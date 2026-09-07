@@ -5,6 +5,32 @@
 
 ---
 
+## [2026-09-08] Android 包名体系迁移（vendor=leestudio）+ APK 命名规范 + AdMob 首启动死锁修复；鸿蒙侧 vendor/bundleName 与双变体构建脚本
+
+**背景**：按用户要求统一 leestudio 品牌包名体系：Android 三渠道改名改包名、APK 按渠道/构建类型分目录命名；鸿蒙改 vendor/bundleName 并支持 howread / howread pro 双变体。
+
+**① Android 包名与 flavor 迁移**（`android/`）：
+- flavor 改名与包名（`app/build.gradle`）：`google` → **howread**（`com.leestudio.howread.reader`，保留 AdMob，即当前 GOOGLE 渠道）；**pro** → `com.leestudio.howread.pro.reader`；**fdroid** → `com.leestudio.howread.fd.reader`（不再与 pro 共用包名，两渠道可同机共存）。flavor 源目录 `src/google/` 重命名为 `src/howread/`（LibreraBuildConfig.FLAVOR="howread"，代码中无 "google" 字符串比较，安全），sourceSets/googleImplementation 同步改名。
+- APK 命名规范：文件名加版本号 v 前缀，输出本就按 `apk/<flavor>/<debug|release>/` 分目录 → `HowRead-v1.0.0-arm64.apk` / `HowRead-Pro-v1.0.0-arm64.apk` / `HowRead-Fdroid-v1.0.0-arm64.apk`（uni 同规则）。
+- 代码内包名常量：`AppsConfig` 的 `LIBRERA_READER`/`PRO_LIBRERA_READER` 更新并新增 `FDROID_LIBRERA_READER`；`Urls.openPdfPro` 商店链接由硬编码改为常量拼接；`AppState`/`WebDavSyncer` 的 "What's New" 包名白名单补入 fdroid 新包名（否则 fdroid 渠道弹窗被误关）。
+- fdroid 渠道显示名：HowRead FD → **HowRead Fd / 好好读 Fd**（values/-zh-rCN/-zh-rTW 三份；曾一度改为 "FDroid"，因过长按用户要求定为 "Fd"）。AdMob 属性键优先 `howread_*`，回落旧 `google_*`（服务器 `~/.gradle/gradle.properties` 旧键继续生效）。
+- **注意**：包名变更 = 全新应用，设备上为新安装、旧包数据不迁移；商店侧（Google Play）等同上架新 App。
+
+**② AdMob 首启动死锁（新装冷启动 ANR，严重）**：MI9 全新安装冷启动必现 ANR——ANR trace 显示主线程在 `AdsFragmentActivity.onResume → AdMobAdsProvider.loadInterstitial`（`MobileAds.setAppVolume`，:228）阻塞等待广告 SDK 初始化锁，而持锁的初始化线程又在等本机 WebView 首次加载（WebView 83 冷启动极慢）→ 主线程死锁、窗口永无焦点、黑屏（am start -W Status: timeout）。旧包因 WebView/SDK 已暖启动不触发，但**任何新装用户都可能命中**。修复（`src/admobAds/AdMobAdsProvider.java`）：`setAppVolume` 移入 `AppsConfig.executorService` 后台执行；`initialize()` 里的 `MobileAds.setRequestConfiguration` 一并移入后台线程。
+**验证**：卸载重装真首启动 `am start -W` → Status: ok / COLD / TotalTime 1239ms（修复前 timeout+ANR）；主页正常渲染、测试横幅广告成功加载（初始化与广告链路恢复）、logcat 0 FATAL / 0 ANR。
+
+**③ 鸿蒙侧（与用户并行的 AGC 签名材料工作交叉进行）**：`AppScope/app.json5` bundleName → `com.leestudio.howread.reader.hmos`、vendor → `leestudio`；`signing/gen_signing.sh`、`gen_release_profile.sh` 改为一次生成 reader/pro 两份 profile（`librera-{debug,release}.p7b` + `librera-pro-{debug,release}.p7b`，profile 内嵌 bundle-name，四份 verify 全通过）；密码回填收窄为只作用于 storeFile=librera-sign.p12 的签名配置（不触碰用户的 howread AGC 材料）；`build-profile.json5` 增加 pro 产品与 liberaprodebug/liberaprorelease 签名配置、entry 增加 pro target；`build_hap_all.sh` 支持变体参数（`bash build_hap_all.sh [default|pro]`，pro 变体临时替换 app.json5 bundleName 与 app_name 字符串、退出自动恢复），产物命名 `HowRead[-Pro]-v<ver>-<abi>-hmos.hap`。default 变体 4 个 HAP 构建成功；**pro 变体尚未打通**（hvigor 报 no executable target in module: 'entry'，产物为陈旧复制件）——已按用户要求暂停鸿蒙构建，待另行任务完成后恢复。
+
+**④ 首启动主题默认改为浅色 + 清理旧产物**：用户反馈新装 App 打开界面很暗。`AppState.defaults()`（仅首启动）原跟随系统深色模式（`Dips.isDarkThemeOn() ? DARK : LIGHT`），系统深色模式的手机上新装首次打开即暗色；改为品牌默认 **THEME_LIGHT**（用户可在偏好设置切换，e-ink 默认不变），`WebDavSyncer.defaultAppState()` 镜像同步。另：删除输出目录中改名前的旧批次 APK（`HowRead[-Pro|-Fdroid]-1.0.0-*.apk` 无 v 前缀批次，旧 fdroid 包名与旧 pro 相同且显示名仍是 "好好读 FD"，已引起误装混淆——经 aapt2 验证新 APK 内 zh-CN label 已是 "好好读 Fd"）。三渠道 release 重编译 BUILD SUCCESSFUL，fdroid 新包已升级安装到 MI9。
+
+**⑤ MI9 三应用界面发暗的定位与处理（设备侧数据修复，无代码改动）**：截图像素采样确认应用背景 141,141,141（系统设置 255,255,255）——应用内有一层约 44% 的均匀黑罩。读取共享配置 `/sdcard/HowRead/profile.HowRead/device.MI_9/app-State.json` 实锤：`isEnableBlueFilter=true + blueLightAlpha=93 + 滤镜色默认纯黑`（黑色 44% 遮罩，255×(1-111/255)≈144 与实测吻合）+ `appBrightness=0 / appBrightnessNight=11`（应用把屏幕背光压至 2%）。根因：**HowRead 系所有包名（旧 com.howread.reader 与新 com.leestudio.*）共享同一份 /sdcard/HowRead 外部配置**（0.9.0 起的设计），旧应用里的夜间护眼+低亮度设置被三个新应用继承。处理：force-stop 三个应用后把共享 app-State.json 修正（isEnableBlueFilter=false、appBrightness/appBrightnessNight=-1000 自动）并回写，fdroid/howread 重启后背景恢复 250,250,250，界面明亮。注意：该配置为全渠道共享，任一渠道里调 亮度/护眼滤镜 会影响其它渠道；旧应用 com.howread.reader 若再被使用且重设暗色值，新应用会再次继承。
+
+**⑥ 切换白天/夜晚模式时重置亮度与护眼滤镜到默认**：用户反馈切换主题后残留的暗色值仍会生效且找不到调亮入口。`AppState` 新增 `resetBrightnessAndFilterToDefaults()`（日/夜亮度→自动 AUTO、护眼滤镜→关、滤镜强度→默认 30、isAllowMinBrigthness→false）；偏好 → 主题色的 4 个模式分支（系统/浅色/深色/深色 OLED）在切换时调用，保证每次白天/夜晚模式切换都从干净的显示值开始。三渠道 release 重编译 BUILD SUCCESSFUL，fdroid/howread 更新包已安装到 MI9 并验证启动正常、背景明亮。
+
+**Android 编译验证**：Ubuntu 服务器 `assembleHowreadRelease assembleProRelease assembleFdroidRelease` 三渠道 BUILD SUCCESSFUL，15 个 APK 文件名/目录全部符合新规范；MI9 安装新包（versionName 1.0.0）冷启动/渲染/广告冒烟通过（见②）。MIUI 限制备注：卸载后重装新包需在手机上手动点一次"继续安装"（INSTALL_FAILED_USER_RESTRICTED）。未执行任何 git 命令。
+
+---
+
 ## [2026-09-07] 鸿蒙移植·阶段4-7：我的文件 / OPDS 网上书库 / 阅读器增强与品牌对齐收尾
 
 **背景**：按安卓 V1.0.0 功能与 UI（参考安卓 CHANGES、store/manual/img 截图、用户要求品牌/图标/包名/测试书）继续对齐鸿蒙端口。
@@ -1962,3 +1988,239 @@ ios/desktop 预留位提升为一级目录；安卓主渠道（Google Play/官�
   零广告闸门扫描 PASS。
 - google+fdroid+pro 同批构建：Version [0.9.0 - 7198]，BUILD SUCCESSFUL，
   三个渠道产物版本一致（HowRead / HowRead-Fdroid / HowRead-Pro 均 0.9.0）。
+
+## [2026-09-07] 鸿蒙移植：PDF 文本精确选择 + 下划线/删除线/波浪线/文字笔记标注（NAPI 扩展）
+
+### 改动（均在 harmony/）
+- `entry/src/main/cpp/mupdf_napi.cpp`：
+  - `getTextRects` 输出扩为每行 `{x0,y0,x1,y1,text,chars:[x0,x1,...]}`（行文本 JSON 转义 UTF-8 + 逐字符 x 边界，mediabox 归一化），作为逐字符选区数据基础；
+  - 新增 `addMarkupAnnotation(handle,page,rects[],type,color)`：underline/strikeout/squiggly/highlight 共用（对齐安卓 addMarkupAnnotationInternal：每 rect 一 quad、pdf_set_annot_quad_points、透明度 highlight 0.4 其余 1.0）；
+  - 新增 `addTextNote(handle,page,x,y,text,color)`：PDF_ANNOT_TEXT + 24pt 图标 rect + contents（对齐安卓 addTextNoteInternal）；
+  - 注册表新增两函数；`types/libmupdf_napi/Index.d.ts` 增 TextLine 接口与两函数声明。
+- `entry/src/main/ets/components/Reader.ets`：
+  - 精确选区：中央区长按（600ms）以 FingerInfo.globalX/Y + onAreaChange 归一化定位行/字符为起点；选区模式下全页透明捕捉层把点按转为终点（长按重设起点）；首末行按字符 x 裁剪合成 quads 实时预览，翻页自动退出；
+  - 浮动操作条：下划线/删除线/波浪线/高亮/笔记（内联输入→addTextNote）/复制（@ohos.pasteboard）/取消；
+  - PageRenderer overlay：underline/squiggly 底部横线、strikeout 中部横线、text 图标、选区蓝色预览。
+- 已知坑（记录）：@State 代理数组直传 NAPI 时 napi_get_array_length 识别失败，调用侧需传本地拷贝；启动自检 runApiTest 每次用 rawfile 覆盖 cacheDir/test.pdf，会清掉演示文件已存标注（自检固有行为）。
+
+### 验证（Pura 90 模拟器）
+- 选区 5 行解析 → 两点选区 14 字符 → 下划线(annotations:1)/删除线(2)/笔记(3)/复制(Copied 14 chars) 全通过；
+- 保存后拉取 PDF 字节含 `Subtype/Underline`，MuPDF 持久化闭环成立；无崩溃。
+
+## [2026-09-07] 鸿蒙：新增 build_hap_all.sh —— DEBUG/RELEASE 双模式产物规范命名分目录
+
+### 改动
+- 新增 `harmony/build_hap_all.sh`：依次 assembleHap buildMode=debug/release（同路径输出，逐次拷贝），版本号取 AppScope/app.json5 versionName，ABI 段由 entry/libs/ 目录推导（arm64-v8a→arm64）；
+- 产物：`harmony/dist/DEBUG/harmony-HowRead-v1.0.0-arm64-x86_64.hap` 与 `harmony/dist/RELEASE/harmony-HowRead-v1.0.0-arm64-x86_64.hap`（命名参考安卓 harmony-HowRead-Pro-v0.8.0-arm64.hap 格式；HAP 实际含双 ABI，故 ABI 段为 arm64-x86_64）。
+
+### 验证
+- 双模式 BUILD SUCCESSFUL，两目录产物就位（DEBUG 113MB / RELEASE 112MB，含标注功能最终代码）；release 模式用现有签名链签名通过（hvigor 不校验 profile type，debug profile 可签 release 包）。
+
+## [2026-09-07] 鸿蒙：RELEASE 产物修正——release profile 签名 + 仅 arm64 打包（华为云平台不再识别为 DEBUG）
+
+### 背景
+`dist/RELEASE/harmony-HowRead-v1.0.0-arm64-x86_64.hap` 上传华为开发云平台测试被识别为 DEBUG 包；
+且文件名 ABI 段 arm64-x86_64 引起疑问。
+
+### 根因与修正
+- **根因 1（DEBUG 标记）**：release 构建复用了 debug 签名 profile（librera-debug.p7b，`"type": "debug"` 且绑定
+  模拟器 UDID），平台按包内嵌 profile 类型判定。修正：新增 `harmony/signing/gen_release_profile.sh`，
+  复用现有自签链生成 `librera-release.p7b`（`type=release`、无设备绑定；hap-sign-tool 对 release 型 profile
+  要求 bundle-info 同时含 development-certificate 与 distribution-certificate，否则报 Require cert in bundleInfo）。
+  `build_hap_all.sh` 在 release 构建前把 build-profile.json5 签名 profile 切到 release p7b，debug 构建用回 debug p7b。
+- **根因 2（ABI 段）**：arm64-v8a=真机 64 位 ARM，x86_64=模拟器；此前双 ABI 都打进 HAP 导致命名并列。
+  修正：release 构建将 entry/build-profile.json5 的 `externalNativeOptions.abiFilters` 切为仅 arm64-v8a，
+  并**临时移走 `entry/libs/x86_64/`**——hvigor 会无视 abiFilters 把 libs 下预置 so 全部打包（CMake 产物受控，
+  预置库不受控），构建后恢复；debug 构建保持双 ABI 供模拟器使用。
+
+### 产物（dist/，按 HAP 实际内容推导命名）
+- `dist/DEBUG/harmony-HowRead-v1.0.0-arm64-x86_64.hap`（内嵌 profile type=debug，双 ABI）
+- `dist/RELEASE/harmony-HowRead-v1.0.0-arm64.hap`（内嵌 profile type=release，仅 3 个 arm64 so）
+
+### 验证
+- hap-sign-tool verify-profile：librera-release.p7b `verified: True, type: release`；
+- 字节级校验：RELEASE HAP 签名块内嵌 profile `type=release`（DEBUG 包为 `type=debug`）；unzip 确认 RELEASE 仅
+  arm64-v8a/libc++_shared.so + libmupdf.so + libmupdf_napi.so；
+- 脚本结束自动恢复默认（debug profile + 双 ABI + x86_64 库归位，trap 兜底）。
+
+### 说明
+- 签名链仍为本地自签（Librera Root CA）。若华为云平台校验证书链（而非仅包类型），需在 AGC 签发正式
+  release 证书与 profile 后替换 `harmony/signing/` 材料（build_hap_all.sh 无需再改）。
+
+## [2026-09-07] 鸿蒙：产物改为按硬件平台分 ABI——DEBUG/RELEASE × arm64/x86_64 共 4 个 HAP
+
+### 背景
+用户要求：不论 debug 还是 release，均按硬件平台（ARM64 与 X86_64）分开构建产物。
+
+### 改动（build_hap_all.sh 定稿）
+- 每次构建单一 ABI：`externalNativeOptions.abiFilters` 设为目标 ABI，并将 `entry/libs/` 下其它 ABI 的
+  预置库目录临时移出（hvigor 打包会无视 abiFilters 收入 libs 下全部预置 so；CMake 产物受控、预置库不受控），
+  构建后立即恢复；trap 兜底保证异常退出也恢复默认（debug profile + 双 ABI + 库归位）。
+- 签名沿用上一条目方案：debug 构建用 librera-debug.p7b，release 构建用 librera-release.p7b（type=release）。
+- 文件名 ABI 段仍按 unzip 实际内容推导；脚本启动清空 dist/ 全量重建（修复了按前缀删除旧产物时
+  误删同前缀新产物的缺陷）；产物目录固定为大写 DEBUG/RELEASE。
+
+### 最终产物（dist/，4 个，均约 57MB）
+- dist/DEBUG/harmony-HowRead-v1.0.0-arm64.hap     （debug profile，仅 arm64-v8a）
+- dist/DEBUG/harmony-HowRead-v1.0.0-x86_64.hap    （debug profile，仅 x86_64，模拟器）
+- dist/RELEASE/harmony-HowRead-v1.0.0-arm64.hap   （release profile，仅 arm64-v8a）
+- dist/RELEASE/harmony-HowRead-v1.0.0-x86_64.hap  （release profile，仅 x86_64）
+
+### 验证
+- 4 个产物逐一校验：ABI 内容唯一 + 内嵌 profile 类型正确（DEBUG=debug，RELEASE=release）；
+- 模拟器安装 dist/DEBUG x86_64 包启动正常（hilog 无 FATAL，书库/渲染正常）。
+
+## [2026-09-07] 鸿蒙：生成 AGC 发布证书申请材料（发布密钥库 + CSR）
+
+### 背景
+华为平台要求正式发布包使用 AGC 签发的发布证书与 Profile；本地生成 CSR 上传申请。
+
+### 改动
+- 新增 `harmony/signing/gen_release_csr.sh`（等价 DevEco「Generate Key and CSR」向导，字段值经用户确认）：
+  - 密钥库 `howread-release-sign.p12`（ECC NIST-P-256，别名 howread-release，密码 HowRead@2026，仅本地保存）；
+  - 本地自签证书 `howread-release-local.cer`（CN=HowRead / OU=LeeStudio / O=Lee / C=CN，25 年，仅 IDE 对等物，不上传）；
+  - **`howread-release.csr`——上传 AGC 申请发布证书（.cer）+ 发布 Profile（.p7b）**。
+- 备忘：hap-sign-tool generate-cert 无 `-outForm` 参数（传了会报 Param is not trusted）；generate-csr 必须带 `-subject` 与 `-signAlg`。
+
+### 验证
+- 三步命令全部 success；CSR 为有效 PEM（openssl 可解析出公钥）。
+- 后续：收到 AGC 的 .cer/.p7b 后替换 build_hap_all.sh 的 release 签名材料并重建 4 个产物。
+
+## [2026-09-07] 鸿蒙：生成 AGC 调试证书申请材料（debug 密钥库 + CSR）
+
+### 改动
+- 新增 `harmony/signing/gen_debug_csr.sh`（与 gen_release_csr.sh 同构，字段值经用户确认）：
+  - 密钥库 `howread-debug-sign.p12`（ECC NIST-P-256，别名 howread-debug，密码 HowRead@2026，与 release 同密码）；
+  - 本地自签证书 `howread-debug-local.cer`（主体与 release 一致：CN=HowRead/OU=LeeStudio/O=Lee/C=CN，25 年）；
+  - **`howread-debug.csr`——上传 AGC 申请调试证书（.cer）+ 调试 Profile（.p7b，平台侧绑定调试设备 UDID，可多台）**。
+
+### 验证
+- 三步命令全部 success；openssl 解析 CSR 主体 = C=CN, O=Lee, OU=LeeStudio, CN=HowRead，与确认值一致。
+- 现有自签 debug 链（librera-sign.p12/librera-debug.p7b）保留作后备，AGC 材料到手后统一切换。
+
+## [2026-09-07] 鸿蒙：接入 AGC 签发证书重建四产物（dist 目录改小写 debug/release）
+
+### 背景
+用户在 AGC 完成调试/发布证书申请并放入 signing/（HowRead-debug.cer / HowRead-release.cer）；
+要求基于新签名重建 debug/release，dist 文件夹改为小写 debug/release。
+
+### 材料核验
+- 两份 .cer 均为华为 3 段链（Huawei CBG Root CA G2 → Developer Relations CA G2 → 叶子）；
+- 叶子公钥与本地 CSR 逐一匹配（debug↔howread-debug.csr，release↔howread-release.csr）；
+- debug 叶子 = Development（1 年），release 叶子 = Release（3 年）。
+
+### 改动
+- 新增 `signing/gen_howread_profiles.sh`：生成占位 Profile（type=debug/release，嵌入 AGC 叶子证书，
+  bundle-name 动态取 AppScope/app.json5 = com.leestudio.howread.reader.hmos；debug 绑模拟器 UDID），
+  由本地 profile CA 签发 → `howread-debug.p7b` / `howread-release.p7b`（verify True）。
+  **AGC 正式 .p7b 到手后直接替换这两个文件重打即可**（真机安装/上架必须用 AGC p7b）。
+- 新增 `signing/encrypt_pwd.js`：复用现有 material/ 工作密钥加密新密码（不重建 material/，旧配置不受影响）。
+- `build-profile.json5` 新增签名配置 `howreaddebug` / `howreadrelease`（certpath=叶子在前的链文件、
+  profile=howread-*.p7b、storeFile=howread-*-sign.p12、别名 howread-debug/release、密码 HowRead@2026 加密）；
+  default 产品默认指向 howreaddebug；liberadebug/liberaprodebug 及 pro 产品保持不动（另一会话新增）。
+- 新增 `signing/HowRead-debug-sign.cer` / `HowRead-release-sign.cer`：把 AGC 链重排为叶子在前
+  （hap-sign-tool 取第一条作签名证书，AGC 原件是根在前）。
+- `build_hap_all.sh`：default 变体的 set_build_mode 改为切换 default 产品 signingConfig
+  （howreaddebug↔howreadrelease），pro 变体维持旧逻辑；**产物目录改为小写 `dist/debug`、`dist/release`**。
+
+### 排障记录（重要）
+1. SignHap 报 `11010001 Unknown error: Illegal base64 character 20`——AGC 下载的 .cer base64 行内混有空格，
+   嵌入 profile 后 sign-app 严格解码失败；清洗空白并按 64 字符重排后解决（verify-profile 不报，仅 sign-app 报）。
+2. release 构建曾报 `00303073 Configuration Error`——与并行会话修改 build 文件撞车（entry 尚无 pro target），
+   配置补全后自行消失。
+
+### 产物与验证（dist/，均约 54-55MB）
+- debug/HowRead-v1.0.0-arm64-hmos.hap / -x86_64-hmos.hap：profile type=debug + AGC Development 叶子
+- release/HowRead-v1.0.0-arm64-hmos.hap / -x86_64-hmos.hap：profile type=release + AGC Release 叶子
+- 字节级校验叶子证书特征串逐包匹配；模拟器安装 debug x86_64 包启动正常（新包名独立沙箱，无 FATAL）。
+
+## [2026-09-08] 鸿蒙：release 产物换用 AGC 正式 Profile（云调试 9568322 修复）
+
+### 背景
+云调试安装报 `9568322 signature verification failed due to not trusted app source`——包内嵌的是本地自签
+占位 profile，云真机只信任华为 Profile CA 签发的链。
+
+### 改动
+- 用户提供 AGC 签发的发布 Profile `HowRead-releaseRelease.p7b`（verify True：type=release、
+  bundle-name=com.leestudio.howread.reader.hmos、app-identifier=6917615791336205965、
+  叶子=AGC Release 证书且公钥与 howread-release.csr 匹配）；
+- 替换 `signing/howread-release.p7b`（占位文件保留为 howread-release-placeholder.p7b）；
+- `build_hap_all.sh` 重打 4 产物。
+
+### 验证
+- 字节级校验：release 两个包内嵌 AGC profile 原文 + App ID 6917615791336205965；debug 两包仍为占位 profile。
+
+### 待办
+- **云调试装 debug 包仍需 AGC 调试 Profile**（绑云真机 UDID——注意云真机 UDID 与模拟器 454D55…0000 不同，
+  需从云调试页面获取后到 AGC 注册进调试 Profile），到手后替换 howread-debug.p7b 重打。
+
+## [2026-09-08] 鸿蒙：双变体（HowRead / HowRead Pro）× debug/release × arm64/x86_64 共 8 产物
+
+### 背景
+鸿蒙平台分两个 APP：HowRead（普通版）与 HowRead Pro，分别对应两种等级；命名如
+`HowRead-Pro-v1.0.0-arm64-hmos.hap`。中文应用名分别为「好好读」「好好读 Pro」。
+
+### 排障（关键根因，记录）
+pro 构建报 `Current product is 'pro'. No output will be generated because of no executable target`：
+从 hvigor-ohos-plugin 源码定位到 `checkHasTargetApplyProduct → getTargetApplyProducts`——
+**hvigor 对非 default 的 module target，默认只应用于 ["default"] 产品**；必须在项目级
+build-profile.json5 的 `modules[].targets[]` 显式声明：
+```
+{ "name": "pro", "applyToProducts": ["pro"] }
+{ "name": "default", "applyToProducts": ["default"] }
+```
+另发现产物输出路径按产品名变化：`entry/build/<product>/outputs/<product>/entry-<product>-signed.hap`，
+build_hap_all.sh 的 OUT_HAP 已按 variant 参数化（此前误拷 default 产物为 Pro 文件的问题即源于此）。
+
+### 改动
+- `signing/gen_howread_profiles.sh` 参数化（bundleName + 文件名后缀），生成 Pro 占位 profile：
+  `howread-pro-debug.p7b`（绑模拟器 UDID）/ `howread-pro-release.p7b`（verify True，bundle=com.leestudio.howread.pro.reader.hmos，
+  嵌入 AGC 叶子证书，app-identifier=6917615791336205965）。
+- `build-profile.json5` 新增签名配置 `howreadprodebug` / `howreadprorelease`（certpath=AGC 叶子在前链、
+  storeFile=howread-*-sign.p12）；pro 产品默认 howreadprodebug。
+- `build_hap_all.sh`：pro 变体 set_build_mode 切换 pro 产品 signingConfig；OUT_HAP 按 variant；
+  dist 清理改为按变体（HowRead 与 HowRead-Pro 产物可共存）。
+- entry/build-profile.json5 的 pro target 补 runtimeOS（试验项，无害保留）。
+
+### 产物（dist/，8 个，均约 54-55MB，逐包字节级验证）
+- debug/HowRead-v1.0.0-{arm64,x86_64}-hmos.hap        （bundle …howread.reader.hmos，中文「好好读」）
+- release/HowRead-v1.0.0-{arm64,x86_64}-hmos.hap     （AGC 正式发布 Profile）
+- debug/HowRead-Pro-v1.0.0-{arm64,x86_64}-hmos.hap   （bundle …howread.pro.reader.hmos，中文「好好读 Pro」）
+- release/HowRead-Pro-v1.0.0-{arm64,x86_64}-hmos.hap
+- 全部：AGC Development/Release 叶子证书按包正确、profile 类型正确、包名正确、ABI 唯一。
+
+### 待办
+- Pro 的 release 包若需上云/上架：Pro 包名需在 AGC 注册 App ID 并申请正式发布 Profile，替换
+  `signing/howread-pro-release.p7b` 重打；调试 Profile（绑设备）同理。
+- default 的 debug 包云调试仍需 AGC 调试 Profile（待用户提供，绑云真机 UDID）。
+- 模拟器冒烟：HowRead-Pro debug x86_64 包安装启动正常，与 HowRead 包共存。
+
+## [2026-09-08] 鸿蒙：Pro release 包换用 AGC 正式 Profile
+
+### 改动
+- 用户提供 AGC 签发的 Pro 发布 Profile `HowRead pro-releaseRelease.p7b`（verify True：type=release、
+  bundle-name=com.leestudio.howread.pro.reader.hmos、app-identifier=6917615791848364635、AGC Release 叶子）；
+- 替换 `signing/howread-pro-release.p7b`（占位保留为 howread-pro-release-placeholder.p7b）；
+- `build_hap_all.sh pro` 重打 4 个 Pro 产物。
+
+### 验证
+- 字节级校验：release 的两个 Pro 包内嵌 AGC Pro Profile 原文 + App ID 6917615791848364635；
+  release 的两个普通版包内嵌普通版 App ID 6917615791336205965（互不串扰）；
+- debug 包（普通版与 Pro）仍为本地占位 profile——云调试装 debug 包需 AGC 调试 Profile（绑设备）后替换重打。
+
+## [2026-09-08] 鸿蒙：修复 Pro 与普通版桌面名称相同的问题
+
+### 根因
+桌面图标显示的是**模块级 EntryAbility_label**（entry/src/main/resources/{base,zh_CN}/element/string.json），
+而 build_hap_all.sh 的变体切换（swap_variant）只替换了 AppScope 的 app_name——两个变体的
+EntryAbility_label 均为「好好读」，导致桌面名称相同。
+
+### 改动
+- `build_hap_all.sh` swap_variant 扩展：pro 变体同时替换 entry 模块的 EntryAbility_label
+  （base: HowRead→HowRead Pro；zh_CN: 好好读→好好读 Pro），restore_variant 按新备份文件名恢复；
+- 重打 Pro 全部 4 个产物（普通版标签本就正确，无需重打）。
+
+### 验证
+- 包内编译资源（resources.index）：Pro 包含「好好读 Pro/HowRead Pro」，普通版仅「好好读」；
+- 源文件构建后已恢复默认值（HowRead/好好读）；
+- 模拟器实测：两应用共存，桌面 UI 文本同时出现「好好读」与「好好读 Pro」。

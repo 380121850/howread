@@ -60,21 +60,29 @@ public class AdMobAdsProvider implements AdsProvider {
     public void initialize(Context context) {
         try {
             LOG.d("ADS1", "MobileAds.initialize");
-            if (AppsConfig.IS_TEST_DEVICE) {
-                RequestConfiguration configuration =
-                        new RequestConfiguration.Builder().setTestDeviceIds(AppsConfig.testDevices).build();
-                MobileAds.setRequestConfiguration(configuration);
-            }
-            // MobileAds.initialize pulls in Play Services classes; run it off
-            // the main thread (the SDK is explicitly thread-safe for init).
-            AppsConfig.executorService.execute(() -> MobileAds.initialize(context, new OnInitializationCompleteListener() {
-                @Override
-                public void onInitializationComplete(
-                        @NonNull
-                        InitializationStatus initializationStatus) {
-                    LOG.d("ads-complete");
+            // MobileAds.initialize pulls in Play Services classes; run it (and
+            // setRequestConfiguration, which takes the same SDK lock) off the
+            // main thread (the SDK is explicitly thread-safe for init).
+            final RequestConfiguration configuration = AppsConfig.IS_TEST_DEVICE
+                    ? new RequestConfiguration.Builder().setTestDeviceIds(AppsConfig.testDevices).build()
+                    : null;
+            AppsConfig.executorService.execute(() -> {
+                try {
+                    if (configuration != null) {
+                        MobileAds.setRequestConfiguration(configuration);
+                    }
+                    MobileAds.initialize(context, new OnInitializationCompleteListener() {
+                        @Override
+                        public void onInitializationComplete(
+                                @NonNull
+                                InitializationStatus initializationStatus) {
+                            LOG.d("ads-complete");
+                        }
+                    });
+                } catch (Exception e) {
+                    LOG.e(e);
                 }
-            }));
+            });
         } catch (Exception e) {
             LOG.e(e);
         }
@@ -222,11 +230,18 @@ public class AdMobAdsProvider implements AdsProvider {
         try {
             LOG.d("ADS1", "Interstitial loading...");
             try {
-                if (Apps.isNight(a)) {
-                    MobileAds.setAppVolume(0.1f);
-                } else {
-                    MobileAds.setAppVolume(0.6f);
-                }
+                final float volume = Apps.isNight(a) ? 0.1f : 0.6f;
+                // MobileAds.setAppVolume blocks on the SDK init lock. On a
+                // fresh install the background MobileAds.initialize is itself
+                // waiting for the (slow) first WebView init, so calling this
+                // on the main thread deadlocks the UI (cold-start ANR).
+                AppsConfig.executorService.execute(() -> {
+                    try {
+                        MobileAds.setAppVolume(volume);
+                    } catch (Exception e) {
+                        LOG.e(e);
+                    }
+                });
             } catch (Exception e) {
                 LOG.e(e);
             }

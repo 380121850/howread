@@ -148,14 +148,22 @@ android {
     def sampleAdmobFull = 'ca-app-pub-3940256099942544/1033173712'
     def sampleAdmobReward = 'ca-app-pub-3940256099942544/5224354917'
 
+    // Ad-provider property lookup: new keys are prefixed with the flavor name
+    // (howread_admobAppId etc.); the legacy google_* keys on the build server's
+    // ~/.gradle/gradle.properties still win as a fallback so nothing breaks
+    // until they are renamed.
+    def flavorProp = { String base ->
+        project.findProperty("howread_${base}") ?: project.findProperty("google_${base}")
+    }
+
     flavorDimensions.add("version")
     productFlavors {
         fdroid {
             minSdk = libs.versions.minSdk.get().toInteger()
             dimension = "version"
-            applicationId = "com.howread.reader.pro"
+            applicationId = "com.leestudio.howread.fd.reader"
             manifestPlaceholders = [
-                    appName      : "HowRead FD",
+                    appName      : "HowRead Fd",
                     appIcon      : "@mipmap/icon_pdf_pro",
                     appRoundIcon : "@mipmap/icon_pdf_pro",
                     appGdriveKey : "",
@@ -166,25 +174,25 @@ android {
                     appSafeMode  : "true"
             ]
         }
-        google {
+        howread {
             dimension = "version"
-            applicationId = "com.howread.reader"
+            applicationId = "com.leestudio.howread.reader"
             manifestPlaceholders = [
                     appName      : "HowRead",
                     appIcon      : "@mipmap/icon_pdf_reader",
                     appRoundIcon : "@mipmap/icon_pdf_reader",
-                    appGdriveKey : project.findProperty('google_appGdriveKey') ?: '',
-                    admobAppId   : project.findProperty('google_admobAppId') ?: sampleAdmobAppId,
-                    admobBannerId: project.findProperty('google_admobBannerId') ?: sampleAdmobBanner,
-                    admobFullId  : project.findProperty('google_admobFullId') ?: sampleAdmobFull,
-                    admobRewardId  : project.findProperty('google_admobRewardId') ?: sampleAdmobReward,
+                    appGdriveKey : flavorProp('appGdriveKey') ?: '',
+                    admobAppId   : flavorProp('admobAppId') ?: sampleAdmobAppId,
+                    admobBannerId: flavorProp('admobBannerId') ?: sampleAdmobBanner,
+                    admobFullId  : flavorProp('admobFullId') ?: sampleAdmobFull,
+                    admobRewardId  : flavorProp('admobRewardId') ?: sampleAdmobReward,
                     appSafeMode  : "false"
             ]
         }
 
         pro {
             dimension = "version"
-            applicationId = "com.howread.reader.pro"
+            applicationId = "com.leestudio.howread.pro.reader"
             manifestPlaceholders = [
                     appName      : "HowRead Pro",
                     appIcon      : "@mipmap/icon_pdf_pro",
@@ -217,23 +225,21 @@ android {
                 println abiName + " : appSafeMode false"
             }
 */
-            if (abiName != null) {
-                def code = abiCodes.get(abiName, 0) + variant.versionCode
-                abiName = abiName.replace("arm64-v8a", "arm64").replace("armeabi-v7a", "arm")
+                if (abiName != null) {
+                    def code = abiCodes.get(abiName, 0) + variant.versionCode
+                    abiName = abiName.replace("arm64-v8a", "arm64").replace("armeabi-v7a", "arm")
 
-                output.versionCodeOverride = code
-                // the main "google" flavor IS the HowRead brand: no flavor tag
-                // in the file name; the other flavors keep their tag
-                def brand = (flavor == "Google") ? "HowRead" : "HowRead-${flavor}"
+                    output.versionCodeOverride = code
+                    // the "howread" flavor IS the HowRead brand: no flavor tag in
+                    // the file name; the other flavors keep their tag
+                    def brand = (flavor == "Howread") ? "HowRead" : "HowRead-" + flavor
 
-                def fullName = "${brand}-${versionNumber}-${abiName}.apk"
+                    def fullName = "${brand}-v${versionNumber}-${abiName}.apk"
 
-                output.outputFileName = fullName
-            } else {
-                //def fullName = "Librera ${flavor}-${versionNumber}-c${codeNumber}-d${db}-universal.apk"
-                //def fullName = "Librera ${flavor}-${versionNumber}-universal.apk"
-                def brand = (flavor == "Google") ? "HowRead" : "HowRead-${flavor}"
-                def fullName = "${brand}-${versionNumber}-uni.apk"
+                    output.outputFileName = fullName
+                } else {
+                    def brand = (flavor == "Howread") ? "HowRead" : "HowRead-" + flavor
+                    def fullName = "${brand}-v${versionNumber}-uni.apk"
                 output.versionCodeOverride = codeNumber
                 output.outputFileName = fullName
             }
@@ -256,14 +262,14 @@ android {
         main { jniLibs.srcDirs = ["${rootDir}/../prebuilt/native/mupdf-1.23.7"] }
     }
 
-    // Ad-provider implementation sources. The ad-enabled flavor (google)
+    // Ad-provider implementation sources. The ad-enabled flavor (howread)
     // compiles the real AdMob implementation (it pulls play-services-ads through
     // libDepFree) and merges src/admobAds/AndroidManifest.xml (ad unit ids); the
     // GMS-free flavors (fdroid, pro) compile the no-op provider from src/noAds
     // so their APKs contain no ad-SDK code at all (F-Droid requirement). Both
     // groups provide the same AdsProviderFactory class name, like the
-    // LibreraBuildConfig pattern 鈥?never compiled into the same variant.
-    ['google'].each { fl ->
+    // LibreraBuildConfig pattern — never compiled into the same variant.
+    ['howread'].each { fl ->
         sourceSets[fl].java.srcDirs += ['src/admobAds/java']
         sourceSets[fl].manifest.srcFile('src/admobAds/AndroidManifest.xml')
     }
@@ -352,13 +358,13 @@ dependencies {
 
     def dep_free = project(':libDepFree')
 
-    // libDepFree carries play-services-ads + UMP; only the ad-enabled google
+    // libDepFree carries play-services-ads + UMP; only the ad-enabled howread
     // flavor links it. fdroid/pro stay GMS-free (no ad SDK at all).
-    googleImplementation dep_free
+    howreadImplementation dep_free
     def dep_pro = project(':libDepPro')
 
     // libDepPro carries junrar + Play Review (non-ad GMS deps).
-    googleImplementation dep_pro
+    howreadImplementation dep_pro
     proImplementation dep_pro
 
 /** Testing **/

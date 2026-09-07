@@ -443,6 +443,25 @@ public class AppState {
     @IgnoreHashCode public boolean stopReadingOnCall = true;
     @IgnoreHashCode public int appBrightness = AUTO_BRIGTNESS;
     @IgnoreHashCode public int appBrightnessNight = AUTO_BRIGTNESS;
+
+    /**
+     * Resets the day/night brightness and blue-light filter pairs to factory
+     * defaults (system brightness, filter off, default filter strength).
+     * Called when the app theme (day/night mode) is switched in Preferences:
+     * stale per-mode dim values (e.g. imported night-reading configs) used to
+     * survive the switch and left the UI unusably dark with no obvious way
+     * back.
+     */
+    public void resetBrightnessAndFilterToDefaults() {
+        appBrightness = AUTO_BRIGTNESS;
+        appBrightnessNight = AUTO_BRIGTNESS;
+        isEnableBlueFilter = false;
+        isEnableBlueFilterNight = false;
+        blueLightAlpha = 30;
+        blueLightAlphaNight = 30;
+        isAllowMinBrigthness = false;
+    }
+
     public volatile int fastReadSpeed = 200;
     public volatile int fastReadFontSize = 32;
     public volatile int fastManyWords = 2;
@@ -708,7 +727,10 @@ public class AppState {
 
         displayPath = AppProfile.DOWNLOADS_DIR.getPath();
 
-        appTheme = Dips.isDarkThemeOn() ? AppState.THEME_DARK : com.foobnix.model.AppState.THEME_LIGHT;
+        // Brand default is LIGHT on first run regardless of the system dark
+        // mode (users can still switch in Preferences); following the system
+        // here made fresh installs open in dark UI on dark-mode phones.
+        appTheme = AppState.THEME_LIGHT;
         if (Dips.isEInk()) {
             appTheme = AppState.THEME_INK;
             isDayNotInvert = true;
@@ -726,8 +748,9 @@ public class AppState {
             accessibilityDefaults();
         }
 
-        if (!AppsConfig.LIBRERA_READER.equals(Apps.getPackageName(a)) && !AppsConfig.PRO_LIBRERA_READER.equals(
-                Apps.getPackageName(a))) {
+        if (!AppsConfig.LIBRERA_READER.equals(Apps.getPackageName(a))
+                && !AppsConfig.PRO_LIBRERA_READER.equals(Apps.getPackageName(a))
+                && !AppsConfig.FDROID_LIBRERA_READER.equals(Apps.getPackageName(a))) {
             isShowWhatIsNewDialog = false;
         }
 

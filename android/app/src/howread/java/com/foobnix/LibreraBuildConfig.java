@@ -1,5 +1,5 @@
 package com.foobnix;
 
 public class LibreraBuildConfig {
-      public static final String FLAVOR = "google";
+      public static final String FLAVOR = "howread";
 }

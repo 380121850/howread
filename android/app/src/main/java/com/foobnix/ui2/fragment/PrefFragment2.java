@@ -731,6 +731,10 @@ public class PrefFragment2 extends UIFragment {
                                                                AppState.get().appTheme =
                                                                        Dips.isDarkThemeOn() ? AppState.THEME_DARK :
                                                                                AppState.THEME_LIGHT;
+                                                               // a day/night mode switch starts from clean
+                                                               // display values (stale dim configs survived
+                                                               // the switch and left the UI unusably dark)
+                                                               AppState.get().resetBrightnessAndFilterToDefaults();
                                                                AppState.get().contrastImage = 0;
                                                                AppState.get().brigtnessImage = 0;
                                                                AppState.get().bolderTextOnImage = false;
@@ -751,7 +755,7 @@ public class PrefFragment2 extends UIFragment {
                                                            @Override public boolean onMenuItemClick(MenuItem item) {
                                                                AppState.get().isSystemThemeColor = false;
                                                                AppState.get().appTheme = AppState.THEME_LIGHT;
-
+                                                               AppState.get().resetBrightnessAndFilterToDefaults();
                                                                AppState.get().contrastImage = 0;
                                                                AppState.get().brigtnessImage = 0;
                                                                AppState.get().bolderTextOnImage = false;
@@ -771,7 +775,7 @@ public class PrefFragment2 extends UIFragment {
                                                            @Override public boolean onMenuItemClick(MenuItem item) {
                                                                AppState.get().isSystemThemeColor = false;
                                                                AppState.get().appTheme = AppState.THEME_DARK;
-
+                                                               AppState.get().resetBrightnessAndFilterToDefaults();
                                                                AppState.get().contrastImage = 0;
                                                                AppState.get().brigtnessImage = 0;
                                                                AppState.get().bolderTextOnImage = false;
@@ -791,6 +795,7 @@ public class PrefFragment2 extends UIFragment {
                                                            @Override public boolean onMenuItemClick(MenuItem item) {
                                                                AppState.get().isSystemThemeColor = false;
                                                                AppState.get().appTheme = AppState.THEME_DARK_OLED;
+                                                               AppState.get().resetBrightnessAndFilterToDefaults();
 
                                                                AppState.get().contrastImage = 0;
                                                                AppState.get().brigtnessImage = 0;

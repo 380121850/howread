@@ -1274,11 +1274,14 @@ public class WebDavSyncer {
             st.nameMusicianMode = a.getString(R.string.mode_musician);
             st.musicText = a.getString(R.string.musician);
             final String pkg = com.foobnix.android.utils.Apps.getPackageName(a);
-            if (!AppsConfig.LIBRERA_READER.equals(pkg) && !AppsConfig.PRO_LIBRERA_READER.equals(pkg)) {
+            if (!AppsConfig.LIBRERA_READER.equals(pkg)
+                    && !AppsConfig.PRO_LIBRERA_READER.equals(pkg)
+                    && !AppsConfig.FDROID_LIBRERA_READER.equals(pkg)) {
                 st.isShowWhatIsNewDialog = false;
             }
         }
-        st.appTheme = Dips.isDarkThemeOn() ? AppState.THEME_DARK : AppState.THEME_LIGHT;
+        // mirrors defaults(): brand default is LIGHT regardless of system dark mode
+        st.appTheme = AppState.THEME_LIGHT;
         // first-run migration in loadInit() flips this once (the tab merge);
         // the saved default file always carries the migrated value
         st.networkTabMerged = true;

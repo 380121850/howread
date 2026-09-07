@@ -109,10 +109,10 @@ public class Urls {
 
     public static void openPdfPro(Context a) {
         try {
-            open(a, "market://details?id=com.howread.reader.pro");
+            open(a, "market://details?id=" + AppsConfig.PRO_LIBRERA_READER);
         } catch (Exception e) {
             // android 1.6
-            open(a, "https://play.google.com/store/apps/details?id=com.howread.reader.pro");
+            open(a, "https://play.google.com/store/apps/details?id=" + AppsConfig.PRO_LIBRERA_READER);
         }
     }
 
