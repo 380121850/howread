@@ -42,6 +42,14 @@ interface LibFolder {
   path: string;
 }
 
+/** Home 书签笔记 card model (one per book that has bookmarks). */
+interface BookmarkCard {
+  path: string;
+  title: string;
+  cover: string;
+  percent: string;
+}
+
 /**
  * Library page: multi-tab shell (Recent / Favorites / Settings).
  * Recent and Favorites show cover thumbnails, progress, and a star toggle.
@@ -168,6 +176,10 @@ struct Index {
   @State lockPin: string = '';
   /** cached cover images for the dashboard carousel */
   @State dashCovers: string[] = [];
+  /** 阅读统计 chart dialog visibility (home stats header) */
+  @State showStatsChart: boolean = false;
+  /** per-book action menu target path ('' = hidden) */
+  @State libMenuPath: string = '';
 
   aboutToAppear(): void {
     this.runApiTest();
@@ -795,10 +807,9 @@ struct Index {
       Column() {
         // Top bar (Android imageParent1: 48dp brand color #3949AB, hamburger + title + import)
         Row() {
-          Text('\u2630')
-            .fontSize(22).fontColor(Color.White)
-            .width(44).height(44)
-            .textAlign(TextAlign.Center)
+          Image($r('app.media.ic_menu'))
+            .width(24).height(24).fillColor(Color.White)
+            .width(44).height(44).padding(10)
             .onClick(() => {
               this.showDrawer = true;
               this.pickRandomQuote();
@@ -808,10 +819,9 @@ struct Index {
             .layoutWeight(1)
             .textAlign(TextAlign.Start)
             .padding({ left: 6 })
-          Text('\uff0b')
-            .fontSize(26).fontColor(Color.White)
-            .width(44).height(44)
-            .textAlign(TextAlign.Center)
+          Image($r('app.media.ic_add'))
+            .width(24).height(24).fillColor(Color.White)
+            .width(44).height(44).padding(10)
             .onClick(() => {
               this.openFilePicker();
             })
@@ -824,22 +834,22 @@ struct Index {
           TabContent() {
             this.buildDashboardTab()
           }
-          .tabBar(this.buildTabLabel('\u{1F3E0}', '\u9996\u9875', 0))
+          .tabBar(this.buildTabLabel($r('app.media.ic_home'), '\u9996\u9875', 0))
 
           TabContent() {
             this.buildLibraryTab()
           }
-          .tabBar(this.buildTabLabel('\u{1F4DA}', '\u4E66\u5E93', 1))
+          .tabBar(this.buildTabLabel($r('app.media.ic_book_open'), '\u4E66\u5E93', 1))
 
           TabContent() {
             this.buildBrowseTab()
           }
-          .tabBar(this.buildTabLabel('\u{1F4C1}', '\u6211\u7684\u6587\u4EF6', 2))
+          .tabBar(this.buildTabLabel($r('app.media.ic_folder'), '\u6211\u7684\u6587\u4EF6', 2))
 
           TabContent() {
             this.buildSettingsTab()
           }
-          .tabBar(this.buildTabLabel('\u2699', '\u504F\u597D', 3))
+          .tabBar(this.buildTabLabel($r('app.media.ic_wrench'), '\u504F\u597D', 3))
         }
         .width('100%')
         .layoutWeight(1)
@@ -854,15 +864,28 @@ struct Index {
 
       // ---- FAB "continue last book" (Android fabLastBook: home + library only) ----
       if (this.currentTab === 0 || this.currentTab === 1) {
-        Button('\u7EE7\u7EED\u9605\u8BFB')
-          .fontSize(13).fontColor(Color.White)
-          .backgroundColor('#3949AB')
-          .height(42)
-          .borderRadius(21)
-          .margin({ right: 16, bottom: 62 })
-          .onClick(() => {
-            this.openLastBook();
-          })
+        Button() {
+          Image($r('app.media.ic_book_open'))
+            .width(24).height(24).fillColor(Color.White)
+        }
+        .width(52).height(52)
+        .backgroundColor('#3949AB')
+        .borderRadius(26)
+        .shadow({ radius: 8, color: '#44000000', offsetX: 0, offsetY: 2 })
+        .margin({ right: 16, bottom: 62 })
+        .onClick(() => {
+          this.openLastBook();
+        })
+      }
+
+      // ---- per-book action menu (Android hr19) ----
+      if (this.libMenuPath.length > 0) {
+        this.buildLibMenuDialog()
+      }
+
+      // ---- 阅读统计 chart dialog (Android stats chart popup) ----
+      if (this.showStatsChart) {
+        this.buildStatsChartDialog()
       }
 
       // ---- left drawer (Android DrawerLayout overlay) ----
@@ -1345,9 +1368,11 @@ struct Index {
 
   /** Tab bar label with icon + text (Android: selected white / unselected #ddffffff). */
   @Builder
-  buildTabLabel(icon: string, text: string, idx: number) {
+  buildTabLabel(icon: Resource, text: string, idx: number) {
     Column({ space: 2 }) {
-      Text(icon).fontSize(18).fontColor(this.currentTab === idx ? '#FFFFFF' : '#DDFFFFFF')
+      Image(icon)
+        .width(22).height(22)
+        .fillColor(this.currentTab === idx ? '#FFFFFF' : '#B3FFFFFF')
       Text(text).fontSize(10).fontColor(this.currentTab === idx ? '#FFFFFF' : '#DDFFFFFF')
     }
     .width('100%')
@@ -1563,199 +1588,351 @@ struct Index {
     .alignItems(VerticalAlign.Bottom)
   }
 
-  /** Home tab: continue-reading card + recent carousel + favorites + quick grid. */
+  /** Section title row: bold dark title + blue 更多 link (Android DashboardFragment2).
+   * moreAction: 0..3 = switch tab, 7 = stats chart dialog, 8 = network overlay, 9 = bookmarks overlay, -1 = none. */
+  @Builder
+  sectionHeader(title: string, moreAction: number) {
+    Row() {
+      Text(title)
+        .fontSize(17).fontWeight(FontWeight.Medium).fontColor('#333')
+      Blank()
+      if (moreAction >= 0) {
+        Text('更多')
+          .fontSize(14).fontColor('#3949AB')
+          .onClick(() => {
+            if (moreAction === 7) {
+              this.updateChartData();
+              this.showStatsChart = true;
+            } else if (moreAction === 8) {
+              this.activeOverlay = 2;
+            } else if (moreAction === 9) {
+              this.activeOverlay = 1;
+            } else {
+              this.switchTab(moreAction);
+            }
+          })
+      }
+    }
+    .width('94%')
+    .padding({ top: 14, bottom: 8 })
+  }
+
+  /** Big cover tile for the home carousels (no caption, Android hr01 style). */
+  @Builder
+  coverTile(book: RecentBook) {
+    if (book.coverPath.length > 0) {
+      Image(book.coverPath)
+        .width(92).height(126)
+        .borderRadius(3)
+        .objectFit(ImageFit.Cover)
+        .backgroundColor('#ddd')
+        .onClick(() => {
+          this.openBook(book);
+        })
+    } else {
+      Column() {
+        Text(book.title.length > 6 ? book.title.substring(0, 6) : book.title)
+          .fontSize(12).fontColor('#fff').maxLines(3).textAlign(TextAlign.Center)
+      }
+      .width(92).height(126)
+      .justifyContent(FlexAlign.Center)
+      .padding(6)
+      .borderRadius(3)
+      .backgroundColor('#8d7b74')
+      .onClick(() => {
+        this.openBook(book);
+      })
+    }
+  }
+
+  /** White stat card: big blue number + grey caption (Android hr01).
+   * kind: 0=书籍总数 1=已读书籍 2=总阅读时间 3=今日阅读 4=阅读速度.
+   * Values are read via statValue() inside build so @State changes re-render. */
+  @Builder
+  statCard(kind: number) {
+    Column({ space: 6 }) {
+      Text(this.statValue(kind))
+        .fontSize(24).fontWeight(FontWeight.Bold).fontColor('#3949AB').maxLines(1)
+      Text(this.statLabel(kind))
+        .fontSize(13).fontColor('#666').maxLines(1)
+    }
+    .layoutWeight(1)
+    .height(96)
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor(Color.White)
+    .borderRadius(4)
+    .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
+  }
+
+  statValue(kind: number): string {
+    if (kind === 0) {
+      return '' + this.recentBooks.length;
+    }
+    if (kind === 1) {
+      return '' + this.countFinishedBooks();
+    }
+    if (kind === 2) {
+      return this.fmtDuration(this.statsData.totalMs);
+    }
+    if (kind === 3) {
+      return this.fmtDuration(this.statsData.todayMs);
+    }
+    return this.statsData.speedPpm + '';
+  }
+
+  statLabel(kind: number): string {
+    if (kind === 0) {
+      return '\u4E66\u7C4D\u603B\u6570';
+    }
+    if (kind === 1) {
+      return '\u5DF2\u8BFB\u4E66\u7C4D';
+    }
+    if (kind === 2) {
+      return '\u603B\u9605\u8BFB\u65F6\u95F4';
+    }
+    if (kind === 3) {
+      return '\u4ECA\u65E5\u9605\u8BFB';
+    }
+    return '\u9605\u8BFB\u901F\u5EA6\uFF08\u9875/\u5206\uFF09';
+  }
+
+  /** Quick-access circle: colored disc + icon + caption (Android 我的文件/网上书库 rows). */
+  @Builder
+  shortcutCircle(icon: Resource, color: string, label: string, target: number) {
+    Column({ space: 8 }) {
+      Column() {
+        Image(icon).width(28).height(28).fillColor(Color.White)
+      }
+      .width(64).height(64)
+      .justifyContent(FlexAlign.Center)
+      .backgroundColor(color)
+      .borderRadius(32)
+      Text(label)
+        .fontSize(13).fontColor('#666').maxLines(1)
+    }
+    .onClick(() => {
+      this.switchTab(target);
+    })
+  }
+
+  /** Group allBookmarks into one card per book (cover + title + 快速书签 + percent). */
+  private bookmarkCards(): BookmarkCard[] {
+    const cards: BookmarkCard[] = [];
+    for (let i = 0; i < this.allBookmarks.length; i++) {
+      const b: Bookmark = this.allBookmarks[i];
+      let found: BookmarkCard | undefined = undefined;
+      for (let j = 0; j < cards.length; j++) {
+        if (cards[j].path === b.path) {
+          found = cards[j];
+          break;
+        }
+      }
+      if (found === undefined) {
+        let cover = '';
+        let title = b.path.substring(b.path.lastIndexOf('/') + 1);
+        let total = 0;
+        for (let k = 0; k < this.recentBooks.length; k++) {
+          if (this.recentBooks[k].path === b.path) {
+            cover = this.recentBooks[k].coverPath;
+            title = this.recentBooks[k].title;
+            total = this.recentBooks[k].totalPages;
+            break;
+          }
+        }
+        const card: BookmarkCard = { path: b.path, title: title, cover: cover, percent: '' };
+        if (total > 0) {
+          const pct: number = Math.floor((b.page + 1) * 100 / total);
+          card.percent = pct + '%';
+        }
+        cards.push(card);
+      }
+    }
+    return cards;
+  }
+
+  /** Home tab (Android hr01/hr03): recents shelf + bookmark cards + favorites + stats + shortcuts + OPDS. */
   @Builder
   buildDashboardTab() {
     Scroll() {
-      Column({ space: 12 }) {
-        /* continue reading the last book */
-        if (this.recentBooks.length > 0) {
-          Row() {
-            if (this.recentBooks[0].coverPath.length > 0) {
-              Image(this.recentBooks[0].coverPath)
-                .width(52).height(70).borderRadius(4).objectFit(ImageFit.Cover).backgroundColor('#eee')
-            } else {
-              Column() {
-                Text('\u{1F4C4}').fontSize(26)
-              }
-              .width(52).height(70)
-              .justifyContent(FlexAlign.Center)
-              .backgroundColor('#f0f0f0').borderRadius(4)
-            }
-            Column({ space: 3 }) {
-              Text('\u7EE7\u7EED\u9605\u8BFB')
-                .fontSize(11).fontColor('#888')
-              Text(this.recentBooks[0].title.length > 18 ? this.recentBooks[0].title.substring(0, 18) + '\u2026' : this.recentBooks[0].title)
-                .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333').maxLines(1)
-              Text(this.recentBooks[0].totalPages > 0 ? '\u7B2C ' + (this.recentBooks[0].page + 1) + ' / ' + this.recentBooks[0].totalPages + ' \u9875' : '')
-                .fontSize(11).fontColor('#888')
-            }
-            .layoutWeight(1)
-            .alignItems(HorizontalAlign.Start)
-            .margin({ left: 10 })
-            Text('\u203A')
-              .fontSize(26).fontColor('#3949AB')
-          }
-          .width('92%')
-          .padding(10)
-          .backgroundColor('#eef1fb')
-          .borderRadius(10)
-          .onClick(() => {
-            this.openBook(this.recentBooks[0]);
-          })
-        }
-
-        /* recent covers carousel */
-        Text('\u6700\u8FD1\u9605\u8BFB')
-          .fontSize(14).fontWeight(FontWeight.Bold).fontColor('#333').width('92%')
+      Column() {
+        /* 最近阅读: horizontal cover shelf */
+        this.sectionHeader('\u6700\u8FD1\u9605\u8BFB', 0)
         Scroll() {
-          Row({ space: 10 }) {
+          Row({ space: 12 }) {
             ForEach(this.recentBooks, (book: RecentBook) => {
-              this.coverThumb(book)
+              this.coverTile(book)
             }, (item: RecentBook) => item.path)
           }
+          .padding({ left: 12, right: 12 })
         }
         .scrollable(ScrollDirection.Horizontal)
-        .width('92%')
+        .width('100%')
 
-        /* favorites */
-        if (this.starredBooks.length > 0) {
-          Text('\u6211\u7684\u73CD\u85CF')
-            .fontSize(14).fontWeight(FontWeight.Bold).fontColor('#333').width('92%')
+        /* 书签笔记: per-book cards */
+        this.sectionHeader('\u4E66\u7B7E\u7B14\u8BB0', 9)
+        if (this.bookmarkCards().length === 0) {
+          Text('\u6682\u65E0\u4E66\u7B7E\u7B14\u8BB0')
+            .fontSize(12).fontColor('#999')
+            .width('94%').padding({ left: 12, top: 2, bottom: 6 })
+        } else {
           Scroll() {
-            Row({ space: 10 }) {
-              ForEach(this.starredBooks, (book: RecentBook) => {
-                this.coverThumb(book)
-              }, (item: RecentBook) => item.path)
+            Row({ space: 12 }) {
+              ForEach(this.bookmarkCards(), (card: BookmarkCard) => {
+                Row({ space: 10 }) {
+                  if (card.cover.length > 0) {
+                    Image(card.cover).width(48).height(64).borderRadius(2).objectFit(ImageFit.Cover).backgroundColor('#eee')
+                  } else {
+                    Column() {
+                      Text(card.title.length > 4 ? card.title.substring(0, 4) : card.title)
+                        .fontSize(10).fontColor('#fff').maxLines(2).textAlign(TextAlign.Center)
+                    }
+                    .width(48).height(64).justifyContent(FlexAlign.Center).backgroundColor('#8d7b74').borderRadius(2)
+                  }
+                  Column({ space: 4 }) {
+                    Text(card.title.length > 16 ? card.title.substring(0, 16) + '\u2026' : card.title)
+                      .fontSize(14).fontWeight(FontWeight.Medium).fontColor('#333').maxLines(1)
+                    Text('\u5FEB\u901F\u4E66\u7B7E').fontSize(12).fontColor('#888')
+                    Text(card.percent).fontSize(12).fontColor('#999')
+                  }
+                  .alignItems(HorizontalAlign.Start)
+                  .layoutWeight(1)
+                }
+                .width(250)
+                .padding(10)
+                .backgroundColor(Color.White)
+                .borderRadius(4)
+                .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
+                .onClick(() => {
+                  this.activeOverlay = 1;
+                })
+              }, (card: BookmarkCard) => card.path)
             }
+            .padding({ left: 12, right: 12 })
           }
           .scrollable(ScrollDirection.Horizontal)
-          .width('92%')
+          .width('100%')
         }
 
-        /* quick grid: 我的文件 / 网上书库 / 书签笔记 / 偏好 */
+        /* 我的珍藏 */
+        if (this.starredBooks.length > 0) {
+          this.sectionHeader('\u6211\u7684\u73CD\u85CF', 1)
+          Scroll() {
+            Row({ space: 12 }) {
+              ForEach(this.starredBooks, (book: RecentBook) => {
+                this.coverTile(book)
+              }, (item: RecentBook) => item.path)
+            }
+            .padding({ left: 12, right: 12 })
+          }
+          .scrollable(ScrollDirection.Horizontal)
+          .width('100%')
+        }
+
+        /* 阅读统计: 3 + 2 white cards */
+        this.sectionHeader('\u9605\u8BFB\u7EDF\u8BA1', 7)
         Row({ space: 10 }) {
-          Column({ space: 4 }) {
-            Text('\u{1F4C1}').fontSize(22)
-            Text('\u6211\u7684\u6587\u4EF6').fontSize(11).fontColor('#333')
-          }
-          .layoutWeight(1).height(72)
-          .justifyContent(FlexAlign.Center)
-          .backgroundColor('#f5f5f5').borderRadius(8)
-          .onClick(() => {
-            this.switchTab(2);
-          })
-
-          Column({ space: 4 }) {
-            Text('\u{1F310}').fontSize(22)
-            Text('\u7F51\u4E0A\u4E66\u5E93').fontSize(11).fontColor('#333')
-          }
-          .layoutWeight(1).height(72)
-          .justifyContent(FlexAlign.Center)
-          .backgroundColor('#f5f5f5').borderRadius(8)
-          .onClick(() => {
-            this.activeOverlay = 2;
-          })
-
-          Column({ space: 4 }) {
-            Text('\u{1F516}').fontSize(22)
-            Text('\u4E66\u7B7E\u7B14\u8BB0').fontSize(11).fontColor('#333')
-          }
-          .layoutWeight(1).height(72)
-          .justifyContent(FlexAlign.Center)
-          .backgroundColor('#f5f5f5').borderRadius(8)
-          .onClick(() => {
-            this.activeOverlay = 1;
-          })
-
-          Column({ space: 4 }) {
-            Text('\u2699').fontSize(22)
-            Text('\u504F\u597D').fontSize(11).fontColor('#333')
-          }
-          .layoutWeight(1).height(72)
-          .justifyContent(FlexAlign.Center)
-          .backgroundColor('#f5f5f5').borderRadius(8)
-          .onClick(() => {
-            this.switchTab(3);
-          })
+          this.statCard(0)
+          this.statCard(1)
+          this.statCard(2)
         }
-        .width('92%')
-
-        /* 阅读统计: 5 cards (Android DashboardFragment2) */
-        Text('\u9605\u8BFB\u7EDF\u8BA1')
-          .fontSize(14).fontWeight(FontWeight.Bold).fontColor('#333').width('92%')
-        Row({ space: 6 }) {
-          Column({ space: 2 }) {
-            Text('' + this.recentBooks.length)
-              .fontSize(14).fontWeight(FontWeight.Bold).fontColor('#3949AB').maxLines(1)
-            Text('\u603B\u6570').fontSize(9).fontColor('#888')
-          }
-          .layoutWeight(1).padding({ top: 8, bottom: 8 }).backgroundColor('#f0f3fb').borderRadius(6)
-
-          Column({ space: 2 }) {
-            Text('' + this.countFinishedBooks())
-              .fontSize(14).fontWeight(FontWeight.Bold).fontColor('#3949AB').maxLines(1)
-            Text('\u5DF2\u8BFB').fontSize(9).fontColor('#888')
-          }
-          .layoutWeight(1).padding({ top: 8, bottom: 8 }).backgroundColor('#f0f3fb').borderRadius(6)
-
-          Column({ space: 2 }) {
-            Text(this.fmtDuration(this.statsData.totalMs))
-              .fontSize(14).fontWeight(FontWeight.Bold).fontColor('#3949AB').maxLines(1)
-            Text('\u603B\u65F6\u957F').fontSize(9).fontColor('#888')
-          }
-          .layoutWeight(1).padding({ top: 8, bottom: 8 }).backgroundColor('#f0f3fb').borderRadius(6)
-
-          Column({ space: 2 }) {
-            Text(this.fmtDuration(this.statsData.todayMs))
-              .fontSize(14).fontWeight(FontWeight.Bold).fontColor('#3949AB').maxLines(1)
-            Text('\u4ECA\u65E5').fontSize(9).fontColor('#888')
-          }
-          .layoutWeight(1).padding({ top: 8, bottom: 8 }).backgroundColor('#f0f3fb').borderRadius(6)
-
-          Column({ space: 2 }) {
-            Text(this.statsData.speedPpm + '\u9875/\u5206')
-              .fontSize(13).fontWeight(FontWeight.Bold).fontColor('#3949AB').maxLines(1)
-            Text('\u901F\u5EA6').fontSize(9).fontColor('#888')
-          }
-          .layoutWeight(1).padding({ top: 8, bottom: 8 }).backgroundColor('#f0f3fb').borderRadius(6)
+        .width('94%')
+        Row({ space: 10 }) {
+          this.statCard(3)
+          this.statCard(4)
         }
-        .width('92%')
+        .width('94%')
+        .margin({ top: 10 })
 
-        /* bar chart: 周 / 月 / 年 */
-        Row({ space: 8 }) {
-          ForEach(['\u5468', '\u6708', '\u5E74'], (label: string, idx: number) => {
-            Button(label)
-              .fontSize(11).height(26)
-              .backgroundColor(this.chartRange === idx ? '#3949AB' : '#e0e0e0')
-              .fontColor(this.chartRange === idx ? Color.White : '#333')
-              .onClick(() => {
-                this.chartRange = idx;
-                this.updateChartData();
-              })
-          }, (label: string, idx: number) => `range_${idx}`)
+        /* 我的文件: quick circles */
+        this.sectionHeader('\u6211\u7684\u6587\u4EF6', 2)
+        Row({ space: 20 }) {
+          if (this.webdavUrl.length > 0) {
+            this.shortcutCircle($r('app.media.ic_cloud'), '#4db6ac', 'WebDAV', 2)
+          }
+          this.shortcutCircle($r('app.media.ic_folder'), '#bdbdbd', 'Download', 2)
         }
-        .width('92%')
-        this.buildBarChart()
+        .width('94%')
+        .padding({ top: 4, bottom: 6 })
 
-        /* dev entry: raw test.pdf reader */
-        Text('\u6D4B\u8BD5 PDF (Reader)')
-          .fontSize(12).fontColor('#2a7')
-          .onClick(() => {
-            router.pushUrl({ url: 'components/Reader' })
-              .then(() => {
-                console.info('[Index] Navigated to Reader (test pdf)');
-              })
-              .catch((err: Error) => {
-                console.error('[Index] Navigate failed: ' + JSON.stringify(err));
-              });
-          })
+        /* 网上书库: OPDS circles */
+        this.sectionHeader('\u7F51\u4E0A\u4E66\u5E93', 8)
+        Row({ space: 20 }) {
+          ForEach(OPDS_PRESETS, (p: OpdsEntry) => {
+            Column({ space: 6 }) {
+              Column() {
+                Text('OPDS')
+                  .fontSize(12).fontWeight(FontWeight.Bold).fontColor(Color.White)
+              }
+              .width(64).height(64)
+              .justifyContent(FlexAlign.Center)
+              .backgroundColor('#3949AB')
+              .borderRadius(32)
+              Text(p.title.length > 8 ? p.title.substring(0, 8) + '\u2026' : p.title)
+                .fontSize(12).fontColor('#666').maxLines(1)
+            }
+            .onClick(() => {
+              this.activeOverlay = 2;
+            })
+          }, (p: OpdsEntry) => p.href)
+        }
+        .width('94%')
+        .padding({ top: 4, bottom: 24 })
       }
       .width('100%')
-      .padding({ top: 12, bottom: 20 })
     }
     .width('100%')
     .height('100%')
+    .backgroundColor('#f0f2f5')
+    .scrollBar(BarState.Off)
+  }
+
+  /** 阅读统计 chart dialog (Android hr02): range tabs + bar chart + 确认. */
+  @Builder
+  buildStatsChartDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showStatsChart = false;
+        })
+      Column({ space: 14 }) {
+        Row({ space: 28 }) {
+          ForEach(['\u8FD11\u5468', '\u8FD11\u6708', '\u8FD11\u5E74'], (label: string, idx: number) => {
+            Column({ space: 4 }) {
+              Text(label)
+                .fontSize(15)
+                .fontColor(this.chartRange === idx ? '#3949AB' : '#666')
+              Divider()
+                .width(label.length * 15 + 8)
+                .strokeWidth(2)
+                .color(this.chartRange === idx ? '#3949AB' : Color.Transparent)
+            }
+            .onClick(() => {
+              this.chartRange = idx;
+              this.updateChartData();
+            })
+          }, (label: string, idx: number) => `rng_${idx}`)
+        }
+        .width('100%')
+        this.buildBarChart()
+        Row() {
+          Blank()
+          Text('\u786E\u8BA4')
+            .fontSize(16).fontColor('#00897B')
+            .padding({ left: 20, top: 6, bottom: 2 })
+            .onClick(() => {
+              this.showStatsChart = false;
+            })
+        }
+        .width('100%')
+      }
+      .width('86%')
+      .padding(16)
+      .backgroundColor(Color.White)
+      .borderRadius(8)
+    }
+    .width('100%').height('100%')
   }
 
   /** Cover thumbnail used in dashboard carousels. */
@@ -1785,71 +1962,97 @@ struct Index {
   @Builder
   buildLibraryTab() {
     Column() {
-      /* search bar */
-      Row({ space: 6 }) {
-        Text('\u{1F50D}').fontSize(14).fontColor('#888')
-        TextInput({ placeholder: '\u641C\u7D22\u4E66\u540D/\u4F5C\u8005/\u6807\u7B7E', text: this.libQuery })
-          .fontSize(13).height(34).layoutWeight(1)
-          .onChange((v: string) => {
-            this.libQuery = v;
-          })
-        if (this.libQuery.length > 0) {
-          Text('\u2716').fontSize(14).fontColor('#aaa').width(26).height(34).textAlign(TextAlign.Center)
-            .onClick(() => {
-              this.libQuery = '';
-            })
-        }
-        if (this.selMode) {
-          Button('\u53D6\u6D88').fontSize(12).height(30).backgroundColor('#e0e0e0').fontColor('#333')
-            .onClick(() => {
-              this.exitSel();
-            })
-        }
-      }
-      .width('94%').margin({ top: 6 })
+      /* search + tools row (Android hr04: white search box on brand blue + sort/refresh/view) */
+      Column({ space: 8 }) {
+        Row({ space: 8 }) {
+          Row({ space: 6 }) {
+            Image($r('app.media.ic_search'))
+              .width(18).height(18).fillColor('#999')
+            TextInput({ placeholder: '\u641C\u7D22', text: this.libQuery })
+              .fontSize(14).height(38).layoutWeight(1)
+              .backgroundColor(Color.Transparent)
+              .padding(0)
+              .onChange((v: string) => {
+                this.libQuery = v;
+              })
+            if (this.selMode) {
+              Button('\u53D6\u6D88').fontSize(12).height(28).backgroundColor('#3949AB').fontColor(Color.White)
+                .onClick(() => {
+                  this.exitSel();
+                })
+            } else {
+              Text('' + this.getLibraryBooks().length)
+                .fontSize(14).fontColor('#3949AB')
+            }
+          }
+          .layoutWeight(1).height(38)
+          .backgroundColor(Color.White)
+          .borderRadius(3)
+          .padding({ left: 8, right: 8 })
 
-      /* status chips: 全部 / 未读 / 在读 / 已读 */
+          /* sort: label + chevron */
+          Row({ space: 2 }) {
+            Text(this.sortName(this.libSortMode))
+              .fontSize(13).fontColor(Color.White)
+            Image($r('app.media.ic_chevron_up'))
+              .width(14).height(14).fillColor(Color.White)
+          }
+          .height(38)
+          .padding({ left: 8, right: 4 })
+          .onClick(() => {
+            this.libSortMode = (this.libSortMode + 1) % 5;
+          })
+
+          Image($r('app.media.ic_refresh'))
+            .width(20).height(20).fillColor(Color.White)
+            .onClick(() => {
+              this.loadLibrary();
+            })
+
+          Image($r('app.media.ic_shelf'))
+            .width(22).height(22).fillColor(Color.White)
+            .onClick(() => {
+              this.libViewMode = (this.libViewMode + 1) % 5;
+            })
+        }
+        .width('100%')
+      }
+      .width('100%')
+      .padding({ left: 8, right: 8, top: 6, bottom: 8 })
+      .backgroundColor('#3949AB')
+
+      /* status chips: 全部 / 未读 / 在读 / 已读 (white chip + blue border, selected = blue bg) */
       Scroll() {
         Row({ space: 8 }) {
           ForEach(['\u5168\u90E8', '\u672A\u8BFB', '\u5728\u8BFB', '\u5DF2\u8BFB'], (label: string, idx: number) => {
-            Button(label)
-              .fontSize(12).height(28)
-              .backgroundColor(this.libStatusFilter === idx - 1 ? '#3949AB' : '#e0e0e0')
-              .fontColor(this.libStatusFilter === idx - 1 ? Color.White : '#333')
+            Text(label)
+              .fontSize(13)
+              .fontColor(this.libStatusFilter === idx - 1 ? Color.White : '#3949AB')
+              .height(28)
+              .padding({ left: 14, right: 14 })
+              .borderRadius(3)
+              .backgroundColor(this.libStatusFilter === idx - 1 ? '#3949AB' : Color.White)
+              .border({ width: 1, color: this.libStatusFilter === idx - 1 ? '#3949AB' : '#9FA8DA' })
               .onClick(() => {
                 this.libStatusFilter = this.libStatusFilter === idx - 1 ? -1 : idx - 1;
               })
           }, (label: string, idx: number) => `chip_${idx}`)
+          Text(this.libStarFilter ? '\u2605 \u6536\u85CF' : '\u2606 \u6536\u85CF')
+            .fontSize(13)
+            .fontColor(this.libStarFilter ? Color.White : '#3949AB')
+            .height(28)
+            .padding({ left: 14, right: 14 })
+            .borderRadius(3)
+            .backgroundColor(this.libStarFilter ? '#3949AB' : Color.White)
+            .border({ width: 1, color: this.libStarFilter ? '#3949AB' : '#9FA8DA' })
+            .onClick(() => {
+              this.libStarFilter = !this.libStarFilter;
+              console.info(`[Index] Library star filter: ${this.libStarFilter}`);
+            })
         }
       }
       .scrollable(ScrollDirection.Horizontal)
-      .width('94%').margin({ top: 6 })
-
-      /* tool row: sort + view + star filter + count */
-      Row({ space: 8 }) {
-        Button('\u6392\u5E8F:' + this.sortName(this.libSortMode))
-          .fontSize(11).height(28).backgroundColor('#e0e0e0').fontColor('#333')
-          .onClick(() => {
-            this.libSortMode = (this.libSortMode + 1) % 5;
-          })
-        Button('\u89C6\u56FE:' + this.viewName(this.libViewMode))
-          .fontSize(11).height(28).backgroundColor('#e0e0e0').fontColor('#333')
-          .onClick(() => {
-            this.libViewMode = (this.libViewMode + 1) % 5;
-          })
-        Button(this.libStarFilter ? '\u2605\u6536\u85CF' : '\u5168\u90E8')
-          .fontSize(11).height(28)
-          .backgroundColor(this.libStarFilter ? '#3949AB' : '#e0e0e0')
-          .fontColor(this.libStarFilter ? Color.White : '#333')
-          .onClick(() => {
-            this.libStarFilter = !this.libStarFilter;
-            console.info(`[Index] Library star filter: ${this.libStarFilter}`);
-          })
-        Blank()
-        Text('\u5171 ' + this.getLibraryBooks().length + ' \u672C')
-          .fontSize(11).fontColor('#888')
-      }
-      .width('94%').margin({ top: 6 })
+      .width('94%').margin({ top: 8 })
 
       /* batch selection bar */
       if (this.selMode) {
@@ -2063,39 +2266,174 @@ struct Index {
     }))
   }
 
-  /** Library grid / cover / bookshelf cell. */
+  /** Library grid / cover / bookshelf cell (Android hr04: cover + progress/star/more overlay). */
   @Builder
   LibGridCell(book: RecentBook) {
     Column({ space: 4 }) {
-      if (book.coverPath.length > 0) {
-        Image(book.coverPath)
+      Stack({ alignContent: Alignment.Bottom }) {
+        if (book.coverPath.length > 0) {
+          Image(book.coverPath)
+            .width('100%').aspectRatio(0.72)
+            .objectFit(ImageFit.Cover).backgroundColor('#eee')
+        } else {
+          Column() {
+            Text(book.title.length > 8 ? book.title.substring(0, 8) : book.title)
+              .fontSize(14).fontColor('#fff').maxLines(3).textAlign(TextAlign.Center)
+          }
           .width('100%').aspectRatio(0.72)
-          .objectFit(ImageFit.Cover).borderRadius(4).backgroundColor('#eee')
-      } else {
-        Column() {
-          Text('\u{1F4C4}').fontSize(34)
+          .justifyContent(FlexAlign.Center).padding(6).backgroundColor('#8d7b74')
         }
-        .width('100%').aspectRatio(0.72)
-        .justifyContent(FlexAlign.Center).backgroundColor('#f0f0f0').borderRadius(4)
+        if (!this.selMode) {
+          Row({ space: 6 }) {
+            if (book.totalPages > 0) {
+              Text('' + Math.floor((book.page + 1) * 100 / book.totalPages) + '%')
+                .fontSize(11).fontColor(book.status === 2 ? '#7cb342' : '#ffffff')
+                .backgroundColor('#66000000')
+                .width(44).height(44).borderRadius(22).textAlign(TextAlign.Center)
+            }
+            Blank()
+            Column() {
+              Image(book.star ? $r('app.media.ic_star') : $r('app.media.ic_star_border'))
+                .width(20).height(20).fillColor(Color.White)
+            }
+            .width(36).height(36).justifyContent(FlexAlign.Center)
+            .backgroundColor('#66000000').borderRadius(18)
+            .onClick(() => {
+              this.onToggleStar(book);
+            })
+            Column() {
+              Image($r('app.media.ic_more_vert'))
+                .width(20).height(20).fillColor(Color.White)
+            }
+            .width(36).height(36).justifyContent(FlexAlign.Center)
+            .backgroundColor('#66000000').borderRadius(18)
+            .onClick(() => {
+              this.libMenuPath = book.path;
+              console.info(`[Index] Book menu: ${book.title}`);
+            })
+          }
+          .width('100%')
+          .padding({ left: 6, right: 6, bottom: 6 })
+          .onClick(() => {
+            /* swallow taps on the overlay row so the cover tap doesn't fire */
+          })
+        }
       }
-      Text(book.title.length > 10 ? book.title.substring(0, 10) + '\u2026' : book.title)
-        .fontSize(11).fontColor('#333').maxLines(1)
-      Text(this.statusLabel(book.status))
-        .fontSize(9).fontColor(this.statusColor(book.status))
+      .width('100%')
+      .borderRadius(3)
+      .clip(true)
+      .onClick(() => {
+        if (this.selMode) {
+          this.toggleSelect(book.path);
+        } else {
+          this.openBook(book);
+        }
+      })
+      .gesture(LongPressGesture({ repeat: false, duration: 500 }).onAction(() => {
+        if (!this.selMode) {
+          this.selMode = true;
+          this.toggleSelect(book.path);
+        }
+      }))
+      if (this.libViewMode === 2) {
+        Text(book.title.length > 10 ? book.title.substring(0, 10) + '\u2026' : book.title)
+          .fontSize(11).fontColor('#333').maxLines(1)
+      }
     }
+  }
+
+  /** Resolve the book targeted by the per-book menu. */
+  private libMenuBook(): RecentBook | undefined {
+    for (let i = 0; i < this.recentBooks.length; i++) {
+      if (this.recentBooks[i].path === this.libMenuPath) {
+        return this.recentBooks[i];
+      }
+    }
+    return undefined;
+  }
+
+  /** Per-book actions (Android hr19 subset): status marks / star / delete. */
+  @Builder
+  buildLibMenuDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.libMenuPath = '';
+        })
+      Column() {
+        this.libMenuItem($r('app.media.ic_check'), '\u6807\u8BB0\u4E3A\u5DF2\u8BFB', 2)
+        this.libMenuItem($r('app.media.ic_circle_half'), '\u6807\u8BB0\u4E3A\u5728\u8BFB', 1)
+        this.libMenuItem($r('app.media.ic_circle_empty'), '\u6807\u8BB0\u4E3A\u672A\u8BFB\uFF08\u6E05\u7A7A\u8FDB\u5EA6\uFF09', 0)
+        Divider().color('#eeeeee')
+        this.libMenuStarItem()
+        Divider().color('#eeeeee')
+        this.libMenuDeleteItem()
+      }
+      .width('78%')
+      .padding({ top: 8, bottom: 8 })
+      .backgroundColor(Color.White)
+      .borderRadius(6)
+    }
+    .width('100%').height('100%')
+  }
+
+  @Builder
+  libMenuItem(icon: Resource, label: string, status: number) {
+    Row({ space: 14 }) {
+      Image(icon).width(20).height(20).fillColor('#3949AB')
+      Text(label).fontSize(15).fontColor('#333')
+    }
+    .width('100%')
+    .padding({ left: 18, right: 18, top: 13, bottom: 13 })
     .onClick(() => {
-      if (this.selMode) {
-        this.toggleSelect(book.path);
-      } else {
-        this.openBook(book);
-      }
+      const path: string = this.libMenuPath;
+      this.libMenuPath = '';
+      setBookStatus(getContext(this), path, status).then(() => {
+        return this.loadLibrary();
+      });
     })
-    .gesture(LongPressGesture({ repeat: false, duration: 500 }).onAction(() => {
-      if (!this.selMode) {
-        this.selMode = true;
-        this.toggleSelect(book.path);
+  }
+
+  @Builder
+  libMenuStarItem() {
+    Row({ space: 14 }) {
+      Image(this.libMenuBook()?.star ? $r('app.media.ic_star_border') : $r('app.media.ic_star'))
+        .width(20).height(20).fillColor('#3949AB')
+      Text(this.libMenuBook()?.star ? '\u53D6\u6D88\u6536\u85CF' : '\u6536\u85CF')
+        .fontSize(15).fontColor('#333')
+    }
+    .width('100%')
+    .padding({ left: 18, right: 18, top: 13, bottom: 13 })
+    .onClick(() => {
+      const path: string = this.libMenuPath;
+      this.libMenuPath = '';
+      toggleStar(getContext(this), path).then(() => {
+        return this.loadLibrary();
+      });
+    })
+  }
+
+  @Builder
+  libMenuDeleteItem() {
+    Row({ space: 14 }) {
+      Image($r('app.media.ic_close')).width(20).height(20).fillColor('#d32f2f')
+      Text('\u5220\u9664').fontSize(15).fontColor('#d32f2f')
+    }
+    .width('100%')
+    .padding({ left: 18, right: 18, top: 13, bottom: 13 })
+    .onClick(() => {
+      const path: string = this.libMenuPath;
+      this.libMenuPath = '';
+      try {
+        fs.unlinkSync(path);
+        console.info(`[Index] Deleted book file: ${path}`);
+      } catch (e) {
+        console.error('[Index] delete book failed');
       }
-    }))
+      this.loadLibrary();
+    })
   }
 
   /** Left drawer panel (Android DrawerLayout: banner + nav + quote + bottom bar). */
@@ -2114,11 +2452,11 @@ struct Index {
 
       /* nav items: 最近阅读 / 书库 / 我的文件 / 网上书库 / 书签笔记 */
       Column({ space: 0 }) {
-        this.drawerNavItem('\u23F3', '\u6700\u8FD1\u9605\u8BFB', 0)
-        this.drawerNavItem('\u{1F4DA}', '\u4E66\u5E93', 1)
-        this.drawerNavItem('\u{1F4C1}', '\u6211\u7684\u6587\u4EF6', 2)
-        this.drawerNavItem('\u{1F310}', '\u7F51\u4E0A\u4E66\u5E93', 3)
-        this.drawerNavItem('\u{1F516}', '\u4E66\u7B7E\u7B14\u8BB0', 4)
+        this.drawerNavItem($r('app.media.ic_toc'), '\u6700\u8FD1\u9605\u8BFB', 0)
+        this.drawerNavItem($r('app.media.ic_book_open'), '\u4E66\u5E93', 1)
+        this.drawerNavItem($r('app.media.ic_folder'), '\u6211\u7684\u6587\u4EF6', 2)
+        this.drawerNavItem($r('app.media.ic_globe'), '\u7F51\u4E0A\u4E66\u5E93', 3)
+        this.drawerNavItem($r('app.media.ic_bookmark'), '\u4E66\u7B7E\u7B14\u8BB0', 4)
       }
       .width('100%').margin({ top: 6 })
 
@@ -2137,10 +2475,10 @@ struct Index {
 
       /* bottom bar: 设置选项 / 软件说明 / 晚上模式 / 退出 */
       Row() {
-        this.drawerBottomButton('\u2699', '\u8BBE\u7F6E\u9009\u9879', 0)
-        this.drawerBottomButton('\u2139', '\u8F6F\u4EF6\u8BF4\u660E', 1)
-        this.drawerBottomButton('\u263D', '\u665A\u4E0A\u6A21\u5F0F', 2)
-        this.drawerBottomButton('\u2B05', '\u9000\u51FA', 3)
+        this.drawerBottomButton($r('app.media.ic_settings'), '\u8BBE\u7F6E\u9009\u9879', 0)
+        this.drawerBottomButton($r('app.media.ic_info'), '\u8F6F\u4EF6\u8BF4\u660E', 1)
+        this.drawerBottomButton($r('app.media.ic_brightness'), '\u665A\u4E0A\u6A21\u5F0F', 2)
+        this.drawerBottomButton($r('app.media.ic_close'), '\u9000\u51FA', 3)
       }
       .width('100%')
     }
@@ -2151,9 +2489,9 @@ struct Index {
 
   /** One drawer nav row. target: 0/1=library, 2=my files, 3=network, 4=bookmarks. */
   @Builder
-  drawerNavItem(icon: string, label: string, target: number) {
+  drawerNavItem(icon: Resource, label: string, target: number) {
     Row({ space: 10 }) {
-      Text(icon).fontSize(18)
+      Image(icon).width(20).height(20).fillColor(this.settings.theme > 0 ? '#ddd' : '#3949AB')
       Text(label).fontSize(14).fontColor(this.drawerFg())
     }
     .width('100%').height(48)
@@ -2175,9 +2513,9 @@ struct Index {
 
   /** One drawer bottom-bar button. kind: 0=settings, 1=about, 2=night, 3=exit. */
   @Builder
-  drawerBottomButton(icon: string, label: string, kind: number) {
+  drawerBottomButton(icon: Resource, label: string, kind: number) {
     Column({ space: 2 }) {
-      Text(icon).fontSize(16).fontColor(this.settings.theme > 0 ? '#ddd' : '#3949AB')
+      Image(icon).width(18).height(18).fillColor(this.settings.theme > 0 ? '#ddd' : '#3949AB')
       Text(label).fontSize(10).fontColor(this.settings.theme > 0 ? '#999' : '#666')
     }
     .layoutWeight(1)
@@ -2819,65 +3157,162 @@ struct Index {
     .padding({ top: 8 })
   }
 
-  /** my-files: root — 网络区 (OPDS/WebDAV) + 书库文件夹 (Android BrowseFragment2). */
+  /** 我的文件 root (Android hr05): OPDS / WebDAV / 书库文件夹 / 搜索 sections. */
+  @Builder
+  browseSectionHeader(title: string, addKind: number) {
+    Row() {
+      Text(title)
+        .fontSize(16).fontWeight(FontWeight.Medium).fontColor('#3949AB')
+      Blank()
+      if (addKind > 0) {
+        Row({ space: 2 }) {
+          Text('+').fontSize(16).fontColor('#3949AB')
+          Text('添加').fontSize(14).fontColor('#3949AB')
+        }
+        .onClick(() => {
+          if (addKind === 1) {
+            this.netSection = 0;
+            this.activeOverlay = 2;
+          } else if (addKind === 2) {
+            this.netSection = 1;
+            this.activeOverlay = 2;
+          } else {
+            this.openFilePicker();
+          }
+        })
+      }
+    }
+    .width('94%')
+    .padding({ top: 18, bottom: 4 })
+  }
+
+  /** Root entry row: leading icon + blue label (OPDS/WebDAV items, Android hr05). */
+  @Builder
+  browseEntryRow(icon: Resource, label: string) {
+    Row({ space: 14 }) {
+      Image(icon)
+        .width(24).height(24).fillColor('#3949AB')
+      Text(label)
+        .fontSize(16).fontColor('#3949AB')
+        .maxLines(1)
+        .layoutWeight(1)
+    }
+    .width('94%')
+    .padding({ left: 12, right: 12, top: 12, bottom: 12 })
+    .onClick(() => {
+      this.netSection = 0;
+      this.activeOverlay = 2;
+    })
+  }
+
+  /** 书库文件夹 row: folder icon + name + star (Android hr05). */
+  @Builder
+  browseFolderRow(f: LibFolder) {
+    Row({ space: 14 }) {
+      Image($r('app.media.ic_folder'))
+        .width(26).height(26).fillColor('#3949AB')
+      Text(f.name)
+        .fontSize(16).fontColor('#555')
+        .maxLines(1)
+        .layoutWeight(1)
+      Image($r('app.media.ic_star_border'))
+        .width(20).height(20).fillColor('#3949AB')
+    }
+    .width('94%')
+    .padding({ left: 12, right: 12, top: 12, bottom: 12 })
+    .backgroundColor(Color.White)
+    .borderRadius(3)
+    .margin({ bottom: 8 })
+    .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
+    .onClick(() => {
+      this.enterBrowseAbs(f.path);
+    })
+  }
+
   @Builder
   buildBrowseRoot() {
     Scroll() {
-      Column({ space: 8 }) {
-        Text('\u7F51\u7EDC\u533A')
-          .fontSize(13).fontWeight(FontWeight.Bold).fontColor('#333').width('92%')
-        Row() {
-          Text('\u{1F310}').fontSize(18)
-          Text('\u7F51\u4E0A\u4E66\u5E93 (OPDS)').fontSize(13).fontColor('#333').margin({ left: 10 }).layoutWeight(1)
-          Text('\u203A').fontSize(16).fontColor('#bbb')
-        }
-        .width('92%').padding(10).backgroundColor('#f5f5f5').borderRadius(8)
-        .onClick(() => {
-          this.activeOverlay = 2;
-        })
-        Row() {
-          Text('\u2601').fontSize(18)
-          Text('WebDAV \u670D\u52A1\u5668').fontSize(13).fontColor('#333').margin({ left: 10 }).layoutWeight(1)
-          Text('\u203A').fontSize(16).fontColor('#bbb')
-        }
-        .width('92%').padding(10).backgroundColor('#f5f5f5').borderRadius(8)
-        .onClick(() => {
-          this.activeOverlay = 2;
-        })
+      Column() {
+        /* 网上书库（OPDS） */
+        this.browseSectionHeader('\u7F51\u4E0A\u4E66\u5E93\uFF08OPDS\uFF09', 1)
+        ForEach(OPDS_PRESETS, (p: OpdsEntry) => {
+          this.browseEntryRow($r('app.media.ic_globe'), p.title)
+        }, (p: OpdsEntry) => p.href)
 
-        Text('\u4E66\u5E93\u6587\u4EF6\u5939')
-          .fontSize(13).fontWeight(FontWeight.Bold).fontColor('#333').width('92%')
-        ForEach(this.libFolders, (f: LibFolder) => {
-          Row() {
-            Text('\u{1F4C2}').fontSize(18)
-            Column({ space: 2 }) {
-              Text(f.name).fontSize(13).fontColor('#333').maxLines(1)
-              Text(f.path).fontSize(9).fontColor('#999').maxLines(1)
-            }
-            .layoutWeight(1).alignItems(HorizontalAlign.Start).margin({ left: 10 })
-            Text('\u203A').fontSize(16).fontColor('#bbb')
+        Divider().color('#e8e8e8').margin({ top: 8 })
+
+        /* WebDAV */
+        this.browseSectionHeader('WebDAV', 2)
+        if (this.webdavUrl.length > 0) {
+          Row({ space: 14 }) {
+            Image($r('app.media.ic_cloud'))
+              .width(24).height(24).fillColor('#3949AB')
+            Text(this.webdavUrl)
+              .fontSize(16).fontColor('#3949AB')
+              .maxLines(1)
+              .layoutWeight(1)
+            Image($r('app.media.ic_pencil'))
+              .width(20).height(20).fillColor('#3949AB')
+              .onClick(() => {
+                this.netSection = 1;
+                this.activeOverlay = 2;
+              })
           }
-          .width('92%').padding(10).backgroundColor('#f0f3fb').borderRadius(8)
+          .width('94%')
+          .padding({ left: 12, right: 12, top: 12, bottom: 12 })
           .onClick(() => {
-            this.enterBrowseAbs(f.path);
+            this.netSection = 1;
+            this.activeOverlay = 2;
           })
-        }, (f: LibFolder) => f.path)
-
-        Text('\u5FEB\u6377\u76EE\u5F55')
-          .fontSize(13).fontWeight(FontWeight.Bold).fontColor('#333').width('92%')
-        Row() {
-          Text('\u{1F4C2}').fontSize(18)
-          Text('\u5DF2\u5BFC\u5165\u7684\u4E66 (\u4E66\u5E93)').fontSize(13).fontColor('#333').margin({ left: 10 }).layoutWeight(1)
-          Text('\u203A').fontSize(16).fontColor('#bbb')
+        } else {
+          Text('\u5C1A\u672A\u6DFB\u52A0\u670D\u52A1\u5668')
+            .fontSize(13).fontColor('#999')
+            .width('94%').padding({ left: 12, bottom: 8 })
         }
-        .width('92%').padding(10).backgroundColor('#f5f5f5').borderRadius(8)
+
+        Divider().color('#e8e8e8').margin({ top: 8 })
+
+        /* 书库文件夹 */
+        this.browseSectionHeader('\u4E66\u5E93\u6587\u4EF6\u5939', 3)
+        ForEach(this.libFolders, (f: LibFolder) => {
+          this.browseFolderRow(f)
+        }, (f: LibFolder) => f.path)
+        Row({ space: 14 }) {
+          Image($r('app.media.ic_book_open'))
+            .width(24).height(24).fillColor('#3949AB')
+          Text('\u5DF2\u5BFC\u5165\u7684\u4E66 \uFF08\u4E66\u5E93\uFF09')
+            .fontSize(16).fontColor('#555')
+            .layoutWeight(1)
+        }
+        .width('94%')
+        .padding({ left: 12, right: 12, top: 12, bottom: 12 })
         .onClick(() => {
           this.enterBrowseAbs(this.libFolders.length > 0 ? this.libFolders[0].path : '');
         })
+
+        Divider().color('#e8e8e8').margin({ top: 8 })
+
+        /* 搜索 */
+        this.browseSectionHeader('\u641C\u7D22', 0)
+        Row({ space: 14 }) {
+          Image($r('app.media.ic_db_search'))
+            .width(24).height(24).fillColor('#3949AB')
+          Text('\u5728\u591A\u4E2A\u6587\u6863\u4E2D\u641C\u7D22')
+            .fontSize(16).fontColor('#3949AB')
+            .layoutWeight(1)
+        }
+        .width('94%')
+        .padding({ left: 12, right: 12, top: 12, bottom: 24 })
+        .onClick(() => {
+          this.switchTab(1);
+        })
       }
-      .width('100%').padding({ top: 4, bottom: 16 })
+      .width('100%')
+      .padding({ bottom: 16 })
     }
-    .width('100%').layoutWeight(1)
+    .width('100%')
+    .layoutWeight(1)
+    .scrollBar(BarState.Off)
   }
 
   // ---- Phase 4: browse helpers ----
@@ -3030,14 +3465,123 @@ struct Index {
     this.listBrowseDir();
   }
 
+  /** Blue section header bar (Android hr07: 书库设置/常规设置/UI配置). */
+  @Builder
+  settingsSectionBar(title: string) {
+    Text(title)
+      .fontSize(15).fontWeight(FontWeight.Medium).fontColor(Color.White)
+      .width('100%')
+      .padding({ left: 12, top: 9, bottom: 9 })
+      .backgroundColor('#3949AB')
+      .borderRadius(2)
+  }
+
+  /** Key-value row (Android hr07: label + blue underlined value). */
+  @Builder
+  settingsKvRow(label: string, value: string) {
+    Row() {
+      Text(label)
+        .fontSize(14).fontColor('#333').width(120)
+      Text(value)
+        .fontSize(14).fontColor('#3949AB')
+        .decoration({ type: TextDecorationType.Underline, color: '#3949AB' })
+        .maxLines(1)
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+  }
+
   @Builder
   buildSettingsTab() {
     Scroll() {
       Column({ space: 8 }) {
+        /* ===== 偏好 sub-bar + profile (Android hr07) ===== */
+        Row() {
+          Text('\u504F\u597D')
+            .fontSize(15).fontWeight(FontWeight.Medium).fontColor(Color.White)
+          Blank()
+          Text('\u9000\u51FA\u7A0B\u5E8F')
+            .fontSize(14).fontColor(Color.White)
+            .decoration({ type: TextDecorationType.Underline, color: Color.White })
+            .onClick(() => {
+              (getContext(this) as common.UIAbilityContext).terminateSelf();
+              console.info('[Index] Exit app requested from prefs');
+            })
+        }
+        .width('100%')
+        .height(40)
+        .padding({ left: 12, right: 12 })
+        .backgroundColor('#4a5ac0')
+
+        /* 配置文件 row: avatar + name + gear */
+        Row({ space: 12 }) {
+          Text('\u914D\u7F6E\u6587\u4EF6')
+            .fontSize(14).fontColor('#333')
+          Blank()
+          Column() {
+            Text('H')
+              .fontSize(18).fontWeight(FontWeight.Bold).fontColor(Color.White)
+          }
+          .width(42).height(42)
+          .justifyContent(FlexAlign.Center)
+          .backgroundColor('#3949AB')
+          .borderRadius(21)
+          Text('HowRead')
+            .fontSize(15).fontColor('#3949AB')
+            .decoration({ type: TextDecorationType.Underline, color: '#3949AB' })
+          Image($r('app.media.ic_settings'))
+            .width(22).height(22).fillColor('#00897B')
+        }
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 10, bottom: 2 })
+
+        Text('\u91CD\u7F6E')
+          .fontSize(14).fontColor('#3949AB')
+          .decoration({ type: TextDecorationType.Underline, color: '#3949AB' })
+          .width('100%')
+          .padding({ left: 12, bottom: 4 })
+          .onClick(() => {
+            this.settings = defaultSettings();
+            saveSettings(getContext(this), this.settings);
+            this.status = '\u5DF2\u91CD\u7F6E\u4E3A\u9ED8\u8BA4\u8BBE\u7F6E';
+            console.info('[Index] Settings reset to defaults');
+          })
+
+        /* ===== 常规设置: key-value rows ===== */
+        this.settingsSectionBar('\u5E38\u89C4\u8BBE\u7F6E')
+        this.settingsKvRow('\u5C4F\u5E55', '\u6B63\u5E38')
+        this.settingsKvRow('\u5C4F\u5E55\u65B9\u5411', '\u7CFB\u7EDF')
+        this.settingsKvRow('\u8BED\u8A00', '\u7CFB\u7EDF\u9ED8\u8BA4')
+        Row() {
+          Text('WebDAV \u540C\u6B65')
+            .fontSize(14).fontColor('#333').width(120)
+          Text(this.webdavUrl.length > 0 ? this.webdavUrl : '\u672A\u914D\u7F6E')
+            .fontSize(14).fontColor('#3949AB')
+            .decoration({ type: TextDecorationType.Underline, color: '#3949AB' })
+            .maxLines(1)
+            .layoutWeight(1)
+        }
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+        .onClick(() => {
+          this.netSection = 1;
+          this.activeOverlay = 2;
+        })
+        Row() {
+          Text('AI \u5927\u6A21\u578B')
+            .fontSize(14).fontColor('#333').width(120)
+          Text('\u672A\u914D\u7F6E')
+            .fontSize(14).fontColor('#3949AB')
+            .decoration({ type: TextDecorationType.Underline, color: '#3949AB' })
+        }
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+        .onClick(() => {
+          this.status = 'AI \u63A5\u5165\u5C06\u5728\u540E\u7EED\u7248\u672C\u63D0\u4F9B';
+        })
+
         /* ===== Reader settings (sprint E) ===== */
-        Text('阅读设置')
-          .fontSize(15).fontWeight(FontWeight.Bold)
-          .margin({ top: 4 })
+        this.settingsSectionBar('\u9605\u8BFB\u914D\u7F6E')
 
         // Theme
         Row({ space: 8 }) {
@@ -3223,10 +3767,24 @@ struct Index {
             .fontSize(11).fontColor('#777').width(36)
         }
 
+        /* ===== UI 配置 (Android hr07) ===== */
+        this.settingsSectionBar('UI\u914D\u7F6E')
+        Row({ space: 12 }) {
+          Image($r('app.media.ic_info'))
+            .width(22).height(22).fillColor('#00897B')
+          Text('\u8F6F\u4EF6\u8BF4\u660E')
+            .fontSize(15).fontColor('#00897B')
+            .decoration({ type: TextDecorationType.Underline, color: '#00897B' })
+            .layoutWeight(1)
+        }
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+        .onClick(() => {
+          this.activeOverlay = 3;
+        })
+
         // ---- Sprint K: System integration settings ----
-        Text('\u7CFB\u7EDF\u96C6\u6210')
-          .fontSize(15).fontWeight(FontWeight.Bold)
-          .margin({ top: 8 })
+        this.settingsSectionBar('\u7CFB\u7EDF\u96C6\u6210')
 
         /* K2: App lock */
         Row({ space: 8 }) {

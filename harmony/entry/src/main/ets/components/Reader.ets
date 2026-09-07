@@ -731,15 +731,15 @@ struct Reader {
     return '#f5f5f5';
   }
 
-  /** Top-bar background per theme. */
+  /** Top-bar background per theme (Android hr10: brand blue / night navy / ink brown). */
   private barBg(): string {
     if (this.theme === 3) {
       return '#4a3a28'; /* ink: dark brown bar */
     }
     if (this.nightMode) {
-      return '#1a1a1a';
+      return '#282b40';
     }
-    return '#333333';
+    return '#3949AB';
   }
 
   /** Re-layout a reflowable doc with the current typography settings. */
@@ -2060,77 +2060,95 @@ struct Reader {
     }
   }
 
+  /** One row of the selection dialog menu (Android hr12). */
+  @Builder
+  selMenuRow(icon: Resource, label: string, action: number) {
+    Row({ space: 16 }) {
+      Image(icon)
+        .width(22).height(22).fillColor('#00897B')
+      Text(label)
+        .fontSize(16).fontColor('#00897B')
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, top: 11, bottom: 11 })
+    .onClick(() => {
+      if (action === 1) {
+        this.toggleBookmark();
+        this.exitSelMode();
+      } else if (action === 2) {
+        this.copySelText();
+        this.exitSelMode();
+      } else if (action === 3) {
+        this.searchQuery = this.selText;
+        this.openSearch();
+        this.doSearch();
+        this.exitSelMode();
+      } else if (action === 4) {
+        this.showSelNoteInput = true;
+      } else if (action === 5) {
+        promptAction.showToast({ message: '\u5206\u4EAB\u529F\u80FD\u5C06\u5728\u540E\u7EED\u7248\u672C\u63D0\u4F9B' });
+        this.exitSelMode();
+      } else if (action === 6) {
+        promptAction.showToast({ message: 'AI \u529F\u80FD\u5C06\u5728\u540E\u7EED\u7248\u672C\u63D0\u4F9B' });
+      } else if (action === 7 || action === 8) {
+        promptAction.showToast({ message: '\u5728\u7EBF\u67E5\u8BCD\u5C06\u5728\u540E\u7EED\u7248\u672C\u63D0\u4F9B' });
+        this.exitSelMode();
+      }
+    })
+  }
+
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       /* Main content area */
       Column() {
-        // Top bar - Row 1: Title + page info (sprint G3)
+        // Top bar - single row (Android hr10/11): title + TOC/brightness/fullscreen/AI/settings/close
         Row() {
-          Text('←')
-            .fontSize(18).fontColor(Color.White).margin({ right: 8 })
-            .onClick(() => {
-              router.back();
-              console.info('[Reader] Back to library');
-            })
-
           Column({ space: 1 }) {
-            Text(this.docTitle.length > 20 ? this.docTitle.substring(0, 20) + '…' : (this.docTitle.length > 0 ? this.docTitle : ''))
+            Text(this.docTitle.length > 16 ? this.docTitle.substring(0, 16) + '…' : (this.docTitle.length > 0 ? this.docTitle : ''))
               .fontSize(14).fontColor(Color.White).maxLines(1).fontWeight(FontWeight.Medium)
-            Text(this.totalPages > 0 ? `p${this.currentPage + 1}/${this.totalPages}` : '...')
-              .fontSize(11).fontColor('#bbb')
+            Text(this.totalPages > 0 ? `${this.currentPage + 1}/${this.totalPages}` : '...')
+              .fontSize(10).fontColor('#c5cae9')
           }
           .alignItems(HorizontalAlign.Start)
           .layoutWeight(1)
 
-          // Mode indicator (compact)
-          Text(this.scrollMode === 0 ? '⇄' : '⇅')
-            .fontSize(14).fontColor('#aaa').margin({ right: 4 })
-        }
-        .width('100%').height(36)
-        .justifyContent(FlexAlign.Center)
-        .backgroundColor(this.barBg())
-
-        // Top bar - Row 2: Tool icons strip (sprint G3)
-        Row() {
-          Text('🔍')
-            .fontSize(16).fontColor(Color.White).margin({ right: 14 })
-            .onClick(() => this.openSearch())
-
-          Text('🔖')
-            .fontSize(16).fontColor(Color.White).margin({ right: 14 })
+          Image($r('app.media.ic_toc'))
+            .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
             .onClick(() => {
-              this.toggleBookmark();
+              this.showToc = true;
+              console.info('[Reader] TOC opened (top bar)');
             })
-
-          Text('📑')
-            .fontSize(16).fontColor(Color.White).margin({ right: 14 })
+          Image($r('app.media.ic_brightness'))
+            .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
             .onClick(() => {
-              this.loadBookmarks().then(() => {
-                this.showBookmarks = true;
-                console.info('[Reader] Bookmark panel opened');
-              });
+              this.brightnessLevel = this.brightnessLevel > 200 ? 64 : this.brightnessLevel + 32;
+              this.setBrightness(this.brightnessLevel);
             })
-
-          Text('🔊')
-            .fontSize(16).fontColor(Color.White).margin({ right: 14 })
-            .onClick(() => this.openTtsPanel())
-
-          Text('⚡')
-            .fontSize(16).fontColor(Color.White).margin({ right: 14 })
-            .onClick(() => this.openRsvpPanel())
-
-          Blank()
-
-          // Menu button (right-aligned)
-          Text('≡ 菜单')
-            .fontSize(13).fontColor(Color.White)
+          Image($r('app.media.ic_fullscreen'))
+            .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
+            .onClick(() => {
+              this.toggleFullscreen();
+            })
+          Image($r('app.media.ic_ai'))
+            .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
+            .onClick(() => {
+              promptAction.showToast({ message: 'AI \u529F\u80FD\u5C06\u5728\u540E\u7EED\u7248\u672C\u63D0\u4F9B' });
+            })
+          Image($r('app.media.ic_settings'))
+            .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
             .onClick(() => {
               this.showMenu = !this.showMenu;
               console.info(`[Reader] Menu toggled (top bar): ${this.showMenu}`);
             })
+          Image($r('app.media.ic_close'))
+            .width(22).height(22).fillColor(Color.White)
+            .onClick(() => {
+              router.back();
+              console.info('[Reader] Close reader');
+            })
         }
-        .width('100%').height(36)
-        .justifyContent(FlexAlign.Center)
+        .width('100%').height(46)
+        .padding({ left: 12, right: 12 })
         .backgroundColor(this.barBg())
 
         // Search bar (visible when opened)
@@ -2163,36 +2181,6 @@ struct Reader {
           .width('96%')
           .padding({ top: 6, bottom: 6 })
           .backgroundColor(this.nightMode ? '#222' : '#f0f0f0')
-        }
-
-        // Progress bar with chapter info (sprint I3)
-        Row() {
-          Progress({ value: this.totalPages > 1 ? (this.currentPage / (this.totalPages - 1)) * 100 : 0, total: 100 })
-            .layoutWeight(1).height(4)
-            .color(this.nightMode ? '#aaa' : Color.Blue)
-          if (this.tocEntries.length > 0) {
-            Text(`${this.tocEntries.length}\u7AE0`)
-              .fontSize(9).fontColor('#ff9800')
-              .margin({ left: 4 })
-          }
-        }
-        .width('96%').height(12)
-
-        /* Phase 6: page seek slider (Android footer seekbar) */
-        if (this.totalPages > 1) {
-          Slider({ value: this.currentPage, min: 0, max: this.totalPages - 1, step: 1 })
-            .width('96%').height(22)
-            .selectedColor('#3949AB')
-            .onChange((value: number, mode: SliderChangeMode) => {
-              if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                const target: number = Math.max(0, Math.min(Math.round(value), this.totalPages - 1));
-                if (target !== this.currentPage) {
-                  this.currentPage = target;
-                  this.onPageChanged(target);
-                  console.info(`[Reader] Seek to page ${target + 1}`);
-                }
-              }
-            })
         }
 
         // Main reading area
@@ -2338,60 +2326,81 @@ struct Reader {
           })
         }
 
-        // Bottom toolbar (sprint G2: icon strip like Android document_footer)
+        // Bottom toolbar (Android hr10/11: brand blue bar, white icons)
         Row() {
-          /* Page mode toggle */
-          Text(this.pageMode === 0 ? '□' : (this.pageMode === 1 ? '□□' : '♫'))
-            .fontSize(14).fontColor(this.nightMode ? '#ccc' : '#333')
-            .margin({ right: 12 })
+          Image($r('app.media.ic_search'))
+            .width(22).height(22).fillColor(Color.White).margin({ right: 22 })
+            .onClick(() => this.openSearch())
+
+          Image($r('app.media.ic_edit'))
+            .width(22).height(22).fillColor(Color.White).margin({ right: 22 })
             .onClick(() => {
-              this.togglePageMode();
+              this.loadTextRects();
+              this.parseSelLines();
+              this.selMode = true;
+              console.info(`[Reader] Selection mode (bottom bar) on page ${this.currentPage}`);
             })
 
-          /* TOC */
-          if (this.tocEntries.length > 0) {
-            Text('📑')
-              .fontSize(15).fontColor(this.nightMode ? '#ccc' : '#333')
-              .margin({ right: 12 })
-              .onClick(() => {
-                this.showToc = true;
-                console.info('[Reader] TOC opened (bottom bar)');
-              })
-          }
+          Image($r('app.media.ic_bookmark'))
+            .width(22).height(22).fillColor(Color.White).margin({ right: 22 })
+            .onClick(() => {
+              this.toggleBookmark();
+            })
 
-          /* Bookmarks */
-          Text('🔖')
-            .fontSize(15).fontColor(this.nightMode ? '#ccc' : '#333')
-            .margin({ right: 12 })
+          Image($r('app.media.ic_list'))
+            .width(22).height(22).fillColor(Color.White).margin({ right: 22 })
             .onClick(() => {
               this.loadBookmarks().then(() => {
                 this.showBookmarks = true;
-                console.info('[Reader] Bookmarks opened (bottom bar)');
+                console.info('[Reader] Bookmark panel opened (bottom bar)');
               });
             })
 
-          /* Search */
-          Text('🔍')
-            .fontSize(15).fontColor(this.nightMode ? '#ccc' : '#333')
-            .margin({ right: 12 })
-            .onClick(() => this.openSearch())
-
           Blank()
 
-          /* Zoom display */
-          Text(`${Math.round(this.zoomLevel * 100)}%`)
-            .fontSize(11).fontColor(this.nightMode ? '#888' : Color.Gray)
-            .margin({ right: 8 })
+          Image($r('app.media.ic_lock'))
+            .width(22).height(22).fillColor(Color.White).margin({ right: 22 })
+            .onClick(() => {
+              this.toggleFullscreen();
+              console.info('[Reader] Lock/fullscreen toggled (bottom bar)');
+            })
 
-          /* Progress (compact) */
-          if (this.totalPages > 1) {
-            Text(`${Math.round((this.currentPage / (this.totalPages - 1)) * 100)}%`)
-              .fontSize(11).fontColor(this.nightMode ? '#666' : '#999')
-          }
+          Image($r('app.media.ic_more_vert'))
+            .width(22).height(22).fillColor(Color.White)
+            .onClick(() => {
+              this.showMenu = !this.showMenu;
+              console.info(`[Reader] Menu toggled (bottom bar): ${this.showMenu}`);
+            })
         }
-        .width('100%').height(38)
-        .padding({ left: 12, right: 12 })
-        .backgroundColor(this.chromeBg())
+        .width('100%').height(44)
+        .padding({ left: 16, right: 16 })
+        .backgroundColor(this.barBg())
+
+        /* Page seek slider row (Android hr10: page number left, total right, white on blue) */
+        Row({ space: 10 }) {
+          Text(this.totalPages > 0 ? '' + (this.currentPage + 1) : '0')
+            .fontSize(12).fontColor(Color.White).width(36).textAlign(TextAlign.Center)
+          Slider({ value: this.currentPage, min: 0, max: Math.max(this.totalPages - 1, 1), step: 1 })
+            .layoutWeight(1).height(24)
+            .selectedColor(Color.White)
+            .trackColor('#5c6bc0')
+            .blockColor(Color.White)
+            .onChange((value: number, mode: SliderChangeMode) => {
+              if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                const target: number = Math.max(0, Math.min(Math.round(value), this.totalPages - 1));
+                if (target !== this.currentPage) {
+                  this.currentPage = target;
+                  this.onPageChanged(target);
+                  console.info(`[Reader] Seek to page ${target + 1}`);
+                }
+              }
+            })
+          Text(this.totalPages > 0 ? '' + this.totalPages : '0')
+            .fontSize(12).fontColor(Color.White).width(36).textAlign(TextAlign.Center)
+        }
+        .width('100%')
+        .padding({ left: 8, right: 8, top: 2, bottom: 6 })
+        .backgroundColor(this.barBg())
       }
       .width('100%').height('100%')
       .backgroundColor(this.chromeBg())
@@ -2428,75 +2437,109 @@ struct Reader {
           .hitTestBehavior(HitTestMode.None)
       }
 
-      /* Phase 9: floating selection action bar (bottom, above the toolbar) */
+      /* Phase 9: selection action dialog (Android hr12: 文本 popup) */
       if (this.selMode) {
-        Column() {
-          Blank()
-          Column({ space: 8 }) {
-            Text(this.selText.length > 0
-              ? (this.selText.length > 24 ? this.selText.substring(0, 24) + '…' : this.selText)
-              : '选择文本（点按设终点）')
-              .fontSize(12)
-              .fontColor(this.nightMode ? '#bbb' : '#666')
-              .maxLines(1)
-            Row({ space: 8 }) {
-              Button('下划线')
-                .fontSize(12).height(32)
+        Stack({ alignContent: Alignment.Center }) {
+          Column()
+            .width('100%').height('100%')
+            .backgroundColor('#33000000')
+            .onClick(() => {
+              this.exitSelMode();
+            })
+          Column() {
+            /* blue header: 文本 + close */
+            Row() {
+              Text('\u6587\u672C')
+                .fontSize(16).fontColor(Color.White)
+              Blank()
+              Image($r('app.media.ic_close'))
+                .width(20).height(20).fillColor(Color.White)
+                .onClick(() => {
+                  this.exitSelMode();
+                })
+            }
+            .width('100%')
+            .height(42)
+            .padding({ left: 14, right: 14 })
+            .backgroundColor('#3949AB')
+
+            /* selected text + TTS entries */
+            Row({ space: 10 }) {
+              Text(this.selText.length > 0
+                ? (this.selText.length > 18 ? this.selText.substring(0, 18) + '…' : this.selText)
+                : '\u9009\u62E9\u6587\u672C')
+                .fontSize(15).fontColor('#333')
+                .maxLines(1)
+                .layoutWeight(1)
+              Image($r('app.media.ic_sparkle'))
+                .width(22).height(22).fillColor('#00897B')
+                .onClick(() => {
+                  promptAction.showToast({ message: 'AI \u529F\u80FD\u5C06\u5728\u540E\u7EED\u7248\u672C\u63D0\u4F9B' });
+                })
+              Image($r('app.media.ic_book_open'))
+                .width(22).height(22).fillColor('#00897B')
+                .onClick(() => this.openTtsPanel())
+            }
+            .width('100%')
+            .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+
+            /* markup row */
+            Row({ space: 6 }) {
+              Button('\u4E0B\u5212')
+                .fontSize(11).height(30).layoutWeight(1).padding({ left: 0, right: 0 })
                 .backgroundColor('#1e88e5').fontColor(Color.White)
                 .onClick(() => this.applySelMarkup('underline'))
-              Button('删除线')
-                .fontSize(12).height(32)
+              Button('\u5220\u9664')
+                .fontSize(11).height(30).layoutWeight(1).padding({ left: 0, right: 0 })
                 .backgroundColor('#e53935').fontColor(Color.White)
                 .onClick(() => this.applySelMarkup('strikeout'))
-              Button('波浪线')
-                .fontSize(12).height(32)
+              Button('\u6CE2\u6D6A')
+                .fontSize(11).height(30).layoutWeight(1).padding({ left: 0, right: 0 })
                 .backgroundColor('#8e24aa').fontColor(Color.White)
                 .onClick(() => this.applySelMarkup('squiggly'))
-              Button('高亮')
-                .fontSize(12).height(32)
+              Button('\u9AD8\u4EAE')
+                .fontSize(11).height(30).layoutWeight(1).padding({ left: 0, right: 0 })
                 .backgroundColor('#fbc02d').fontColor(Color.White)
                 .onClick(() => this.applySelMarkup('highlight'))
             }
+            .width('100%')
+            .padding({ left: 14, right: 14, bottom: 6 })
+
             if (this.showSelNoteInput) {
               Row({ space: 8 }) {
-                TextInput({ text: this.selNoteInput, placeholder: '笔记内容' })
+                TextInput({ text: this.selNoteInput, placeholder: '\u7B14\u8BB0\u5185\u5BB9' })
                   .layoutWeight(1).height(36).fontSize(13)
                   .onChange((value: string) => {
                     this.selNoteInput = value;
                   })
-                Button('添加')
+                Button('\u6DFB\u52A0')
                   .fontSize(12).height(32)
-                  .backgroundColor('#43a047').fontColor(Color.White)
+                  .backgroundColor('#00897B').fontColor(Color.White)
                   .onClick(() => this.applySelNote())
               }
+              .width('100%')
+              .padding({ left: 14, right: 14, bottom: 6 })
             }
-            Row({ space: 8 }) {
-              Button('笔记')
-                .fontSize(12).height(32)
-                .backgroundColor('#43a047').fontColor(Color.White)
-                .onClick(() => {
-                  this.showSelNoteInput = !this.showSelNoteInput;
-                })
-              Button('复制')
-                .fontSize(12).height(32)
-                .backgroundColor('#607d8b').fontColor(Color.White)
-                .onClick(() => this.copySelText())
-              Button('取消')
-                .fontSize(12).height(32)
-                .backgroundColor('#e0e0e0').fontColor('#333')
-                .onClick(() => this.exitSelMode())
-            }
+
+            Divider().color('#eeeeee')
+
+            /* menu rows (Android hr12 list) */
+            this.selMenuRow($r('app.media.ic_bookmark'), '\u52A0\u5165\u4E66\u7B7E', 1)
+            this.selMenuRow($r('app.media.ic_share'), '\u5206\u4EAB', 5)
+            this.selMenuRow($r('app.media.ic_copy'), '\u590D\u5236', 2)
+            this.selMenuRow($r('app.media.ic_search'), '\u6587\u5185\u641C\u7D22', 3)
+            this.selMenuRow($r('app.media.ic_sparkle'), '\u53D1\u9001\u7ED9AI', 6)
+            this.selMenuRow($r('app.media.ic_edit'), '\u7B14\u8BB0', 4)
+            Divider().color('#eeeeee')
+            this.selMenuRow($r('app.media.ic_globe'), '\u7F51\u7EDC\u641C\u7D22(\u8C37\u6B4C\u7B49)', 7)
+            this.selMenuRow($r('app.media.ic_book_open'), '\u7F51\u7EDC\u8BCD\u5178(\u725B\u6D25\u8BCD\u5178\u7B49)', 8)
           }
-          .width('92%')
-          .padding(10)
-          .borderRadius(10)
-          .backgroundColor(this.nightMode ? '#2b2b2b' : '#ffffff')
-          .shadow({ radius: 8, color: '#33000000', offsetX: 0, offsetY: 2 })
-          .alignItems(HorizontalAlign.Center)
+          .width('82%')
+          .backgroundColor(Color.White)
+          .borderRadius(4)
+          .clip(true)
         }
         .width('100%').height('100%')
-        .hitTestBehavior(HitTestMode.Transparent)
-        .padding({ bottom: 48 })
       }
 
       /* Menu overlay (modal: full-screen dim + centered panel) */
