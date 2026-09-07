@@ -1,6 +1,6 @@
 {
   "app": {
-    "bundleName": "com.foobnix.pdf.reader",
+    "bundleName": "com.howread.reader",
     "vendor": "foobnix",
     "versionCode": 1,
     "versionName": "1.0.0",

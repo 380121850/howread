@@ -1,0 +1,24 @@
+{
+  "string": [
+    {
+      "name": "EntryAbility_label",
+      "value": "好好读"
+    },
+    {
+      "name": "tab_home",
+      "value": "首页"
+    },
+    {
+      "name": "tab_library",
+      "value": "书库"
+    },
+    {
+      "name": "tab_my_files",
+      "value": "我的文件"
+    },
+    {
+      "name": "tab_prefs",
+      "value": "偏好"
+    }
+  ]
+}

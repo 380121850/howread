@@ -19,6 +19,9 @@ import image from '@ohos.multimedia.image';
 import router from '@ohos.router';
 import brightness from '@system.brightness';
 import webview from '@ohos.web.webview';
+import promptAction from '@ohos.promptAction';
+import picker from '@ohos.file.picker';
+import { importUriToSandbox } from '../model/FileImport';
 import {
   version, openDocument, pageCount, renderPageAsync, closeDocument, getToc, getPageSize,
   searchText, searchDocument, getText, getAnnotations, addHighlight, addInkStroke, deleteAnnotation, saveDocument,
@@ -26,6 +29,7 @@ import {
   RenderResult, RenderOptions, TocEntry, CropRect, TextRect, AnnotationInfo, DocumentInfo
 } from 'libmupdf_napi.so';
 import { saveRecentBook, getPageForPath, RecentBook } from '../model/ReadingProgress';
+import { recordReadTime, recordPagesRead } from '../model/ReadingStats';
 import { getBookmarks, addBookmark, removeBookmark, Bookmark } from '../model/Bookmarks';
 import { TextUtils } from '../model/TextUtils';
 import { loadSettings, saveSettings, THEME_NAMES, ReaderSettings } from '../model/Settings';
@@ -444,6 +448,10 @@ struct Reader {
   private rsvpTokens: string[] = [];
   private rsvpIndex: number = 0;
   private rsvpTimerId: number = -1;
+  /** Phase 3: 30s reading-time reporting timer */
+  private readTimerId: number = -1;
+  /** Phase 6: reading-reminder one-shot timer */
+  private reminderTimerId: number = -1;
   private rsvpAdvancing: boolean = false;
 
   /* Hidden ArkWeb host that exposes speechSynthesis for TTS */
@@ -494,6 +502,10 @@ struct Reader {
   aboutToAppear(): void {
     try {
       const ctx = getContext(this);
+      /* Phase 3: report reading time in 30s chunks while the reader is open */
+      this.readTimerId = setInterval(() => {
+        this.tickReadTime();
+      }, 30000);
       this.initSettings(ctx).then(() => {
         const params = router.getParams() as Record<string, string>;
         if (params !== null && params !== undefined && params['docPath'] !== undefined) {
@@ -535,6 +547,17 @@ struct Reader {
       }
 
     console.info(`[Reader] Settings applied: theme=${s.theme} zoom=${s.zoom.toFixed(2)} font=${s.fontSize} lh=${s.lineHeight.toFixed(1)}`);
+    /* Phase 6: reading reminder (one-shot after N minutes) */
+    if (s.readReminderMinutes > 0) {
+      this.reminderTimerId = setTimeout(() => {
+        try {
+          promptAction.showToast({ message: '\u5DF2\u8FDE\u7EED\u9605\u8BFB ' + s.readReminderMinutes + ' \u5206\u949F\uff0c\u5EFA\u8BAE\u4F11\u606F\u4E00\u4E0B' });
+        } catch (e) {
+          console.error('[Reader] reminder toast failed');
+        }
+        this.reminderTimerId = -1;
+      }, s.readReminderMinutes * 60000);
+    }
   }
 
   private applySettings(s: ReaderSettings): void {
@@ -555,6 +578,8 @@ struct Reader {
     this.fontSize = s.fontSize;
     this.lineHeight = s.lineHeight;
     this.pageMargin = s.margin;
+    this.blueLightFilter = s.blueLightFilter;
+    this.bgImagePath = s.bgImagePath;
     this.dataSource.setZoom(this.zoomLevel);
     this.dataSource.setInvert(this.nightMode);
     if (this.brightnessLevel > 0) {
@@ -584,6 +609,10 @@ struct Reader {
       lineHeight: this.lineHeight,
       margin: this.pageMargin,
       appLockEnabled: false, /* loaded from global prefs on Index side */
+      appLockPass: '1234',
+      readReminderMinutes: 0,
+      blueLightFilter: this.blueLightFilter,
+      bgImagePath: this.bgImagePath,
       proxyHost: '',
       proxyPort: 8080,
       proxyType: 0,
@@ -596,6 +625,30 @@ struct Reader {
       flipAnimation: 0
     };
     await saveSettings(getContext(this), s);
+  }
+
+  /** Phase 7: pick a background image via the system picker and persist its sandbox path. */
+  private async pickBgImage(): Promise<void> {
+    try {
+      const ctx = getContext(this);
+      let documentPicker = new picker.DocumentViewPicker(ctx);
+      let options: picker.DocumentSelectOptions = {
+        fileSuffixFilters: ['JPG|jpg|jpeg', 'PNG|png', 'WEBP|webp'],
+        maxSelectNumber: 1
+      };
+      const uris: Array<string> = await documentPicker.select(options);
+      if (uris.length === 0) {
+        console.info('[Reader] BG image picker cancelled');
+        return;
+      }
+      const target: string = importUriToSandbox(ctx, uris[0]);
+      this.bgImagePath = target;
+      this.bgImageAlpha = 60;
+      this.persistSettings();
+      console.info(`[Reader] Background image set: ${target}`);
+    } catch (e) {
+      console.error('[Reader] pickBgImage failed');
+    }
   }
 
   /** Apply a theme: drives invert + UI chrome colors. */
@@ -715,6 +768,14 @@ struct Reader {
   }
 
   aboutToDisappear(): void {
+    if (this.readTimerId >= 0) {
+      clearInterval(this.readTimerId);
+      this.readTimerId = -1;
+    }
+    if (this.reminderTimerId >= 0) {
+      clearTimeout(this.reminderTimerId);
+      this.reminderTimerId = -1;
+    }
     this.stopAutoFlip();
     this.ttsStopped = true;
     this.stopTtsPoll();
@@ -736,17 +797,37 @@ struct Reader {
         author: '',
         tags: [],
         series: '',
-        genre: ''
+        genre: '',
+        status: 0
       };
       saveRecentBook(ctx, book);
     }
     this.dataSource.closeDoc();
   }
 
+  /** Phase 3: accumulate a 30s reading-time chunk. */
+  private tickReadTime(): void {
+    try {
+      recordReadTime(getContext(this), 30000).catch((e: Error) => {
+      });
+    } catch (e) {
+      console.error('[Reader] read time tick failed');
+    }
+  }
+
   private onPageChanged(index: number): void {
     const prevPage = this.currentPage;
     this.currentPage = index;
     console.info(`[Reader] Page changed to ${index + 1}/${this.totalPages}`);
+    /* Phase 3: count a flipped page only when the page actually changed */
+    if (prevPage !== index) {
+      try {
+        recordPagesRead(getContext(this), 1).catch((e: Error) => {
+        });
+      } catch (e) {
+        /* non-fatal */
+      }
+    }
     this.saveProgress(index);
     this.refreshAnnotations();
     /* Re-anchor active reading modes (TTS / RSVP) to the new page */
@@ -784,7 +865,8 @@ struct Reader {
         author: '',
         tags: [],
         series: '',
-        genre: ''
+        genre: '',
+        status: 0
       };
       saveRecentBook(ctx, book);
     }
@@ -1838,6 +1920,23 @@ struct Reader {
         }
         .width('96%').height(12)
 
+        /* Phase 6: page seek slider (Android footer seekbar) */
+        if (this.totalPages > 1) {
+          Slider({ value: this.currentPage, min: 0, max: this.totalPages - 1, step: 1 })
+            .width('96%').height(22)
+            .selectedColor('#3949AB')
+            .onChange((value: number, mode: SliderChangeMode) => {
+              if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                const target: number = Math.max(0, Math.min(Math.round(value), this.totalPages - 1));
+                if (target !== this.currentPage) {
+                  this.currentPage = target;
+                  this.onPageChanged(target);
+                  console.info(`[Reader] Seek to page ${target + 1}`);
+                }
+              }
+            })
+        }
+
         // Main reading area
         if (this.scrollMode === 0) {
           /* Horizontal Swiper mode */
@@ -2012,10 +2111,16 @@ struct Reader {
       }
 
       /* I6: Custom background image (behind content, touches pass through) */
-      if (this.bgImagePath.length > 0 && this.bgImageAlpha > 0) {
+      if (this.bgImagePath.length > 0 && this.bgImageAlpha > 0 && this.bgImagePath !== 'placeholder') {
+        Image(this.bgImagePath)
+          .width('100%').height('100%')
+          .objectFit(ImageFit.Cover)
+          .opacity(this.bgImageAlpha / 100.0)
+          .hitTestBehavior(HitTestMode.None)
+      } else if (this.bgImagePath === 'placeholder' && this.bgImageAlpha > 0) {
         Column()
           .width('100%').height('100%')
-          .backgroundColor('#f5f5dc') /* placeholder until picker works */
+          .backgroundColor('#f5f5dc') /* legacy placeholder until picker works */
           .opacity(this.bgImageAlpha / 100.0)
           .hitTestBehavior(HitTestMode.None)
       }
@@ -2183,6 +2288,7 @@ struct Reader {
                 this.blueLightFilter = Math.round(value);
                 if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
                   console.info(`[Reader] Blue light filter: ${this.blueLightFilter}%`);
+                  this.persistSettings();
                 }
               })
             Text(this.blueLightFilter > 0 ? `${this.blueLightFilter}%` : '\u5173')
@@ -2220,15 +2326,13 @@ struct Reader {
               })
           }
 
-          /* I6: Background image */
+          /* I6: Background image (Phase 7: real picker → sandbox path) */
           Row({ space: 8 }) {
-            Button('\u80CC\u666F\u56FE')
+            Button(this.bgImagePath.length > 0 ? '\u80CC\u666F\u56FE \u2713' : '\u80CC\u666F\u56FE')
               .fontSize(12).height(32)
               .backgroundColor('#4db6ac').fontColor(Color.White)
               .onClick(() => {
-                /* TODO: open image picker - for now toggle a placeholder */
-                this.bgImagePath = this.bgImagePath.length > 0 ? '' : 'placeholder';
-                console.info(`[Reader] Background image: ${this.bgImagePath}`);
+                this.pickBgImage();
               })
             if (this.bgImagePath.length > 0) {
               Slider({ value: this.bgImageAlpha, min: 0, max: 100, step: 5 })
@@ -2237,6 +2341,7 @@ struct Reader {
                   this.bgImageAlpha = Math.round(value);
                   if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
                     console.info(`[Reader] BG image alpha: ${this.bgImageAlpha}%`);
+                    this.persistSettings();
                   }
                 })
             }

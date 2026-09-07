@@ -3,6 +3,22 @@
     {
       "name": "start_window_background",
       "value": "#FFFFFF"
+    },
+    {
+      "name": "brand_primary",
+      "value": "#3949AB"
+    },
+    {
+      "name": "brand_accent",
+      "value": "#03A9F4"
+    },
+    {
+      "name": "tab_selected",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "tab_unselected",
+      "value": "#DDFFFFFF"
     }
   ]
 }

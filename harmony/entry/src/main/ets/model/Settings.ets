@@ -57,6 +57,14 @@ export interface ReaderSettings {
   /* ---- Sprint K: System integration ---- */
   /** App lock enabled (biometric/password) */
   appLockEnabled: boolean;
+  /** App lock passcode (Phase 6; default 1234) */
+  appLockPass: string;
+  /** Reading reminder interval in minutes (0 = off, Phase 6) */
+  readReminderMinutes: number;
+  /** Blue-light filter overlay opacity 0..100 (Phase 7) */
+  blueLightFilter: number;
+  /** User background image path for the reader ('' = none, Phase 7) */
+  bgImagePath: string;
   /** Proxy server host (empty = no proxy) */
   proxyHost: string;
   /** Proxy port */
@@ -103,6 +111,10 @@ export function defaultSettings(): ReaderSettings {
     dropCapEnabled: false,
     fontFamily: 'default',
     appLockEnabled: false,
+    appLockPass: '1234',
+    readReminderMinutes: 0,
+    blueLightFilter: 0,
+    bgImagePath: '',
     proxyHost: '',
     proxyPort: 8080,
     proxyType: 0,
@@ -143,6 +155,10 @@ export async function loadSettings(ctx: Context): Promise<ReaderSettings> {
       dropCapEnabled: r.dropCapEnabled === true,
       fontFamily: typeof r.fontFamily === 'string' ? r.fontFamily : d.fontFamily,
       appLockEnabled: r.appLockEnabled === true,
+      appLockPass: typeof r.appLockPass === 'string' ? r.appLockPass : d.appLockPass,
+      readReminderMinutes: typeof r.readReminderMinutes === 'number' ? r.readReminderMinutes : d.readReminderMinutes,
+      blueLightFilter: typeof r.blueLightFilter === 'number' ? r.blueLightFilter : d.blueLightFilter,
+      bgImagePath: typeof r.bgImagePath === 'string' ? r.bgImagePath : d.bgImagePath,
       proxyHost: typeof r.proxyHost === 'string' ? r.proxyHost : d.proxyHost,
       proxyPort: typeof r.proxyPort === 'number' ? r.proxyPort : d.proxyPort,
       proxyType: typeof r.proxyType === 'number' ? r.proxyType : d.proxyType,

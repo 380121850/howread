@@ -33,6 +33,78 @@
 
 ---
 
+## 阶段 8（2026-09-06）：UI 壳对齐安卓 V1.0.0（移植 Phase 1）
+
+> 背景：安卓 V1.0.0 稳定后，按用户要求把鸿蒙端口 UI 布局与功能对齐安卓。此前鸿蒙是自创 6-Tab（最近/收藏/书签/浏览/设置/云盘），安卓是「底部 4 Tab（首页/书库/我的文件/偏好）+ 左侧抽屉 + 顶栏 + FAB」。
+
+已完成 ✅：
+1. ✅ **主框架重构**：Index.ets 改为安卓同款壳——顶栏（品牌色 #3949AB：☰ 汉堡 + Tab 标题 + ＋ 导入）、底部 4 Tab、左侧抽屉（280vp：品牌横幅"值得读，好好读" + 5 导航项 + 随机读书格言 + 底部 4 按钮）、右下 FAB"继续阅读"、3 模态浮层（书签笔记/网上书库/软件说明）。
+2. ✅ **功能归位**（一个不丢）：最近→首页轮播+书库；收藏→书库星标筛选；书签管理→抽屉书签笔记浮层；浏览→我的文件 Tab；设置→偏好 Tab；WebDAV→网上书库浮层。
+3. ✅ **抽屉定位 bug 修复**：本 SDK 的 Stack 子级 `.align(Alignment.TopStart)` 未生效（面板跑到右侧），改用全屏 Row 固定左侧。
+4. ✅ **主题资源**：color.json 补 brand_primary #3949AB / accent #03A9F4 / tab 选中未选色；应用名修正（AppScope HowRead/好好读，entry 新增 zh_CN）。
+5. ✅ **抽屉格言**：rawfile/reading_quotes.txt（复用安卓 assets 1000+ 条），随机刷新。
+6. ✅ **验证**：编译/安装/启动通过；uitest 布局核对（4 Tab/抽屉/浮层/FAB 均渲染、格言随机刷新）；交互 hilog 驱动验证（Tab 切换、晚上模式、三浮层、FAB→Reader 渲染）；无崩溃。
+
+待后续阶段：书库搜索/状态chips/排序/视图模式（阶段2）、首页阅读统计（阶段3）、我的文件 my-files:（阶段4）、OPDS（阶段5）等。
+
+### 阶段 8 续（2026-09-07）：书库对齐（移植 Phase 2）✅ 已完成
+
+1. ✅ **书库搜索**：书名/作者/系列/标签模糊过滤（TextInput + 实时过滤）。
+2. ✅ **状态 chips**：全部/未读/在读/已读；`RecentBook.status`（0/1/2）持久化，旧数据按 page/totalPages 回填推导。
+3. ✅ **排序**：最近/名称/日期/作者/系列 5 种。
+4. ✅ **视图模式**：列表/紧凑/网格/封面/书架（木纹背景）5 种。
+5. ✅ **批量选择**：长按进入 → N 项已选/全选/标记已读/未读/在读/取消；`setBookStatus/setBooksStatus` 批量持久化。
+6. ✅ **进度条**：每行 Linear Progress（page+1/totalPages）。
+7. ✅ **元数据合并修复**：`saveRecentBook` 由"整体替换"改为"合并"——Reader 只传 page/totalPages/lastRead 时保留 star/cover/author/tags/series/genre/status（此前读一次书会丢星标/封面/标签）。
+8. ✅ **ForEach 重渲修复**：书库列表/网格 key 由 `path` 改为 `path_page_status_star`，状态/星标/进度变化时强制重渲（ArkUI ForEach 同 key 复用不刷新数据的经典坑）。
+9. ✅ **验证**：uitest/hilog 驱动——搜索过滤、chips 筛选（在读→1 本）、批量标记持久化（hilog `setBooksStatus 1 books -> 1` + 设备 preferences 文件核对 status=1）、5 视图切换、列表状态标签与进度条渲染正确、无崩溃。
+
+### 阶段 8 续（2026-09-07）：首页阅读统计 + 品牌对齐（移植 Phase 3）✅ 已完成
+
+1. ✅ **ReadingStats 模型**（新 `model/ReadingStats.ets`）：totalMs + 每日/每月 JSON（preferences 持久化）；`recordReadTime`（30s 分块）、`recordPagesRead`（翻页计数）、聚合统计（今日/本月/速度）、近 N 日/近 N 月序列。
+2. ✅ **Reader 上报**：aboutToAppear 启动 30s 定时器 → `recordReadTime(30000)`，aboutToDisappear 停止；onPageChanged 实际翻页才 `recordPagesRead(1)`。
+3. ✅ **首页统计区块**（对齐安卓 DashboardFragment2 截图 hr01/hr03）：5 卡片 总数/已读/总时长/今日/速度 + 柱状图（周/月/年 三档，近7天/30天/12个月）。
+4. ✅ **反应式修复**：@Builder 参数不追踪状态 → 统计卡改为直接在 Text 内引用 @State；图表数据改为 @State 数组（chartValues/chartLabels）由 updateChartData() 驱动。
+5. ✅ **onPageShow 刷新**：从阅读器返回首页时 loadStats + loadLibrary。
+6. ✅ **品牌对齐**（用户要求）：图标替换为 docs/howread_cleaned.png（512px 缩放，AppScope + entry 双 media）；包名 com.foobnix.pdf.reader → **com.howread.reader**（与安卓 google 渠道一致，signing/gen_signing.sh + profile-template.json 包名同步后重签）；应用名 HowRead/好好读（阶段1 已完成）。
+7. ✅ **验证**：uitest——统计卡 总数 8 响应式；阅读 90s 后返回首页显示 总时长/今日 2m；hilog `[Stats] record 30000ms, total=90000` 累计正确；周柱状图 09-01~09-07 标签渲染；新包名安装启动正常。无崩溃。
+
+### 阶段 8 续（2026-09-07）：我的文件 my-files:（移植 Phase 4）✅ 已完成
+
+1. ✅ **my-files: 根视图**（对齐安卓 hr05）：网络区（网上书库 OPDS / WebDAV 服务器 两项入口）+ 书库文件夹（书库=cacheDir，可进入）+ 快捷目录。
+2. ✅ **文件夹浏览器**：面包屑栏（⌂ home / ↑ 上级 / 路径 / 网格·列表切换），目录在前文件在后，点击目录进入、点击书籍打开（可阅读扩展名判定，非书文件弹操作菜单）、长按弹操作菜单。
+3. ✅ **文件操作**：长按 → 打开 / 重命名 / 删除 / 关闭（fs.renameSync / fs.unlinkSync / fs.rmdirSync）。
+4. ✅ **新建文件夹**：对话框输入 → fs.mkdirSync → 列表刷新（验证：testfolder 创建成功出现在目录列表）。
+5. ⚠️ **系统分享未接**：本 OpenHarmony SDK 无 `@ohos.share` 模块（编译报错），分享行已移除（后续设备/API 支持再补；安卓截图 hr12 的分享属文本选择浮层，阶段6 评估）。
+6. ✅ **验证**：uitest 驱动——根视图三分区渲染、进入书库文件夹列出 demo 书、长按弹出操作菜单、新建文件夹成功。无崩溃。
+
+### 阶段 8 续（2026-09-07）：网上书库 OPDS（移植 Phase 5）✅ 已完成
+
+1. ✅ **Opds 模型**（新 `model/Opds.ets`）：`@ohos.net.http` fetch + 字符串解析（entry/title/link/rel 分类 subsection→目录 / acquisition→书籍，href 相对路径解析，实体解码）；带浏览器 UA（Gutenberg 等要求）。
+2. ✅ **网上书库浮层重构**：OPDS 目录 / WebDAV 云盘 双区切换；OPDS 内置 3 书目（Project Gutenberg / Standard Ebooks / CBETA 电子佛典）+ 自定义 URL；目录下钻（返回栈）+ 书籍下载入库（复用 WebDAV 下载模式）。
+3. ✅ **解析器验证**：Node 复刻逻辑测试通过（子目录/书籍分类、标题、href 解析全对）。
+4. ⚠️ **公共书源从模拟器网络被拒**（Gutenberg 403 / Standard Ebooks 401）：fetch 管道正常（能收到状态码），属模拟器网络环境限制；自定义 URL 可在可用网络中使用。
+5. ✅ **验证**：浮层渲染（OPDS 选中态/3 书目/自定义地址）、点击拉取日志正确。无崩溃。
+
+### 阶段 8 续（2026-09-07）：阅读器增强 + 应用锁 + 阅读提醒（移植 Phase 6 部分）✅ 已完成（部分）
+
+1. ✅ **应用锁**：Settings 增加 `appLockPass`（默认 1234）+ 偏好页锁屏密码输入；Index 启动/返回时若 appLockEnabled 显示全屏锁定覆盖层（密码掩码输入 → 校验 → 解锁，错误清空重输）；验证：开启→重启→锁定页→输入 1234→解锁（hilog `App lock requested` / `App unlocked`）。
+2. ✅ **阅读提醒**：Settings 增加 `readReminderMinutes`（0=关）+ 偏好页设置项（30 分钟步进）；Reader 打开时设一次性定时器，到点 showToast 提醒；aboutToDisappear 清理。
+3. ✅ **阅读器页码滑块**：Reader 底部进度条下加 Slider（0..totalPages-1），End/Click 跳页（对齐安卓 footer SeekBar）。
+4. ✅ **验证**：应用锁全流程、偏好页新设置项、阅读器 Slider 渲染（uitest 组件树含 Slider）。无崩溃。
+5. ⏸ **未做（记录待续）**：PDF 文本精确选择 + 下划线/删除线标注（需 NAPI 扩展 C++）、查词/翻译（需外部 API）、系统分享（本 SDK 无 @ohos.share，需 @kit.ShareKit 评估）、播放列表、书内 WebView（不迁移清单）。
+
+### 阶段 8 续（2026-09-07）：我的文件/OPDS/阅读器增强/品牌收尾（移植 Phase 4-7）✅ 已完成（部分）
+
+1. ✅ **我的文件**（Phase 4）：my-files: 根视图（网络区+书库文件夹+快捷目录）、文件夹浏览器（面包屑/网格列表/目录在前）、长按文件操作（打开/重命名/删除）、新建文件夹。系统分享暂缺（SDK 无 @ohos.share）。
+2. ✅ **OPDS 网上书库**（Phase 5）：model/Opds.ets fetch+解析；浮层 OPDS/WebDAV 双区；内置书目+自定义 URL；下钻+下载入库；解析器 Node 测试通过；公共书源被模拟器网络拒（403/401）。
+3. ✅ **应用锁/阅读提醒/页码滑块**（Phase 6）：锁定→解锁全流程验证；阅读提醒定时 toast；Reader Slider 跳页。
+4. ✅ **蓝光持久化/真实背景图**（Phase 7）：Settings 持久化 + 图片选择器衬底。
+5. ✅ **品牌**：图标 howread_cleaned.png；包名 com.howread.reader；应用名 HowRead/好好读。
+6. ⏸ **后续（按用户要求自动继续）**：文本选择+下划线/删除线标注（NAPI C++）、查词/翻译、WebDAV 三向同步、桌面卡片、TTS 录音导出（LAME 交叉编译）、连字符词库、播放列表、i18n 铺开。测试书 ci/autotest/teskbook 供压力/真机验证。
+
+---
+
 ## 阶段 1：环境与构建链路 ✅ 已完成
 
 Ubuntu22（lee 用户 + `source ~/.bashrc`）构建、`hvigorw assembleHap --mode module -p product=default -p buildMode=debug`、hdc 安装启动、`timeout N hilog | grep` 日志验证。

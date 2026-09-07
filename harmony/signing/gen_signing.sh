@@ -79,7 +79,7 @@ profile = {
     "bundle-info": {
         "developer-id": "librera",
         "development-certificate": leaf,
-        "bundle-name": "com.foobnix.pdf.reader",
+        "bundle-name": "com.howread.reader",
         "apl": "normal",
         "app-feature": "hos_normal_app",
         "app-identifier": "6918739742083506800"

@@ -30,6 +30,22 @@ export interface RecentBook {
   series: string;
   /** genre/category (e.g. "Fantasy", "Sci-Fi") */
   genre: string;
+  /* Phase 2: reading status 0=unread 1=reading 2=finished */
+  status: number;
+}
+
+/** Derive a reading status from page progress (0 unread / 1 reading / 2 finished). */
+function deriveStatus(page: number, totalPages: number): number {
+  if (totalPages <= 0) {
+    return 0;
+  }
+  if (page + 1 >= totalPages) {
+    return 2;
+  }
+  if (page > 0) {
+    return 1;
+  }
+  return 0;
 }
 
 const PREF_NAME = 'librera_reader';
@@ -49,14 +65,48 @@ export async function saveRecentBook(ctx: Context, book: RecentBook): Promise<vo
   try {
     const prefs = await getPrefs(ctx);
     const list = await getRecentBooks(ctx);
-    /* Remove existing entry for same path */
+    /* Phase 2: merge instead of blind replace — callers like the Reader only
+       pass page/totalPages/lastRead, so preserve star/cover/author/tags/series/
+       genre and keep status in sync with the progress. */
+    let old: RecentBook | undefined = undefined;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].path === book.path) {
+        old = list[i];
+        break;
+      }
+    }
+    let status: number = typeof book.status === 'number' ? book.status : deriveStatus(book.page, book.totalPages);
+    if (old !== undefined) {
+      if (old.page === book.page) {
+        /* same-page metadata update → keep the explicit status */
+        status = old.status;
+      } else {
+        /* progress changed → re-derive */
+        status = deriveStatus(book.page, book.totalPages);
+      }
+    }
+    const merged: RecentBook = {
+      path: book.path,
+      title: book.title,
+      page: book.page,
+      totalPages: book.totalPages,
+      lastRead: book.lastRead,
+      star: old !== undefined ? old.star : book.star === true,
+      coverPath: (old !== undefined && (book.coverPath === undefined || book.coverPath.length === 0)) ? old.coverPath : book.coverPath,
+      author: (old !== undefined && (book.author === undefined || book.author.length === 0)) ? old.author : book.author,
+      tags: (old !== undefined && (book.tags === undefined || book.tags.length === 0)) ? old.tags : book.tags,
+      series: (old !== undefined && (book.series === undefined || book.series.length === 0)) ? old.series : book.series,
+      genre: (old !== undefined && (book.genre === undefined || book.genre.length === 0)) ? old.genre : book.genre,
+      status: status
+    };
+    /* Remove existing entry for same path, keep merged at front */
     const filtered: RecentBook[] = [];
     for (let i = 0; i < list.length; i++) {
       if (list[i].path !== book.path) {
         filtered.push(list[i]);
       }
     }
-    filtered.unshift(book);
+    filtered.unshift(merged);
     /* Cap at MAX_RECENT */
     const trimmed: RecentBook[] = [];
     for (let i = 0; i < filtered.length && i < MAX_RECENT; i++) {
@@ -64,9 +114,49 @@ export async function saveRecentBook(ctx: Context, book: RecentBook): Promise<vo
     }
     await prefs.put(KEY_RECENT, JSON.stringify(trimmed));
     await prefs.flush();
-    console.info(`[Progress] Saved recent: ${book.title} page=${book.page}/${book.totalPages}`);
+    console.info(`[Progress] Saved recent: ${book.title} page=${book.page}/${book.totalPages} status=${status}`);
   } catch (e) {
     console.error('[Progress] saveRecentBook failed');
+  }
+}
+
+/** Set the explicit reading status of one book (0 unread / 1 reading / 2 finished). */
+export async function setBookStatus(ctx: Context, path: string, status: number): Promise<void> {
+  try {
+    const list = await getRecentBooks(ctx);
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].path === path) {
+        list[i].status = status;
+        break;
+      }
+    }
+    const prefs = await getPrefs(ctx);
+    await prefs.put(KEY_RECENT, JSON.stringify(list));
+    await prefs.flush();
+    console.info(`[Progress] setBookStatus ${path} -> ${status}`);
+  } catch (e) {
+    console.error('[Progress] setBookStatus failed');
+  }
+}
+
+/** Set the reading status of multiple books at once (batch selection). */
+export async function setBooksStatus(ctx: Context, paths: string[], status: number): Promise<void> {
+  try {
+    const list = await getRecentBooks(ctx);
+    for (let i = 0; i < list.length; i++) {
+      for (let j = 0; j < paths.length; j++) {
+        if (list[i].path === paths[j]) {
+          list[i].status = status;
+          break;
+        }
+      }
+    }
+    const prefs = await getPrefs(ctx);
+    await prefs.put(KEY_RECENT, JSON.stringify(list));
+    await prefs.flush();
+    console.info(`[Progress] setBooksStatus ${paths.length} books -> ${status}`);
+  } catch (e) {
+    console.error('[Progress] setBooksStatus failed');
   }
 }
 
@@ -94,7 +184,8 @@ export async function getRecentBooks(ctx: Context): Promise<RecentBook[]> {
           author: typeof b.author === 'string' ? b.author : '',
           tags: Array.isArray(b.tags) ? b.tags as string[] : [],
           series: typeof b.series === 'string' ? b.series : '',
-          genre: typeof b.genre === 'string' ? b.genre : ''
+          genre: typeof b.genre === 'string' ? b.genre : '',
+          status: typeof b.status === 'number' ? b.status : deriveStatus(b.page, b.totalPages)
         };
         list.push(clean);
       }

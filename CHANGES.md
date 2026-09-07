@@ -5,6 +5,67 @@
 
 ---
 
+## [2026-09-07] 鸿蒙移植·阶段4-7：我的文件 / OPDS 网上书库 / 阅读器增强与品牌对齐收尾
+
+**背景**：按安卓 V1.0.0 功能与 UI（参考安卓 CHANGES、store/manual/img 截图、用户要求品牌/图标/包名/测试书）继续对齐鸿蒙端口。
+
+**改动**（`harmony/` 内）：
+- **阶段4 我的文件**：my-files: 根视图（网络区 OPDS/WebDAV 入口 + 书库文件夹 + 快捷目录）；文件夹浏览器（⌂/↑/路径/网格列表切换、目录在前、长按操作菜单 打开/重命名/删除）；新建文件夹（对话框+fs.mkdirSync，验证 testfolder 创建成功）。系统分享暂缺（本 SDK 无 @ohos.share）。
+- **阶段5 OPDS**：新增 `model/Opds.ets`（fetch+字符串解析，UA 头，subsection/acquisition 分类，href 相对解析）；网上书库浮层 OPDS/WebDAV 双区；内置 Gutenberg/Standard Ebooks/CBETA 书目 + 自定义 URL；下钻返回栈 + 书籍下载入库；解析器 Node 测试通过。公共书源从模拟器网络被拒（403/401，环境限制）。
+- **阶段6**：应用锁（Settings.appLockPass + 全屏锁定覆盖层，验证 锁定→1234→解锁）；阅读提醒（readReminderMinutes，Reader 定时 toast）；阅读器页码滑块（Slider 跳页）。
+- **阶段7**：蓝光滤镜持久化（Settings.blueLightFilter）；阅读器背景图改为真实图片（DocumentViewPicker 选图 → importUriToSandbox → Image 衬底 + 透明度持久化）。
+- **品牌（阶段3 延续）**：图标=docs/howread_cleaned.png 512px；包名 com.foobnix.pdf.reader→com.howread.reader（重签）；应用名 HowRead/好好读。
+- 参考素材：安卓 CHANGES（Z:\opt\librera\CHANGES.md）、截图 store/manual/img（hr01-19）、图标 docs/howread_cleaned.png、测试书 ci/autotest/teskbook（用于后续真机/压力验证）。
+
+**验证**（模拟器 uitest/hilog）：我的文件根视图/文件夹浏览/新建文件夹、OPDS 浮层与拉取日志、应用锁全流程、阅读器 Slider、蓝光/背景图设置项；各阶段编译 BUILD SUCCESSFUL、无崩溃。未执行任何 git 命令。
+
+---
+
+## [2026-09-07] 鸿蒙移植·阶段3：首页阅读统计 + 品牌对齐（图标/包名）
+
+**背景**：对齐安卓首页仪表盘（截图 hr01/hr03：5 统计卡 + 周/月/年柱状图弹层）；按用户要求统一品牌——图标、包名。
+
+**改动**（`harmony/` 内）：
+- 新增 `model/ReadingStats.ets`：阅读时长/每日/每月持久化（preferences）；`recordReadTime`（30s 分块）、`recordPagesRead`、聚合统计、近 N 日/月序列。
+- `Reader.ets`：aboutToAppear 启动 30s 计时上报 → `recordReadTime`；aboutToDisappear 停止；onPageChanged 实际翻页 `recordPagesRead(1)`。
+- `pages/Index.ets` 首页新增「阅读统计」5 卡片（总数/已读/总时长/今日/速度）+ 柱状图（周/月/年）；修复 @Builder 参数不追踪状态的坑（统计卡内联引用 @State、图表数据改 @State 数组驱动）；新增 `onPageShow` 从阅读器返回时刷新统计与书库。
+- **品牌对齐**：图标 = `docs/howread_cleaned.png` 缩放到 512px（AppScope app_icon.png + entry icon.png）；**包名 com.foobnix.pdf.reader → com.howread.reader**（与安卓 google 渠道一致），signing/gen_signing.sh + profile-template.json 包名同步并重新生成签名（verify bundle=com.howread.reader）；应用名 HowRead/好好读（阶段1已设）。
+
+**验证**（模拟器，uitest + hilog）：统计卡 总数=8 响应式；阅读 90s 后返回首页显示 总时长/今日 2m（hilog `[Stats] record 30000ms, total=90000`）；周柱状图 09-01~09-07 渲染；新包名 com.howread.reader 安装/启动正常，全部 NAPI 自测通过、无崩溃。未执行任何 git 命令。
+
+---
+
+## [2026-09-07] 鸿蒙移植·阶段2：书库功能对齐安卓（搜索/状态chips/排序/5视图/批量选择）
+
+**背景**：对齐安卓 SearchFragment2 的书库体验——搜索、阅读状态筛选、排序、多视图、批量标记。
+
+**改动**（`harmony/` 内）：
+- `model/ReadingProgress.ets`：`RecentBook` 增加 `status`（0未读/1在读/2已读），旧数据按 page/totalPages 回填推导；`saveRecentBook` 由整体替换改为**元数据合并**（保留 star/cover/author/tags/series/genre/status，修复"读一次书丢星标/封面/标签"既有隐患）；新增 `setBookStatus`/`setBooksStatus` 批量状态设置。
+- `pages/Index.ets` 书库 Tab 重构：搜索框（书名/作者/系列/标签）、状态 chips（全部/未读/在读/已读）、排序（最近/名称/日期/作者/系列）、5 视图（列表/紧凑/网格/封面/书架·木纹背景）、行内进度条、长按进入批量选择（N 项已选/全选/标记已读·未读·在读/取消）；列表/网格 ForEach key 改为 `path_page_status_star` 强制状态变化时重渲（ArkUI 同 key 复用不刷新的坑）。
+- 全部 RecentBook 字面量补 `status` 字段（Index 9 处 + Reader 2 处）。
+
+**验证**（模拟器 Pura 90，uitest + hilog + 设备 preferences 文件）：搜索"alice"→仅剩 Alice EPUB（共 1 本）；在读 chips→1 本；长按批量标记在读→hilog `setBooksStatus 1 books -> 1`、设备 prefs 文件 status=1、列表显示"在读"；5 视图切换正常；全部 NAPI 自测通过、无崩溃。未执行任何 git 命令。
+
+---
+
+## [2026-09-06] 鸿蒙移植·阶段1：主框架 UI 重构对齐安卓（4 Tab + 左侧抽屉 + 顶栏 + FAB）
+
+**背景**：安卓 V1.0.0 稳定，按既定方案将鸿蒙端口 UI 布局对齐安卓（底部 4 Tab：首页/书库/我的文件/偏好 + 左侧抽屉：横幅/导航/格言/底部按钮 + 顶栏汉堡+标题+导入 + 右下"继续阅读"FAB + 品牌色 #3949AB）。此前鸿蒙是自创的 6-Tab（最近/收藏/书签/浏览/设置/云盘）结构，与安卓不一致。
+
+**改动**（全部在 `harmony/` 内）：
+- `entry/src/main/ets/pages/Index.ets`：重构 build() 为安卓同款壳——顶栏（品牌色 48dp：☰ 汉堡 + 当前 Tab 标题 + ＋ 导入）；底部 4 Tab（首页/书库/我的文件/偏好，选中白/未选 #ddffffff，barBackgroundColor #3949AB）；左侧抽屉（280vp：品牌渐变横幅"值得读，好好读" + 5 导航项 最近阅读/书库/我的文件/网上书库/书签笔记 + 每次打开刷新随机格言 + 底部 4 按钮 设置选项/软件说明/晚上模式/退出）；右下 FAB"继续阅读"（仅首页/书库显示）；3 个模态浮层（书签笔记/网上书库[WebDAV，OPDS 待阶段5]/软件说明）。原 6-Tab 功能全部归位：最近→首页轮播+书库；收藏→书库星标筛选+首页珍藏；书签管理→抽屉书签笔记浮层；浏览→我的文件 Tab；设置→偏好 Tab；云盘 WebDAV→网上书库浮层。
+- 抽屉定位 bug 修复：`Stack` 子级 `.align(Alignment.TopStart)` 在本 SDK 上未生效（面板被对齐到右侧），改用全屏 `Row`（面板 + weight-1 点击关闭区）固定左侧。
+- `resources/base/element/color.json`：新增 brand_primary #3949AB、brand_accent #03A9F4、tab_selected #FFFFFF、tab_unselected #DDFFFFFF。
+- 应用名修正：AppScope app_name = HowRead（base/en_US）/ 好好读（zh_CN）；entry 新增 zh_CN 资源（EntryAbility_label=好好读 + 4 个 tab 文案），base 补 4 个 tab 文案（Home/Library/My Files/Preferences）。
+- `resources/rawfile/reading_quotes.txt`：从安卓 assets/reading_quotes.txt 复制格言库（1000+ 条，逐条 `文 —— 出处` 格式），Index 用 `util.TextDecoder` UTF-8 解码，抽屉随机取一条。
+
+**验证**（鸿蒙模拟器 Pura 90，hdc + uitest + hilog 驱动）：
+- 编译 BUILD SUCCESSFUL；安装启动正常，全部 NAPI 自测通过（仅 demo.mobi 样本本身不支持，与本次无关）。
+- uitest dumpLayout 核对：4 Tab、顶栏（☰ 首页 ＋）、首页继续阅读卡片/最近封面轮播/快捷宫格（我的文件·网上书库·书签笔记·偏好）、FAB 均渲染；抽屉在左侧且含横幅/5 导航/格言/4 底部按钮；格言每次打开随机刷新（两次打开分别为"读书当读全书…"与"奇文共欣赏…"）。
+- 交互验证：4 Tab 切换（hilog `Tab switched to N`）、晚上模式切换（theme 0→1 持久化）、软件说明/书签笔记/网上书库三浮层开合居中、FAB→Reader 打开并渲染（theme=1 生效）。全程无崩溃。未执行任何 git 命令。
+
+---
+
 ## [2026-09-06] P1 缺陷修复五项：页面缓存并发竞态、OOM 清理 NPE、warm 态打开文件失效、TTS 重复朗读与暂停后翻页、TTS 空白页假死
 
 **背景**：Android 主干代码三轮走查（品牌迁移/阅读核心/周边功能）确认的 P1 级缺陷，本轮只修 P1（P0 迁移类与 P2 JNI 泄漏类另行处理）。

@@ -6,11 +6,27 @@
     },
     {
       "name": "EntryAbility_desc",
-      "value": "HowRead for HarmonyOS"
+      "value": "HowRead reader for HarmonyOS"
     },
     {
       "name": "EntryAbility_label",
       "value": "HowRead"
+    },
+    {
+      "name": "tab_home",
+      "value": "Home"
+    },
+    {
+      "name": "tab_library",
+      "value": "Library"
+    },
+    {
+      "name": "tab_my_files",
+      "value": "My Files"
+    },
+    {
+      "name": "tab_prefs",
+      "value": "Preferences"
     }
   ]
 }
