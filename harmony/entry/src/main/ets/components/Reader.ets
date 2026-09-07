@@ -21,12 +21,14 @@ import brightness from '@system.brightness';
 import webview from '@ohos.web.webview';
 import promptAction from '@ohos.promptAction';
 import picker from '@ohos.file.picker';
+import pasteboard from '@ohos.pasteboard';
 import { importUriToSandbox } from '../model/FileImport';
 import {
   version, openDocument, pageCount, renderPageAsync, closeDocument, getToc, getPageSize,
   searchText, searchDocument, getText, getAnnotations, addHighlight, addInkStroke, deleteAnnotation, saveDocument,
+  addMarkupAnnotation, addTextNote,
   layoutDocument, isReflowable, getDocumentInfo, getTextRects, loadFont,
-  RenderResult, RenderOptions, TocEntry, CropRect, TextRect, AnnotationInfo, DocumentInfo
+  RenderResult, RenderOptions, TocEntry, CropRect, TextRect, TextLine, AnnotationInfo, DocumentInfo
 } from 'libmupdf_napi.so';
 import { saveRecentBook, getPageForPath, RecentBook } from '../model/ReadingProgress';
 import { recordReadTime, recordPagesRead } from '../model/ReadingStats';
@@ -161,6 +163,7 @@ struct PageRenderer {
   cropRect: CropRect | undefined = undefined;
   searchHits: TextRect[] = [];
   annotations: AnnotationInfo[] = [];
+  selPreview: TextRect[] = [];
   @State pixelMap: image.PixelMap | undefined = undefined;
   @State isLoading: boolean = true;
   @State errorText: string = '';
@@ -224,7 +227,7 @@ struct PageRenderer {
               .backgroundColor('#33ffeb3b')
           }, (hit: TextRect, idx: number) => `hit_${idx}_${hit.x0}`)
 
-          /* annotation highlights (orange, wider) */
+          /* annotation overlays per type (Phase 9: underline/strikeout/squiggly/text) */
           ForEach(this.annotations, (ann: AnnotationInfo) => {
             if (ann.type === 'highlight') {
               Column()
@@ -232,8 +235,50 @@ struct PageRenderer {
                 .height(`${(ann.y1 - ann.y0) * 100}%`)
                 .position({ x: `${ann.x0 * 100}%`, y: `${ann.y0 * 100}%` })
                 .backgroundColor('#55ff9800')
+            } else if (ann.type === 'underline' || ann.type === 'squiggly') {
+              /* line at the bottom of the annotation rect */
+              Column() {
+                Column()
+                  .width('100%').height(3)
+                  .backgroundColor(ann.type === 'underline' ? '#1e88e5' : '#8e24aa')
+                  .borderRadius(1)
+              }
+              .width(`${(ann.x1 - ann.x0) * 100}%`)
+              .height(`${(ann.y1 - ann.y0) * 100}%`)
+              .position({ x: `${ann.x0 * 100}%`, y: `${ann.y0 * 100}%` })
+              .justifyContent(FlexAlign.End)
+              .hitTestBehavior(HitTestMode.None)
+            } else if (ann.type === 'strikeout') {
+              /* line through the middle of the annotation rect */
+              Column() {
+                Column()
+                  .width('100%').height(3)
+                  .backgroundColor('#e53935')
+                  .borderRadius(1)
+              }
+              .width(`${(ann.x1 - ann.x0) * 100}%`)
+              .height(`${(ann.y1 - ann.y0) * 100}%`)
+              .position({ x: `${ann.x0 * 100}%`, y: `${ann.y0 * 100}%` })
+              .justifyContent(FlexAlign.Center)
+              .hitTestBehavior(HitTestMode.None)
+            } else if (ann.type === 'text') {
+              /* sticky note icon at the annotation anchor */
+              Text('💬')
+                .fontSize(16)
+                .width(20).height(20)
+                .position({ x: `${ann.x0 * 100}%`, y: `${ann.y0 * 100}%` })
+                .hitTestBehavior(HitTestMode.None)
             }
-          }, (ann: AnnotationInfo, idx: number) => `ann_${idx}_${ann.x0}`)
+          }, (ann: AnnotationInfo, idx: number) => `ann_${idx}_${ann.type}_${ann.x0}`)
+
+          /* Phase 9: live selection preview (translucent blue) */
+          ForEach(this.selPreview, (rect: TextRect, idx: number) => {
+            Column()
+              .width(`${(rect.x1 - rect.x0) * 100}%`)
+              .height(`${(rect.y1 - rect.y0) * 100}%`)
+              .position({ x: `${rect.x0 * 100}%`, y: `${rect.y0 * 100}%` })
+              .backgroundColor('#3342A5F5')
+          }, (rect: TextRect, idx: number) => `sel_${idx}_${rect.x0}_${rect.y0}`)
         }
         .width('100%')
       } else {
@@ -473,6 +518,21 @@ struct Reader {
   // ---- Sprint H: Text selection + typography ----
   @State textRectsJson: string = '[]';
   @State selectedLineIdx: number = -1;
+  /* Phase 9: precise char-level selection + markup annotations */
+  @State selMode: boolean = false;          /* selection mode active */
+  @State selPreview: TextRect[] = [];       /* selection quads (normalized) */
+  @State selText: string = '';              /* selected text content */
+  @State showSelNoteInput: boolean = false; /* note input row visible */
+  @State selNoteInput: string = '';
+  private selLines: TextLine[] = [];        /* parsed text lines for the page */
+  private selStartLine: number = -1;
+  private selStartChar: number = -1;
+  private selEndLine: number = -1;
+  private selEndChar: number = -1;
+  private pageGlobalX: number = 0;          /* page area origin for coord conversion */
+  private pageGlobalY: number = 0;
+  private pageAreaW: number = 0;
+  private pageAreaH: number = 0;
   @State showTypographyPanel: boolean = false;
   @State textAlign: number = 0; /* 0=left, 1=center, 2=right, 3=justify */
   @State paragraphSpacing: number = 8;
@@ -818,6 +878,9 @@ struct Reader {
   private onPageChanged(index: number): void {
     const prevPage = this.currentPage;
     this.currentPage = index;
+    if (this.selMode) {
+      this.exitSelMode();
+    }
     console.info(`[Reader] Page changed to ${index + 1}/${this.totalPages}`);
     /* Phase 3: count a flipped page only when the page actually changed */
     if (prevPage !== index) {
@@ -1688,6 +1751,201 @@ struct Reader {
     }
   }
 
+  /* ---- Phase 9: precise text selection + markup annotations ---- */
+
+  /** Parse the cached textRectsJson into typed lines (text + per-char x bounds). */
+  private parseSelLines(): void {
+    this.selLines = [];
+    try {
+      const arr: Array<TextLine> = JSON.parse(this.textRectsJson) as Array<TextLine>;
+      for (let i = 0; i < arr.length; i++) {
+        const l = arr[i];
+        if (l !== null && l !== undefined && l.text !== undefined && l.chars !== undefined
+          && l.chars !== null && l.chars.length >= 2) {
+          this.selLines.push(l);
+        }
+      }
+    } catch (e) {
+      this.selLines = [];
+    }
+    console.info(`[Reader] Selection lines parsed: ${this.selLines.length}`);
+  }
+
+  /** Find the line index whose vertical range contains ny, or the nearest one. */
+  private findLineAt(ny: number): number {
+    let best = -1;
+    let bestDist = 1e9;
+    for (let i = 0; i < this.selLines.length; i++) {
+      const l = this.selLines[i];
+      if (ny >= l.y0 && ny <= l.y1) {
+        return i;
+      }
+      const d = ny < l.y0 ? l.y0 - ny : ny - l.y1;
+      if (d < bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  /** Find the nearest char boundary in line `li` for normalized x = nx. */
+  private findCharAt(li: number, nx: number): number {
+    const l = this.selLines[li];
+    const n = Math.floor(l.chars.length / 2);
+    if (n === 0) {
+      return 0;
+    }
+    if (nx <= l.chars[0]) {
+      return 0;
+    }
+    for (let i = 0; i < n; i++) {
+      const cx0: number = Number(l.chars[i * 2]);
+      const cx1: number = Number(l.chars[i * 2 + 1]);
+      if (nx <= cx1) {
+        return (nx - cx0) < (cx1 - nx) ? i : i + 1;
+      }
+    }
+    return n;
+  }
+
+  /** (Re)compute the selection quads + selected text from start/end anchors. */
+  private updateSelPreview(): void {
+    this.selPreview = [];
+    this.selText = '';
+    if (this.selStartLine < 0 || this.selEndLine < 0) {
+      return;
+    }
+    const lo = Math.min(this.selStartLine, this.selEndLine);
+    const hi = Math.max(this.selStartLine, this.selEndLine);
+    const forward = this.selStartLine < this.selEndLine
+      || (this.selStartLine === this.selEndLine && this.selStartChar <= this.selEndChar);
+    const cStart = forward ? this.selStartChar : this.selEndChar;
+    const cEnd = forward ? this.selEndChar : this.selStartChar;
+    for (let li = lo; li <= hi; li++) {
+      const l = this.selLines[li];
+      if (l === undefined) {
+        continue;
+      }
+      const n = Math.floor(l.chars.length / 2);
+      const c0 = li === lo ? Math.max(0, Math.min(cStart, n)) : 0;
+      let c1 = li === hi ? Math.max(0, Math.min(cEnd, n)) : n;
+      if (c1 <= c0) {
+        if (lo === hi && c0 < n) {
+          /* collapsed single-point selection still previews one char */
+          c1 = c0 + 1;
+        } else {
+          continue;
+        }
+      }
+      const x0: number = Number(l.chars[c0 * 2]);
+      const x1: number = Number(l.chars[(c1 - 1) * 2 + 1]);
+      this.selPreview.push({ x0: x0, y0: l.y0, x1: x1, y1: l.y1 });
+      this.selText += l.text.substring(c0, c1);
+    }
+    console.info(`[Reader] Selection: ${this.selText.length} chars, ${this.selPreview.length} quads`);
+  }
+
+  /** Set a selection anchor from window-global gesture coordinates. */
+  private setSelAnchor(globalX: number, globalY: number, isStart: boolean): void {
+    if (this.pageAreaW <= 0 || this.pageAreaH <= 0 || this.selLines.length === 0) {
+      return;
+    }
+    const nx = (globalX - this.pageGlobalX) / this.pageAreaW;
+    const ny = (globalY - this.pageGlobalY) / this.pageAreaH;
+    const li = this.findLineAt(ny);
+    if (li < 0) {
+      return;
+    }
+    const ci = this.findCharAt(li, nx);
+    if (isStart) {
+      this.selStartLine = li;
+      this.selStartChar = ci;
+      this.selEndLine = li;
+      this.selEndChar = ci;
+    } else {
+      this.selEndLine = li;
+      this.selEndChar = ci;
+    }
+    this.updateSelPreview();
+  }
+
+  private exitSelMode(): void {
+    this.selMode = false;
+    this.selPreview = [];
+    this.selText = '';
+    this.selStartLine = -1;
+    this.selEndLine = -1;
+    this.showSelNoteInput = false;
+    this.selNoteInput = '';
+  }
+
+  /** Apply a markup annotation (underline/strikeout/squiggly/highlight) to the selection. */
+  private async applySelMarkup(type: string): Promise<void> {
+    const handle: ESObject | undefined = this.dataSource.getDocHandle();
+    if (handle === undefined || this.selPreview.length === 0) {
+      return;
+    }
+    let color = '#fdd835';
+    if (type === 'underline') color = '#1e88e5';
+    else if (type === 'strikeout') color = '#e53935';
+    else if (type === 'squiggly') color = '#8e24aa';
+    /* pass a plain local copy — @State proxy arrays are not NAPI arrays */
+    const rects: TextRect[] = [];
+    for (let i = 0; i < this.selPreview.length; i++) {
+      const r = this.selPreview[i];
+      rects.push({ x0: r.x0, y0: r.y0, x1: r.x1, y1: r.y1 });
+    }
+    try {
+      addMarkupAnnotation(handle, this.currentPage, rects, type, color);
+      await this.refreshAnnotations();
+      console.info(`[Reader] ${type} annotation added: ${this.selPreview.length} quads`);
+      this.exitSelMode();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[Reader] addMarkupAnnotation ${type} failed: ${msg}`);
+    }
+  }
+
+  /** Add a text (sticky) note anchored at the selection start. */
+  private async applySelNote(): Promise<void> {
+    const handle: ESObject | undefined = this.dataSource.getDocHandle();
+    if (handle === undefined || this.selNoteInput.length === 0) {
+      return;
+    }
+    let x = 0.5;
+    let y = 0.5;
+    if (this.selPreview.length > 0) {
+      x = this.selPreview[0].x0;
+      y = this.selPreview[0].y0;
+    }
+    try {
+      addTextNote(handle, this.currentPage, x, y, this.selNoteInput, '#43a047');
+      await this.refreshAnnotations();
+      console.info('[Reader] Text note added');
+      this.selNoteInput = '';
+      this.showSelNoteInput = false;
+      this.exitSelMode();
+    } catch (e) {
+      console.error('[Reader] addTextNote failed');
+    }
+  }
+
+  /** Copy the selected text to the system clipboard. */
+  private copySelText(): void {
+    if (this.selText.length === 0) {
+      return;
+    }
+    try {
+      const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, this.selText);
+      pasteboard.getSystemPasteboard().setData(data);
+      console.info(`[Reader] Copied ${this.selText.length} chars to clipboard`);
+      this.exitSelMode();
+    } catch (e) {
+      console.error('[Reader] clipboard copy failed');
+    }
+  }
+
   /** K5: Get display color for annotation type. */
   private annTypeColor(type: string): string {
     if (type === 'highlight') return '#FFD700';
@@ -1953,7 +2211,8 @@ struct Reader {
                     pageIndex: pageIdx,
                     dataSource: this.dataSource,
                     searchHits: pageIdx === this.searchHitPage ? this.searchHits : [],
-                    annotations: pageIdx === this.currentPage ? this.annotations : []
+                    annotations: pageIdx === this.currentPage ? this.annotations : [],
+                    selPreview: pageIdx === this.currentPage ? this.selPreview : []
                   })
                 }
               }, (item: number) => `${item}_${this.zoomLevel}_${this.nightMode}_${this.pageMode}_${this.reflowVersion}`)
@@ -2013,14 +2272,50 @@ struct Reader {
               })
               .gesture(
                 LongPressGesture({ repeat: false, duration: 600 })
-                  .onAction(() => {
+                  .onAction((event: LongPressGestureEvent) => {
                     this.loadTextRects();
-                    this.selectedLineIdx = -1;
+                    this.parseSelLines();
+                    this.selMode = true;
+                    if (event !== undefined && event.fingerList.length > 0) {
+                      this.setSelAnchor(event.fingerList[0].globalX, event.fingerList[0].globalY, true);
+                    }
                     console.info(`[Reader] Text selection activated on page ${this.currentPage}`);
                   })
               )
+
+            // Phase 9: while in selection mode, this full-page catcher converts
+            // taps into the selection end anchor (long-press restarts the anchor)
+            if (this.selMode) {
+              Column()
+                .width('100%').height('100%')
+                .backgroundColor(Color.Transparent)
+                .gesture(
+                  GestureGroup(GestureMode.Exclusive,
+                    LongPressGesture({ repeat: false, duration: 600 })
+                      .onAction((event: LongPressGestureEvent) => {
+                        if (event !== undefined && event.fingerList.length > 0) {
+                          this.setSelAnchor(event.fingerList[0].globalX, event.fingerList[0].globalY, true);
+                        }
+                      }),
+                    TapGesture({ count: 1 })
+                      .onAction((event: TapGestureEvent) => {
+                        const fl = event !== undefined ? event.fingerList : [];
+                        if (fl.length > 0) {
+                          this.setSelAnchor(fl[0].globalX, fl[0].globalY, false);
+                        }
+                      })
+                  )
+                )
+            }
           }
           .width('100%').layoutWeight(1)
+          .onAreaChange((oldArea: Area, newArea: Area) => {
+            this.pageAreaW = typeof newArea.width === 'number' ? newArea.width : 0;
+            this.pageAreaH = typeof newArea.height === 'number' ? newArea.height : 0;
+            const gp = newArea.globalPosition;
+            this.pageGlobalX = typeof gp.x === 'number' ? gp.x : 0;
+            this.pageGlobalY = typeof gp.y === 'number' ? gp.y : 0;
+          })
         } else {
           /* Vertical continuous scroll mode */
           List() {
@@ -2131,6 +2426,77 @@ struct Reader {
           .width('100%').height('100%')
           .backgroundColor('#2ED2B48C')
           .hitTestBehavior(HitTestMode.None)
+      }
+
+      /* Phase 9: floating selection action bar (bottom, above the toolbar) */
+      if (this.selMode) {
+        Column() {
+          Blank()
+          Column({ space: 8 }) {
+            Text(this.selText.length > 0
+              ? (this.selText.length > 24 ? this.selText.substring(0, 24) + '…' : this.selText)
+              : '选择文本（点按设终点）')
+              .fontSize(12)
+              .fontColor(this.nightMode ? '#bbb' : '#666')
+              .maxLines(1)
+            Row({ space: 8 }) {
+              Button('下划线')
+                .fontSize(12).height(32)
+                .backgroundColor('#1e88e5').fontColor(Color.White)
+                .onClick(() => this.applySelMarkup('underline'))
+              Button('删除线')
+                .fontSize(12).height(32)
+                .backgroundColor('#e53935').fontColor(Color.White)
+                .onClick(() => this.applySelMarkup('strikeout'))
+              Button('波浪线')
+                .fontSize(12).height(32)
+                .backgroundColor('#8e24aa').fontColor(Color.White)
+                .onClick(() => this.applySelMarkup('squiggly'))
+              Button('高亮')
+                .fontSize(12).height(32)
+                .backgroundColor('#fbc02d').fontColor(Color.White)
+                .onClick(() => this.applySelMarkup('highlight'))
+            }
+            if (this.showSelNoteInput) {
+              Row({ space: 8 }) {
+                TextInput({ text: this.selNoteInput, placeholder: '笔记内容' })
+                  .layoutWeight(1).height(36).fontSize(13)
+                  .onChange((value: string) => {
+                    this.selNoteInput = value;
+                  })
+                Button('添加')
+                  .fontSize(12).height(32)
+                  .backgroundColor('#43a047').fontColor(Color.White)
+                  .onClick(() => this.applySelNote())
+              }
+            }
+            Row({ space: 8 }) {
+              Button('笔记')
+                .fontSize(12).height(32)
+                .backgroundColor('#43a047').fontColor(Color.White)
+                .onClick(() => {
+                  this.showSelNoteInput = !this.showSelNoteInput;
+                })
+              Button('复制')
+                .fontSize(12).height(32)
+                .backgroundColor('#607d8b').fontColor(Color.White)
+                .onClick(() => this.copySelText())
+              Button('取消')
+                .fontSize(12).height(32)
+                .backgroundColor('#e0e0e0').fontColor('#333')
+                .onClick(() => this.exitSelMode())
+            }
+          }
+          .width('92%')
+          .padding(10)
+          .borderRadius(10)
+          .backgroundColor(this.nightMode ? '#2b2b2b' : '#ffffff')
+          .shadow({ radius: 8, color: '#33000000', offsetX: 0, offsetY: 2 })
+          .alignItems(HorizontalAlign.Center)
+        }
+        .width('100%').height('100%')
+        .hitTestBehavior(HitTestMode.Transparent)
+        .padding({ bottom: 48 })
       }
 
       /* Menu overlay (modal: full-screen dim + centered panel) */

@@ -104,6 +104,16 @@ export function addHighlight(handle: ESObject, pageNumber: number, x0: number, y
   x1: number, y1: number, color: string): void;
 /** Add an ink (freehand) annotation from a stroke of normalized points. */
 export function addInkStroke(handle: ESObject, pageNumber: number, points: TextRect[]): void;
+/**
+ * Add a markup annotation (underline / strikeout / squiggly / highlight) from
+ * a list of normalized rects — one quad per rect. type is one of
+ * 'highlight' | 'underline' | 'strikeout' | 'squiggly'.
+ */
+export function addMarkupAnnotation(handle: ESObject, pageNumber: number, rects: TextRect[],
+  type: string, color: string): void;
+/** Add a text (sticky-note) annotation at a normalized point with contents. */
+export function addTextNote(handle: ESObject, pageNumber: number, x: number, y: number,
+  text: string, color: string): void;
 /** Delete the annotation at `index` on the page. */
 export function deleteAnnotation(handle: ESObject, pageNumber: number, index: number): void;
 /** Save the (modified) document back to `path` (PDF only). */
@@ -117,7 +127,14 @@ export function searchText(handle: ESObject, text: string, pageNumber: number): 
 export function searchDocument(handle: ESObject, text: string): string;
 /** Get document metadata */
 export function getDocumentInfo(handle: ESObject): DocumentInfo;
-/** Get individual text span rectangles on a page (normalized 0..1). Returns JSON string array. */
+/** A text line on a page (normalized 0..1): bbox + line text + per-char x bounds. */
+export interface TextLine extends TextRect {
+  text: string;
+  /** per-char [x0, x1] pairs flattened, same order as `text` */
+  chars: number[];
+}
+
+/** Get text lines on a page (normalized 0..1). Returns JSON string: TextLine[]. */
 export function getTextRects(handle: ESObject, pageNumber: number): string;
 /** Load a custom font file for reflowable documents. Returns true if applied. */
 export function loadFont(handle: ESObject, fontPath: string): boolean;

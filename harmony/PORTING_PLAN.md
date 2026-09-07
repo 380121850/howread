@@ -103,6 +103,15 @@
 5. ✅ **品牌**：图标 howread_cleaned.png；包名 com.howread.reader；应用名 HowRead/好好读。
 6. ⏸ **后续（按用户要求自动继续）**：文本选择+下划线/删除线标注（NAPI C++）、查词/翻译、WebDAV 三向同步、桌面卡片、TTS 录音导出（LAME 交叉编译）、连字符词库、播放列表、i18n 铺开。测试书 ci/autotest/teskbook 供压力/真机验证。
 
+### 续（2026-09-07）：PDF 文本精确选择 + 下划线/删除线/波浪线/文字笔记标注 ✅ 已完成
+
+1. ✅ **NAPI 扩展**（mupdf_napi.cpp + Index.d.ts）：`getTextRects` 输出扩为每行 `{x0,y0,x1,y1,text,chars:[x0,x1,...]}`（行文本 UTF-8 JSON 转义 + 逐字符 x 边界，归一化 0..1）；新增 `addMarkupAnnotation(handle,page,rects[],type,color)`（underline/strikeout/squiggly/highlight，每 rect 一 quad，透明度对齐安卓：highlight 0.4 其余 1.0）与 `addTextNote(handle,page,x,y,text,color)`（24pt 图标 rect + contents，对齐安卓 addTextNoteInternal）；注册表 + d.ts 同步。
+2. ✅ **精确选区 UI**（Reader.ets）：页面中央长按（600ms）取 `FingerInfo.globalX/Y` + `onAreaChange` 换算归一化坐标 → 命中最近行/字符为起点；选区模式下全页透明捕捉层把点按转为终点（长按重设起点）；首末行按字符 x 裁剪、中间行整行合成 quads，实时蓝色预览；翻页自动退出选区。
+3. ✅ **浮动操作条**：下划线/删除线/波浪线/高亮（直调 addMarkupAnnotation + refreshAnnotations）、笔记（内联 TextInput → addTextNote 锚在选区起点）、复制（@ohos.pasteboard 系统剪贴板）、取消；条底部悬于工具栏上方（HitTestMode.Transparent 不挡页面手势）。
+4. ✅ **渲染扩展**（PageRenderer）：highlight 半透明块保留；underline/squiggly 矩形底部 3px 横线（蓝/紫）、strikeout 中部横线（红）、text 💬 图标；选区预览层。
+5. ✅ **验证**（Pura 90 模拟器 + hilog + uitest dumpLayout）：选区 5 行解析（2751 字节 JSON）→ 两点选区 14 字符 1 quad → 下划线（annotations:1）→ 删除线（2）→ 笔记（3）→ 复制（`Copied 14 chars to clipboard`）→ 保存（`Document saved with annotations`）；字节级验证：拉取保存后 PDF 含 `Subtype/Underline`。已知坑：@State 代理数组直传 NAPI `napi_get_array_length` 失败 → 调用侧传本地拷贝；启动自检 runApiTest 每次用 rawfile 覆盖 cacheDir/test.pdf，会清掉该演示文件的已存标注（自检固有行为，非管线缺陷）。
+6. ✅ **产物规范**（应需求插入，三次迭代定稿）：新增 `harmony/build_hap_all.sh` —— **按硬件平台分 ABI 构建，DEBUG/RELEASE × arm64/x86_64 共 4 个产物**，放入 `harmony/dist/DEBUG/` 与 `harmony/dist/RELEASE/`，文件名 ABI 段按 HAP 实际打包内容推导（每次构建设单一 abiFilters 并临时移走 entry/libs 下其它预置 ABI 目录——hvigor 会无视 abiFilters 打包 libs 下所有预置 so；脚本启动清空 dist 全量重建，结束 trap 恢复默认配置）。签名：debug 构建用 debug profile，release 构建用 `signing/gen_release_profile.sh` 生成的 release profile（type=release、无设备绑定；bundle-info 需同时含 development/distribution-certificate），平台侧不再识别为 DEBUG 包。最终产物：`harmony-HowRead-v1.0.0-{arm64,x86_64}.hap` × {DEBUG,RELEASE}，全部字节级验证（ABI 唯一 + 内嵌 profile 类型正确）；模拟器安装 DEBUG x86_64 包启动正常。注意：签名链仍为本地自签（Librera Root CA），若 AGC 校验证书链需在 AGC 签发正式 release 证书/profile 后替换 signing/ 材料。
+
 ---
 
 ## 阶段 1：环境与构建链路 ✅ 已完成
@@ -213,11 +222,11 @@ TTS 朗读、搜索全书、批注/高亮编辑、OPDS 书源、云同步等。*
 | 31 | 字体大小/缩放/自定义字体 | 🟡 | zoom ✅；reflow 字号/行距/页边距 ✅（冲刺 E）；自定义字体无 |
 | 32 | 页边距/行距/段距/对齐 | 🟡 | 行距/页边距 ✅（冲刺 E reflowable CSS）；段距/对齐无 |
 | 33 | 连字符（HyphenPattern 670KB） | ❌ | 未接 |
-| 34 | 文本选择+高亮/下划线/删除线 | ❌ | 未接 |
+| 34 | 文本选择+高亮/下划线/删除线 | ✅ | 逐字符选区 + addMarkupAnnotation（underline/strikeout/squiggly/highlight）+ 文字笔记 + 剪贴板复制，PDF 持久化 |
 | 35 | 词典/翻译（本地+在线） | ❌ | 未接 |
 | 36 | 速读 RSVP/脚注/EPUB3 页码 | 🟡 | 速读 RSVP ✅（冲刺 D）；脚注/EPUB3 页码未接 |
 | **批注与书签** | | | |
-| 37 | PDF 批注（26 类型，MuPDF 持久化） | ❌ | NAPI 无 annotation API |
+| 37 | PDF 批注（26 类型，MuPDF 持久化） | 🟡 | highlight/underline/strikeout/squiggly/ink/text ✅（MuPDF 持久化）；其余类型未接 |
 | 38 | 手绘覆盖层 | ❌ | 未接 |
 | 39 | 书签管理器（多书签/导出导入） | 🟡 | 进度单点持久化有；多书签无 |
 | **TTS 与音频** | | | |

@@ -1533,6 +1533,228 @@ napi_value AddInkStroke(napi_env env, napi_callback_info info)
     return result;
 }
 
+/* ---- addMarkupAnnotation: underline / strikeout / squiggly / highlight from a rect list ---- */
+napi_value AddMarkupAnnotation(napi_env env, napi_callback_info info)
+{
+    size_t argc = 5;
+    napi_value args[5];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 5) {
+        napi_throw_type_error(env, nullptr, "addMarkupAnnotation(handle, page, rects, type, color) required");
+        return nullptr;
+    }
+    auto *h = GetHandle(env, args[0]);
+    if (h == nullptr) {
+        return nullptr;
+    }
+    int32_t pageNumber = 0;
+    napi_get_value_int32(env, args[1], &pageNumber);
+    char type[16] = {0};
+    napi_get_value_string_utf8(env, args[3], type, sizeof(type), nullptr);
+    char color[16] = {0};
+    napi_get_value_string_utf8(env, args[4], color, sizeof(color), nullptr);
+
+    enum pdf_annot_type atype;
+    if (strcmp(type, "highlight") == 0) {
+        atype = PDF_ANNOT_HIGHLIGHT;
+    } else if (strcmp(type, "underline") == 0) {
+        atype = PDF_ANNOT_UNDERLINE;
+    } else if (strcmp(type, "strikeout") == 0) {
+        atype = PDF_ANNOT_STRIKE_OUT;
+    } else if (strcmp(type, "squiggly") == 0) {
+        atype = PDF_ANNOT_SQUIGGLY;
+    } else {
+        napi_throw_type_error(env, "BAD_TYPE", "type must be highlight|underline|strikeout|squiggly");
+        return nullptr;
+    }
+
+    pdf_document *pdf = GetPdfDoc(env, h);
+    if (pdf == nullptr) {
+        return nullptr;
+    }
+
+    /* collect normalized rects from the array arg (each {x0,y0,x1,y1}) */
+    uint32_t n = 0;
+    napi_get_array_length(env, args[2], &n);
+    if (n == 0) {
+        napi_throw_type_error(env, nullptr, "rects array required");
+        return nullptr;
+    }
+    std::vector<fz_rect> rects;
+    for (uint32_t i = 0; i < n; i++) {
+        napi_value item;
+        napi_get_element(env, args[2], i, &item);
+        double rx0 = 0, ry0 = 0, rx1 = 0, ry1 = 0;
+        napi_value v;
+        if (napi_get_named_property(env, item, "x0", &v) == napi_ok) napi_get_value_double(env, v, &rx0);
+        if (napi_get_named_property(env, item, "y0", &v) == napi_ok) napi_get_value_double(env, v, &ry0);
+        if (napi_get_named_property(env, item, "x1", &v) == napi_ok) napi_get_value_double(env, v, &rx1);
+        if (napi_get_named_property(env, item, "y1", &v) == napi_ok) napi_get_value_double(env, v, &ry1);
+        rects.push_back(fz_make_rect(static_cast<float>(rx0), static_cast<float>(ry0),
+            static_cast<float>(rx1), static_cast<float>(ry1)));
+    }
+
+    /* page size in points for conversion */
+    fz_rect media = fz_infinite_rect;
+    pdf_page *page = nullptr;
+    pthread_mutex_lock(&g_mu);
+    if (!fz_setjmp(*fz_push_try(h->ctx))) do {
+        page = pdf_load_page(h->ctx, pdf, pageNumber);
+        if (page != nullptr) {
+            media = fz_bound_page(h->ctx, (fz_page *)page);
+        }
+    } while (0);
+    if (fz_do_catch(h->ctx)) {
+        page = nullptr;
+    }
+    if (page != nullptr) {
+        fz_drop_page(h->ctx, (fz_page *)page);
+    }
+    pthread_mutex_unlock(&g_mu);
+
+    if (fz_is_infinite_rect(media)) {
+        napi_throw_error(env, "PAGE_FAILED", "cannot load page");
+        return nullptr;
+    }
+    float pw = media.x1 - media.x0;
+    float ph = media.y1 - media.y0;
+    if (pw <= 0.0f || ph <= 0.0f) {
+        napi_throw_error(env, "PAGE_FAILED", "bad page size");
+        return nullptr;
+    }
+
+    /* one quad per rect: bottom-left, bottom-right, top-right, top-left */
+    std::vector<fz_quad> quads;
+    for (size_t i = 0; i < rects.size(); i++) {
+        fz_rect pr = rects[i];
+        pr.x0 = media.x0 + pr.x0 * pw;
+        pr.y0 = media.y0 + pr.y0 * ph;
+        pr.x1 = media.x0 + pr.x1 * pw;
+        pr.y1 = media.y0 + pr.y1 * ph;
+        fz_quad q;
+        q.ll = fz_make_point(pr.x0, pr.y1);
+        q.lr = fz_make_point(pr.x1, pr.y1);
+        q.ur = fz_make_point(pr.x1, pr.y0);
+        q.ul = fz_make_point(pr.x0, pr.y0);
+        quads.push_back(q);
+    }
+
+    float rgb[3];
+    ParseHexColor(color, rgb);
+
+    pthread_mutex_lock(&g_mu);
+    if (!fz_setjmp(*fz_push_try(h->ctx))) do {
+        pdf_page *pg = pdf_load_page(h->ctx, pdf, pageNumber);
+        pdf_annot *annot = pdf_create_annot(h->ctx, pg, atype);
+        pdf_set_annot_color(h->ctx, annot, 3, rgb);
+        /* Android parity: translucent highlight, opaque line markups */
+        pdf_set_annot_opacity(h->ctx, annot, atype == PDF_ANNOT_HIGHLIGHT ? 0.4f : 1.0f);
+        pdf_set_annot_quad_points(h->ctx, annot, static_cast<int>(quads.size()), quads.data());
+        pdf_update_annot(h->ctx, annot);
+        fz_drop_page(h->ctx, (fz_page *)pg);
+    } while (0);
+    if (fz_do_catch(h->ctx)) {
+        pthread_mutex_unlock(&g_mu);
+        napi_throw_error(env, "ANNOT_FAILED", "cannot create markup annotation");
+        return nullptr;
+    }
+    pthread_mutex_unlock(&g_mu);
+
+    napi_value result;
+    napi_get_undefined(env, &result);
+    return result;
+}
+
+/* ---- addTextNote: a PDF text annotation (sticky note icon) at a normalized point ---- */
+napi_value AddTextNote(napi_env env, napi_callback_info info)
+{
+    size_t argc = 6;
+    napi_value args[6];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 6) {
+        napi_throw_type_error(env, nullptr, "addTextNote(handle, page, x, y, text, color) required");
+        return nullptr;
+    }
+    auto *h = GetHandle(env, args[0]);
+    if (h == nullptr) {
+        return nullptr;
+    }
+    int32_t pageNumber = 0;
+    double x = 0, y = 0;
+    napi_get_value_int32(env, args[1], &pageNumber);
+    napi_get_value_double(env, args[2], &x);
+    napi_get_value_double(env, args[3], &y);
+    char note[2048] = {0};
+    napi_get_value_string_utf8(env, args[4], note, sizeof(note) - 1, nullptr);
+    char color[16] = {0};
+    napi_get_value_string_utf8(env, args[5], color, sizeof(color), nullptr);
+
+    pdf_document *pdf = GetPdfDoc(env, h);
+    if (pdf == nullptr) {
+        return nullptr;
+    }
+
+    fz_rect media = fz_infinite_rect;
+    pdf_page *page = nullptr;
+    pthread_mutex_lock(&g_mu);
+    if (!fz_setjmp(*fz_push_try(h->ctx))) do {
+        page = pdf_load_page(h->ctx, pdf, pageNumber);
+        if (page != nullptr) {
+            media = fz_bound_page(h->ctx, (fz_page *)page);
+        }
+    } while (0);
+    if (fz_do_catch(h->ctx)) {
+        page = nullptr;
+    }
+    if (page != nullptr) {
+        fz_drop_page(h->ctx, (fz_page *)page);
+    }
+    pthread_mutex_unlock(&g_mu);
+
+    if (fz_is_infinite_rect(media)) {
+        napi_throw_error(env, "PAGE_FAILED", "cannot load page");
+        return nullptr;
+    }
+    float pw = media.x1 - media.x0;
+    float ph = media.y1 - media.y0;
+    if (pw <= 0.0f || ph <= 0.0f) {
+        napi_throw_error(env, "PAGE_FAILED", "bad page size");
+        return nullptr;
+    }
+
+    /* anchor point + 24pt icon rect (Android addTextNoteInternal pattern) */
+    float ux = media.x0 + static_cast<float>(x) * pw;
+    float uy = media.y0 + static_cast<float>(y) * ph;
+    float iconSize = 24.0f;
+    fz_rect r = fz_make_rect(ux, uy - iconSize, ux + iconSize, uy);
+
+    float rgb[3];
+    ParseHexColor(color, rgb);
+
+    pthread_mutex_lock(&g_mu);
+    if (!fz_setjmp(*fz_push_try(h->ctx))) do {
+        pdf_page *pg = pdf_load_page(h->ctx, pdf, pageNumber);
+        pdf_annot *annot = pdf_create_annot(h->ctx, pg, PDF_ANNOT_TEXT);
+        pdf_set_annot_rect(h->ctx, annot, r);
+        if (note[0] != '\0') {
+            pdf_set_annot_contents(h->ctx, annot, note);
+        }
+        pdf_set_annot_color(h->ctx, annot, 3, rgb);
+        pdf_update_annot(h->ctx, annot);
+        fz_drop_page(h->ctx, (fz_page *)pg);
+    } while (0);
+    if (fz_do_catch(h->ctx)) {
+        pthread_mutex_unlock(&g_mu);
+        napi_throw_error(env, "ANNOT_FAILED", "cannot create text note");
+        return nullptr;
+    }
+    pthread_mutex_unlock(&g_mu);
+
+    napi_value result;
+    napi_get_undefined(env, &result);
+    return result;
+}
+
 /* ---- deleteAnnotation ---- */
 napi_value DeleteAnnotation(napi_env env, napi_callback_info info)
 {
@@ -1632,7 +1854,46 @@ napi_value SaveDocument(napi_env env, napi_callback_info info)
 }
 
 
-/* ---- getTextRects (sprint H2): return line-level text bounding boxes ---- */
+/* Append one unicode code point to buf as JSON-escaped UTF-8.
+ * Returns the new offset, or -1 when the buffer is full. */
+static int AppendJsonChar(char *buf, int bufSize, int offset, int c)
+{
+    char tmp[8];
+    int n = 0;
+    if (c == '"' || c == '\\') {
+        tmp[n++] = '\\';
+        tmp[n++] = (char)c;
+    } else if (c == '\n') {
+        tmp[n++] = '\\'; tmp[n++] = 'n';
+    } else if (c == '\r') {
+        tmp[n++] = '\\'; tmp[n++] = 'r';
+    } else if (c == '\t') {
+        tmp[n++] = '\\'; tmp[n++] = 't';
+    } else if (c < 0x20) {
+        n = snprintf(tmp, sizeof(tmp), "\\u%04x", c);
+    } else if (c < 0x80) {
+        tmp[n++] = (char)c;
+    } else if (c < 0x800) {
+        tmp[n++] = (char)(0xC0 | (c >> 6));
+        tmp[n++] = (char)(0x80 | (c & 0x3F));
+    } else if (c < 0x10000) {
+        tmp[n++] = (char)(0xE0 | (c >> 12));
+        tmp[n++] = (char)(0x80 | ((c >> 6) & 0x3F));
+        tmp[n++] = (char)(0x80 | (c & 0x3F));
+    } else {
+        tmp[n++] = (char)(0xF0 | (c >> 18));
+        tmp[n++] = (char)(0x80 | ((c >> 12) & 0x3F));
+        tmp[n++] = (char)(0x80 | ((c >> 6) & 0x3F));
+        tmp[n++] = (char)(0x80 | (c & 0x3F));
+    }
+    if (offset + n >= bufSize) {
+        return -1;
+    }
+    memcpy(buf + offset, tmp, n);
+    return offset + n;
+}
+
+/* ---- getTextRects: line-level text boxes with line text + per-char x bounds ---- */
 napi_value GetTextRects(napi_env env, napi_callback_info info)
 {
     size_t argc = 2;
@@ -1681,25 +1942,29 @@ napi_value GetTextRects(napi_env env, napi_callback_info info)
         if (pw <= 0.0f) pw = 612.0f;
         if (ph <= 0.0f) ph = 792.0f;
 
-        /* Count total text lines for buffer sizing */
+        /* Count total text lines and chars for buffer sizing */
         size_t lineCount = 0;
+        size_t charCount = 0;
         for (const fz_stext_block *block = stext->first_block; block != nullptr; block = block->next) {
             if (block->type != FZ_STEXT_BLOCK_TEXT) continue;
             for (const fz_stext_line *line = block->u.t.first_line; line != nullptr; line = line->next) {
                 lineCount++;
+                for (const fz_stext_char *ch = line->first_char; ch != nullptr; ch = ch->next) {
+                    charCount++;
+                }
             }
         }
 
-        /* Build JSON array of line rectangles: [{x0,y0,x1,y1},...] normalized 0..1 */
-        size_t bufSize = 256 + lineCount * 80;
+        /* Build JSON array: [{x0,y0,x1,y1,text,chars:[x0,x1,...]},...] normalized 0..1 */
+        size_t bufSize = 256 + lineCount * 160 + charCount * 32;
         char *json = static_cast<char *>(fz_calloc(h->ctx, bufSize, 1));
         if (json == nullptr) break;
 
         int offset = snprintf(json, bufSize, "[");
         bool first = true;
-        for (const fz_stext_block *block = stext->first_block; block != nullptr && offset < (int)(bufSize - 64); block = block->next) {
+        for (const fz_stext_block *block = stext->first_block; block != nullptr && offset < (int)(bufSize - 128); block = block->next) {
             if (block->type != FZ_STEXT_BLOCK_TEXT) continue;
-            for (const fz_stext_line *line = block->u.t.first_line; line != nullptr && offset < (int)(bufSize - 64); line = line->next) {
+            for (const fz_stext_line *line = block->u.t.first_line; line != nullptr && offset < (int)(bufSize - 128); line = line->next) {
                 if (!first) json[offset++] = ',';
                 first = false;
                 float x0 = (line->bbox.x0 - stext->mediabox.x0) / pw;
@@ -1708,10 +1973,42 @@ napi_value GetTextRects(napi_env env, napi_callback_info info)
                 float y1 = (line->bbox.y1 - stext->mediabox.y0) / ph;
                 if (x0 < 0.0f) x0 = 0.0f; if (x1 > 1.0f) x1 = 1.0f;
                 if (y0 < 0.0f) y0 = 0.0f; if (y1 > 1.0f) y1 = 1.0f;
-                int n = snprintf(json + offset, 80,
-                    "{\"x0\":%.4f,\"y0\":%.4f,\"x1\":%.4f,\"y1\":%.4f}",
+                int n = snprintf(json + offset, 100,
+                    "{\"x0\":%.4f,\"y0\":%.4f,\"x1\":%.4f,\"y1\":%.4f,\"text\":\"",
                     x0, y0, x1, y1);
                 if (n > 0) offset += n;
+                for (const fz_stext_char *ch = line->first_char; ch != nullptr; ch = ch->next) {
+                    offset = AppendJsonChar(json, (int)bufSize, offset, ch->c);
+                    if (offset < 0) break;
+                }
+                if (offset < 0) break;
+                if (offset + 16 >= (int)bufSize) break;
+                json[offset++] = '"';
+                json[offset++] = ',';
+                json[offset++] = '"';
+                json[offset++] = 'c';
+                json[offset++] = 'h';
+                json[offset++] = 'a';
+                json[offset++] = 'r';
+                json[offset++] = 's';
+                json[offset++] = '"';
+                json[offset++] = ':';
+                json[offset++] = '[';
+                for (const fz_stext_char *ch = line->first_char; ch != nullptr; ch = ch->next) {
+                    float cx0 = ch->quad.ll.x, cx1 = ch->quad.lr.x;
+                    if (ch->quad.ul.x < cx0) cx0 = ch->quad.ul.x;
+                    if (ch->quad.ur.x > cx1) cx1 = ch->quad.ur.x;
+                    cx0 = (cx0 - stext->mediabox.x0) / pw;
+                    cx1 = (cx1 - stext->mediabox.x0) / pw;
+                    if (cx0 < 0.0f) cx0 = 0.0f;
+                    if (cx1 > 1.0f) cx1 = 1.0f;
+                    n = snprintf(json + offset, 32, "%.4f,%.4f,", cx0, cx1);
+                    if (n > 0) offset += n;
+                    if (offset + 16 >= (int)bufSize) break;
+                }
+                if (offset > 0 && json[offset - 1] == ',') offset--;
+                json[offset++] = ']';
+                json[offset++] = '}';
             }
         }
         json[offset++] = ']';
@@ -1825,6 +2122,8 @@ napi_value Init(napi_env env, napi_value exports)
         {"getAnnotations", nullptr, GetAnnotations, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"addHighlight", nullptr, AddHighlight, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"addInkStroke", nullptr, AddInkStroke, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"addMarkupAnnotation", nullptr, AddMarkupAnnotation, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"addTextNote", nullptr, AddTextNote, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"deleteAnnotation", nullptr, DeleteAnnotation, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"saveDocument", nullptr, SaveDocument, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getText", nullptr, GetText, nullptr, nullptr, nullptr, napi_default, nullptr},

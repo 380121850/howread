@@ -9,8 +9,86 @@
           "storeFile": "./signing/librera-sign.p12",
           "profile": "./signing/librera-debug.p7b",
           "keyAlias": "app-sign-key",
-          "keyPassword": "0000001CD32150AB3AFBD4334E54E997DE951904CA55261F289C6C80A0FEBBFECA6B9295872C498CD270AA99",
-          "storePassword": "0000001CD32150AB3AFBD4334E54E997DE951904CA55261F289C6C80A0FEBBFECA6B9295872C498CD270AA99",
+          "keyPassword": "0000001C7952AD30AC6036FE4E7B78B3CAFF9E78407406F4A1CAF1B7613C4B2C0470065C5FE17A32F7B85236",
+          "storePassword": "0000001C7952AD30AC6036FE4E7B78B3CAFF9E78407406F4A1CAF1B7613C4B2C0470065C5FE17A32F7B85236",
+          "signAlg": "SHA256withECDSA"
+        }
+      },
+      {
+        "name": "liberaprodebug",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "./signing/app-sign-cert.cer",
+          "storeFile": "./signing/librera-sign.p12",
+          "profile": "./signing/librera-pro-debug.p7b",
+          "keyAlias": "app-sign-key",
+          "keyPassword": "0000001C7952AD30AC6036FE4E7B78B3CAFF9E78407406F4A1CAF1B7613C4B2C0470065C5FE17A32F7B85236",
+          "storePassword": "0000001C7952AD30AC6036FE4E7B78B3CAFF9E78407406F4A1CAF1B7613C4B2C0470065C5FE17A32F7B85236",
+          "signAlg": "SHA256withECDSA"
+        }
+      },
+      {
+        "name": "liberaprorelease",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "./signing/app-sign-cert.cer",
+          "storeFile": "./signing/librera-sign.p12",
+          "profile": "./signing/librera-pro-release.p7b",
+          "keyAlias": "app-sign-key",
+          "keyPassword": "0000001C7952AD30AC6036FE4E7B78B3CAFF9E78407406F4A1CAF1B7613C4B2C0470065C5FE17A32F7B85236",
+          "storePassword": "0000001C7952AD30AC6036FE4E7B78B3CAFF9E78407406F4A1CAF1B7613C4B2C0470065C5FE17A32F7B85236",
+          "signAlg": "SHA256withECDSA"
+        }
+      },
+      {
+        "name": "howreaddebug",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "./signing/HowRead-debug-sign.cer",
+          "storeFile": "./signing/howread-debug-sign.p12",
+          "profile": "./signing/howread-debug.p7b",
+          "keyAlias": "howread-debug",
+          "keyPassword": "0000001C6681B0C48E8163DFE5908F89B1EBF39C17CA4502C16DE6651170B32A0FA1928E4C6F72B8F293F3D5",
+          "storePassword": "0000001C6681B0C48E8163DFE5908F89B1EBF39C17CA4502C16DE6651170B32A0FA1928E4C6F72B8F293F3D5",
+          "signAlg": "SHA256withECDSA"
+        }
+      },
+      {
+        "name": "howreadrelease",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "./signing/HowRead-release-sign.cer",
+          "storeFile": "./signing/howread-release-sign.p12",
+          "profile": "./signing/howread-release.p7b",
+          "keyAlias": "howread-release",
+          "keyPassword": "0000001C6681B0C48E8163DFE5908F89B1EBF39C17CA4502C16DE6651170B32A0FA1928E4C6F72B8F293F3D5",
+          "storePassword": "0000001C6681B0C48E8163DFE5908F89B1EBF39C17CA4502C16DE6651170B32A0FA1928E4C6F72B8F293F3D5",
+          "signAlg": "SHA256withECDSA"
+        }
+      },
+      {
+        "name": "howreadprodebug",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "./signing/HowRead-debug-sign.cer",
+          "storeFile": "./signing/howread-debug-sign.p12",
+          "profile": "./signing/howread-pro-debug.p7b",
+          "keyAlias": "howread-debug",
+          "keyPassword": "0000001C82BA97B590D1EFCBDEE2DD7B112120AEF0C0F3B35522EFA8F1A1E6D2FF2B89A6041EF303162F264C",
+          "storePassword": "0000001C82BA97B590D1EFCBDEE2DD7B112120AEF0C0F3B35522EFA8F1A1E6D2FF2B89A6041EF303162F264C",
+          "signAlg": "SHA256withECDSA"
+        }
+      },
+      {
+        "name": "howreadprorelease",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "./signing/HowRead-release-sign.cer",
+          "storeFile": "./signing/howread-release-sign.p12",
+          "profile": "./signing/howread-pro-release.p7b",
+          "keyAlias": "howread-release",
+          "keyPassword": "0000001C82BA97B590D1EFCBDEE2DD7B112120AEF0C0F3B35522EFA8F1A1E6D2FF2B89A6041EF303162F264C",
+          "storePassword": "0000001C82BA97B590D1EFCBDEE2DD7B112120AEF0C0F3B35522EFA8F1A1E6D2FF2B89A6041EF303162F264C",
           "signAlg": "SHA256withECDSA"
         }
       }
@@ -18,7 +96,20 @@
     "products": [
       {
         "name": "default",
-        "signingConfig": "liberadebug",
+        "signingConfig": "howreaddebug",
+        "compatibleSdkVersion": "6.1.1(24)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        },
+        "targetSdkVersion": "6.1.1(24)"
+      },
+      {
+        "name": "pro",
+        "signingConfig": "howreadprodebug",
         "compatibleSdkVersion": "6.1.1(24)",
         "runtimeOS": "HarmonyOS",
         "buildOption": {
@@ -45,7 +136,16 @@
       "srcPath": "./entry",
       "targets": [
         {
-          "name": "default"
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        },
+        {
+          "name": "pro",
+          "applyToProducts": [
+            "pro"
+          ]
         }
       ]
     }
