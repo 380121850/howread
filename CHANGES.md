@@ -2267,3 +2267,38 @@ EntryAbility_label 均为「好好读」，导致桌面名称相同。
 - 统计卡数据实时刷新（8 本/2m），首页 FAB、书库封面覆盖层、文本菜单均正常交互。
 - 待续：AI 大模型接入（设置对话框+发送给AI+AI 翻译+AI 简介，对应 hr08/13/17/18）、
   OPDS/WebDAV 服务器持久化列表的增删改、书库木质书架背景、WebDAV 同步日志页（hr09b）。
+
+## [2026-09-08] 版本号分平台独立管理
+
+### 背景
+此前版本号只收敛在安卓侧 `android/app/gradle.properties`（1.0.0 / 7200），
+鸿蒙 `AppScope/app.json5` 的 versionCode 仍是初始值 1，未与主版本对齐；
+iOS / Desktop 两个预留平台没有任何版本配置位。
+
+### 改动
+- **新增全局版本真值源**：仓库根目录 `VERSION`，按平台独立分段
+  （[Platform.Android] / [Platform.HarmonyOS] / [Platform.iOS] / [Platform.Desktop]），
+  每段含 versionName（SemVer）、versionCode（单调递增整型）、releaseDate（YYYY.MM.DD 升级时间点）；
+- **安卓侧**：`android/app/gradle.properties` 字段与 VERSION 的 Android 节严格对齐
+  （1.0.0 / 7200 / 2026.09.08），gradle 读取与 ABI 偏移逻辑不变；
+- **鸿蒙侧**：`AppScope/app.json5` 的 versionCode 1 → **7200**，与 VERSION 的 HarmonyOS 节对齐；
+- **预留平台**：`ios/VERSION_PLACEHOLDER`、`desktop/VERSION_PLACEHOLDER` 新增占位，
+  标注后续立项后从根目录 VERSION 自动同步生成；
+- 语义说明：versionName 是用户可见的对外版本号（展示用）；
+  versionCode 是系统/商店升级判断用的整型内部号（必须单调递增，永不回退）。
+
+### 验证
+- 各平台版本字段均与根目录 VERSION 对应节一致；本次仅改配置不动代码，无需重新编译。
+
+## [2026-09-08] 鸿蒙版本号定为 v0.5.1 / versionCode 32
+
+### 改动
+- 根目录 `VERSION` 的 [Platform.HarmonyOS] 节：versionName 1.0.0 → **0.5.1**，
+  versionCode 7200 → **32**，releaseDate 2026.09.08；
+- `harmony/AppScope/app.json5` 同步：versionCode 7200 → 32，versionName → "0.5.1"；
+- `harmony/oh-package.json5`、`harmony/entry/oh-package.json5` 的 version 同步 → "0.5.1"。
+
+### 说明
+- 最终产物文件名带 v 前缀：`build_hap_all.sh` 从 AppScope/app.json5 读取 versionName，
+  产物为 `HowRead[-Pro]-v0.5.1-<abi>-hmos.hap`；配置文件里的 versionName 字段本身为纯数字不含 v。
+- versionCode=32 为用户指定值；鸿蒙侧独立于安卓（安卓仍为 1.0.0 / 7200）。

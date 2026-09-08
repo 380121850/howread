@@ -1,0 +1,8 @@
+# iOS 平台版本配置占位（预留，未立项开发）
+# 正式立项开发后，本文件内容将从根目录 VERSION 的 [Platform.iOS] 节自动同步生成
+# 当前真实版本源：Z:\opt\librera\LibreraReader\VERSION
+
+[Platform.iOS]
+versionName = 0.0.0
+versionCode = 0
+releaseDate = (pending 立项后分配)

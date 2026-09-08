@@ -1,0 +1,23 @@
+# HowRead 好好读 全局版本控制文件
+# 按平台独立管理，各平台构建脚本优先读取本文件对应节的字段值自动生成构建配置
+# 版本规则：versionCode 始终单调递增，永不回退；versionName 遵循 SemVer 语义化格式 <major>.<minor>.<patch>
+
+[Platform.Android]
+versionName = 1.0.0
+versionCode = 7200
+releaseDate = 2026.09.08
+
+[Platform.HarmonyOS]
+versionName = 0.5.1
+versionCode = 32
+releaseDate = 2026.09.08
+
+[Platform.iOS]
+versionName = 0.0.0
+versionCode = 0
+releaseDate = (pending 立项后分配)
+
+[Platform.Desktop]
+versionName = 0.0.0
+versionCode = 0
+releaseDate = (pending 立项后分配)
