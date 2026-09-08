@@ -78,7 +78,18 @@
 5. ✅ **偏好**（hr07）：偏好|退出程序子栏、配置文件行（H 头像）、重置、蓝色分区标题条 + 键值行（WebDAV 同步/AI 大模型行）。
 6. ✅ **阅读器**（hr10/hr11/hr12）：单行品牌蓝顶栏 6 钮（目录/亮度/全屏/AI/设置/关闭）、品牌蓝底栏 6 白钮 + 蓝底页码滑块行；文本选择改「文本」对话框（标注按钮 + 加入书签/分享/复制/文内搜索/发送给AI/笔记/网络搜索/网络词典菜单，部分功能 toast 占位）。
 7. ✅ **验证**：default/debug 构建 + 模拟器逐屏截图比对 hr01/04/05/07/10/12 通过；统计卡响应式（修复 @Builder 值传参不追踪）。
-8. ⏸ **待续**：AI 大模型接入全套（hr08 设置对话框 / hr13 发送给AI / hr17 AI 笔记列表 / hr18 AI 翻译 / AI 简介书籍）、OPDS/WebDAV 服务器持久化列表增删改、书库木质书架背景、WebDAV 同步日志页（hr09b）、分享/在线查词真实跳转。
+8. ✅ 待续项已全部完成（2026-09-08 第二批，见下节）。
+
+### 阶段 10（2026-09-08）：第二批功能移植（AI 全套 / 服务器管理 / 同步基础版 / 木质书架 / 分享查词）✅ 已完成
+
+1. ✅ **AI 大模型接入全套**：`model/AiClient.ets`（OpenAI 兼容 /chat/completions + /models + 测试，AiConfig 持久化 `librera_ai`）+ `model/Notes.ets`（AI 笔记 `librera_notes`）；hr08 偏好设置对话框（厂商 chips 智谱/OpenAI/DeepSeek/自定义、密钥掩码、获取模型、输出上限、思考模式、测试连接）；hr13 发送给AI 独立页 `pages/AiChat.ets`（可编辑选中文本+问题+回答+保存到笔记，已注册 main_pages.json）；AI 简介书籍（书库长按菜单→结果对话框→保存笔记）；hr18 AI 翻译对话框（源/目标语言、双语对照置灰=面板模式、结果底部面板+保存）；hr17 书签面板「AI 笔记」分组（徽章/页码/删除）。
+2. ✅ **OPDS/WebDAV 服务器持久化增删改**（hr05/hr06）：`model/Servers.ets`（`librera_servers`，首启种入 Gutenberg/Standard Ebooks/CBETA）；我的文件根服务器卡片行（✎编辑/✕删除/＋添加对话框），WebDAV 对话框含账号/密码/信任自签；连接带 Basic Authorization；首页圆卡与 OPDS 浮层改读持久化列表。
+3. ✅ **书库木质书架背景**（hr04）：bg_wood.png（4 竖板木纹平铺贴图）+ 网格视图背景铺贴 + 每格底部深棕木板条。
+4. ✅ **WebDAV 同步基础版**（hr09/hr09b）：`model/Sync.ets` 配置+日志持久化；runSync 按书比对 updatedAt 较新者胜（GET/PUT `.howread.json`，服务端新→回写进度+合并书签；仅 GET/PUT，无 PROPFIND/三向合并/定时——鸿蒙 HTTP 栈限制，用户确认基础版）；hr09 同步对话框（启用/地址/凭据/同步路径/冲突策略/测试连接/同步日志/立即同步/上次摘要）；hr09b 日志页（倒序+每书明细）。
+5. ✅ **分享/在线查词真实跳转**：分享=@kit.ShareKit systemShare（SharedRecord utd general.text + ShareController.show，失败回退复制剪贴板）；网络搜索=openLink Google；网络词典=openLink 有道。
+6. ⏸ **仍待续**：AI 翻译"页内双语对照"真实注入页面（需按段落矩形覆盖渲染，复杂度高）；同步三向字段级合并/定时同步/墓碑；AI 实际调用与 WebDAV 端到端需真实 Key/局域网服务器验证；浏览器 openLink 真机复验；播放列表、TTS 录音导出、i18n 铺开。
+
+
 
 ### 阶段 8 续（2026-09-07）：我的文件 my-files:（移植 Phase 4）✅ 已完成
 

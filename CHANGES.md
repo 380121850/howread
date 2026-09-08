@@ -5,6 +5,38 @@
 
 ---
 
+## [2026-09-08] 鸿蒙移植：AI 大模型接入全套 + OPDS/WebDAV 服务器管理 + WebDAV 同步基础版 + 木质书架 + 分享/在线查词
+
+**背景**：按安卓版功能（LibreraReader/CHANGES.md 2026-08-28~09-05 的 AI/WebDAV/OPDS 迭代）与截图 hr05/06/08/09/09b/13/17/18/19，把安卓有而鸿蒙缺的 5 大功能块一次移植完毕。用户确认的范围决策：WebDAV 同步做**基础版**（进度+书签、手动立即同步、无 PROPFIND/三向合并/定时）；AI 翻译的"页内双语对照"先做**面板模式**（鸿蒙阅读器是 PDF 页面图像渲染，无法照搬安卓的文本重排页内注入）。
+
+**改动**（`harmony/` 内）：
+
+**① AI 大模型接入全套**：
+- 新增 `model/AiClient.ets`：OpenAI 兼容客户端（`AiConfig{provider,url,key,model,maxTokens,thinking}` 持久化于 preferences `librera_ai`）；`chatCompletion`（POST /chat/completions，Bearer，60s 超时，非流式，智谱厂商附 thinking.type）、`listModels`（GET /models）、`testChat`、`aiConfigReady`。
+- 新增 `model/Notes.ets`：AI 笔记存储（preferences `librera_notes`，`{path,title,page,date,kind,text}`，kind=AI问答/AI简介/AI翻译，上限 500），供 hr17 式查看，不依赖 PDF 注释。
+- 新增 `pages/AiChat.ets`（hr13 发送给AI 独立页，注册进 main_pages.json）：所选文本可编辑 TextArea + 可选问题输入 + 发送（系统提示"你是专业的阅读助手"）+ AI 回答区 + 保存到笔记；router 参数 docPath/title/page/selText。Reader 选择菜单「发送给AI」(action 6) 从 toast 改为跳转本页。
+- `Index.ets` 偏好页：AI 占位行改为真实状态行（厂商 · 模型名），弹出 hr08「AI 大模型接入」对话框：协议 OpenAI 兼容 + 模型厂商 chips（智谱/OpenAI/DeepSeek/自定义，选中预填 API 地址）+ API 地址/密钥（掩码）/模型名+「获取模型」拉 /models 列表点选 + 输出上限 + 思考模式 Checkbox + 测试连接（测试输入框+响应区）+ 关闭/保存。
+- **AI 简介书籍**（hr19+hr17）：书库长按菜单新增「AI 简介书籍」项（ic_sparkle）→ 以书名/作者组 prompt 请求模型 → 结果对话框展示 +「保存到笔记」落 Notes.ets。
+- **AI 翻译**（hr18 面板模式）：Reader 顶栏 AI 按钮从 toast 改为翻译对话框：源/目标语言 Select 下拉、「在页面内显示译文（双语对照）」Checkbox 置灰标注"面板模式"、AI翻译结果保存 Checkbox、开始翻译 → 取选中文本（无则取当前页 extractable 文本 loadTextRects+parseSelLines）翻译 → 结果底部面板 Scroll 展示 +「保存到笔记」。
+- **hr17 查看**：Reader 书签面板底部新增「AI 笔记 (N)」分组：kind 徽章 + 时间/页码 + 3 行摘要 + ✕ 删除（loadBookmarks 时同步加载）。
+
+**② OPDS/WebDAV 服务器持久化增删改**（hr05/hr06）：
+- 新增 `model/Servers.ets`：preferences `librera_servers` 存 `OpdsServer{url,name}` / `DavServer{url,name,user,password,trusted}` 增删改查，首启种入内置 Gutenberg/Standard Ebooks/CBETA 三预设（seeded 标记防重复）。
+- 我的文件根视图：OPDS 与 WebDAV 分区改为持久化服务器列表（白色卡片行：图标+名称+URL+✎编辑+✕删除），分区头「+ 添加」改为直接弹添加对话框（原来只是跳浮层）；OPDS 对话框=URL+名称，WebDAV 对话框按 hr06=URL/名称/账号/密码/信任自签名证书+关闭/添加。行点击 OPDS=直接拉取目录，WebDAV=选中该服务器连接并打开云盘浮层。
+- `webdavConnect`/`webdavDownload` 增加所选服务器凭据的 Basic Authorization 头（util.Base64Helper）；首页「网上书库」圆卡与 OPDS 浮层预设列表改读持久化列表。
+
+**③ 书库木质书架背景**（hr04）：Python 生成 512px 平铺木纹贴图 `resources/base/media/bg_wood.png`（4 竖板拼缝+纹理+暗角，tmp/scripts/gen_wood.py）；书库 grid/cover/bookshelf 视图背景 Stack 铺 bg_wood（objectFit Cover），LibGridCell 底部加深棕木板条（108% 宽+offset 下移+投影）模拟书架隔板；列表视图保持白色。
+
+**④ WebDAV 同步基础版**（hr09/hr09b）：
+- 新增 `model/Sync.ets`：配置持久化（`librera_sync`：enabled/url/user/password/trusted/remotePath/冲突策略"较新优先"/上次同步摘要）+ 同步日志（`librera_synclog`，{time,up,linked,ms,details[]} 上限 100）。引擎 `runSync`：遍历有进度/书签的书，与远端 `<remotePath>/<安全名>.howread.json` 比对 updatedAt，较新者胜（服务端新→回写 ReadingProgress+按书合并 Bookmarks；本地新→PUT 上传），全程仅 GET/PUT（鸿蒙 HTTP 栈无 PROPFIND）；`testSyncConnection` GET 远端目录。
+- 偏好页「WebDAV 同步」行改为真实状态（未启用/上次同步时间），弹出 hr09 对话框：启用同步 Checkbox、地址/账号/密码、信任自签、同步路径（默认 /dav/Books）、冲突策略行（固定"较新优先（按修改时间）"）、测试连接/同步日志/立即同步三链接、上次同步摘要行 + "与我的文件中的 WebDAV 服务器相互独立"说明、关闭/保存。同步日志页按 hr09b（倒序条目+每书明细【上传】【下载】【已最新】【失败】）。
+
+**⑤ 分享/在线查词真实跳转**：Reader 选择菜单 分享(action 5)=@kit.ShareKit systemShare 文本分享（SDK 的 SharedData 构造需 SharedRecord{utd:'general.text',content,title}，ShareController.show；异常/失败回退"复制到剪贴板"）；网络搜索(action 7)=`openLink('https://www.google.com/search?q='+encodeURIComponent(选中文本))`；网络词典(action 8)=openLink 有道 dict.youdao.com。均以 common.UIAbilityContext.openLink（API 12）打开浏览器。
+
+**验证**（模拟器 127.0.0.1:5555 uitest 逐屏截图）：我的文件根=hr05（预设种入+MyNAS 添加成功持久化显示，✎/✕/＋添加齐备）；WebDAV 添加对话框=hr06；偏好 AI 对话框=hr08（修复模型厂商 chips 单行溢出：协议与厂商拆两行）；WebDAV 同步对话框=hr09、同步日志空态=hr09b；书库网格=hr04 木纹+书板生效；阅读器 AI 按钮弹 hr18 翻译对话框（面板模式徽章）；文本选择菜单=hr12、「发送给AI」跳转 hr13 页面正常（未配置 Key 时红字引导）。编译 BUILD SUCCESSFUL（default 与 pro 两变体全 8 产物）。AI 实际调用与 WebDAV PUT/GET 需真实 Key/局域网服务器后端到端验证（模拟器公共网 403 环境限制）；浏览器 openLink 跳转建议真机复验。未执行任何 git 命令。
+
+---
+
 ## [2026-09-08] Android 包名体系迁移（vendor=leestudio）+ APK 命名规范 + AdMob 首启动死锁修复；鸿蒙侧 vendor/bundleName 与双变体构建脚本
 
 **背景**：按用户要求统一 leestudio 品牌包名体系：Android 三渠道改名改包名、APK 按渠道/构建类型分目录命名；鸿蒙改 vendor/bundleName 并支持 howread / howread pro 双变体。

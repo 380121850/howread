@@ -1,6 +1,7 @@
 {
   "src": [
     "pages/Index",
-    "components/Reader"
+    "components/Reader",
+    "pages/AiChat"
   ]
 }

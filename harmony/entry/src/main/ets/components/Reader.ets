@@ -22,6 +22,8 @@ import webview from '@ohos.web.webview';
 import promptAction from '@ohos.promptAction';
 import picker from '@ohos.file.picker';
 import pasteboard from '@ohos.pasteboard';
+import common from '@ohos.app.ability.common';
+import { systemShare } from '@kit.ShareKit';
 import { importUriToSandbox } from '../model/FileImport';
 import {
   version, openDocument, pageCount, renderPageAsync, closeDocument, getToc, getPageSize,
@@ -33,6 +35,8 @@ import {
 import { saveRecentBook, getPageForPath, RecentBook } from '../model/ReadingProgress';
 import { recordReadTime, recordPagesRead } from '../model/ReadingStats';
 import { getBookmarks, addBookmark, removeBookmark, Bookmark } from '../model/Bookmarks';
+import { AiConfig, loadAiConfig, chatCompletion, aiConfigReady, AiMessage } from '../model/AiClient';
+import { getNotes, addNote, removeNote, AiNote } from '../model/Notes';
 import { TextUtils } from '../model/TextUtils';
 import { loadSettings, saveSettings, THEME_NAMES, ReaderSettings } from '../model/Settings';
 import { startTtsBackgroundTask, stopTtsBackgroundTask, showTtsNotification, cancelTtsNotification } from '../service/TtsService';
@@ -431,6 +435,10 @@ struct MusicianPageRenderer {
 /**
  * Main Reader component.
  */
+/* Languages for the AI translation dialog (hr18). */
+const TRANS_SRC: string[] = ['\u81EA\u52A8\u68C0\u6D4B', '\u4E2D\u6587', '\u82F1\u6587', '\u65E5\u6587', '\u6CD5\u6587', '\u5FB7\u6587', '\u4FC4\u6587', '\u897F\u73ED\u7259\u6587'];
+const TRANS_DST: string[] = ['\u4E2D\u6587', '\u82F1\u6587', '\u65E5\u6587', '\u6CD5\u6587', '\u5FB7\u6587', '\u4FC4\u6587', '\u897F\u73ED\u7259\u6587'];
+
 @Entry
 @Component
 struct Reader {
@@ -458,6 +466,16 @@ struct Reader {
   @State autoFlipInterval: number = 3;      /* seconds between flips */
   @State showBookmarks: boolean = false;    /* bookmark list panel */
   @State bookmarks: Bookmark[] = [];
+  /* ---- Phase 10: AI 大模型接入 (hr13/17/18 parity) ---- */
+  @State showTrans: boolean = false;        /* AI 翻译 dialog (hr18) */
+  @State transSrcIdx: number = 0;
+  @State transDstIdx: number = 1;
+  @State transSave: boolean = true;
+  @State transBusy: boolean = false;
+  @State transResult: string = '';
+  @State showTransPanel: boolean = false;   /* bottom sheet with the translation */
+  @State aiNotes: AiNote[] = [];            /* AI notes for the bookmark panel (hr17) */
+  private aiCfg: AiConfig = { provider: '', url: '', key: '', model: '', maxTokens: 8192, thinking: false };
   @State annotations: AnnotationInfo[] = []; /* current page annotations */
   @State drawMode: boolean = false;         /* freehand drawing mode */
   @State drawPoints: TextRect[] = [];
@@ -1105,10 +1123,12 @@ struct Reader {
   private async loadBookmarks(): Promise<void> {
     if (this.documentPath.length === 0) {
       this.bookmarks = [];
+      this.aiNotes = [];
       return;
     }
     const ctx = getContext(this);
     this.bookmarks = await getBookmarks(ctx, this.documentPath);
+    this.loadAiNotes();
     console.info(`[Reader] Bookmarks loaded: ${this.bookmarks.length}`);
   }
 
@@ -2060,6 +2080,264 @@ struct Reader {
     }
   }
 
+  /* ---- Phase 10: AI 翻译 + AI 笔记 (hr17/18 parity) ---- */
+
+  /** Load AI notes for this book (shown in the bookmark panel). */
+  private loadAiNotes(): void {
+    if (this.documentPath.length === 0) {
+      this.aiNotes = [];
+      return;
+    }
+    getNotes(getContext(this), this.documentPath).then((n: AiNote[]) => {
+      this.aiNotes = n;
+    });
+  }
+
+  private openTransDialog(): void {
+    loadAiConfig(getContext(this)).then((c: AiConfig) => {
+      this.aiCfg = c;
+    });
+    this.transResult = '';
+    this.transBusy = false;
+    this.showTrans = true;
+    console.info('[Reader] AI translate dialog opened');
+  }
+
+  /** Whole-page text for translation (falls back to the selection first). */
+  private pageTextForTrans(): string {
+    this.loadTextRects();
+    this.parseSelLines();
+    let t = '';
+    for (let i = 0; i < this.selLines.length; i++) {
+      t += this.selLines[i].text + '\n';
+    }
+    return t.trim();
+  }
+
+  private startTranslate(): void {
+    if (this.transBusy) {
+      return;
+    }
+    if (!aiConfigReady(this.aiCfg)) {
+      promptAction.showToast({ message: '\u8BF7\u5148\u5728\u504F\u597D\u4E2D\u914D\u7F6E AI \u5927\u6A21\u578B' });
+      return;
+    }
+    const text = this.selText.length > 0 ? this.selText : this.pageTextForTrans();
+    if (text.length === 0) {
+      promptAction.showToast({ message: '\u5F53\u524D\u9875\u65E0\u53EF\u63D0\u53D6\u6587\u672C' });
+      return;
+    }
+    this.transBusy = true;
+    this.transResult = '';
+    const src: string = TRANS_SRC[this.transSrcIdx];
+    const dst: string = TRANS_DST[this.transDstIdx];
+    const from = src === TRANS_SRC[0] ? '' : '\u4ECE' + src;
+    const msgs: AiMessage[] = [
+      { role: 'system', content: '\u4F60\u662F\u4E13\u4E1A\u7684\u7FFB\u8BD1\uFF0C\u53EA\u8F93\u51FA\u8BD1\u6587\uFF0C\u4E0D\u8981\u89E3\u91CA\u3002' },
+      { role: 'user', content: `\u8BF7\u628A\u4E0B\u9762\u7684\u6587\u672C${from}\u7FFB\u8BD1\u6210${dst}\uFF0C\u53EA\u8F93\u51FA\u8BD1\u6587\uFF1A\n\n` + text }
+    ];
+    chatCompletion(this.aiCfg, msgs, 0).then((out: string) => {
+      this.transResult = out;
+      this.transBusy = false;
+      this.showTransPanel = true;
+      this.showTrans = false;
+    }).catch((e: Object) => {
+      this.transResult = '\u7FFB\u8BD1\u5931\u8D25\uFF1A' + (e instanceof Error ? e.message : String(e));
+      this.transBusy = false;
+      this.showTransPanel = true;
+      this.showTrans = false;
+    });
+  }
+
+  private saveTransNote(): void {
+    if (this.transResult.length === 0 || this.transResult.startsWith('\u7FFB\u8BD1\u5931\u8D25')) {
+      return;
+    }
+    const n: AiNote = {
+      path: this.documentPath,
+      title: this.docTitle,
+      page: this.currentPage,
+      date: new Date().toISOString(),
+      kind: 'AI\u7FFB\u8BD1',
+      text: this.transResult
+    };
+    addNote(getContext(this), n).then((ok: boolean) => {
+      promptAction.showToast({ message: ok ? '\u8BD1\u6587\u5DF2\u4FDD\u5B58\u5230\u7B14\u8BB0' : '\u4FDD\u5B58\u5931\u8D25' });
+      if (ok) {
+        this.loadAiNotes();
+      }
+    });
+  }
+
+  private toSelectOptions(list: string[]): SelectOption[] {
+    const arr: SelectOption[] = [];
+    for (let i = 0; i < list.length; i++) {
+      arr.push({ value: list[i] });
+    }
+    return arr;
+  }
+
+  /** hr18: AI 翻译 dialog (panel-mode bilingual note + save checkbox). */
+  @Builder
+  buildTransDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showTrans = false;
+        })
+      Column({ space: 12 }) {
+        Row() {
+          Text('AI\u7FFB\u8BD1')
+            .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
+            .layoutWeight(1)
+          Image($r('app.media.ic_close'))
+            .width(20).height(20).fillColor('#888')
+            .onClick(() => {
+              this.showTrans = false;
+            })
+        }
+        .width('100%')
+
+        Row({ space: 8 }) {
+          Text('\u6E90\u8BED\u8A00').fontSize(14).fontColor('#333').width(70)
+          Select(this.toSelectOptions(TRANS_SRC))
+            .selected(this.transSrcIdx)
+            .value(TRANS_SRC[this.transSrcIdx])
+            .font({ size: 14 })
+            .width(140)
+            .onSelect((idx: number) => {
+              this.transSrcIdx = idx;
+            })
+        }
+        .width('100%')
+
+        Row({ space: 8 }) {
+          Text('\u76EE\u6807\u8BED\u8A00').fontSize(14).fontColor('#333').width(70)
+          Select(this.toSelectOptions(TRANS_DST))
+            .selected(this.transDstIdx)
+            .value(TRANS_DST[this.transDstIdx])
+            .font({ size: 14 })
+            .width(140)
+            .onSelect((idx: number) => {
+              this.transDstIdx = idx;
+            })
+        }
+        .width('100%')
+
+        Row({ space: 6 }) {
+          Checkbox({ name: 'transBilingual' })
+            .width(18).height(18)
+            .selectedColor('#3949AB')
+            .select(false)
+            .enabled(false)
+          Text('\u5728\u9875\u9762\u5185\u663E\u793A\u8BD1\u6587\uFF08\u53CC\u8BED\u5BF9\u7167\uFF09')
+            .fontSize(13).fontColor('#999')
+          Text('\u9762\u677F\u6A21\u5F0F')
+            .fontSize(11).fontColor('#3949AB')
+            .border({ width: 1, color: '#3949AB' })
+            .borderRadius(8)
+            .padding({ left: 6, right: 6, top: 1, bottom: 1 })
+        }
+        .width('100%')
+
+        Row({ space: 6 }) {
+          Checkbox({ name: 'transSave' })
+            .width(18).height(18)
+            .selectedColor('#3949AB')
+            .select(this.transSave)
+            .onChange((v: boolean) => {
+              this.transSave = v;
+            })
+          Text('AI\u7FFB\u8BD1\u7ED3\u679C\u4FDD\u5B58').fontSize(13).fontColor('#333')
+        }
+        .width('100%')
+
+        Row({ space: 12 }) {
+          Blank()
+          Button('\u53D6\u6D88')
+            .fontSize(14).height(36)
+            .backgroundColor('#e0e0e0').fontColor('#333')
+            .onClick(() => {
+              this.showTrans = false;
+            })
+          Button('\u5F00\u59CB\u7FFB\u8BD1')
+            .fontSize(14).height(36)
+            .backgroundColor('#3949AB').fontColor(Color.White)
+            .onClick(() => {
+              this.startTranslate();
+            })
+        }
+        .width('100%')
+      }
+      .width('82%')
+      .padding(14)
+      .backgroundColor(Color.White)
+      .borderRadius(8)
+    }
+    .width('100%').height('100%')
+  }
+
+  /** Translation result bottom sheet (panel mode). */
+  @Builder
+  buildTransPanel() {
+    Stack({ alignContent: Alignment.Bottom }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showTransPanel = false;
+        })
+      Column({ space: 10 }) {
+        Row() {
+          Text('AI \u7FFB\u8BD1\u7ED3\u679C')
+            .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333')
+            .layoutWeight(1)
+          Image($r('app.media.ic_close'))
+            .width(20).height(20).fillColor('#888')
+            .onClick(() => {
+              this.showTransPanel = false;
+            })
+        }
+        .width('100%')
+
+        Scroll() {
+          Text(this.transResult)
+            .fontSize(14).fontColor('#333')
+            .width('100%')
+        }
+        .width('100%')
+        .height(260)
+        .backgroundColor('#f5f5f5')
+        .borderRadius(4)
+        .padding(8)
+
+        Row({ space: 12 }) {
+          Blank()
+          Button('\u5173\u95ED')
+            .fontSize(14).height(36)
+            .backgroundColor('#e0e0e0').fontColor('#333')
+            .onClick(() => {
+              this.showTransPanel = false;
+            })
+          Button('\u4FDD\u5B58\u5230\u7B14\u8BB0')
+            .fontSize(14).height(36)
+            .backgroundColor('#00897B').fontColor(Color.White)
+            .onClick(() => {
+              this.saveTransNote();
+            })
+        }
+        .width('100%')
+      }
+      .width('100%')
+      .padding(14)
+      .backgroundColor(Color.White)
+      .borderRadius({ topLeft: 10, topRight: 10 })
+    }
+    .width('100%').height('100%')
+  }
+
   /** One row of the selection dialog menu (Android hr12). */
   @Builder
   selMenuRow(icon: Resource, label: string, action: number) {
@@ -2086,15 +2364,84 @@ struct Reader {
       } else if (action === 4) {
         this.showSelNoteInput = true;
       } else if (action === 5) {
-        promptAction.showToast({ message: '\u5206\u4EAB\u529F\u80FD\u5C06\u5728\u540E\u7EED\u7248\u672C\u63D0\u4F9B' });
+        /* 分享 (system share sheet; falls back to clipboard) */
+        this.shareSelText();
         this.exitSelMode();
       } else if (action === 6) {
-        promptAction.showToast({ message: 'AI \u529F\u80FD\u5C06\u5728\u540E\u7EED\u7248\u672C\u63D0\u4F9B' });
-      } else if (action === 7 || action === 8) {
-        promptAction.showToast({ message: '\u5728\u7EBF\u67E5\u8BCD\u5C06\u5728\u540E\u7EED\u7248\u672C\u63D0\u4F9B' });
+        /* 发送给AI (Android hr13): jump to the dedicated AI chat page */
+        this.exitSelMode();
+        router.pushUrl({
+          url: 'pages/AiChat',
+          params: {
+            docPath: this.documentPath,
+            title: this.docTitle,
+            page: '' + this.currentPage,
+            selText: this.selText
+          }
+        });
+        console.info('[Reader] Sent selection to AiChat page');
+      } else if (action === 7) {
+        /* 网络搜索(谷歌等): open the browser */
+        this.openWebSearch(this.selText);
+        this.exitSelMode();
+      } else if (action === 8) {
+        /* 网络词典(牛津词典等): open youdao in the browser */
+        this.openWebDictionary(this.selText);
         this.exitSelMode();
       }
     })
+  }
+
+  /** Open a URL in the system browser (API 12 openLink). */
+  private openExternal(url: string): void {
+    try {
+      (getContext(this) as common.UIAbilityContext).openLink(url);
+      console.info('[Reader] openLink: ' + url);
+    } catch (e) {
+      promptAction.showToast({ message: '\u65E0\u6CD5\u6253\u5F00\u6D4F\u89C8\u5668' });
+      console.error('[Reader] openLink failed');
+    }
+  }
+
+  private openWebSearch(text: string): void {
+    if (text.trim().length === 0) {
+      promptAction.showToast({ message: '\u672A\u9009\u4E2D\u6587\u672C' });
+      return;
+    }
+    this.openExternal('https://www.google.com/search?q=' + encodeURIComponent(text));
+  }
+
+  private openWebDictionary(text: string): void {
+    if (text.trim().length === 0) {
+      promptAction.showToast({ message: '\u672A\u9009\u4E2D\u6587\u672C' });
+      return;
+    }
+    this.openExternal('https://dict.youdao.com/result?word=' + encodeURIComponent(text) + '&lang=en');
+  }
+
+  /** System share sheet for the selected text; clipboard fallback. */
+  private shareSelText(): void {
+    if (this.selText.trim().length === 0) {
+      promptAction.showToast({ message: '\u672A\u9009\u4E2D\u6587\u672C' });
+      return;
+    }
+    try {
+      const rec: systemShare.SharedRecord = {
+        utd: 'general.text',
+        content: this.selText,
+        title: this.docTitle
+      };
+      const data = new systemShare.SharedData(rec);
+      const controller = new systemShare.ShareController(data);
+      controller.show(getContext(this) as common.UIAbilityContext, {})
+        .catch(() => {
+          this.copySelText();
+          promptAction.showToast({ message: '\u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F\uFF08\u7CFB\u7EDF\u5206\u4EAB\u4E0D\u53EF\u7528\uFF09' });
+        });
+    } catch (e) {
+      this.copySelText();
+      promptAction.showToast({ message: '\u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F\uFF08\u7CFB\u7EDF\u5206\u4EAB\u4E0D\u53EF\u7528\uFF09' });
+    }
   }
 
   build() {
@@ -2132,7 +2479,7 @@ struct Reader {
           Image($r('app.media.ic_ai'))
             .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
             .onClick(() => {
-              promptAction.showToast({ message: 'AI \u529F\u80FD\u5C06\u5728\u540E\u7EED\u7248\u672C\u63D0\u4F9B' });
+              this.openTransDialog();
             })
           Image($r('app.media.ic_settings'))
             .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
@@ -3267,6 +3614,55 @@ struct Reader {
               }
               .layoutWeight(1)
             }
+
+            /* AI 笔记 (hr17): AI 回答 / 简介 / 翻译，按时间倒序 */
+            Divider().color('#eeeeee').margin({ top: 8, bottom: 8 })
+            Row({ space: 6 }) {
+              Text('AI \u7B14\u8BB0')
+                .fontSize(14).fontWeight(FontWeight.Bold).fontColor('#333')
+              Text(`(${this.aiNotes.length})`)
+                .fontSize(12).fontColor('#999')
+            }
+            .width('100%')
+
+            if (this.aiNotes.length === 0) {
+              Text('(\u6682\u65E0\uFF0C\u9009\u4E2D\u6587\u672C\u53D1\u9001\u7ED9AI\u6216\u4F7F\u7528AI\u7FFB\u8BD1)')
+                .fontSize(12).fontColor(Color.Gray)
+            } else {
+              List() {
+                ForEach(this.aiNotes, (n: AiNote) => {
+                  ListItem() {
+                    Row({ space: 8 }) {
+                      Text(n.kind)
+                        .fontSize(10).fontColor(Color.White)
+                        .backgroundColor('#3949AB')
+                        .borderRadius(4)
+                        .padding({ left: 5, right: 5, top: 2, bottom: 2 })
+                      Column({ space: 2 }) {
+                        Text(`${n.date.substring(0, 16).replace('T', ' ')} \u00B7 \u7B2C ${n.page + 1} \u9875`)
+                          .fontSize(10).fontColor('#999')
+                        Text(n.text)
+                          .fontSize(12).fontColor('#333')
+                          .maxLines(3)
+                          .textOverflow({ overflow: TextOverflow.Ellipsis })
+                      }
+                      .alignItems(HorizontalAlign.Start)
+                      .layoutWeight(1)
+                      Text('\u2715')
+                        .fontSize(14).fontColor('#e57373')
+                        .onClick(() => {
+                          removeNote(getContext(this), n.date).then(() => {
+                            this.loadAiNotes();
+                          });
+                        })
+                    }
+                    .width('100%')
+                    .padding({ top: 6, bottom: 6 })
+                  }
+                }, (n: AiNote) => n.date)
+              }
+              .height(180)
+            }
           }
           .width('70%')
           .height('100%')
@@ -3276,6 +3672,16 @@ struct Reader {
         }
         .width('100%').height('100%')
         .justifyContent(FlexAlign.End)
+      }
+
+      /* AI 翻译 dialog (Android hr18, panel mode) */
+      if (this.showTrans) {
+        this.buildTransDialog()
+      }
+
+      /* AI 翻译结果 bottom sheet */
+      if (this.showTransPanel) {
+        this.buildTransPanel()
       }
 
       /* Hidden ArkWeb host exposing speechSynthesis for TTS (sprint D) */

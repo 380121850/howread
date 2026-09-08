@@ -23,7 +23,12 @@ import { importUriToSandbox } from '../model/FileImport';
 import { getTagList, addTagToBook, removeTagFromBook, getSeriesList } from '../model/Tags';
 import { getReadingStats, getDailyStats, getMonthlyStats, ReadingStatsData, DayStat, MonthStat } from '../model/ReadingStats';
 import { fetchOpds, OPDS_PRESETS, OpdsEntry } from '../model/Opds';
+import { OpdsServer, DavServer, getOpdsServers, saveOpdsServer, removeOpdsServer, getDavServers, saveDavServer, removeDavServer } from '../model/Servers';
+import { SyncConfig, SyncLogEntry, defaultSyncConfig, loadSyncConfig, saveSyncConfig, getSyncLog, runSync, testSyncConnection } from '../model/Sync';
+import { AiConfig, AiMessage, loadAiConfig, saveAiConfig, chatCompletion, listModels, testChat, aiConfigReady, AI_PROVIDERS, AI_PROVIDER_URLS } from '../model/AiClient';
+import { addNote, AiNote } from '../model/Notes';
 import http from '@ohos.net.http';
+import promptAction from '@ohos.promptAction';
 import { KEY_PENDING_URI } from '../entryability/EntryAbility';
 
 /** Backup payload shape (sprint E). */
@@ -180,6 +185,48 @@ struct Index {
   @State showStatsChart: boolean = false;
   /** per-book action menu target path ('' = hidden) */
   @State libMenuPath: string = '';
+  // ---- Phase 10: AI 大模型接入 (Android hr08/13/17/18/19 parity) ----
+  /** AI config dialog visibility (prefs) */
+  @State showAiDialog: boolean = false;
+  /** editable AI config bound to the dialog inputs */
+  @State aiCfg: AiConfig = {
+    provider: AI_PROVIDERS[0], url: AI_PROVIDER_URLS[0], key: '', model: '', maxTokens: 8192, thinking: false
+  };
+  @State aiTestIn: string = '';
+  @State aiTestOut: string = '';
+  @State aiBusy: boolean = false;
+  @State aiModels: string[] = [];
+  /** AI 简介 dialog */
+  @State showAiIntro: boolean = false;
+  @State aiIntroBusy: boolean = false;
+  @State aiIntroText: string = '';
+  @State aiIntroTitle: string = '';
+  private aiIntroPath: string = '';
+  // ---- Phase 10: OPDS/WebDAV server persistence (Android hr05/hr06) ----
+  @State opdsServers: OpdsServer[] = [];
+  @State davServers: DavServer[] = [];
+  /** OPDS add/edit dialog: index into davServers, -1 = add */
+  @State showOpdsEdit: boolean = false;
+  @State opdsEditIdx: number = -1;
+  @State opdsEditUrl: string = '';
+  @State opdsEditName: string = '';
+  /** WebDAV add/edit dialog (hr06) */
+  @State showDavEdit: boolean = false;
+  @State davEditIdx: number = -1;
+  @State davEditUrl: string = '';
+  @State davEditName: string = '';
+  @State davEditUser: string = '';
+  @State davEditPass: string = '';
+  @State davEditTrusted: boolean = false;
+  /** index of the WebDAV server used by webdavConnect */
+  @State davSelected: number = -1;
+  // ---- Phase 10: WebDAV sync basic edition (Android hr09/hr09b) ----
+  @State showSyncDialog: boolean = false;
+  @State syncCfg: SyncConfig = defaultSyncConfig();
+  @State syncBusy: boolean = false;
+  @State syncTestOut: string = '';
+  @State showSyncLog: boolean = false;
+  @State syncLogs: SyncLogEntry[] = [];
 
   aboutToAppear(): void {
     this.runApiTest();
@@ -191,6 +238,47 @@ struct Index {
     this.initBrowseDir();
     this.loadQuotes();
     this.loadStats();
+    loadAiConfig(getContext(this)).then((c: AiConfig) => {
+      this.aiCfg = c;
+    });
+    this.loadServers();
+    loadSyncConfig(getContext(this)).then((c: SyncConfig) => {
+      this.syncCfg = c;
+    });
+  }
+
+  /** hr05: load persisted OPDS/WebDAV server lists. */
+  private loadServers(): void {
+    getOpdsServers(getContext(this)).then((l: OpdsServer[]) => {
+      this.opdsServers = l;
+    });
+    getDavServers(getContext(this)).then((l: DavServer[]) => {
+      this.davServers = l;
+      if (this.davSelected >= l.length) {
+        this.davSelected = l.length - 1;
+      }
+    });
+  }
+
+  /** Credentials of the selected WebDAV server ('' when none/basic disabled). */
+  private davAuthHeader(): string {
+    if (this.davSelected < 0 || this.davSelected >= this.davServers.length) {
+      return '';
+    }
+    const s = this.davServers[this.davSelected];
+    if (s.user.length === 0) {
+      return '';
+    }
+    const raw = s.user + ':' + s.password;
+    return 'Basic ' + new util.Base64Helper().encodeToStringSync(new Uint8Array(this.toBytes(raw)));
+  }
+
+  private toBytes(s: string): number[] {
+    const arr: number[] = [];
+    for (let i = 0; i < s.length; i++) {
+      arr.push(s.charCodeAt(i) & 0xff);
+    }
+    return arr;
   }
 
   /** Phase 3: refresh stats + library whenever the Index page becomes visible
@@ -888,6 +976,36 @@ struct Index {
         this.buildStatsChartDialog()
       }
 
+      // ---- AI 大模型接入 dialog (Android hr08) ----
+      if (this.showAiDialog) {
+        this.buildAiDialog()
+      }
+
+      // ---- AI 简介书籍 dialog (Android hr19 + hr17) ----
+      if (this.showAiIntro) {
+        this.buildAiIntroDialog()
+      }
+
+      // ---- OPDS add/edit dialog (hr05) ----
+      if (this.showOpdsEdit) {
+        this.buildOpdsEditDialog()
+      }
+
+      // ---- WebDAV add/edit dialog (hr06) ----
+      if (this.showDavEdit) {
+        this.buildDavEditDialog()
+      }
+
+      // ---- WebDAV 同步 dialog (hr09) ----
+      if (this.showSyncDialog) {
+        this.buildSyncDialog()
+      }
+
+      // ---- 同步日志 page (hr09b) ----
+      if (this.showSyncLog) {
+        this.buildSyncLogDialog()
+      }
+
       // ---- left drawer (Android DrawerLayout overlay) ----
       if (this.showDrawer) {
         Column() {}
@@ -1139,10 +1257,15 @@ struct Index {
     try {
       const url: string = this.webdavUrl.endsWith('/') ? this.webdavUrl : this.webdavUrl + '/';
       /* WebDAV PROPFIND (using GET as fallback since RequestMethod lacks PROPFIND) */
+      const hdr: Record<string, string> = { 'Depth': '1' };
+      const auth: string = this.davAuthHeader();
+      if (auth.length > 0) {
+        hdr['Authorization'] = auth;
+      }
       let req = http.createHttp();
       let resp = await req.request(url, {
         method: http.RequestMethod.GET,
-        header: { 'Depth': '1' },
+        header: hdr,
         connectTimeout: 10000,
         readTimeout: 15000
       });
@@ -1179,9 +1302,15 @@ struct Index {
     if (this.webdavUrl.length === 0 || fileName.length === 0) return;
     try {
       const url: string = this.webdavUrl.endsWith('/') ? this.webdavUrl + fileName : this.webdavUrl + '/' + fileName;
+      const hdr: Record<string, string> = {};
+      const auth: string = this.davAuthHeader();
+      if (auth.length > 0) {
+        hdr['Authorization'] = auth;
+      }
       let req = http.createHttp();
       let resp = await req.request(url, {
         method: http.RequestMethod.GET,
+        header: hdr,
         connectTimeout: 10000,
         readTimeout: 30000
       });
@@ -1854,10 +1983,10 @@ struct Index {
         .width('94%')
         .padding({ top: 4, bottom: 6 })
 
-        /* 网上书库: OPDS circles */
+        /* 网上书库: OPDS circles (persisted server list, first 2) */
         this.sectionHeader('\u7F51\u4E0A\u4E66\u5E93', 8)
         Row({ space: 20 }) {
-          ForEach(OPDS_PRESETS, (p: OpdsEntry) => {
+          ForEach(this.opdsServers.slice(0, 2), (s: OpdsServer) => {
             Column({ space: 6 }) {
               Column() {
                 Text('OPDS')
@@ -1867,13 +1996,13 @@ struct Index {
               .justifyContent(FlexAlign.Center)
               .backgroundColor('#3949AB')
               .borderRadius(32)
-              Text(p.title.length > 8 ? p.title.substring(0, 8) + '\u2026' : p.title)
+              Text(s.name.length > 8 ? s.name.substring(0, 8) + '\u2026' : s.name)
                 .fontSize(12).fontColor('#666').maxLines(1)
             }
             .onClick(() => {
               this.activeOverlay = 2;
             })
-          }, (p: OpdsEntry) => p.href)
+          }, (s: OpdsServer) => s.url)
         }
         .width('94%')
         .padding({ top: 4, bottom: 24 })
@@ -2095,26 +2224,31 @@ struct Index {
         }
         .layoutWeight(1).width('100%')
       } else {
-        /* grid / cover / bookshelf (wood background) */
+        /* grid / cover / bookshelf (wood shelf background, Android hr04) */
         Scroll() {
-          Column() {
-            Grid() {
-              ForEach(this.getLibraryBooks(), (book: RecentBook) => {
-                GridItem() {
-                  this.LibGridCell(book)
-                }
-              }, (item: RecentBook) => `${item.path}_${item.page}_${item.status}_${item.star}`)
+          Stack({ alignContent: Alignment.TopStart }) {
+            Image($r('app.media.bg_wood'))
+              .width('100%').height('100%')
+              .objectFit(ImageFit.Cover)
+            Column() {
+              Grid() {
+                ForEach(this.getLibraryBooks(), (book: RecentBook) => {
+                  GridItem() {
+                    this.LibGridCell(book)
+                  }
+                }, (item: RecentBook) => `${item.path}_${item.page}_${item.status}_${item.star}`)
+              }
+              .columnsTemplate('1fr 1fr 1fr')
+              .columnsGap(8).rowsGap(12)
+              .width('94%')
+              .padding({ top: 4 })
             }
-            .columnsTemplate('1fr 1fr 1fr')
-            .columnsGap(8).rowsGap(12)
-            .width('94%')
-            .padding({ top: 4 })
+            .width('100%')
+            .padding({ top: 4, bottom: 16 })
           }
           .width('100%')
-          .padding({ top: 4, bottom: 16 })
         }
         .layoutWeight(1).width('100%')
-        .backgroundColor(this.libViewMode === 4 ? '#7a4f28' : Color.Transparent)
       }
     }
     .width('100%')
@@ -2271,6 +2405,13 @@ struct Index {
   LibGridCell(book: RecentBook) {
     Column({ space: 4 }) {
       Stack({ alignContent: Alignment.Bottom }) {
+        /* shelf plank under the book (hr04 bookshelf) */
+        Column()
+          .width('108%').height(12)
+          .backgroundColor('#4e342e')
+          .borderRadius(2)
+          .shadow({ radius: 6, color: '#77000000', offsetX: 0, offsetY: 4 })
+          .offset({ y: 6 })
         if (book.coverPath.length > 0) {
           Image(book.coverPath)
             .width('100%').aspectRatio(0.72)
@@ -2342,6 +2483,671 @@ struct Index {
     }
   }
 
+  /* ---- Phase 10: AI 大模型接入 (Android hr08) ---- */
+
+  private saveAiDialog(): void {
+    if (this.aiCfg.maxTokens <= 0) {
+      this.aiCfg.maxTokens = 8192;
+    }
+    saveAiConfig(getContext(this), this.aiCfg).then(() => {
+      this.status = 'AI \u914D\u7F6E\u5DF2\u4FDD\u5B58';
+      this.showAiDialog = false;
+    });
+  }
+
+  private pickAiProvider(idx: number): void {
+    this.aiCfg.provider = AI_PROVIDERS[idx];
+    if (idx < AI_PROVIDER_URLS.length && AI_PROVIDER_URLS[idx].length > 0) {
+      this.aiCfg.url = AI_PROVIDER_URLS[idx];
+    }
+  }
+
+  private fetchAiModels(): void {
+    if (this.aiBusy) {
+      return;
+    }
+    this.aiBusy = true;
+    this.aiModels = [];
+    listModels(this.aiCfg).then((ids: string[]) => {
+      this.aiModels = ids;
+      this.aiBusy = false;
+      this.status = '\u83B7\u53D6\u5230 ' + ids.length + ' \u4E2A\u6A21\u578B';
+    }).catch((e: Object) => {
+      this.aiTestOut = '\u83B7\u53D6\u6A21\u578B\u5931\u8D25\uFF1A' + (e instanceof Error ? e.message : String(e));
+      this.aiBusy = false;
+    });
+  }
+
+  private aiTestSend(): void {
+    if (this.aiBusy) {
+      return;
+    }
+    this.aiBusy = true;
+    this.aiTestOut = '';
+    saveAiConfig(getContext(this), this.aiCfg);
+    testChat(this.aiCfg, this.aiTestIn).then((out: string) => {
+      this.aiTestOut = out;
+      this.aiBusy = false;
+    }).catch((e: Object) => {
+      this.aiTestOut = '\u6D4B\u8BD5\u5931\u8D25\uFF1A' + (e instanceof Error ? e.message : String(e));
+      this.aiBusy = false;
+    });
+  }
+
+  /** hr08: AI 大模型接入 dialog (provider/url/key/model/tokens/thinking/test). */
+  @Builder
+  buildAiDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showAiDialog = false;
+        })
+      Column({ space: 10 }) {
+        Row() {
+          Text('AI \u5927\u6A21\u578B\u63A5\u5165')
+            .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
+            .layoutWeight(1)
+          Image($r('app.media.ic_close'))
+            .width(20).height(20).fillColor('#888')
+            .onClick(() => {
+              this.showAiDialog = false;
+            })
+        }
+        .width('100%')
+
+        Row({ space: 8 }) {
+          Text('\u534F\u8BAE').fontSize(14).fontColor('#333').width(70)
+          Text('OpenAI \u517C\u5BB9')
+            .fontSize(14).fontColor('#3949AB')
+        }
+        .width('100%')
+
+        Row({ space: 8 }) {
+          Text('\u6A21\u578B\u5382\u5546').fontSize(14).fontColor('#333').width(70)
+          ForEach(AI_PROVIDERS, (p: string, idx: number) => {
+            Text(p)
+              .fontSize(12)
+              .fontColor(this.aiCfg.provider === p ? Color.White : '#3949AB')
+              .backgroundColor(this.aiCfg.provider === p ? '#3949AB' : Color.Transparent)
+              .border({ width: 1, color: '#3949AB' })
+              .borderRadius(10)
+              .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+              .onClick(() => {
+                this.pickAiProvider(idx);
+              })
+          }, (p: string) => p)
+        }
+        .width('100%')
+
+        Row({ space: 8 }) {
+          Text('API \u5730\u5740').fontSize(14).fontColor('#333').width(70)
+          TextInput({ text: this.aiCfg.url, placeholder: 'https://...' })
+            .fontSize(13).height(38).layoutWeight(1)
+            .backgroundColor(Color.White)
+            .border({ width: 1, color: '#cccccc' })
+            .borderRadius(4)
+            .onChange((v: string) => {
+              this.aiCfg.url = v;
+            })
+        }
+        .width('100%')
+
+        Row({ space: 8 }) {
+          Text('\u5BC6\u94A5').fontSize(14).fontColor('#333').width(70)
+          TextInput({ text: this.aiCfg.key, placeholder: 'sk-...' })
+            .type(InputType.Password)
+            .fontSize(13).height(38).layoutWeight(1)
+            .backgroundColor(Color.White)
+            .border({ width: 1, color: '#cccccc' })
+            .borderRadius(4)
+            .onChange((v: string) => {
+              this.aiCfg.key = v;
+            })
+        }
+        .width('100%')
+
+        Row({ space: 8 }) {
+          Text('\u6A21\u578B\u540D').fontSize(14).fontColor('#333').width(70)
+          TextInput({ text: this.aiCfg.model, placeholder: 'glm-4.5-air' })
+            .fontSize(13).height(38).layoutWeight(1)
+            .backgroundColor(Color.White)
+            .border({ width: 1, color: '#cccccc' })
+            .borderRadius(4)
+            .onChange((v: string) => {
+              this.aiCfg.model = v;
+            })
+          Text('\u83B7\u53D6\u6A21\u578B')
+            .fontSize(13).fontColor('#00897B')
+            .onClick(() => {
+              this.fetchAiModels();
+            })
+        }
+        .width('100%')
+
+        if (this.aiModels.length > 0) {
+          Scroll() {
+            Column() {
+              ForEach(this.aiModels, (m: string) => {
+                Text(m)
+                  .fontSize(13).fontColor('#333')
+                  .width('100%')
+                  .padding({ top: 6, bottom: 6 })
+                  .onClick(() => {
+                    this.aiCfg.model = m;
+                    this.aiModels = [];
+                  })
+              }, (m: string) => m)
+            }
+            .width('100%')
+          }
+          .width('100%')
+          .height(110)
+          .backgroundColor('#f5f5f5')
+          .borderRadius(4)
+        }
+
+        Row({ space: 8 }) {
+          Text('\u8F93\u51FA\u4E0A\u9650').fontSize(14).fontColor('#333').width(70)
+          TextInput({ text: this.aiCfg.maxTokens + '' })
+            .type(InputType.Number)
+            .fontSize(13).height(38).width(120)
+            .backgroundColor(Color.White)
+            .border({ width: 1, color: '#cccccc' })
+            .borderRadius(4)
+            .onChange((v: string) => {
+              this.aiCfg.maxTokens = parseInt(v.length > 0 ? v : '0');
+            })
+          Blank()
+          Row({ space: 6 }) {
+            Text('\u601D\u8003\u6A21\u5F0F').fontSize(13).fontColor('#333')
+            Checkbox({ name: 'thinking' })
+              .select(this.aiCfg.thinking)
+              .selectedColor('#3949AB')
+              .width(18).height(18)
+              .onChange((v: boolean) => {
+                this.aiCfg.thinking = v;
+              })
+          }
+        }
+        .width('100%')
+
+        Text('\u6D4B\u8BD5\u8FDE\u63A5')
+          .fontSize(13).fontColor('#00897B')
+          .width('100%')
+          .onClick(() => {
+            this.aiTestSend();
+          })
+
+        TextInput({ text: this.aiTestIn, placeholder: '\u8F93\u5165\u6587\u5B57\uFF0C\u6D4B\u8BD5\u6A21\u578B\u662F\u5426\u6709\u54CD\u5E94' })
+          .fontSize(13).height(38).width('100%')
+          .backgroundColor(Color.White)
+          .border({ width: 1, color: '#cccccc' })
+          .borderRadius(4)
+          .onChange((v: string) => {
+            this.aiTestIn = v;
+          })
+
+        if (this.aiTestOut.length > 0 || this.aiBusy) {
+          Text(this.aiBusy ? '\u6B63\u5728\u8BF7\u6C42\u6A21\u578B\u2026' : this.aiTestOut)
+            .fontSize(12).fontColor(this.aiTestOut.startsWith('\u6D4B\u8BD5\u5931\u8D25') || this.aiTestOut.startsWith('\u83B7\u53D6\u6A21\u578B\u5931\u8D25') ? '#d32f2f' : '#333')
+            .width('100%')
+            .maxLines(6)
+            .padding(8)
+            .backgroundColor('#f5f5f5')
+            .borderRadius(4)
+        }
+
+        Row({ space: 12 }) {
+          Blank()
+          Button('\u5173\u95ED')
+            .fontSize(14).height(36)
+            .backgroundColor('#e0e0e0').fontColor('#333')
+            .onClick(() => {
+              this.showAiDialog = false;
+            })
+          Button('\u4FDD\u5B58')
+            .fontSize(14).height(36)
+            .backgroundColor('#3949AB').fontColor(Color.White)
+            .onClick(() => {
+              this.saveAiDialog();
+            })
+        }
+        .width('100%')
+      }
+      .width('86%')
+      .padding(14)
+      .backgroundColor(Color.White)
+      .borderRadius(8)
+    }
+    .width('100%').height('100%')
+  }
+
+  /** hr19+hr17: AI 简介 — ask the model about the book, show + save as AI note. */
+  private startAiIntro(): void {
+    const book = this.libMenuBook();
+    if (book === undefined) {
+      return;
+    }
+    if (!aiConfigReady(this.aiCfg)) {
+      loadAiConfig(getContext(this)).then((c: AiConfig) => {
+        this.aiCfg = c;
+        if (!aiConfigReady(c)) {
+          this.status = '\u8BF7\u5148\u5728\u504F\u597D\u4E2D\u914D\u7F6E AI \u5927\u6A21\u578B';
+          this.showAiDialog = true;
+          loadAiConfig(getContext(this));
+        } else {
+          this.aiIntroRun(book);
+        }
+      });
+      return;
+    }
+    this.aiIntroRun(book);
+  }
+
+  private aiIntroRun(book: RecentBook): void {
+    this.libMenuPath = '';
+    this.aiIntroPath = book.path;
+    this.aiIntroTitle = book.title;
+    this.aiIntroText = '';
+    this.aiIntroBusy = true;
+    this.showAiIntro = true;
+    const author = book.author.length > 0 ? book.author : '\u672A\u77E5';
+    const msgs: AiMessage[] = [
+      { role: 'system', content: '\u4F60\u662F\u4E13\u4E1A\u7684\u9605\u8BFB\u52A9\u624B\uFF0C\u8BF7\u7528\u7B80\u4F53\u4E2D\u6587\u56DE\u7B54\u3002' },
+      {
+        role: 'user',
+        content: '\u8BF7\u7528\u7B80\u4F53\u4E2D\u6587\u4E3A\u8FD9\u672C\u4E66\u5199\u4E00\u6BB5 150 \u5B57\u5DE6\u53F3\u7684\u7B80\u4ECB\uFF0C\u5E76\u7B80\u8981\u70B9\u8BC4\u3002\u4E66\u540D\uFF1A' + book.title + '\uFF0C\u4F5C\u8005\uFF1A' + author
+      }
+    ];
+    chatCompletion(this.aiCfg, msgs, 1024).then((out: string) => {
+      this.aiIntroText = out;
+      this.aiIntroBusy = false;
+    }).catch((e: Object) => {
+      this.aiIntroText = '\u8BF7\u6C42\u5931\u8D25\uFF1A' + (e instanceof Error ? e.message : String(e));
+      this.aiIntroBusy = false;
+    });
+  }
+
+  private saveAiIntro(): void {
+    if (this.aiIntroText.length === 0 || this.aiIntroBusy) {
+      return;
+    }
+    const n: AiNote = {
+      path: this.aiIntroPath,
+      title: this.aiIntroTitle,
+      page: 0,
+      date: new Date().toISOString(),
+      kind: 'AI\u7B80\u4ECB',
+      text: this.aiIntroText
+    };
+    addNote(getContext(this), n).then((ok: boolean) => {
+      promptAction.showToast({ message: ok ? 'AI \u7B80\u4ECB\u5DF2\u4FDD\u5B58\u5230\u7B14\u8BB0' : '\u4FDD\u5B58\u5931\u8D25' });
+      if (ok) {
+        this.showAiIntro = false;
+      }
+    });
+  }
+
+  @Builder
+  buildAiIntroDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showAiIntro = false;
+        })
+      Column({ space: 10 }) {
+        Row({ space: 8 }) {
+          Image($r('app.media.ic_sparkle'))
+            .width(20).height(20).fillColor('#3949AB')
+          Text('AI \u7B80\u4ECB\u4E66\u7C4D')
+            .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
+            .layoutWeight(1)
+          Image($r('app.media.ic_close'))
+            .width(20).height(20).fillColor('#888')
+            .onClick(() => {
+              this.showAiIntro = false;
+            })
+        }
+        .width('100%')
+
+        Text(this.aiIntroTitle)
+          .fontSize(14).fontColor('#666').maxLines(1)
+          .width('100%')
+
+        Scroll() {
+          Column() {
+            if (this.aiIntroBusy) {
+              Row({ space: 8 }) {
+                LoadingProgress().width(20).height(20).color('#3949AB')
+                Text('\u6B63\u5728\u751F\u6210\u7B80\u4ECB\u2026').fontSize(13).fontColor('#777')
+              }
+            } else {
+              Text(this.aiIntroText)
+                .fontSize(14).fontColor('#333')
+                .width('100%')
+            }
+          }
+          .width('100%')
+        }
+        .width('100%')
+        .height(220)
+        .backgroundColor('#f5f5f5')
+        .borderRadius(4)
+        .padding(8)
+
+        Row({ space: 12 }) {
+          Blank()
+          Button('\u5173\u95ED')
+            .fontSize(14).height(36)
+            .backgroundColor('#e0e0e0').fontColor('#333')
+            .onClick(() => {
+              this.showAiIntro = false;
+            })
+          Button('\u4FDD\u5B58\u5230\u7B14\u8BB0')
+            .fontSize(14).height(36)
+            .backgroundColor('#00897B').fontColor(Color.White)
+            .opacity(this.aiIntroText.length > 0 && !this.aiIntroBusy ? 1 : 0.4)
+            .onClick(() => {
+              this.saveAiIntro();
+            })
+        }
+        .width('100%')
+      }
+      .width('82%')
+      .padding(14)
+      .backgroundColor(Color.White)
+      .borderRadius(8)
+    }
+    .width('100%').height('100%')
+  }
+
+  /* ---- Phase 10: WebDAV sync basic edition (hr09/hr09b) ---- */
+
+  private saveSyncDialog(): void {
+    saveSyncConfig(getContext(this), this.syncCfg).then(() => {
+      this.status = '\u540C\u6B65\u914D\u7F6E\u5DF2\u4FDD\u5B58';
+      this.showSyncDialog = false;
+    });
+  }
+
+  private syncTest(): void {
+    if (this.syncBusy) {
+      return;
+    }
+    this.syncBusy = true;
+    this.syncTestOut = '';
+    saveSyncConfig(getContext(this), this.syncCfg);
+    testSyncConnection(this.syncCfg).then((out: string) => {
+      this.syncTestOut = out;
+      this.syncBusy = false;
+    });
+  }
+
+  private syncRunNow(): void {
+    if (this.syncBusy) {
+      return;
+    }
+    this.syncBusy = true;
+    this.syncTestOut = '\u6B63\u5728\u540C\u6B65\u2026';
+    saveSyncConfig(getContext(this), this.syncCfg);
+    runSync(getContext(this), this.syncCfg).then((entry: SyncLogEntry) => {
+      this.syncCfg.lastSyncTime = entry.time;
+      this.syncCfg.lastUp = entry.up;
+      this.syncCfg.lastLinked = entry.linked;
+      this.syncCfg.lastMs = entry.ms;
+      this.syncTestOut = `\u540C\u6B65\u5B8C\u6210\uFF1A\u5173\u8054 ${entry.linked} \u672C\uFF0C\u4E0A\u4F20 ${entry.up} \u672C\uFF0C\u8017\u65F6 ${entry.ms}ms`;
+      this.syncBusy = false;
+      this.status = 'WebDAV \u540C\u6B65\u5B8C\u6210';
+    }).catch((e: Object) => {
+      this.syncTestOut = '\u540C\u6B65\u5931\u8D25\uFF1A' + (e instanceof Error ? e.message : String(e));
+      this.syncBusy = false;
+    });
+  }
+
+  private openSyncLog(): void {
+    getSyncLog(getContext(this)).then((l: SyncLogEntry[]) => {
+      this.syncLogs = l;
+      this.showSyncLog = true;
+    });
+  }
+
+  private fmtLogTime(iso: string): string {
+    return iso.substring(0, 16).replace('T', ' ');
+  }
+
+  /** hr09: WebDAV 同步 dialog (basic: progress + bookmarks, newer-wins). */
+  @Builder
+  buildSyncDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showSyncDialog = false;
+        })
+      Scroll() {
+        Column({ space: 10 }) {
+          Row() {
+            Text('WebDAV \u540C\u6B65')
+              .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
+              .layoutWeight(1)
+            Image($r('app.media.ic_close'))
+              .width(20).height(20).fillColor('#888')
+              .onClick(() => {
+                this.showSyncDialog = false;
+              })
+          }
+          .width('100%')
+
+          Row({ space: 6 }) {
+            Checkbox({ name: 'syncEnabled' })
+              .width(18).height(18)
+              .selectedColor('#3949AB')
+              .select(this.syncCfg.enabled)
+              .onChange((v: boolean) => {
+                this.syncCfg.enabled = v;
+              })
+            Text('\u542F\u7528\u540C\u6B65\uFF08\u9605\u8BFB\u8FDB\u5EA6\u4E0E\u4E66\u7B7E\uFF09').fontSize(13).fontColor('#333')
+          }
+          .width('100%')
+
+          TextInput({ text: this.syncCfg.url, placeholder: '\u5730\u5740 http://dav.example.com:5005' })
+            .fontSize(13).height(38).width('100%')
+            .backgroundColor(Color.White)
+            .border({ width: 1, color: '#cccccc' })
+            .borderRadius(4)
+            .onChange((v: string) => {
+              this.syncCfg.url = v;
+            })
+          TextInput({ text: this.syncCfg.user, placeholder: '\u8D26\u53F7' })
+            .fontSize(13).height(38).width('100%')
+            .backgroundColor(Color.White)
+            .border({ width: 1, color: '#cccccc' })
+            .borderRadius(4)
+            .onChange((v: string) => {
+              this.syncCfg.user = v;
+            })
+          TextInput({ text: this.syncCfg.password, placeholder: '\u5BC6\u7801' })
+            .type(InputType.Password)
+            .fontSize(13).height(38).width('100%')
+            .backgroundColor(Color.White)
+            .border({ width: 1, color: '#cccccc' })
+            .borderRadius(4)
+            .onChange((v: string) => {
+              this.syncCfg.password = v;
+            })
+
+          Row({ space: 6 }) {
+            Checkbox({ name: 'syncTrust' })
+              .width(18).height(18)
+              .selectedColor('#3949AB')
+              .select(this.syncCfg.trusted)
+              .onChange((v: boolean) => {
+                this.syncCfg.trusted = v;
+              })
+            Text('\u4FE1\u4EFB\u81EA\u7B7E\u540D\u8BC1\u4E66').fontSize(13).fontColor('#333')
+          }
+          .width('100%')
+
+          Row({ space: 8 }) {
+            Text('\u540C\u6B65\u8DEF\u5F84').fontSize(14).fontColor('#333').width(70)
+            TextInput({ text: this.syncCfg.remotePath })
+              .fontSize(13).height(38).layoutWeight(1)
+              .backgroundColor(Color.White)
+              .border({ width: 1, color: '#cccccc' })
+              .borderRadius(4)
+              .onChange((v: string) => {
+                this.syncCfg.remotePath = v;
+              })
+          }
+          .width('100%')
+
+          Row({ space: 8 }) {
+            Text('\u51B2\u7A81\u7B56\u7565').fontSize(14).fontColor('#333').width(70)
+            Text(this.syncCfg.conflict)
+              .fontSize(13).fontColor('#3949AB')
+          }
+          .width('100%')
+
+          Row({ space: 16 }) {
+            Text('\u6D4B\u8BD5\u8FDE\u63A5')
+              .fontSize(13).fontColor('#00897B')
+              .onClick(() => {
+                this.syncTest();
+              })
+            Text('\u540C\u6B65\u65E5\u5FD7')
+              .fontSize(13).fontColor('#00897B')
+              .onClick(() => {
+                this.openSyncLog();
+              })
+            Text('\u7ACB\u5373\u540C\u6B65')
+              .fontSize(13).fontColor('#00897B')
+              .onClick(() => {
+                this.syncRunNow();
+              })
+          }
+          .width('100%')
+
+          if (this.syncTestOut.length > 0) {
+            Text(this.syncTestOut)
+              .fontSize(12).fontColor('#333')
+              .width('100%')
+              .maxLines(4)
+              .padding(8)
+              .backgroundColor('#f5f5f5')
+              .borderRadius(4)
+          }
+
+          if (this.syncCfg.lastSyncTime.length > 0) {
+            Text(`\u4E0A\u6B21\u540C\u6B65\uFF1A${this.fmtLogTime(this.syncCfg.lastSyncTime)} \u00B7 \u2191${this.syncCfg.lastUp}\u672C \u00B7 \u5173\u8054${this.syncCfg.lastLinked} \u00B7 ${this.syncCfg.lastMs}ms`)
+              .fontSize(12).fontColor('#666')
+              .width('100%')
+            Text('\u4E0E\u201C\u6211\u7684\u6587\u4EF6\u201D\u4E2D\u7684 WebDAV \u670D\u52A1\u5668\u76F8\u4E92\u72EC\u7ACB')
+              .fontSize(11).fontColor('#999')
+              .width('100%')
+          }
+
+          Row({ space: 12 }) {
+            Blank()
+            Button('\u5173\u95ED')
+              .fontSize(14).height(36)
+              .backgroundColor('#e0e0e0').fontColor('#333')
+              .onClick(() => {
+                this.showSyncDialog = false;
+              })
+            Button('\u4FDD\u5B58')
+              .fontSize(14).height(36)
+              .backgroundColor('#3949AB').fontColor(Color.White)
+              .onClick(() => {
+                this.saveSyncDialog();
+              })
+          }
+          .width('100%')
+        }
+        .width('86%')
+        .padding(14)
+        .backgroundColor(Color.White)
+        .borderRadius(8)
+      }
+      .width('100%').height('100%')
+    }
+    .width('100%').height('100%')
+  }
+
+  /** hr09b: 同步日志 page (reverse chronological, per-book details). */
+  @Builder
+  buildSyncLogDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showSyncLog = false;
+        })
+      Column({ space: 10 }) {
+        Row() {
+          Text('\u540C\u6B65\u65E5\u5FD7')
+            .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
+            .layoutWeight(1)
+          Image($r('app.media.ic_close'))
+            .width(20).height(20).fillColor('#888')
+            .onClick(() => {
+              this.showSyncLog = false;
+            })
+        }
+        .width('100%')
+
+        if (this.syncLogs.length === 0) {
+          Text('(\u6682\u65E0\u540C\u6B65\u8BB0\u5F55\uFF0C\u70B9\u201C\u7ACB\u5373\u540C\u6B65\u201D\u751F\u6210)')
+            .fontSize(13).fontColor('#999')
+            .width('100%')
+            .textAlign(TextAlign.Center)
+            .padding({ top: 30, bottom: 30 })
+        } else {
+          List({ space: 8 }) {
+            ForEach(this.syncLogs, (e: SyncLogEntry) => {
+              ListItem() {
+                Column({ space: 4 }) {
+                  Text(`${this.fmtLogTime(e.time)} \u00B7 \u2191${e.up}\u672C \u00B7 \u5173\u8054${e.linked} \u00B7 ${e.ms}ms`)
+                    .fontSize(12).fontColor('#3949AB')
+                  ForEach(e.details, (d: string, di: number) => {
+                    Text(d)
+                      .fontSize(11).fontColor('#555')
+                      .width('100%')
+                  }, (d: string, di: number) => `${e.time}_${di}`)
+                }
+                .alignItems(HorizontalAlign.Start)
+                .width('100%')
+                .padding(8)
+                .backgroundColor('#f7f7f7')
+                .borderRadius(4)
+              }
+            }, (e: SyncLogEntry) => e.time)
+          }
+          .width('100%')
+          .layoutWeight(1)
+        }
+
+        Button('\u5173\u95ED')
+          .fontSize(14).height(36).width('40%')
+          .backgroundColor('#3949AB').fontColor(Color.White)
+          .onClick(() => {
+            this.showSyncLog = false;
+          })
+      }
+      .width('86%')
+      .height('70%')
+      .padding(14)
+      .backgroundColor(Color.White)
+      .borderRadius(8)
+    }
+    .width('100%').height('100%')
+  }
+
   /** Resolve the book targeted by the per-book menu. */
   private libMenuBook(): RecentBook | undefined {
     for (let i = 0; i < this.recentBooks.length; i++) {
@@ -2363,6 +3169,8 @@ struct Index {
           this.libMenuPath = '';
         })
       Column() {
+        this.libMenuAiItem()
+        Divider().color('#eeeeee')
         this.libMenuItem($r('app.media.ic_check'), '\u6807\u8BB0\u4E3A\u5DF2\u8BFB', 2)
         this.libMenuItem($r('app.media.ic_circle_half'), '\u6807\u8BB0\u4E3A\u5728\u8BFB', 1)
         this.libMenuItem($r('app.media.ic_circle_empty'), '\u6807\u8BB0\u4E3A\u672A\u8BFB\uFF08\u6E05\u7A7A\u8FDB\u5EA6\uFF09', 0)
@@ -2377,6 +3185,19 @@ struct Index {
       .borderRadius(6)
     }
     .width('100%').height('100%')
+  }
+
+  @Builder
+  libMenuAiItem() {
+    Row({ space: 14 }) {
+      Image($r('app.media.ic_sparkle')).width(20).height(20).fillColor('#3949AB')
+      Text('AI \u7B80\u4ECB\u4E66\u7C4D').fontSize(15).fontColor('#333')
+    }
+    .width('100%')
+    .padding({ left: 18, right: 18, top: 13, bottom: 13 })
+    .onClick(() => {
+      this.startAiIntro();
+    })
   }
 
   @Builder
@@ -2659,21 +3480,21 @@ struct Index {
         /* preset home */
         Scroll() {
           Column({ space: 8 }) {
-            ForEach(OPDS_PRESETS, (p: OpdsEntry) => {
+            ForEach(this.opdsServers, (s: OpdsServer) => {
               Row() {
                 Text('\u{1F4D6}').fontSize(18)
                 Column({ space: 2 }) {
-                  Text(p.title).fontSize(13).fontColor('#333').maxLines(1)
-                  Text(p.summary).fontSize(9).fontColor('#999').maxLines(1)
+                  Text(s.name).fontSize(13).fontColor('#333').maxLines(1)
+                  Text(s.url).fontSize(9).fontColor('#999').maxLines(1)
                 }
                 .layoutWeight(1).alignItems(HorizontalAlign.Start).margin({ left: 10 })
                 Text('\u203A').fontSize(16).fontColor('#bbb')
               }
               .width('94%').padding(10).backgroundColor('#f5f5f5').borderRadius(8)
               .onClick(() => {
-                this.opdsOpen(p.href);
+                this.opdsOpen(s.url);
               })
-            }, (p: OpdsEntry) => p.href)
+            }, (s: OpdsServer) => s.url)
             Row({ space: 8 }) {
               TextInput({ placeholder: '\u81EA\u5B9A\u4E49 OPDS \u5730\u5740', text: this.opdsUrl })
                 .fontSize(12).height(34).layoutWeight(1)
@@ -3171,11 +3992,9 @@ struct Index {
         }
         .onClick(() => {
           if (addKind === 1) {
-            this.netSection = 0;
-            this.activeOverlay = 2;
+            this.openOpdsEdit(-1);
           } else if (addKind === 2) {
-            this.netSection = 1;
-            this.activeOverlay = 2;
+            this.openDavEdit(-1);
           } else {
             this.openFilePicker();
           }
@@ -3184,6 +4003,322 @@ struct Index {
     }
     .width('94%')
     .padding({ top: 18, bottom: 4 })
+  }
+
+  /* ---- Phase 10: OPDS/WebDAV server management (hr05/hr06) ---- */
+
+  private openOpdsEdit(idx: number): void {
+    if (idx >= 0 && idx < this.opdsServers.length) {
+      const s = this.opdsServers[idx];
+      this.opdsEditUrl = s.url;
+      this.opdsEditName = s.name;
+      this.opdsEditIdx = idx;
+    } else {
+      this.opdsEditUrl = '';
+      this.opdsEditName = '';
+      this.opdsEditIdx = -1;
+    }
+    this.showOpdsEdit = true;
+  }
+
+  private saveOpdsEdit(): void {
+    if (this.opdsEditUrl.trim().length === 0) {
+      this.status = 'OPDS \u5730\u5740\u4E0D\u80FD\u4E3A\u7A7A';
+      return;
+    }
+    const original: string = this.opdsEditIdx >= 0 && this.opdsEditIdx < this.opdsServers.length
+      ? this.opdsServers[this.opdsEditIdx].url : '';
+    const s: OpdsServer = {
+      url: this.opdsEditUrl.trim(),
+      name: this.opdsEditName.trim().length > 0 ? this.opdsEditName.trim() : this.opdsEditUrl.trim()
+    };
+    saveOpdsServer(getContext(this), s, original).then(() => {
+      this.showOpdsEdit = false;
+      this.loadServers();
+      this.status = 'OPDS \u4E66\u5E93\u5DF2\u4FDD\u5B58';
+    });
+  }
+
+  private deleteOpdsServerAt(idx: number): void {
+    if (idx < 0 || idx >= this.opdsServers.length) {
+      return;
+    }
+    const url = this.opdsServers[idx].url;
+    removeOpdsServer(getContext(this), url).then(() => {
+      this.loadServers();
+      this.status = 'OPDS \u4E66\u5E93\u5DF2\u5220\u9664';
+    });
+  }
+
+  private openDavEdit(idx: number): void {
+    if (idx >= 0 && idx < this.davServers.length) {
+      const s = this.davServers[idx];
+      this.davEditUrl = s.url;
+      this.davEditName = s.name;
+      this.davEditUser = s.user;
+      this.davEditPass = s.password;
+      this.davEditTrusted = s.trusted;
+      this.davEditIdx = idx;
+    } else {
+      this.davEditUrl = 'http://';
+      this.davEditName = '';
+      this.davEditUser = '';
+      this.davEditPass = '';
+      this.davEditTrusted = false;
+      this.davEditIdx = -1;
+    }
+    this.showDavEdit = true;
+  }
+
+  private saveDavEdit(): void {
+    if (this.davEditUrl.trim().length === 0 || this.davEditUrl.trim() === 'http://') {
+      this.status = 'WebDAV \u5730\u5740\u4E0D\u80FD\u4E3A\u7A7A';
+      return;
+    }
+    const original: string = this.davEditIdx >= 0 && this.davEditIdx < this.davServers.length
+      ? this.davServers[this.davEditIdx].url : '';
+    const s: DavServer = {
+      url: this.davEditUrl.trim(),
+      name: this.davEditName.trim().length > 0 ? this.davEditName.trim() : this.davEditUrl.trim(),
+      user: this.davEditUser,
+      password: this.davEditPass,
+      trusted: this.davEditTrusted
+    };
+    saveDavServer(getContext(this), s, original).then(() => {
+      this.showDavEdit = false;
+      this.loadServers();
+      this.status = 'WebDAV \u670D\u52A1\u5668\u5DF2\u4FDD\u5B58';
+    });
+  }
+
+  private deleteDavServerAt(idx: number): void {
+    if (idx < 0 || idx >= this.davServers.length) {
+      return;
+    }
+    const url = this.davServers[idx].url;
+    removeDavServer(getContext(this), url).then(() => {
+      if (this.davSelected === idx) {
+        this.davSelected = -1;
+      }
+      this.loadServers();
+      this.status = 'WebDAV \u670D\u52A1\u5668\u5DF2\u5220\u9664';
+    });
+  }
+
+  /** hr05: OPDS server row with edit/delete actions. */
+  @Builder
+  browseOpdsRow(s: OpdsServer) {
+    Row({ space: 12 }) {
+      Image($r('app.media.ic_globe'))
+        .width(24).height(24).fillColor('#3949AB')
+      Column({ space: 2 }) {
+        Text(s.name)
+          .fontSize(15).fontColor('#555').maxLines(1)
+        Text(s.url)
+          .fontSize(11).fontColor('#999').maxLines(1)
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+      Image($r('app.media.ic_pencil'))
+        .width(20).height(20).fillColor('#3949AB')
+        .onClick(() => {
+          this.openOpdsEdit(this.opdsServers.indexOf(s));
+        })
+      Image($r('app.media.ic_close'))
+        .width(20).height(20).fillColor('#999999')
+        .onClick(() => {
+          this.deleteOpdsServerAt(this.opdsServers.indexOf(s));
+        })
+    }
+    .width('94%')
+    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+    .backgroundColor(Color.White)
+    .borderRadius(3)
+    .margin({ bottom: 8 })
+    .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
+    .onClick(() => {
+      this.netSection = 0;
+      this.opdsOpen(s.url);
+      this.activeOverlay = 2;
+    })
+  }
+
+  /** hr05: WebDAV server row with edit/delete; tap = connect + open cloud panel. */
+  @Builder
+  browseDavRow(s: DavServer, idx: number) {
+    Row({ space: 12 }) {
+      Image($r('app.media.ic_cloud'))
+        .width(24).height(24).fillColor('#3949AB')
+      Column({ space: 2 }) {
+        Text(s.name)
+          .fontSize(15).fontColor('#555').maxLines(1)
+        Text(s.url)
+          .fontSize(11).fontColor('#999').maxLines(1)
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+      Image($r('app.media.ic_pencil'))
+        .width(20).height(20).fillColor('#3949AB')
+        .onClick(() => {
+          this.openDavEdit(idx);
+        })
+      Image($r('app.media.ic_close'))
+        .width(20).height(20).fillColor('#999999')
+        .onClick(() => {
+          this.deleteDavServerAt(idx);
+        })
+    }
+    .width('94%')
+    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+    .backgroundColor(Color.White)
+    .borderRadius(3)
+    .margin({ bottom: 8 })
+    .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
+    .onClick(() => {
+      this.webdavUrl = s.url;
+      this.davSelected = idx;
+      this.netSection = 1;
+      this.webdavConnect();
+      this.activeOverlay = 2;
+    })
+  }
+
+  /** hr05: OPDS add/edit dialog (URL + name). */
+  @Builder
+  buildOpdsEditDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showOpdsEdit = false;
+        })
+      Column({ space: 12 }) {
+        Text(this.opdsEditIdx >= 0 ? '\u7F16\u8F91 OPDS \u4E66\u5E93' : '\u6DFB\u52A0 OPDS \u4E66\u5E93')
+          .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
+          .width('100%')
+        TextInput({ text: this.opdsEditUrl, placeholder: 'https://.../opds/' })
+          .fontSize(13).height(38).width('100%')
+          .backgroundColor(Color.White)
+          .border({ width: 1, color: '#cccccc' })
+          .borderRadius(4)
+          .onChange((v: string) => {
+            this.opdsEditUrl = v;
+          })
+        TextInput({ text: this.opdsEditName, placeholder: '\u540D\u79F0\uFF08\u5982\uFF1AProject Gutenberg\uFF09' })
+          .fontSize(13).height(38).width('100%')
+          .backgroundColor(Color.White)
+          .border({ width: 1, color: '#cccccc' })
+          .borderRadius(4)
+          .onChange((v: string) => {
+            this.opdsEditName = v;
+          })
+        Row({ space: 12 }) {
+          Blank()
+          Button('\u5173\u95ED')
+            .fontSize(14).height(36)
+            .backgroundColor('#e0e0e0').fontColor('#333')
+            .onClick(() => {
+              this.showOpdsEdit = false;
+            })
+          Button(this.opdsEditIdx >= 0 ? '\u4FDD\u5B58' : '\u6DFB\u52A0')
+            .fontSize(14).height(36)
+            .backgroundColor('#3949AB').fontColor(Color.White)
+            .onClick(() => {
+              this.saveOpdsEdit();
+            })
+        }
+        .width('100%')
+      }
+      .width('82%')
+      .padding(14)
+      .backgroundColor(Color.White)
+      .borderRadius(8)
+    }
+    .width('100%').height('100%')
+  }
+
+  /** hr06: WebDAV add/edit dialog (URL/name/user/password/trust). */
+  @Builder
+  buildDavEditDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showDavEdit = false;
+        })
+      Column({ space: 10 }) {
+        Text(this.davEditIdx >= 0 ? '\u7F16\u8F91 WebDAV \u670D\u52A1\u5668' : '\u6DFB\u52A0 WebDAV \u670D\u52A1\u5668')
+          .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
+          .width('100%')
+        TextInput({ text: this.davEditUrl, placeholder: 'http://' })
+          .fontSize(13).height(38).width('100%')
+          .backgroundColor(Color.White)
+          .border({ width: 1, color: '#cccccc' })
+          .borderRadius(4)
+          .onChange((v: string) => {
+            this.davEditUrl = v;
+          })
+        TextInput({ text: this.davEditName, placeholder: '\u540D\u79F0\uFF08\u5982\uFF1AMyNAS\uFF09' })
+          .fontSize(13).height(38).width('100%')
+          .backgroundColor(Color.White)
+          .border({ width: 1, color: '#cccccc' })
+          .borderRadius(4)
+          .onChange((v: string) => {
+            this.davEditName = v;
+          })
+        TextInput({ text: this.davEditUser, placeholder: '\u8D26\u53F7' })
+          .fontSize(13).height(38).width('100%')
+          .backgroundColor(Color.White)
+          .border({ width: 1, color: '#cccccc' })
+          .borderRadius(4)
+          .onChange((v: string) => {
+            this.davEditUser = v;
+          })
+        TextInput({ text: this.davEditPass, placeholder: '\u5BC6\u7801' })
+          .type(InputType.Password)
+          .fontSize(13).height(38).width('100%')
+          .backgroundColor(Color.White)
+          .border({ width: 1, color: '#cccccc' })
+          .borderRadius(4)
+          .onChange((v: string) => {
+            this.davEditPass = v;
+          })
+        Row({ space: 6 }) {
+          Checkbox({ name: 'davTrust' })
+            .width(18).height(18)
+            .selectedColor('#3949AB')
+            .select(this.davEditTrusted)
+            .onChange((v: boolean) => {
+              this.davEditTrusted = v;
+            })
+          Text('\u4FE1\u4EFB\u81EA\u7B7E\u540D\u8BC1\u4E66').fontSize(13).fontColor('#333')
+        }
+        .width('100%')
+        Row({ space: 12 }) {
+          Blank()
+          Button('\u5173\u95ED')
+            .fontSize(14).height(36)
+            .backgroundColor('#e0e0e0').fontColor('#333')
+            .onClick(() => {
+              this.showDavEdit = false;
+            })
+          Button(this.davEditIdx >= 0 ? '\u4FDD\u5B58' : '\u6DFB\u52A0')
+            .fontSize(14).height(36)
+            .backgroundColor('#3949AB').fontColor(Color.White)
+            .onClick(() => {
+              this.saveDavEdit();
+            })
+        }
+        .width('100%')
+      }
+      .width('82%')
+      .padding(14)
+      .backgroundColor(Color.White)
+      .borderRadius(8)
+    }
+    .width('100%').height('100%')
   }
 
   /** Root entry row: leading icon + blue label (OPDS/WebDAV items, Android hr05). */
@@ -3233,42 +4368,29 @@ struct Index {
   buildBrowseRoot() {
     Scroll() {
       Column() {
-        /* 网上书库（OPDS） */
+        /* 网上书库（OPDS）: persisted server list (hr05) */
         this.browseSectionHeader('\u7F51\u4E0A\u4E66\u5E93\uFF08OPDS\uFF09', 1)
-        ForEach(OPDS_PRESETS, (p: OpdsEntry) => {
-          this.browseEntryRow($r('app.media.ic_globe'), p.title)
-        }, (p: OpdsEntry) => p.href)
+        if (this.opdsServers.length === 0) {
+          Text('\u5C1A\u672A\u6DFB\u52A0\u4E66\u5E93')
+            .fontSize(13).fontColor('#999')
+            .width('94%').padding({ left: 12, bottom: 8 })
+        }
+        ForEach(this.opdsServers, (s: OpdsServer) => {
+          this.browseOpdsRow(s)
+        }, (s: OpdsServer) => s.url)
 
         Divider().color('#e8e8e8').margin({ top: 8 })
 
-        /* WebDAV */
+        /* WebDAV: persisted server list (hr05/hr06) */
         this.browseSectionHeader('WebDAV', 2)
-        if (this.webdavUrl.length > 0) {
-          Row({ space: 14 }) {
-            Image($r('app.media.ic_cloud'))
-              .width(24).height(24).fillColor('#3949AB')
-            Text(this.webdavUrl)
-              .fontSize(16).fontColor('#3949AB')
-              .maxLines(1)
-              .layoutWeight(1)
-            Image($r('app.media.ic_pencil'))
-              .width(20).height(20).fillColor('#3949AB')
-              .onClick(() => {
-                this.netSection = 1;
-                this.activeOverlay = 2;
-              })
-          }
-          .width('94%')
-          .padding({ left: 12, right: 12, top: 12, bottom: 12 })
-          .onClick(() => {
-            this.netSection = 1;
-            this.activeOverlay = 2;
-          })
-        } else {
+        if (this.davServers.length === 0) {
           Text('\u5C1A\u672A\u6DFB\u52A0\u670D\u52A1\u5668')
             .fontSize(13).fontColor('#999')
             .width('94%').padding({ left: 12, bottom: 8 })
         }
+        ForEach(this.davServers, (s: DavServer, idx: number) => {
+          this.browseDavRow(s, idx)
+        }, (s: DavServer) => s.url)
 
         Divider().color('#e8e8e8').margin({ top: 8 })
 
@@ -3555,7 +4677,9 @@ struct Index {
         Row() {
           Text('WebDAV \u540C\u6B65')
             .fontSize(14).fontColor('#333').width(120)
-          Text(this.webdavUrl.length > 0 ? this.webdavUrl : '\u672A\u914D\u7F6E')
+          Text(this.syncCfg.enabled
+            ? (this.syncCfg.lastSyncTime.length > 0 ? '\u4E0A\u6B21\uFF1A' + this.syncCfg.lastSyncTime.substring(0, 16).replace('T', ' ') : '\u5DF2\u542F\u7528')
+            : '\u672A\u542F\u7528')
             .fontSize(14).fontColor('#3949AB')
             .decoration({ type: TextDecorationType.Underline, color: '#3949AB' })
             .maxLines(1)
@@ -3564,20 +4688,31 @@ struct Index {
         .width('100%')
         .padding({ left: 12, right: 12, top: 9, bottom: 9 })
         .onClick(() => {
-          this.netSection = 1;
-          this.activeOverlay = 2;
+          loadSyncConfig(getContext(this)).then((c: SyncConfig) => {
+            this.syncCfg = c;
+            this.syncTestOut = '';
+            this.showSyncDialog = true;
+          });
         })
         Row() {
           Text('AI \u5927\u6A21\u578B')
             .fontSize(14).fontColor('#333').width(120)
-          Text('\u672A\u914D\u7F6E')
+          Text(this.aiCfg.model.length > 0 ? this.aiCfg.provider + ' \u00B7 ' + this.aiCfg.model : '\u672A\u914D\u7F6E')
             .fontSize(14).fontColor('#3949AB')
             .decoration({ type: TextDecorationType.Underline, color: '#3949AB' })
+            .maxLines(1)
+            .layoutWeight(1)
         }
         .width('100%')
         .padding({ left: 12, right: 12, top: 9, bottom: 9 })
         .onClick(() => {
-          this.status = 'AI \u63A5\u5165\u5C06\u5728\u540E\u7EED\u7248\u672C\u63D0\u4F9B';
+          loadAiConfig(getContext(this)).then((c: AiConfig) => {
+            this.aiCfg = c;
+            this.aiTestIn = '';
+            this.aiTestOut = '';
+            this.aiModels = [];
+            this.showAiDialog = true;
+          });
         })
 
         /* ===== Reader settings (sprint E) ===== */
