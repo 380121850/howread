@@ -37,6 +37,8 @@ import { recordReadTime, recordPagesRead } from '../model/ReadingStats';
 import { getBookmarks, addBookmark, removeBookmark, Bookmark } from '../model/Bookmarks';
 import { AiConfig, loadAiConfig, chatCompletion, aiConfigReady, AiMessage } from '../model/AiClient';
 import { getNotes, addNote, removeNote, AiNote } from '../model/Notes';
+import { exportNotesFile, ExportData } from '../model/Export';
+import { isBilingualDoc, buildBilingual } from '../model/Bilingual';
 import { TextUtils } from '../model/TextUtils';
 import { loadSettings, saveSettings, THEME_NAMES, ReaderSettings } from '../model/Settings';
 import { startTtsBackgroundTask, stopTtsBackgroundTask, showTtsNotification, cancelTtsNotification } from '../service/TtsService';
@@ -464,6 +466,8 @@ struct Reader {
   @State brightnessLevel: number = 128;     /* 1..255 system brightness */
   @State autoFlip: boolean = false;
   @State autoFlipInterval: number = 3;      /* seconds between flips */
+  @State autoScroll: boolean = false;       /* continuous auto-scroll, vertical mode (A) */
+  @State autoScrollSpeed: number = 2;       /* px per 50ms tick (2/4/6/8) */
   @State showBookmarks: boolean = false;    /* bookmark list panel */
   @State bookmarks: Bookmark[] = [];
   /* ---- Phase 10: AI 大模型接入 (hr13/17/18 parity) ---- */
@@ -475,11 +479,16 @@ struct Reader {
   @State transResult: string = '';
   @State showTransPanel: boolean = false;   /* bottom sheet with the translation */
   @State aiNotes: AiNote[] = [];            /* AI notes for the bookmark panel (hr17) */
+  @State showExportDialog: boolean = false; /* notes/bookmarks export format picker (A) */
+  @State transInPage: boolean = false;      /* in-page bilingual toggle (D, EPUB/TXT only) */
+  private biOriginalPath: string = '';      /* set while reading the rebuilt bilingual file */
   private aiCfg: AiConfig = { provider: '', url: '', key: '', model: '', maxTokens: 8192, thinking: false };
   @State annotations: AnnotationInfo[] = []; /* current page annotations */
   @State drawMode: boolean = false;         /* freehand drawing mode */
   @State drawPoints: TextRect[] = [];
   private flipTimerId: number = -1;
+  private scrollTimerId: number = -1;
+  private vScroller: Scroller = new Scroller();
   private documentPath: string = '';
   private dataSource: PageDataSource = new PageDataSource();
 
@@ -650,6 +659,8 @@ struct Reader {
     this.brightnessLevel = s.brightness;
     this.autoFlip = s.autoFlip;
     this.autoFlipInterval = s.autoFlipInterval;
+    this.autoScroll = s.autoScroll;
+    this.autoScrollSpeed = s.autoScrollSpeed;
     this.ttsRate = s.ttsRate;
     this.ttsPitch = s.ttsPitch;
     this.rsvpWpm = s.rsvpWpm;
@@ -679,6 +690,8 @@ struct Reader {
       nightMode: this.nightMode,
       autoFlip: this.autoFlip,
       autoFlipInterval: this.autoFlipInterval,
+      autoScroll: this.autoScroll,
+      autoScrollSpeed: this.autoScrollSpeed,
       brightness: this.brightnessLevel,
       ttsRate: this.ttsRate,
       ttsPitch: this.ttsPitch,
@@ -1290,6 +1303,40 @@ struct Reader {
     if (this.flipTimerId >= 0) {
       clearInterval(this.flipTimerId);
       this.flipTimerId = -1;
+    }
+  }
+
+  /* ---- A: continuous auto-scroll (vertical scroll mode) ---- */
+
+  private toggleAutoScroll(): void {
+    this.autoScroll = !this.autoScroll;
+    if (this.autoScroll) {
+      if (this.scrollMode === 0) {
+        /* scrolling needs the vertical List; switch automatically */
+        this.toggleScrollMode();
+      }
+      this.startAutoScroll();
+    } else {
+      this.stopAutoScroll();
+    }
+    console.info(`[Reader] Auto-scroll: ${this.autoScroll ? 'ON' : 'OFF'} (${this.autoScrollSpeed}px/tick)`);
+  }
+
+  private startAutoScroll(): void {
+    this.stopAutoScroll();
+    this.scrollTimerId = setInterval(() => {
+      try {
+        this.vScroller.scrollBy(0, this.autoScrollSpeed);
+      } catch (e) {
+        /* scroller not attached yet (List still mounting) — keep ticking */
+      }
+    }, 50);
+  }
+
+  private stopAutoScroll(): void {
+    if (this.scrollTimerId >= 0) {
+      clearInterval(this.scrollTimerId);
+      this.scrollTimerId = -1;
     }
   }
 
@@ -2093,6 +2140,22 @@ struct Reader {
     });
   }
 
+  /** Export bookmarks + AI notes of this book to TXT/Markdown (A). */
+  private doExportNotes(markdown: boolean): void {
+    const data: ExportData = {
+      docTitle: this.docTitle,
+      bookmarks: this.bookmarks,
+      notes: this.aiNotes
+    };
+    exportNotesFile(getContext(this), data, markdown).then((msg: string) => {
+      if (msg.length > 0) {
+        promptAction.showToast({ message: msg });
+        this.showExportDialog = false;
+        this.showBookmarks = false;
+      }
+    });
+  }
+
   private openTransDialog(): void {
     loadAiConfig(getContext(this)).then((c: AiConfig) => {
       this.aiCfg = c;
@@ -2101,6 +2164,54 @@ struct Reader {
     this.transBusy = false;
     this.showTrans = true;
     console.info('[Reader] AI translate dialog opened');
+  }
+
+  /** In-page bilingual is only possible for reflowable EPUB/TXT/HTML books. */
+  private biSupported(): boolean {
+    return isBilingualDoc(this.documentPath);
+  }
+
+  /** Swap the open document in place (keep page, rebuild page list). */
+  private async swapDoc(newPath: string): Promise<void> {
+    try {
+      this.dataSource.openDoc(newPath);
+    } catch (e) {
+      console.error('[Reader] swapDoc open failed: ' + String(e));
+      promptAction.showToast({ message: '\u53CC\u8BED\u7248\u6253\u5F00\u5931\u8D25\uFF0C\u5DF2\u4FDD\u7559\u539F\u6587' });
+      return;
+    }
+    const handle: ESObject | undefined = this.dataSource.getDocHandle();
+    try {
+      this.isReflow = false;
+      if (handle !== undefined) {
+        try {
+          this.isReflow = isReflowable(handle);
+        } catch (e) {
+          this.isReflow = false;
+        }
+        if (this.isReflow) {
+          try {
+            const css = `body{margin:${this.pageMargin}pt;line-height:${this.lineHeight.toFixed(2)}}`;
+            layoutDocument(handle, REFLOW_W, REFLOW_H, this.fontSize, css);
+          } catch (e) {
+            console.error('[Reader] swapDoc reflow layout failed');
+          }
+        }
+      }
+      this.pageList = [];
+      this.totalPages = this.dataSource.getPageCount();
+      for (let i = 0; i < this.totalPages; i++) {
+        this.pageList.push(i);
+      }
+      this.reflowVersion++;
+      this.currentPage = Math.min(this.currentPage, this.totalPages - 1);
+      this.onPageChanged(this.currentPage);
+      this.loadToc();
+      this.loadBookmarks();
+    } catch (e) {
+      console.error('[Reader] swapDoc rebuild failed: ' + String(e));
+    }
+    console.info(`[Reader] Document swapped to ${newPath}`);
   }
 
   /** Whole-page text for translation (falls back to the selection first). */
@@ -2122,6 +2233,46 @@ struct Reader {
       promptAction.showToast({ message: '\u8BF7\u5148\u5728\u504F\u597D\u4E2D\u914D\u7F6E AI \u5927\u6A21\u578B' });
       return;
     }
+    const dst: string = TRANS_DST[this.transDstIdx];
+    /* D: in-page bilingual mode (EPUB/TXT rebuild pipeline) */
+    if (this.transInPage && this.biSupported()) {
+      if (this.biOriginalPath.length > 0) {
+        /* currently reading the bilingual copy → restore the original */
+        this.transBusy = true;
+        this.transResult = '\u6B63\u5728\u6062\u590D\u539F\u6587\u2026';
+        const orig = this.biOriginalPath;
+        this.swapDoc(orig).then(() => {
+          this.biOriginalPath = '';
+          this.transBusy = false;
+          this.transResult = '';
+          this.showTrans = false;
+          promptAction.showToast({ message: '\u5DF2\u6062\u590D\u539F\u6587' });
+        });
+        return;
+      }
+      this.transBusy = true;
+      this.transResult = '\u51C6\u5907\u4E2D\u2026';
+      const srcPath = this.documentPath;
+      buildBilingual(getContext(this), this.aiCfg, srcPath, dst, (msg: string) => {
+        this.transResult = msg;
+      }).then((outPath: string) => {
+        this.transBusy = false;
+        if (outPath.length === 0) {
+          /* failure message already in transResult; make it visible */
+          promptAction.showToast({ message: this.transResult.substring(0, 60) });
+          return;
+        }
+        this.biOriginalPath = srcPath;
+        this.swapDoc(outPath).then(() => {
+          this.showTrans = false;
+          promptAction.showToast({ message: '\u53CC\u8BED\u7248\u5DF2\u751F\u6210\uFF0C\u8BD1\u6587\u4EE5\u84DD\u8272\u663E\u793A' });
+        }).catch((e: Object) => {
+          this.transBusy = false;
+          promptAction.showToast({ message: '\u53CC\u8BED\u7248\u5E94\u7528\u5931\u8D25\uFF1A' + String(e).substring(0, 40) });
+        });
+      });
+      return;
+    }
     const text = this.selText.length > 0 ? this.selText : this.pageTextForTrans();
     if (text.length === 0) {
       promptAction.showToast({ message: '\u5F53\u524D\u9875\u65E0\u53EF\u63D0\u53D6\u6587\u672C' });
@@ -2130,7 +2281,6 @@ struct Reader {
     this.transBusy = true;
     this.transResult = '';
     const src: string = TRANS_SRC[this.transSrcIdx];
-    const dst: string = TRANS_DST[this.transDstIdx];
     const from = src === TRANS_SRC[0] ? '' : '\u4ECE' + src;
     const msgs: AiMessage[] = [
       { role: 'system', content: '\u4F60\u662F\u4E13\u4E1A\u7684\u7FFB\u8BD1\uFF0C\u53EA\u8F93\u51FA\u8BD1\u6587\uFF0C\u4E0D\u8981\u89E3\u91CA\u3002' },
@@ -2230,15 +2380,26 @@ struct Reader {
           Checkbox({ name: 'transBilingual' })
             .width(18).height(18)
             .selectedColor('#3949AB')
-            .select(false)
-            .enabled(false)
+            .select(this.transInPage && this.biSupported())
+            .enabled(this.biSupported())
+            .onChange((v: boolean) => {
+              this.transInPage = v;
+            })
           Text('\u5728\u9875\u9762\u5185\u663E\u793A\u8BD1\u6587\uFF08\u53CC\u8BED\u5BF9\u7167\uFF09')
-            .fontSize(13).fontColor('#999')
-          Text('\u9762\u677F\u6A21\u5F0F')
-            .fontSize(11).fontColor('#3949AB')
-            .border({ width: 1, color: '#3949AB' })
-            .borderRadius(8)
-            .padding({ left: 6, right: 6, top: 1, bottom: 1 })
+            .fontSize(13).fontColor(this.biSupported() ? '#333' : '#999')
+          if (this.biSupported()) {
+            Text('\u672C\u4E66\u53EF\u7528')
+              .fontSize(11).fontColor('#00897B')
+              .border({ width: 1, color: '#00897B' })
+              .borderRadius(8)
+              .padding({ left: 6, right: 6, top: 1, bottom: 1 })
+          } else {
+            Text('\u9762\u677F\u6A21\u5F0F')
+              .fontSize(11).fontColor('#3949AB')
+              .border({ width: 1, color: '#3949AB' })
+              .borderRadius(8)
+              .padding({ left: 6, right: 6, top: 1, bottom: 1 })
+          }
         }
         .width('100%')
 
@@ -2253,6 +2414,12 @@ struct Reader {
           Text('AI\u7FFB\u8BD1\u7ED3\u679C\u4FDD\u5B58').fontSize(13).fontColor('#333')
         }
         .width('100%')
+
+        if (this.transBusy && this.transResult.length > 0) {
+          Text(this.transResult)
+            .fontSize(12).fontColor('#3949AB')
+            .width('100%').maxLines(2)
+        }
 
         Row({ space: 12 }) {
           Blank()
@@ -2653,7 +2820,7 @@ struct Reader {
           })
         } else {
           /* Vertical continuous scroll mode */
-          List() {
+          List({ scroller: this.vScroller }) {
             ForEach(this.pageList, (pageIdx: number) => {
               ListItem() {
                 PageRenderer({ pageIndex: pageIdx, dataSource: this.dataSource })
@@ -2669,6 +2836,19 @@ struct Reader {
           .onScrollIndex((index: number) => {
             if (index !== this.currentPage) {
               this.onPageChanged(index);
+            }
+          })
+          .onReachEnd(() => {
+            if (this.autoScroll) {
+              this.autoScroll = false;
+              this.stopAutoScroll();
+            }
+          })
+          .onTouch(() => {
+            /* any manual touch stops the auto-scroll */
+            if (this.autoScroll) {
+              this.autoScroll = false;
+              this.stopAutoScroll();
             }
           })
         }
@@ -2984,6 +3164,30 @@ struct Reader {
                   this.startAutoFlip();
                 }
                 console.info(`[Reader] Auto-flip interval: ${this.autoFlipInterval}s`);
+              })
+          }
+
+          // A: auto-scroll toggle (vertical scroll mode)
+          Row({ space: 8 }) {
+            Text('\u81EA\u52A8\u6EDA\u52A8:')
+              .fontSize(13).fontColor('#555')
+            Button(this.autoScroll ? '\u5F00' : '\u5173')
+              .fontSize(12).height(32)
+              .backgroundColor(this.autoScroll ? '#2a7' : '#e0e0e0')
+              .fontColor(this.autoScroll ? Color.White : '#333')
+              .onClick(() => {
+                this.toggleAutoScroll();
+                this.persistSettings();
+              })
+            Text(this.autoScrollSpeed + 'px')
+              .fontSize(11).fontColor('#777')
+              .onClick(() => {
+                this.autoScrollSpeed = this.autoScrollSpeed >= 8 ? 2 : this.autoScrollSpeed + 2;
+                if (this.autoScroll) {
+                  this.startAutoScroll();
+                }
+                this.persistSettings();
+                console.info(`[Reader] Auto-scroll speed: ${this.autoScrollSpeed}px`);
               })
           }
 
@@ -3581,9 +3785,18 @@ struct Reader {
             })
 
           Column() {
-            Text('书签')
-              .fontSize(16).fontWeight(FontWeight.Bold)
-              .margin({ bottom: 8 })
+            Row({ space: 8 }) {
+              Text('书签')
+                .fontSize(16).fontWeight(FontWeight.Bold)
+              Blank()
+              Text('\u5BFC\u51FA')
+                .fontSize(13).fontColor('#3949AB')
+                .onClick(() => {
+                  this.showExportDialog = true;
+                })
+            }
+            .width('100%')
+            .margin({ bottom: 8 })
 
             if (this.bookmarks.length === 0) {
               Text('(暂无书签，点顶栏 🔖 添加)')
@@ -3682,6 +3895,48 @@ struct Reader {
       /* AI 翻译结果 bottom sheet */
       if (this.showTransPanel) {
         this.buildTransPanel()
+      }
+
+      /* Notes/bookmarks export dialog (A: TXT / Markdown) */
+      if (this.showExportDialog) {
+        Stack({ alignContent: Alignment.Center }) {
+          Column()
+            .width('100%').height('100%')
+            .backgroundColor('#66000000')
+            .onClick(() => {
+              this.showExportDialog = false;
+            })
+
+          Column({ space: 12 }) {
+            Text('\u5BFC\u51FA\u7B14\u8BB0\u4E0E\u4E66\u7B7E')
+              .fontSize(15).fontWeight(FontWeight.Bold)
+            Text('\u5305\u542B\u4E66\u7B7E\u4E0E AI \u7B14\u8BB0\uFF0C\u6BCF\u6761\u5E26\u4F4D\u7F6E\u4E0E\u65F6\u95F4')
+              .fontSize(11).fontColor('#999')
+            Button('TXT')
+              .width('80%').height(38).fontSize(13)
+              .backgroundColor('#3949AB').fontColor(Color.White)
+              .onClick(() => {
+                this.doExportNotes(false);
+              })
+            Button('Markdown')
+              .width('80%').height(38).fontSize(13)
+              .backgroundColor('#00897B').fontColor(Color.White)
+              .onClick(() => {
+                this.doExportNotes(true);
+              })
+            Button('\u53D6\u6D88')
+              .width('80%').height(34).fontSize(13)
+              .backgroundColor('#e0e0e0').fontColor('#333')
+              .onClick(() => {
+                this.showExportDialog = false;
+              })
+          }
+          .width('70%')
+          .padding(16)
+          .backgroundColor(Color.White)
+          .borderRadius(12)
+        }
+        .width('100%').height('100%')
       }
 
       /* Hidden ArkWeb host exposing speechSynthesis for TTS (sprint D) */

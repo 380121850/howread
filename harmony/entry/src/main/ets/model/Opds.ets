@@ -20,20 +20,13 @@ export interface OpdsEntry {
   isSub: boolean;
 }
 
-/** Built-in catalog presets shown on the OPDS home. */
+/** Built-in catalog presets shown on the OPDS home (aligned with Android: Gutenberg + CBETA). */
 export const OPDS_PRESETS: OpdsEntry[] = [
   {
     title: 'Project Gutenberg',
     href: 'https://www.gutenberg.org/opds/',
     type: 'application/atom+xml;profile=opds-catalog',
     summary: '5 万+ 公版电子书（英文为主）',
-    isSub: true
-  },
-  {
-    title: 'Standard Ebooks',
-    href: 'https://standardebooks.org/opds/',
-    type: 'application/atom+xml;profile=opds-catalog',
-    summary: '精校公版英文书（EPUB）',
     isSub: true
   },
   {

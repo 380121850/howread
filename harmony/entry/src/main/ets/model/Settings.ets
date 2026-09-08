@@ -27,6 +27,10 @@ export interface ReaderSettings {
   autoFlip: boolean;
   /** seconds between flips */
   autoFlipInterval: number;
+  /** continuous auto-scroll in vertical scroll mode (A round 4) */
+  autoScroll: boolean;
+  /** auto-scroll speed, px per 50ms tick (2..10) */
+  autoScrollSpeed: number;
   /** system brightness 1..255 */
   brightness: number;
   /** TTS rate 0.5..2.0 */
@@ -98,6 +102,8 @@ export function defaultSettings(): ReaderSettings {
     nightMode: false,
     autoFlip: false,
     autoFlipInterval: 3,
+    autoScroll: false,
+    autoScrollSpeed: 2,
     brightness: 128,
     ttsRate: 1.0,
     ttsPitch: 1.0,
@@ -142,6 +148,8 @@ export async function loadSettings(ctx: Context): Promise<ReaderSettings> {
       nightMode: r.nightMode === true,
       autoFlip: r.autoFlip === true,
       autoFlipInterval: typeof r.autoFlipInterval === 'number' ? r.autoFlipInterval : d.autoFlipInterval,
+      autoScroll: r.autoScroll === true,
+      autoScrollSpeed: typeof r.autoScrollSpeed === 'number' ? r.autoScrollSpeed : d.autoScrollSpeed,
       brightness: typeof r.brightness === 'number' ? r.brightness : d.brightness,
       ttsRate: typeof r.ttsRate === 'number' ? r.ttsRate : d.ttsRate,
       ttsPitch: typeof r.ttsPitch === 'number' ? r.ttsPitch : d.ttsPitch,

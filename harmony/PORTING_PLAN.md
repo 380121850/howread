@@ -87,7 +87,19 @@
 3. ✅ **书库木质书架背景**（hr04）：bg_wood.png（4 竖板木纹平铺贴图）+ 网格视图背景铺贴 + 每格底部深棕木板条。
 4. ✅ **WebDAV 同步基础版**（hr09/hr09b）：`model/Sync.ets` 配置+日志持久化；runSync 按书比对 updatedAt 较新者胜（GET/PUT `.howread.json`，服务端新→回写进度+合并书签；仅 GET/PUT，无 PROPFIND/三向合并/定时——鸿蒙 HTTP 栈限制，用户确认基础版）；hr09 同步对话框（启用/地址/凭据/同步路径/冲突策略/测试连接/同步日志/立即同步/上次摘要）；hr09b 日志页（倒序+每书明细）。
 5. ✅ **分享/在线查词真实跳转**：分享=@kit.ShareKit systemShare（SharedRecord utd general.text + ShareController.show，失败回退复制剪贴板）；网络搜索=openLink Google；网络词典=openLink 有道。
-6. ⏸ **仍待续**：AI 翻译"页内双语对照"真实注入页面（需按段落矩形覆盖渲染，复杂度高）；同步三向字段级合并/定时同步/墓碑；AI 实际调用与 WebDAV 端到端需真实 Key/局域网服务器验证；浏览器 openLink 真机复验；播放列表、TTS 录音导出、i18n 铺开。
+6. ✅ **原待续项在阶段 11 完成**：页内双语对照、同步三向合并/定时/墓碑、播放列表均已实现（见阶段 11）；仍待：AI/WebDAV 真实 Key 端到端、openLink 真机复验、TTS 录音导出（平台无 synthesizeToFile）、i18n 铺开。
+
+### 阶段 11（2026-09-08）：第三批功能移植（笔记导出 / 自动滚动 / 播放列表 / 同步三方合并 / 页内双语）✅ 已完成
+
+1. ✅ **笔记/书签导出**（对齐安卓 2026-09-03）：`model/Export.ets` TXT/Markdown 双格式（每条带位置行 + 时间）；Reader 书签面板「导出」→ DocumentViewPicker 保存，失败回退 filesDir/export。验证：保存成功（重名提示证明落盘）。
+2. ✅ **自动连续滚动**：垂直滚动 List 挂 Scroller + 50ms 定时 scrollBy（触摸/到底即停，开启时自动切垂直）；Settings 持久化 autoScroll/autoScrollSpeed；设置面板「自动滚动：开关+速度」行。
+3. ✅ **OPDS 预置对齐**：移除 Standard Ebooks，仅 Gutenberg + CBETA。
+4. ✅ **播放列表**（对齐安卓 Playlists.java）：`model/Playlists.ets` 文本文件持亐（`<filesDir>/playlists/*.playlist`）；书籍菜单「加入播放列表」选择器 + 书库 chips「▶ 播放列表」管理对话框（新建/删除/条目打开/↑↓调序/✕移除/播放第一本）。验证：新建→加入→条目展示全链路。
+5. ✅ **WebDAV 同步三方合并**（对齐安卓 syncThreeWayFile）：`.base` 本地快照（`librera_syncbase`）；进度按「谁相对 base 变了」字段级判定，书签墓碑式合并（任一侧删除传播、新增并集）；冲突策略三选（较新/本地/服务器优先）；定时同步（默认 5 分，应用存活期间）；日志【合并】【冲突】明细。验证：mock WebDAV（Ubuntu 8765）——首轮 8 本上传建快照，远端伪造变更后二轮【合并】应用本地，余【已最新】。
+6. ✅ **页内双语对照**（对齐安卓 BilingualBuilder，真实注入）：`model/Bilingual.ets` EPUB 管线（解包 → `<p>` 提取 → AI 5 段/批编号翻译 → 注入 `<p class="aitran">` + CSS → **自写 store-only ZIP 打包器**（mimetype 首位 + CRC32，规避 zlib.compressFile 产物 MuPDF 不识别））；TXT 交替行；段落级缓存（FNV-1a 键）二次零请求；失败章节保留原文。Reader 翻译对话框双语复选框启用（EPUB/TXT「本书可用」徽章），完成后 swapDoc 原地换开双语版（保页码重排版），再次开启则恢复原书。验证：mock AI（Ubuntu 8766）——Alice EPUB 162 批段落全部注入，103→123 页重排版，译文逐段显示，恢复原文正常。
+7. ⏸ **仍待续**：TTS 录音导出（平台无 synthesizeToFile，需另想方法）；i18n 多语言铺开（单独一轮）；双语后台预翻译窗口（现为逐章）；AI/WebDAV 真实环境端到端；openLink 真机复验。
+
+
 
 
 

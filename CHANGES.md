@@ -5,6 +5,47 @@
 
 ---
 
+## [2026-09-08] 鸿蒙移植第四轮：笔记/书签导出 + 自动滚动 + 播放列表 + WebDAV 同步三方合并 + 页内双语对照
+
+**背景**：继续对齐安卓版功能。用户确认本轮范围：A 小功能包（笔记导出/自动滚动/OPDS 预置对齐）+ B 播放列表 + C WebDAV 同步增强（三方合并/冲突策略/定时同步）+ D 页内双语对照（真实注入）。跳过项：TTS 录音导出（鸿蒙 ArkWeb speechSynthesis 无 synthesizeToFile 能力）、i18n 铺开（单独一轮）。蓝光滤镜鸿蒙已有，无需移植。
+
+**改动**（`harmony/` 内）：
+
+**① 笔记/书签导出**（对齐安卓 2026-09-03「带位置行」）：
+- 新增 `model/Export.ets`：组装当前书 书签 + AI 笔记（每条带 `位置：第 X 页/全书` 与时间），TXT 与 Markdown 两种格式；`exportNotesFile` 优先 `DocumentViewPicker`（SAVE）让用户选保存位置，失败回退 `<filesDir>/export/`。
+- Reader 书签面板标题行加「导出」链接 → 格式选择对话框（TXT / Markdown / 取消），导出成功 toast 路径。
+
+**② 自动连续滚动**：
+- `Settings.ets` 新增 `autoScroll`/`autoScrollSpeed` 持久化；Reader 垂直滚动 List 挂 Scroller（构造参数），新增 `toggleAutoScroll/startAutoScroll/stopAutoScroll`（50ms 定时 scrollBy，触摸即停、到底即停，开启时若在水平翻页自动切垂直）；阅读设置面板「自动翻页」下方新增「自动滚动：开关 + 速度(2/4/6/8px)」行。
+
+**③ OPDS 预置对齐**：`Opds.ets` OPDS_PRESETS 移除 Standard Ebooks，与安卓一致仅 Gutenberg + CBETA（`Servers.ets` 种子逻辑跟随自动生效）。
+
+**④ 播放列表**（对齐安卓 Playlists.java/DialogsPlaylist）：
+- 新增 `model/Playlists.ets`：文本文件持久化（`<filesDir>/playlists/<名称>.playlist`，每行一个书路径）：create/delete/getAll/getItems/update/addTo。
+- `Index.ets`：书籍菜单新增「加入播放列表」→ 选择对话框（现有列表 + 新建并加入）；书库状态 chips 行新增「▶ 播放列表」入口 → 管理对话框（新建/删除/进入列表）；条目对话框支持点击打开、↑/↓ 调序、✕ 移除、播放第一本、删除列表。
+
+**⑤ WebDAV 同步三方合并**（对齐安卓 syncThreeWayFile）：
+- `Sync.ets` 重写 `runSync`：新增 `.base` 本地快照（preferences `librera_syncbase`，key=远端文件名，value=上次合并结果）；同步时 local/remote/base 三方比对——进度按「谁相对 base 变了」字段级判定，书签做墓碑式合并（base 有、任一侧删了 → 删除传播；任一侧新增 → 并集保留）；双方同改 → 冲突策略。首同步无快照时回退较新优先并建立快照。
+- `SyncConfig` 新增 `autoSync`/`autoSyncMin`（默认 5 分钟，应用运行期间 setInterval 定时同步，`armAutoSync` 在保存配置与启动时布防）；`SYNC_CONFLICTS` 三选：较新优先（默认）/本地优先/服务器优先，同步对话框改为 Select 并新增定时同步 Checkbox + 间隔输入。
+- 日志明细新增【合并】【冲突】类别（【上传】【下载】→【合并】已应用本地/【上传】合并结果回写语义）。
+
+**⑥ 页内双语对照**（对齐安卓 BilingualBuilder，真实注入）：
+- 新增 `model/Bilingual.ets`：EPUB 管线 = `zlib.unzipFile` 解包 → 递归收集 xhtml/html → `<p>` 段落提取（stripTags）→ AI 批量翻译（5 段/批、编号行解析、目标语言可选）→ 每段 `</p>` 后注入 `<p class="aitran">译文</p>` + head 注入 CSS → **自写 store-only ZIP 打包器**（mimetype 首位 + container.xml 次位 + 相对正斜杠路径 + CRC32，规避 zlib.compressFile 产物 MuPDF 无法打开的问题）→ 重打包为 `bi_<书名>.epub`；TXT 管线 = 原文/译文交替行新文件。段落级翻译缓存（FNV-1a hash 键，`cache_<书hash>.json` 持久化），二次开启零请求；失败章节保留原文不中断。
+- `Reader.ets`：翻译对话框「在页面内显示译文」复选框启用（EPUB/TXT/HTML 显示「本书可用」徽章，其余保持面板模式）；勾选后开始翻译 → 进度显示于对话框 → 完成后 `swapDoc` 原地换开双语版（保持页码、重排版、刷新 TOC/书签）；已在双语版时再次「开始翻译」→ 恢复原书（页码保持）。翻译结果面板模式保留不变。
+
+**验证**（Pura 90 模拟器，uitest + dumpLayout + snapshot）：
+- 导出：对话框 → DocumentViewPicker 保存 `demo.mobi_MOBI_-notes.txt` 成功（二次保存提示「已有重名文件」证明落盘）。
+- 自动滚动：开启后模式自动切「垂直滚动」，开关状态保持。
+- 播放列表：新建 MyList → demo.mobi「已加入」→ 条目对话框 1 条 + 调序/移除/播放控件齐全。
+- 同步：mock WebDAV（Ubuntu 8765，GET/PUT 内存实现）联测——首轮 8 本全部【上传】并建快照；服务器端伪造远端进度+书签后二轮【合并】demo.txt 已应用本地（第 4 页，书签 1），其余【已最新】；同步日志两个条目明细正确。
+- 双语：mock AI（Ubuntu 8766，OpenAI 兼容，编号行译文）——Alice EPUB 162 批请求全部翻译注入，重开整书 103 页 → 123 页重排版，译文段逐段跟随原文显示；翻译缓存二次运行零请求；「恢复原文」切回 103 页且页码保持。
+
+**产物**：`build_hap_all.sh`（default + pro）8 个 HAP 至 `harmony/dist/`，版本 0.6.0（versionCode 33）。
+
+**待续**：真实 AI Key / 局域网 WebDAV 端到端复验；译文颜色以注入 CSS 为准（真机核验显示效果）；页内双语的后台预翻译窗口（安卓 ±5 页）简化为逐章翻译；TTS 录音导出（平台无 synthesizeToFile）、i18n 铺开待后续轮次。
+
+---
+
 ## [2026-09-08] 鸿蒙移植：AI 大模型接入全套 + OPDS/WebDAV 服务器管理 + WebDAV 同步基础版 + 木质书架 + 分享/在线查词
 
 **背景**：按安卓版功能（LibreraReader/CHANGES.md 2026-08-28~09-05 的 AI/WebDAV/OPDS 迭代）与截图 hr05/06/08/09/09b/13/17/18/19，把安卓有而鸿蒙缺的 5 大功能块一次移植完毕。用户确认的范围决策：WebDAV 同步做**基础版**（进度+书签、手动立即同步、无 PROPFIND/三向合并/定时）；AI 翻译的"页内双语对照"先做**面板模式**（鸿蒙阅读器是 PDF 页面图像渲染，无法照搬安卓的文本重排页内注入）。

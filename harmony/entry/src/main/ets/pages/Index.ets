@@ -24,9 +24,10 @@ import { getTagList, addTagToBook, removeTagFromBook, getSeriesList } from '../m
 import { getReadingStats, getDailyStats, getMonthlyStats, ReadingStatsData, DayStat, MonthStat } from '../model/ReadingStats';
 import { fetchOpds, OPDS_PRESETS, OpdsEntry } from '../model/Opds';
 import { OpdsServer, DavServer, getOpdsServers, saveOpdsServer, removeOpdsServer, getDavServers, saveDavServer, removeDavServer } from '../model/Servers';
-import { SyncConfig, SyncLogEntry, defaultSyncConfig, loadSyncConfig, saveSyncConfig, getSyncLog, runSync, testSyncConnection } from '../model/Sync';
+import { SyncConfig, SyncLogEntry, SYNC_CONFLICTS, defaultSyncConfig, loadSyncConfig, saveSyncConfig, getSyncLog, runSync, testSyncConnection } from '../model/Sync';
 import { AiConfig, AiMessage, loadAiConfig, saveAiConfig, chatCompletion, listModels, testChat, aiConfigReady, AI_PROVIDERS, AI_PROVIDER_URLS } from '../model/AiClient';
 import { addNote, AiNote } from '../model/Notes';
+import { PlaylistMeta, getAllPlaylists, createPlaylist, deletePlaylist, getPlaylistItems, updatePlaylist, addToPlaylist } from '../model/Playlists';
 import http from '@ohos.net.http';
 import promptAction from '@ohos.promptAction';
 import { KEY_PENDING_URI } from '../entryability/EntryAbility';
@@ -185,6 +186,16 @@ struct Index {
   @State showStatsChart: boolean = false;
   /** per-book action menu target path ('' = hidden) */
   @State libMenuPath: string = '';
+  /* round 4 B: playlists */
+  @State showPlPick: boolean = false;      /* add-current-book picker */
+  @State plAddPath: string = '';
+  @State plPickName: string = '';
+  @State plList: PlaylistMeta[] = [];
+  @State showPlManage: boolean = false;    /* playlists management dialog */
+  @State plNewName: string = '';
+  @State showPlItems: boolean = false;     /* one playlist's items */
+  @State plItemsName: string = '';
+  @State plItems: string[] = [];
   // ---- Phase 10: AI 大模型接入 (Android hr08/13/17/18/19 parity) ----
   /** AI config dialog visibility (prefs) */
   @State showAiDialog: boolean = false;
@@ -244,6 +255,7 @@ struct Index {
     this.loadServers();
     loadSyncConfig(getContext(this)).then((c: SyncConfig) => {
       this.syncCfg = c;
+      this.armAutoSync();
     });
   }
 
@@ -984,6 +996,17 @@ struct Index {
       // ---- AI 简介书籍 dialog (Android hr19 + hr17) ----
       if (this.showAiIntro) {
         this.buildAiIntroDialog()
+      }
+
+      // ---- playlists dialogs (round 4 B) ----
+      if (this.showPlPick) {
+        this.buildPlaylistPickDialog()
+      }
+      if (this.showPlManage) {
+        this.buildPlManageDialog()
+      }
+      if (this.showPlItems) {
+        this.buildPlItemsDialog()
       }
 
       // ---- OPDS add/edit dialog (hr05) ----
@@ -2178,6 +2201,17 @@ struct Index {
               this.libStarFilter = !this.libStarFilter;
               console.info(`[Index] Library star filter: ${this.libStarFilter}`);
             })
+          Text('\u25B6 \u64AD\u653E\u5217\u8868')
+            .fontSize(13)
+            .fontColor('#3949AB')
+            .height(28)
+            .padding({ left: 14, right: 14 })
+            .borderRadius(3)
+            .backgroundColor(Color.White)
+            .border({ width: 1, color: '#9FA8DA' })
+            .onClick(() => {
+              this.openPlManage();
+            })
         }
       }
       .scrollable(ScrollDirection.Horizontal)
@@ -2867,8 +2901,27 @@ struct Index {
 
   /* ---- Phase 10: WebDAV sync basic edition (hr09/hr09b) ---- */
 
+  private syncTimerId: number = -1;
+
+  /** (Re)arm the scheduled sync interval (round 4 C; only while app alive). */
+  private armAutoSync(): void {
+    if (this.syncTimerId >= 0) {
+      clearInterval(this.syncTimerId);
+      this.syncTimerId = -1;
+    }
+    if (!this.syncCfg.enabled || !this.syncCfg.autoSync || this.syncCfg.autoSyncMin <= 0) {
+      return;
+    }
+    const ms = this.syncCfg.autoSyncMin * 60000;
+    this.syncTimerId = setInterval(() => {
+      this.syncRunNow();
+    }, ms);
+    console.info('[Index] Auto-sync armed every ' + this.syncCfg.autoSyncMin + ' min');
+  }
+
   private saveSyncDialog(): void {
     saveSyncConfig(getContext(this), this.syncCfg).then(() => {
+      this.armAutoSync();
       this.status = '\u540C\u6B65\u914D\u7F6E\u5DF2\u4FDD\u5B58';
       this.showSyncDialog = false;
     });
@@ -3008,10 +3061,48 @@ struct Index {
 
           Row({ space: 8 }) {
             Text('\u51B2\u7A81\u7B56\u7565').fontSize(14).fontColor('#333').width(70)
-            Text(this.syncCfg.conflict)
-              .fontSize(13).fontColor('#3949AB')
+            Select(SYNC_CONFLICTS.map((v: string) => {
+              const o: SelectOption = { value: v };
+              return o;
+            }))
+              .selected(SYNC_CONFLICTS.indexOf(this.syncCfg.conflict) < 0 ? 0 : SYNC_CONFLICTS.indexOf(this.syncCfg.conflict))
+              .value(this.syncCfg.conflict)
+              .font({ size: 13 })
+              .layoutWeight(1)
+              .onSelect((idx: number) => {
+                this.syncCfg.conflict = SYNC_CONFLICTS[idx];
+              })
           }
           .width('100%')
+
+          Row({ space: 6 }) {
+            Checkbox({ name: 'syncAuto' })
+              .width(18).height(18)
+              .selectedColor('#3949AB')
+              .select(this.syncCfg.autoSync)
+              .onChange((v: boolean) => {
+                this.syncCfg.autoSync = v;
+              })
+            Text('\u5B9A\u65F6\u540C\u6B65\uFF08\u5E94\u7528\u8FD0\u884C\u671F\u95F4\uFF09').fontSize(13).fontColor('#333')
+          }
+          .width('100%')
+
+          if (this.syncCfg.autoSync) {
+            Row({ space: 8 }) {
+              Text('\u95F4\u9694\uFF08\u5206\u949F\uFF09').fontSize(14).fontColor('#333').width(70)
+              TextInput({ text: '' + this.syncCfg.autoSyncMin })
+                .fontSize(13).height(38).layoutWeight(1)
+                .backgroundColor(Color.White)
+                .border({ width: 1, color: '#cccccc' })
+                .borderRadius(4)
+                .type(InputType.Number)
+                .onChange((v: string) => {
+                  const n = parseInt(v);
+                  this.syncCfg.autoSyncMin = n > 0 ? n : 5;
+                })
+            }
+            .width('100%')
+          }
 
           Row({ space: 16 }) {
             Text('\u6D4B\u8BD5\u8FDE\u63A5')
@@ -3171,6 +3262,8 @@ struct Index {
       Column() {
         this.libMenuAiItem()
         Divider().color('#eeeeee')
+        this.libMenuPlItem()
+        Divider().color('#eeeeee')
         this.libMenuItem($r('app.media.ic_check'), '\u6807\u8BB0\u4E3A\u5DF2\u8BFB', 2)
         this.libMenuItem($r('app.media.ic_circle_half'), '\u6807\u8BB0\u4E3A\u5728\u8BFB', 1)
         this.libMenuItem($r('app.media.ic_circle_empty'), '\u6807\u8BB0\u4E3A\u672A\u8BFB\uFF08\u6E05\u7A7A\u8FDB\u5EA6\uFF09', 0)
@@ -3197,6 +3290,22 @@ struct Index {
     .padding({ left: 18, right: 18, top: 13, bottom: 13 })
     .onClick(() => {
       this.startAiIntro();
+    })
+  }
+
+  @Builder
+  libMenuPlItem() {
+    Row({ space: 14 }) {
+      Image($r('app.media.ic_list')).width(20).height(20).fillColor('#3949AB')
+      Text('\u52A0\u5165\u64AD\u653E\u5217\u8868').fontSize(15).fontColor('#333')
+    }
+    .width('100%')
+    .padding({ left: 18, right: 18, top: 13, bottom: 13 })
+    .onClick(() => {
+      this.plAddPath = this.libMenuPath;
+      this.libMenuPath = '';
+      this.refreshPlList();
+      this.showPlPick = true;
     })
   }
 
@@ -3255,6 +3364,310 @@ struct Index {
       }
       this.loadLibrary();
     })
+  }
+
+  /* ---- Round 4 B: playlists (Android Playlists.java parity) ---- */
+
+  private refreshPlList(): void {
+    this.plList = getAllPlaylists(getContext(this));
+  }
+
+  private openPlManage(): void {
+    this.plNewName = '';
+    this.refreshPlList();
+    this.showPlManage = true;
+  }
+
+  private plBookTitle(path: string): string {
+    for (let i = 0; i < this.recentBooks.length; i++) {
+      if (this.recentBooks[i].path === path) {
+        return this.recentBooks[i].title;
+      }
+    }
+    const parts = path.replace(/\\/g, '/').split('/');
+    return parts[parts.length - 1];
+  }
+
+  private openPlItems(name: string): void {
+    this.plItemsName = name;
+    this.plItems = getPlaylistItems(getContext(this), name);
+    this.showPlItems = true;
+  }
+
+  private plMoveItem(idx: number, delta: number): void {
+    const to = idx + delta;
+    if (to < 0 || to >= this.plItems.length) {
+      return;
+    }
+    const tmp = this.plItems[idx];
+    this.plItems[idx] = this.plItems[to];
+    this.plItems[to] = tmp;
+    updatePlaylist(getContext(this), this.plItemsName, this.plItems);
+  }
+
+  private plRemoveItem(idx: number): void {
+    const kept: string[] = [];
+    for (let i = 0; i < this.plItems.length; i++) {
+      if (i !== idx) {
+        kept.push(this.plItems[i]);
+      }
+    }
+    this.plItems = kept;
+    updatePlaylist(getContext(this), this.plItemsName, kept);
+  }
+
+  private plOpenPath(path: string): void {
+    for (let i = 0; i < this.recentBooks.length; i++) {
+      if (this.recentBooks[i].path === path) {
+        this.showPlItems = false;
+        this.showPlManage = false;
+        this.openBook(this.recentBooks[i]);
+        return;
+      }
+    }
+    promptAction.showToast({ message: '\u8BE5\u4E66\u4E0D\u5728\u4E66\u5E93\u4E2D' });
+  }
+
+  /** Add-to-playlist picker (from the per-book menu). */
+  @Builder
+  buildPlaylistPickDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showPlPick = false;
+        })
+      Column({ space: 10 }) {
+        Text('\u52A0\u5165\u64AD\u653E\u5217\u8868')
+          .fontSize(16).fontWeight(FontWeight.Bold)
+        if (this.plList.length === 0) {
+          Text('\u6682\u65E0\u64AD\u653E\u5217\u8868\uFF0C\u4E0B\u65B9\u65B0\u5EFA')
+            .fontSize(12).fontColor('#999')
+        }
+        Scroll() {
+          Column() {
+            ForEach(this.plList, (p: PlaylistMeta) => {
+              Row() {
+                Text('\u25B6').fontSize(14).fontColor('#3949AB')
+                Text(p.name)
+                  .fontSize(14).fontColor('#333').layoutWeight(1)
+                  .margin({ left: 10 }).maxLines(1)
+              }
+              .width('100%')
+              .padding({ top: 10, bottom: 10 })
+              .onClick(() => {
+                const added = addToPlaylist(getContext(this), p.name, this.plAddPath);
+                promptAction.showToast({
+                  message: added ? '\u5DF2\u52A0\u5165\u300C' + p.name + '\u300D' : '\u5DF2\u5728\u8BE5\u64AD\u653E\u5217\u4E2D'
+                });
+                this.showPlPick = false;
+              })
+            }, (p: PlaylistMeta) => p.name)
+          }
+          .width('100%')
+        }
+        .constraintSize({ maxHeight: 220 })
+
+        Row({ space: 8 }) {
+          TextInput({ placeholder: '\u65B0\u5EFA\u64AD\u653E\u5217\u540D\u79F0', text: this.plPickName })
+            .fontSize(13).height(36).layoutWeight(1)
+            .onChange((v: string) => {
+              this.plPickName = v;
+            })
+          Button('\u65B0\u5EFA\u5E76\u52A0\u5165')
+            .fontSize(12).height(36)
+            .backgroundColor('#3949AB').fontColor(Color.White)
+            .onClick(() => {
+              const err = createPlaylist(getContext(this), this.plPickName);
+              if (err.length > 0) {
+                promptAction.showToast({ message: err });
+                return;
+              }
+              addToPlaylist(getContext(this), this.plPickName.trim(), this.plAddPath);
+              promptAction.showToast({ message: '\u5DF2\u521B\u5EFA\u5E76\u52A0\u5165' });
+              this.showPlPick = false;
+            })
+        }
+        .width('100%')
+
+        Button('\u53D6\u6D88')
+          .fontSize(13).height(34).width('60%')
+          .backgroundColor('#e0e0e0').fontColor('#333')
+          .onClick(() => {
+            this.showPlPick = false;
+          })
+      }
+      .width('80%')
+      .padding(14)
+      .backgroundColor(Color.White)
+      .borderRadius(10)
+    }
+    .width('100%').height('100%')
+  }
+
+  /** Playlists management (library chip entry). */
+  @Builder
+  buildPlManageDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showPlManage = false;
+        })
+      Column({ space: 10 }) {
+        Text('\u64AD\u653E\u5217\u8868')
+          .fontSize(16).fontWeight(FontWeight.Bold)
+        if (this.plList.length === 0) {
+          Text('\u6682\u65E0\u64AD\u653E\u5217\u8868\uFF0C\u4E0B\u65B9\u65B0\u5EFA')
+            .fontSize(12).fontColor('#999')
+        }
+        Scroll() {
+          Column() {
+            ForEach(this.plList, (p: PlaylistMeta) => {
+              Row() {
+                Text('\u25B6').fontSize(14).fontColor('#3949AB')
+                Text(p.name)
+                  .fontSize(14).fontColor('#333').layoutWeight(1)
+                  .margin({ left: 10 }).maxLines(1)
+                Text('\u203A').fontSize(16).fontColor('#bbb')
+              }
+              .width('100%')
+              .padding({ top: 10, bottom: 10 })
+              .onClick(() => {
+                this.showPlManage = false;
+                this.openPlItems(p.name);
+              })
+            }, (p: PlaylistMeta) => p.name)
+          }
+          .width('100%')
+        }
+        .constraintSize({ maxHeight: 260 })
+
+        Row({ space: 8 }) {
+          TextInput({ placeholder: '\u65B0\u5EFA\u64AD\u653E\u5217\u540D\u79F0', text: this.plNewName })
+            .fontSize(13).height(36).layoutWeight(1)
+            .onChange((v: string) => {
+              this.plNewName = v;
+            })
+          Button('\u521B\u5EFA')
+            .fontSize(12).height(36)
+            .backgroundColor('#3949AB').fontColor(Color.White)
+            .onClick(() => {
+              const err = createPlaylist(getContext(this), this.plNewName);
+              if (err.length > 0) {
+                promptAction.showToast({ message: err });
+                return;
+              }
+              this.plNewName = '';
+              this.refreshPlList();
+            })
+        }
+        .width('100%')
+
+        Button('\u5173\u95ED')
+          .fontSize(13).height(34).width('60%')
+          .backgroundColor('#e0e0e0').fontColor('#333')
+          .onClick(() => {
+            this.showPlManage = false;
+          })
+      }
+      .width('80%')
+      .padding(14)
+      .backgroundColor(Color.White)
+      .borderRadius(10)
+    }
+    .width('100%').height('100%')
+  }
+
+  /** One playlist's ordered items (open / reorder / remove). */
+  @Builder
+  buildPlItemsDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showPlItems = false;
+        })
+      Column({ space: 10 }) {
+        Text('\u25B6 ' + this.plItemsName)
+          .fontSize(16).fontWeight(FontWeight.Bold)
+          .maxLines(1)
+        if (this.plItems.length === 0) {
+          Text('\u6682\u65E0\u4E66\u76EE')
+            .fontSize(12).fontColor('#999')
+        }
+        Scroll() {
+          Column() {
+            ForEach(this.plItems, (path: string, idx: number) => {
+              Row({ space: 6 }) {
+                Text((idx + 1) + '. ' + this.plBookTitle(path))
+                  .fontSize(13).fontColor('#333')
+                  .layoutWeight(1)
+                  .maxLines(1)
+                  .onClick(() => {
+                    this.plOpenPath(path);
+                  })
+                Text('\u2191')
+                  .fontSize(14).fontColor('#3949AB').padding(6)
+                  .onClick(() => {
+                    this.plMoveItem(idx, -1);
+                  })
+                Text('\u2193')
+                  .fontSize(14).fontColor('#3949AB').padding(6)
+                  .onClick(() => {
+                    this.plMoveItem(idx, 1);
+                  })
+                Text('\u2715')
+                  .fontSize(14).fontColor('#e57373').padding(6)
+                  .onClick(() => {
+                    this.plRemoveItem(idx);
+                  })
+              }
+              .width('100%')
+              .padding({ top: 8, bottom: 8 })
+            }, (path: string, idx: number) => `${idx}_${path}`)
+          }
+          .width('100%')
+        }
+        .constraintSize({ maxHeight: 320 })
+
+        Row({ space: 8 }) {
+          Button('\u64AD\u653E\u7B2C\u4E00\u672C')
+            .fontSize(12).height(34).layoutWeight(1)
+            .backgroundColor('#00897B').fontColor(Color.White)
+            .onClick(() => {
+              if (this.plItems.length > 0) {
+                this.plOpenPath(this.plItems[0]);
+              }
+            })
+          Button('\u5220\u9664\u5217\u8868')
+            .fontSize(12).height(34).layoutWeight(1)
+            .backgroundColor('#e57373').fontColor(Color.White)
+            .onClick(() => {
+              deletePlaylist(getContext(this), this.plItemsName);
+              this.showPlItems = false;
+              this.refreshPlList();
+              this.showPlManage = true;
+            })
+        }
+        .width('100%')
+
+        Button('\u5173\u95ED')
+          .fontSize(13).height(34).width('60%')
+          .backgroundColor('#e0e0e0').fontColor('#333')
+          .onClick(() => {
+            this.showPlItems = false;
+          })
+      }
+      .width('84%')
+      .padding(14)
+      .backgroundColor(Color.White)
+      .borderRadius(10)
+    }
+    .width('100%').height('100%')
   }
 
   /** Left drawer panel (Android DrawerLayout: banner + nav + quote + bottom bar). */
