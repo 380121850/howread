@@ -80,8 +80,15 @@ public class AiClient {
                 AppState.get().aiThinking);
     }
 
-    /** Ask with the current persisted config; the token budget is user-tunable. */
+    /** Ask with the current persisted config; the token budget is user-tunable.
+     *  PRO feature hard gate: locked/fdroid builds never reach the network
+     *  (defense in depth — every UI entry point is gated too). */
     public static TestResult ask(Context c, String userText) {
+        if (!com.foobnix.pdf.info.AppsConfig.isProFeaturesEnabled()) {
+            TestResult r = new TestResult();
+            r.error = "pro_required";
+            return r;
+        }
         String key = AiCredentials.load(c);
         String url = AppState.get().aiBaseUrl;
         String model = AppState.get().aiModel;

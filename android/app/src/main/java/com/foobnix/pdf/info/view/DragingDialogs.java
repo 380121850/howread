@@ -1973,11 +1973,16 @@ public class DragingDialogs {
                     });
                 }
 
-                // 发送给AI: selected text (+ user question) goes to the configured LLM
+                // 发送给AI (AI笔记): selected text (+ user question) goes to the
+                // configured LLM. PRO feature: locked/fdroid builds get a toast.
                 View onSendToAi = view.findViewById(R.id.onSendToAi);
                 if (onSendToAi != null) {
                     onSendToAi.setOnClickListener(new OnClickListener() {
                         @Override public void onClick(View v) {
+                            if (!com.foobnix.pdf.info.AppsConfig.isProFeaturesEnabled()) {
+                                com.foobnix.ui2.fragment.PrefFragment2.proLockedToast(v);
+                                return;
+                            }
                             closeDialog();
                             controller.clearSelectedText();
                             String bookPath = controller.getCurrentBook() != null

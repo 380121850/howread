@@ -145,12 +145,19 @@ public class AppsConfig {
     }
 
     /**
-     * Whether the PRO features are enabled in this build. Reserved gate for
-     * future pro-only features: true in the pro flavor, false everywhere else
-     * (fdroid has no pro features by design). Once IAP lands this becomes
-     * {@code isPro() && BillingManager.isProUnlocked()}.
+     * Whether the PRO features are unlocked in this build: the pro flavor with
+     * an active IAP unlock (stub until the billing integration lands). fdroid
+     * never unlocks — it has no pro features by design. Gating points:
+     * WebDAV sync/WebDAV, AI config/summary/translate/bilingual/AI notes,
+     * notes export and reading-stats recording (existing data is kept, new
+     * data is not added while locked).
      */
     public static boolean isProFeaturesEnabled() {
+        return BillingManager.isProUnlocked();
+    }
+
+    /** True in the pro (ad+IAP flagship) flavor, false in fdroid and others. */
+    public static boolean isProFlavor() {
         return FLAVOR.equals("pro");
     }
 

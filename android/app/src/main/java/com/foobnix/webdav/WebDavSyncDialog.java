@@ -35,6 +35,12 @@ import java.util.Date;
 public class WebDavSyncDialog {
 
     public static void showDialog(final Activity a, final Runnable onRefresh) {
+        // PRO feature gate: locked/fdroid builds can't open the sync config
+        // (defense in depth — the settings row is already gated)
+        if (!com.foobnix.pdf.info.AppsConfig.isProFeaturesEnabled()) {
+            com.foobnix.ui2.fragment.PrefFragment2.proLockedToast(a);
+            return;
+        }
 
         final View view = LayoutInflater.from(a).inflate(R.layout.dialog_webdav_sync, null, false);
         final CheckBox enable = (CheckBox) view.findViewById(R.id.webdavSyncEnabled);

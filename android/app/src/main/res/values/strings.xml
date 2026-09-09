@@ -760,7 +760,7 @@
   <string name="moon_range_month">Month</string>
   <string name="moon_range_year">Year</string>
   <string name="moon_net_section_opds">Online catalogs (OPDS)</string>
-  <string name="moon_net_section_webdav">WebDAV</string>
+  <string name="moon_net_section_webdav">WebDAV (Pro)</string>
   <string name="moon_section_folders">Library folders</string>
   <string name="moon_remove_folder_hint">Remove this folder from the library list? The folder on disk will not be deleted</string>
    <string name="moon_stat_hm">%1$d h %2$d min</string>
@@ -770,7 +770,7 @@
    <string name="moon_drawer_settings">Settings</string>
    <string name="moon_drawer_about">About</string>
    <string name="moon_drawer_exit">Exit</string>
-   <string name="webdav_sync_row">WebDAV sync</string>
+   <string name="webdav_sync_row">WebDAV sync (Pro)</string>
    <string name="webdav_sync_title">WebDAV sync</string>
    <string name="webdav_sync_enable">Enable sync (reading progress &amp; bookmarks)</string>
    <string name="webdav_sync_state_on">On</string>
@@ -807,7 +807,7 @@
    <string name="webdav_path_pick_title">Choose server folder</string>
    <string name="webdav_path_new_folder">New folder</string>
    <string name="webdav_path_select">Select this folder</string>
-   <string name="ai_config_row">AI model</string>
+   <string name="ai_config_row">AI model (Pro)</string>
    <string name="ai_profile_config">Model vendor</string>
    <string name="ai_profile_none">None</string>
    <string name="ai_profile_add">Add model vendor…</string>
@@ -848,7 +848,7 @@
    <string name="ai_config_max_tokens">Max tokens</string>
    <string name="ai_chat_hint">Type text to test the model</string>
    <string name="ai_config_thinking">Thinking mode (shows reasoning, off by default)</string>
-   <string name="ai_translate">AI translate</string>
+   <string name="ai_translate">AI translate (Pro)</string>
    <string name="save_ai_translation_results">Save AI translation results</string>
    <string name="ai_translate_source_lang">Source language</string>
    <string name="ai_translate_target_lang">Target language</string>
@@ -858,7 +858,7 @@
    <string name="ai_translate_unsupported_format">Translation is only available for EPUB, TXT, MOBI and AZW3 books</string>
    <string name="ai_translate_same_lang">Source and target language are the same</string>
    <string name="ai_translate_failed">Translation failed</string>
-  <string name="ai_translate_mode_bilingual">Show translations inside the page (bilingual)</string>
+  <string name="ai_translate_mode_bilingual">Show translations inside the page (bilingual) (Pro)</string>
   <string name="ai_translate_off_bilingual">Turn off in-page bilingual</string>
   <string name="ai_translate_bilingual_unsupported">In-page bilingual is only available for EPUB and TXT books</string>
   <string name="ai_tran_hint">Translating…</string>
@@ -883,4 +883,23 @@
    <string name="notes_export_md">Export notes (Markdown)</string>
    <string name="note_export_position_page">Position: page %1$d / %2$d (%3$s)</string>
    <string name="note_export_position_percent">Position: %1$s</string>
+
+    <!-- ===== Pro gating / IAP stub (2026-09-09) ===== -->
+    <string name="pro_upgrade_btn">Upgrade Pro</string>
+    <string name="pro_upgrade_btn_fdroid">Upgrade to the Pro version</string>
+    <string name="pro_btn_active">Pro active</string>
+    <string name="pro_hint_locked">Pro is locked — unlock to enjoy WebDAV sync, AI notes and other pro features</string>
+    <string name="pro_active_info">Channel: %1$s\nPurchased: %2$s\nOrder (last 4): %3$s</string>
+    <string name="pro_restore">Restore purchases</string>
+    <string name="pro_manage">Manage entitlements</string>
+    <string name="pro_toast_locked">Pro feature — please upgrade first</string>
+    <string name="pro_toast_purchased">Purchase successful (IAP stub) — Pro activated</string>
+    <string name="pro_toast_restored">Purchases restored (IAP stub)</string>
+    <string name="pro_toast_manage">Manage entitlements (IAP stub)</string>
+    <string name="pro_toast_refunded">Refund simulated — Pro locked again</string>
+    <string name="pro_stub_purchase_msg">Billing is NOT integrated yet — this is a STUB purchase.\n\nProduct: Pro feature unlock (WebDAV sync, AI notes, AI translate, bilingual view, notes export, reading stats)\nPrice: free (stub)\n\nConfirm purchase?</string>
+    <string name="pro_stub_buy">Buy (stub)</string>
+    <string name="pro_refund_title">Simulate refund (IAP stub)</string>
+    <string name="pro_refund_msg">This clears the local unlock flag and locks Pro again. Continue?</string>
+    <string name="pro_channel_local_key">Local key</string>
 </resources>

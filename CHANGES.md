@@ -2575,3 +2575,48 @@ iOS / Desktop 两个预留平台没有任何版本配置位。
   产物 `HowRead-Pro-v1.0.1-arm64.apk` / `HowRead-Fdroid-v1.0.1-arm64.apk`；
 - MI9 覆盖安装双包均 Success，`dumpsys package` 实测 versionName=1.0.1、
   versionCode=7205（ABI 拆分固有规则：基数 7204 + arm64 偏移 1）。未执行任何 git 命令。
+
+## [2026-09-10] 安卓：Pro 功能门控体系 + 设置页升级卡片 + IAP 打桩验证
+
+### 背景（用户需求）
+- 设置页新增"升级 Pro"入口（已激活显示解锁方式/购买时间/订单号后四位 + 恢复购买/管理权益，
+  退款/失效回退为"升级 Pro"）；
+- 9 项 Pro 功能（WebDAV 同步、WebDAV、AI 接入、书籍 AI 简介、AI 翻译、页面双语对照、
+  AI 笔记、笔记导出、阅读统计）：未开通不可用（配置界面置灰），名称加 (Pro) 后缀；
+  已有数据（笔记/阅读统计）保留但不再新增；
+- fdroid 无 Pro 功能，按钮改"升级 Pro 版本"，点击直接跳官网（无 IAP 弹窗）；
+- IAP 未对接，先打桩：出开启（IapOn）/未开启两个 pro 包验证。
+
+### 改动
+- **IAP 桩**：build.gradle 新增 generateIapStubSource 任务，生成 com.foobnix.ai.IapStub
+  （UNLOCKED + STUB_PURCHASE_TIME，进 main 源集）；默认未开启版，`-PiapStub=true` 出开启版，
+  产物名加 `-IapOn` 后缀；fdroid 在 BillingManager.isProUnlocked() 里硬返回 false，不受属性影响。
+- **BillingManager（src/main）升级为桩引擎**：isProUnlocked() = IapStub.UNLOCKED ‖ AppSP.iapProUnlocked；
+  launchPurchaseFlow() 弹桩购买对话框（确认后写 AppSP 标志+时间+桩订单号 IAP-STUB-2026-8888）；
+  restorePurchases/manageEntitlements 桩 toast；simulateRefund() 清除本机解锁标记（设置页长按触发）；
+  fdroid 跳官网 R.string.my_site；解锁渠道显示"本地 key"（预留 App Store/小米/华为）。
+- **AppSP** 新增 iapProUnlocked/iapPurchaseTime/iapOrderId（设备本地 SharedPreferences，不随 profile 同步）。
+- **AppsConfig**：isProFeaturesEnabled() = BillingManager.isProUnlocked()；新增 isProFlavor()。
+- **AiClient.ask() 运行时硬门禁**：未解锁返回 error="pro_required"，不发网络请求
+  （AI 翻译/双语/简介/笔记全部经此收敛）。
+- **设置页 Pro 卡片**：fragment_preferences.xml 常规设置组新增 proCardRoot
+  （proUpgradeBtn/proUpgradeHint/proActiveLinks）；PrefFragment2 双态刷新 refreshProCard、
+  proLockedToast、alphaIfProLocked；WebDAV 同步行、AI 大模型行点击拦截+置灰。
+- **九项门控落点**：WebDavSyncDialog.showDialog 守卫；BrowseFragment2 WebDAV 区块添加/编辑拦截
+  + AddWebDavDialog.showDialog 兜底（已有服务器保留可浏览/可删）；ShareDialog 书籍菜单"AI 简介(Pro)"
+  + showAiIntro 拦截；DocumentWrapperUI.updateAiTranslateGate / HorizontalViewActivity 翻译按钮
+  扩展 Pro 判定；AiTranslateDialog.show 拦截 + 双语复选框置灰 + startBilingual 兜底；
+  DragingDialogs 发送给AI 拦截 + AiAskDialog.show 兜底；BookmarksFragment2 导出菜单拦截
+  （MyPopupMenu 新增 getMenu(int,String,Runnable) 字符串标题重载）；ReadingStats.onFlip/onPause
+  停止累计（历史保留可查看，首页"阅读统计 (Pro)"标题）。
+- **字符串**：en/zh-rCN/zh-rTW 各新增 18 条 pro_*；5 个功能名加 (Pro)
+  （webdav_sync_row、ai_config_row、moon_net_section_webdav、ai_translate、ai_translate_mode_bilingual）。
+
+### 验证（MI9 真机，uiautomator 实测）
+- 未开启版：Pro 卡片"升级 Pro"+小字；WebDAV 同步(Pro)/AI 大模型(Pro) 行置灰；首页"阅读统计 (Pro)"；
+- 桩购买全链路：点击"升级 Pro"→ 桩对话框 → 确认 → "Pro 已激活"+解锁方式/购买时间/订单号后四位 8888
+  +「恢复购买」「管理权益」出现；长按"Pro 已激活"→ 模拟退款确认 → 回到"升级 Pro"；
+- 开启版（-PiapStub=true）：安装后直接"Pro 已激活"，信息行显示构建期桩购买时间与订单号；
+- fdroid：按钮"升级 Pro 版本"，点击经浏览器打开 https://380121850.github.io/howread/（无 IAP 弹窗）；
+- 三组包构建全部 BUILD SUCCESSFUL（HowRead-Pro-v1.0.1 / HowRead-Pro-IapOn-v1.0.1 / HowRead-Fdroid-v1.0.1）。
+未执行任何 git 命令。

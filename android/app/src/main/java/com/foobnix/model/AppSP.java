@@ -67,6 +67,15 @@ public class AppSP {
     public long rewardedAdLoadedTime = 0;
     public long rewardShowTime = 0;
 
+    // ---- IAP pro unlock (STUB — billing not integrated yet, see
+    // mobi.librera.libgoogle.BillingManager). Device-local state on purpose:
+    // stored in AppSP (SharedPreferences), never synced with the profile.
+    // iapPurchaseTime/iapOrderId are stub purchase metadata shown on the
+    // settings Pro card (channel is a stub constant, "本地 key").
+    public boolean iapProUnlocked = false;
+    public long iapPurchaseTime = 0;
+    public String iapOrderId = "";
+
 
     public static AppSP get() {
         return instance;

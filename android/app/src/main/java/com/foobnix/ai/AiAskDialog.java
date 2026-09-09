@@ -41,6 +41,12 @@ public class AiAskDialog {
         if (a == null) {
             return;
         }
+        // PRO feature gate (AI笔记/发送给AI): defense in depth — the selection
+        // menu item is already gated
+        if (!com.foobnix.pdf.info.AppsConfig.isProFeaturesEnabled()) {
+            com.foobnix.ui2.fragment.PrefFragment2.proLockedToast(a);
+            return;
+        }
         if (TxtUtils.isEmpty(AppState.get().aiBaseUrl) || TxtUtils.isEmpty(AppState.get().aiModel)
                 || TxtUtils.isEmpty(AiCredentials.load(a))) {
             Toast.makeText(a, R.string.ai_ask_not_configured, Toast.LENGTH_LONG).show();

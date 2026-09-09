@@ -760,7 +760,7 @@
    <string name="moon_range_month">近1月</string>
    <string name="moon_range_year">近1年</string>
    <string name="moon_net_section_opds">网上书库（OPDS）</string>
-   <string name="moon_net_section_webdav">WebDAV</string>
+   <string name="moon_net_section_webdav">WebDAV(Pro)</string>
    <string name="moon_section_folders">书库文件夹</string>
    <string name="moon_remove_folder_hint">从书库列表中移除该文件夹？磁盘上的文件夹不会被删除</string>
    <string name="moon_stat_hm">%1$d小时%2$d分</string>
@@ -770,7 +770,7 @@
    <string name="moon_drawer_settings">设置选项</string>
    <string name="moon_drawer_about">软件说明</string>
    <string name="moon_drawer_exit">退出</string>
-   <string name="webdav_sync_row">WebDAV 同步</string>
+   <string name="webdav_sync_row">WebDAV 同步(Pro)</string>
    <string name="webdav_sync_title">WebDAV 同步</string>
    <string name="webdav_sync_enable">启用同步（阅读进度与书签）</string>
    <string name="webdav_sync_state_on">开启</string>
@@ -807,7 +807,7 @@
    <string name="webdav_path_pick_title">选择服务器目录</string>
    <string name="webdav_path_new_folder">新建文件夹</string>
    <string name="webdav_path_select">选择此目录</string>
-   <string name="ai_config_row">AI 大模型</string>
+   <string name="ai_config_row">AI 大模型(Pro)</string>
    <string name="ai_profile_config">模型厂商</string>
    <string name="ai_profile_none">未添加</string>
    <string name="ai_profile_add">添加模型厂商…</string>
@@ -848,7 +848,7 @@
    <string name="ai_config_max_tokens">输出上限</string>
    <string name="ai_chat_hint">输入文字，测试模型是否有响应</string>
    <string name="ai_config_thinking">思考模式（输出推理过程，默认关闭）</string>
-   <string name="ai_translate">AI翻译</string>
+   <string name="ai_translate">AI翻译(Pro)</string>
    <string name="save_ai_translation_results">AI翻译结果保存</string>
    <string name="ai_translate_source_lang">源语言</string>
    <string name="ai_translate_target_lang">目标语言</string>
@@ -858,7 +858,7 @@
    <string name="ai_translate_unsupported_format">仅支持 EPUB、TXT、MOBI、AZW3 格式书籍翻译</string>
    <string name="ai_translate_same_lang">源语言与目标语言相同</string>
    <string name="ai_translate_failed">翻译失败</string>
-  <string name="ai_translate_mode_bilingual">在页面内显示译文（双语对照）</string>
+  <string name="ai_translate_mode_bilingual">在页面内显示译文（双语对照）(Pro)</string>
   <string name="ai_translate_off_bilingual">关闭页内双语模式</string>
   <string name="ai_translate_bilingual_unsupported">页内双语模式仅支持 EPUB、TXT 格式</string>
   <string name="ai_tran_hint">正在翻译中...</string>
@@ -883,4 +883,23 @@
    <string name="notes_export_md">笔记导出 (Markdown)</string>
    <string name="note_export_position_page">位置：第 %1$d / %2$d 页 (%3$s)</string>
    <string name="note_export_position_percent">位置：%1$s</string>
+
+    <!-- ===== Pro 门控 / IAP 桩（2026-09-09）===== -->
+    <string name="pro_upgrade_btn">升级 Pro</string>
+    <string name="pro_upgrade_btn_fdroid">升级 Pro 版本</string>
+    <string name="pro_btn_active">Pro 已激活</string>
+    <string name="pro_hint_locked">Pro 未解锁，解锁后享受WebDAV、AI笔记等高级功能</string>
+    <string name="pro_active_info">解锁方式：%1$s\n购买时间：%2$s\n订单号后四位：%3$s</string>
+    <string name="pro_restore">恢复购买</string>
+    <string name="pro_manage">管理权益</string>
+    <string name="pro_toast_locked">Pro 功能，请先升级 Pro</string>
+    <string name="pro_toast_purchased">购买成功（IAP 桩），Pro 已激活</string>
+    <string name="pro_toast_restored">已恢复购买（IAP 桩）</string>
+    <string name="pro_toast_manage">权益管理（IAP 桩）</string>
+    <string name="pro_toast_refunded">已模拟退款，Pro 回到未解锁状态</string>
+    <string name="pro_stub_purchase_msg">IAP 未接入，当前为打桩购买。\n\n商品：Pro 高级功能解锁（WebDAV 同步、AI 笔记、AI 翻译、双语对照、笔记导出、阅读统计）\n价格：免费（桩）\n\n确认购买？</string>
+    <string name="pro_stub_buy">确认购买（桩）</string>
+    <string name="pro_refund_title">模拟退款（IAP 桩）</string>
+    <string name="pro_refund_msg">将清除本机解锁标记，Pro 回到未解锁状态。继续？</string>
+    <string name="pro_channel_local_key">本地 key</string>
 </resources>

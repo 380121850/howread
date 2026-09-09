@@ -109,9 +109,12 @@ public class DashboardFragment2 extends UIFragment<FileMeta> {
         setupHeader(view.findViewById(R.id.bookmarkHeader), R.string.bookmarks_and_notes, UITab.BookmarksFragment);
 
         // Reading stats: no "more" link (no dedicated stats settings page yet).
+        // PRO feature: the title carries the (Pro) suffix; while locked the
+        // history stays viewable but ReadingStats stops recording new data.
         View statsHeader = view.findViewById(R.id.statsHeader);
         if (statsHeader != null) {
-            ((TextView) statsHeader.findViewById(R.id.sectionTitle)).setText(R.string.moon_home_stats);
+            ((TextView) statsHeader.findViewById(R.id.sectionTitle))
+                    .setText(getString(R.string.moon_home_stats) + " (Pro)");
             statsHeader.findViewById(R.id.sectionMore).setVisibility(View.GONE);
         }
         bindStat(view, R.id.statTotal, R.string.moon_stat_total);

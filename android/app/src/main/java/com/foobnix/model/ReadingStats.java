@@ -41,8 +41,13 @@ public final class ReadingStats {
     }
 
     /** Count one page turn. No-op outside an active reading session, which
-     *  also excludes the initial position restore that happens before onResume. */
+     *  also excludes the initial position restore that happens before onResume.
+     *  PRO feature: when locked (fdroid / pro without the IAP unlock) nothing
+     *  is recorded — existing stats are kept but never grow. */
     public static void onFlip() {
+        if (!com.foobnix.pdf.info.AppsConfig.isProFeaturesEnabled()) {
+            return;
+        }
         if (resumeAt > 0) {
             pendingFlips++;
         }
@@ -54,6 +59,13 @@ public final class ReadingStats {
         }
         long delta = SystemClock.elapsedRealtime() - resumeAt;
         resumeAt = 0;
+        pendingFlips = 0;
+
+        // PRO feature gate: locked builds keep the recorded history but stop
+        // accumulating new time/pages
+        if (!com.foobnix.pdf.info.AppsConfig.isProFeaturesEnabled()) {
+            return;
+        }
 
         AppSP sp = AppSP.get();
         sp.readTimeMs += delta;

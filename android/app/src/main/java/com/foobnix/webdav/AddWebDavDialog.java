@@ -26,6 +26,12 @@ import com.foobnix.pdf.info.view.MyProgressBar;
 public class AddWebDavDialog {
 
     public static void showDialog(final Activity a, final Runnable onRefresh, final WebDavServer edit) {
+        // PRO feature gate (covers every caller): locked/fdroid builds can't
+        // add or edit WebDAV servers; saved servers stay browsable
+        if (!com.foobnix.pdf.info.AppsConfig.isProFeaturesEnabled()) {
+            com.foobnix.ui2.fragment.PrefFragment2.proLockedToast(a);
+            return;
+        }
 
         final AlertDialog.Builder builder = new AlertDialog.Builder(a);
         final View dialog = LayoutInflater.from(a).inflate(R.layout.dialog_add_webdav, null, false);

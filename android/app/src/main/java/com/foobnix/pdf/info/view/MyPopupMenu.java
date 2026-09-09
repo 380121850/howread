@@ -320,6 +320,25 @@ public class MyPopupMenu {
         return m;
     }
 
+    /** Same as {@link #getMenu(int, int, Runnable)} but with a ready-made title
+     *  (used by PRO-gated items whose text carries a runtime "(Pro)" suffix). */
+    public Menu getMenu(int icon, String text, Runnable run) {
+        Menu m = new Menu();
+        m.setIcon(icon);
+        m.add(text);
+        m.setOnMenuItemClickListener(new OnMenuItemClickListener() {
+            @Override
+            public boolean onMenuItemClick(MenuItem item) {
+                run.run();
+                return true;
+            }
+        });
+
+        list.add(m);
+
+        return m;
+    }
+
     public void setAnchor(View anchor) {
         this.anchor = anchor;
     }

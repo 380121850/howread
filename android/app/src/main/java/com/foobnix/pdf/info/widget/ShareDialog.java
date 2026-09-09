@@ -80,6 +80,9 @@ import java.util.List;
 
 public class ShareDialog {
 
+    /** Menu-item suffix for PRO-gated features, e.g. "AI 简介(Pro)". */
+    public static final String PRO_SUFFIX = "(Pro)";
+
     public static void showArchive(final Activity a, final File file, final Runnable onDeleteAction) {
         if (ExtUtils.isNotValidFile(file)) {
             Toast.makeText(a, R.string.file_not_found, Toast.LENGTH_LONG)
@@ -345,7 +348,9 @@ public class ShareDialog {
         }
 
         if (isShowInfo) {
-            items.add(iconText(a, "\u2728", R.string.ai_intro_book));
+            // PRO feature: the menu item text carries the (Pro) suffix
+            // (iconText only takes a resource id, so build the line here)
+            items.add("\u2728 " + a.getString(R.string.ai_intro_book) + PRO_SUFFIX);
             items.add(iconText(a, "ⓘ", R.string.file_info));
         }
 
@@ -521,8 +526,13 @@ public class ShareDialog {
      * "AI book overview" from the book menu: sends the file name plus the
      * metadata title/author/notes to the configured AI model and shows the
      * reply with an "add to notes" action.
+     * PRO feature: locked/fdroid builds get a toast instead.
      */
     public static void showAiIntro(final Activity a, final File file) {
+        if (!com.foobnix.pdf.info.AppsConfig.isProFeaturesEnabled()) {
+            com.foobnix.ui2.fragment.PrefFragment2.proLockedToast(a);
+            return;
+        }
         if (TxtUtils.isEmpty(AppState.get().aiBaseUrl) || TxtUtils.isEmpty(AppState.get().aiModel)
                 || TxtUtils.isEmpty(AiCredentials.load(a))) {
             Toast.makeText(a, R.string.ai_ask_not_configured, Toast.LENGTH_LONG).show();

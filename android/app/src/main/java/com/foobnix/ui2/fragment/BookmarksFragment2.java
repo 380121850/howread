@@ -36,6 +36,7 @@ import com.foobnix.dao2.FileMeta;
 import com.foobnix.model.AppBookmark;
 import com.foobnix.model.AppState;
 import com.foobnix.model.MyPath;
+import com.foobnix.pdf.info.AppsConfig;
 import com.foobnix.pdf.info.BookmarksData;
 import com.foobnix.pdf.info.ExtUtils;
 import com.foobnix.pdf.info.R;
@@ -470,15 +471,22 @@ public class BookmarksFragment2 extends UIFragment<AppBookmark> {
         }
     };
 
-    /** "⋮" on a merged-notes row: open a small menu to export the notes as TXT (default) or Markdown. */
+    /** "⋮" on a merged-notes row: open a small menu to export the notes as TXT (default) or Markdown.
+     *  PRO feature: locked/fdroid builds get a toast — existing notes stay viewable. */
     private void showNoteExportMenu(final AppBookmark notes, View anchor) {
         if (notes == null) {
             return;
         }
+        if (!AppsConfig.isProFeaturesEnabled()) {
+            PrefFragment2.proLockedToast(anchor);
+            return;
+        }
         MyPopupMenu menu = new MyPopupMenu(anchor);
-        menu.getMenu(R.drawable.glyphicons_302_square_download, R.string.notes_export_txt,
+        menu.getMenu(R.drawable.glyphicons_302_square_download,
+                anchor.getContext().getString(R.string.notes_export_txt) + " (Pro)",
                 () -> exportNotesToFile(notes, "txt"));
-        menu.getMenu(R.drawable.glyphicons_302_square_download, R.string.notes_export_md,
+        menu.getMenu(R.drawable.glyphicons_302_square_download,
+                anchor.getContext().getString(R.string.notes_export_md) + " (Pro)",
                 () -> exportNotesToFile(notes, "md"));
         menu.show();
     }

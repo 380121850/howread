@@ -752,7 +752,8 @@ public class DocumentWrapperUI {
             return;
         }
         final File book = dc.getCurrentBook();
-        final boolean supported = AiTranslator.isSupportedFormat(
+        // PRO feature: locked/fdroid builds grey the AI-translate button too
+        final boolean supported = AppsConfig.isProFeaturesEnabled() && AiTranslator.isSupportedFormat(
                 book == null ? null : book.getPath());
         onTextReplacement.setEnabled(supported);
         onTextReplacement.setAlpha(supported ? 1f : 0.3f);

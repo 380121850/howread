@@ -55,6 +55,12 @@ public class AiTranslateDialog {
         if (a == null || dc == null) {
             return;
         }
+        // PRO feature gate: AI translation (incl. in-page bilingual mode) is
+        // locked in fdroid and in pro builds without the IAP unlock
+        if (!com.foobnix.pdf.info.AppsConfig.isProFeaturesEnabled()) {
+            com.foobnix.ui2.fragment.PrefFragment2.proLockedToast(a);
+            return;
+        }
         final File book = dc.getCurrentBook();
         if (!AiTranslator.isSupportedFormat(book == null ? null : book.getPath())) {
             Toast.makeText(a, R.string.ai_translate_unsupported_format, Toast.LENGTH_SHORT).show();
@@ -109,7 +115,12 @@ public class AiTranslateDialog {
                 && AppState.get().aiBilingualBook.equals(book.getPath());
         final boolean bilingualPossible = isBilingualFormat(book.getPath());
         if (modeBox != null) {
-            if (!bilingualPossible) {
+            if (!com.foobnix.pdf.info.AppsConfig.isProFeaturesEnabled()) {
+                // PRO feature: in-page bilingual is locked — dim the checkbox
+                modeBox.setChecked(false);
+                modeBox.setEnabled(false);
+                modeBox.setAlpha(0.3f);
+            } else if (!bilingualPossible) {
                 // only the list panel works for this format
                 modeBox.setChecked(false);
                 modeBox.setVisibility(View.GONE);
@@ -217,6 +228,12 @@ public class AiTranslateDialog {
 
     private static void startBilingual(final Activity a, final DocumentController dc,
             final String src, final String tgt) {
+        // PRO feature gate (in-page bilingual): defense in depth — the
+        // checkbox is already disabled for locked builds
+        if (!com.foobnix.pdf.info.AppsConfig.isProFeaturesEnabled()) {
+            com.foobnix.ui2.fragment.PrefFragment2.proLockedToast(a);
+            return;
+        }
         if (dc.getCurrentBook() == null) {
             return;
         }

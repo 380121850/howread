@@ -1256,12 +1256,21 @@ import java.util.Map;
         }
 
         // --- WebDAV servers (block always visible, list may be empty) ---
+        // PRO feature: adding/editing servers is locked (fdroid / pro without
+        // the IAP unlock); already-saved servers stay browsable and removable
         netSection.addView(netSectionDivider());
-        netSection.addView(netSectionHeader(getString(R.string.moon_net_section_webdav), new OnClickListener() {
+        final View webdavHeader = netSectionHeader(getString(R.string.moon_net_section_webdav), new OnClickListener() {
             @Override public void onClick(View v) {
+                if (!AppsConfig.isProFeaturesEnabled()) {
+                    PrefFragment2.proLockedToast(v);
+                    return;
+                }
                 AddWebDavDialog.showDialog(a, rebuild, null);
             }
-        }));
+        });
+        // PRO 置灰：未解锁/fdroid 标题半透明，点击弹升级提示
+        PrefFragment2.alphaIfProLocked(webdavHeader);
+        netSection.addView(webdavHeader);
         for (final WebDavServer srv : WebDavStore.load()) {
             netSection.addView(netListItem(R.drawable.glyphicons_544_cloud, srv.title, new OnClickListener() {
                 @Override public void onClick(View v) {
@@ -1283,6 +1292,11 @@ import java.util.Map;
             }, new OnClickListener() {
                 @Override public void onClick(View v) {
                     // edit mode: the dialog prefills and replaces the old entry
+                    // (PRO feature: locked when the IAP unlock is absent)
+                    if (!AppsConfig.isProFeaturesEnabled()) {
+                        PrefFragment2.proLockedToast(v);
+                        return;
+                    }
                     AddWebDavDialog.showDialog(a, rebuild, srv);
                 }
             }));

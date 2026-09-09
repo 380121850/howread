@@ -706,4 +706,23 @@
    <string name="webdav_auth_failed">認證失敗,請檢查伺服器位址和帳號密碼</string>
    <string name="webdav_login">帳號</string>
    <string name="webdav_url">WebDAV 位址</string>
+
+    <!-- ===== Pro 門控 / IAP 樁（2026-09-09）===== -->
+    <string name="pro_upgrade_btn">升級 Pro</string>
+    <string name="pro_upgrade_btn_fdroid">升級 Pro 版本</string>
+    <string name="pro_btn_active">Pro 已啟用</string>
+    <string name="pro_hint_locked">Pro 未解鎖，解鎖後享受WebDAV、AI筆記等高級功能</string>
+    <string name="pro_active_info">解鎖方式：%1$s\n購買時間：%2$s\n訂單號後四位：%3$s</string>
+    <string name="pro_restore">恢復購買</string>
+    <string name="pro_manage">管理權益</string>
+    <string name="pro_toast_locked">Pro 功能，請先升級 Pro</string>
+    <string name="pro_toast_purchased">購買成功（IAP 樁），Pro 已啟用</string>
+    <string name="pro_toast_restored">已恢復購買（IAP 樁）</string>
+    <string name="pro_toast_manage">權益管理（IAP 樁）</string>
+    <string name="pro_toast_refunded">已模擬退款，Pro 回到未解鎖狀態</string>
+    <string name="pro_stub_purchase_msg">IAP 未接入，當前為打樁購買。\n\n商品：Pro 高級功能解鎖（WebDAV 同步、AI 筆記、AI 翻譯、雙語對照、筆記匯出、閱讀統計）\n價格：免費（樁）\n\n確認購買？</string>
+    <string name="pro_stub_buy">確認購買（樁）</string>
+    <string name="pro_refund_title">模擬退款（IAP 樁）</string>
+    <string name="pro_refund_msg">將清除本機解鎖標記，Pro 回到未解鎖狀態。繼續？</string>
+    <string name="pro_channel_local_key">本地 key</string>
 </resources>

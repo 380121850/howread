@@ -1835,8 +1835,10 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
 
         // the book is set inside the controller constructor above; apply the
         // AI-translate gate now that the format is known (initAsync runs on a
-        // background thread, so hop back to the UI thread for the view update)
-        final boolean aiTranslateSupported = AiTranslator.isSupportedFormat(
+        // background thread, so hop back to the UI thread for the view update).
+        // PRO feature: locked/fdroid builds grey the AI-translate button too.
+        final boolean aiTranslateSupported = com.foobnix.pdf.info.AppsConfig.isProFeaturesEnabled()
+                && AiTranslator.isSupportedFormat(
                 dc.getCurrentBook() == null ? null : dc.getCurrentBook().getPath());
         runOnUiThread(new Runnable() {
             @Override
