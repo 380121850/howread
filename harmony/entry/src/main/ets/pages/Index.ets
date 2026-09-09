@@ -35,6 +35,23 @@ import { PlaylistMeta, getAllPlaylists, createPlaylist, deletePlaylist, getPlayl
 import http from '@ohos.net.http';
 import promptAction from '@ohos.promptAction';
 import { KEY_PENDING_URI } from '../entryability/EntryAbility';
+import web_webview from '@ohos.web.webview';
+import i18n from '@ohos.i18n';
+import bundleManager from '@ohos.bundle.bundleManager';
+import Want from '@ohos.app.ability.Want';
+import { BUILD_TIME } from '../model/BuildInfo';
+import { parseScanFormats } from '../model/LibrarySearch';
+
+/* Round 7: module-level resources & constants (Android PrefFragment2 parity) */
+const THEME_LABELS: Resource[] = [$r('app.string.set_theme_light'), $r('app.string.set_theme_dark'), $r('app.string.set_theme_oled'), $r('app.string.set_theme_ink')];
+const TAB_ICONS: Resource[] = [$r('app.media.ic_home'), $r('app.media.ic_book_open'), $r('app.media.ic_folder'), $r('app.media.ic_wrench')];
+const TAB_NAMES: Resource[] = [$r('app.string.tab_home'), $r('app.string.tab_library'), $r('app.string.tab_my_files'), $r('app.string.tab_prefs')];
+const THEME_PRESETS: string[] = ['#3949AB', '#1565C0', '#00897B', '#2E7D32', '#6D4C41', '#455A64', '#AD1457', '#37474F'];
+const ACCENT_PRESETS: string[] = ['#03A9F4', '#FF4081', '#7CB342', '#FFB300', '#9575CD', '#4DD0E1', '#F06292', '#90A4AE'];
+const FORMAT_ROWS: string[][] = [['pdf', 'PDF'], ['epub', 'EPUB'], ['fb2', 'FB2'], ['txtmd', 'TXT/MD'], ['mobi', 'MOBI/AZW'], ['djvu', 'DJVU'], ['xps', 'XPS'], ['doc', 'DOC/DOCX'], ['rtf', 'RTF'], ['odt', 'ODT'], ['cbz', 'CBZ/CBR'], ['zip', 'ZIP'], ['html', 'HTML']];
+const WHATSNEW_URL: string = 'https://github.com/380121850/howread/blob/master/CHANGES.md';
+const HOME_URL: string = 'https://380121850.github.io/howread/';
+const SUPPORT_MAIL: string = '380121850@163.com';
 
 /** Backup payload shape (sprint E). */
 interface BackupFile {
@@ -151,6 +168,36 @@ struct Index {
   @State showProfile: boolean = false;
   @State profileList: string[] = [DEFAULT_PROFILE];
   @State profileInput: string = '';
+  /* ---- Round 7: collapsible pref groups ---- */
+  @State groupExp: Record<string, boolean> = { 'lib': true, 'gen': true, 'backup': true, 'ui': true, 'fmt': true, 'libset': true, 'libdisp': true, 'cov': true, 'read': true, 'theme': true, 'tabs': true };
+  /* ---- Round 7: option popup sheet (orientation/language/columns/font scale/taps) ---- */
+  @State showOptSheet: boolean = false;
+  @State optTitle: string = '';
+  @State optLabels: string[] = [];
+  @State optSel: number = 0;
+  @State optTarget: string = '';
+  /* ---- Round 7: color picker ---- */
+  @State showColorPick: boolean = false;
+  @State colorTarget: number = 0;   /* 0 = theme, 1 = accent */
+  @State colorHexIn: string = '';
+  /* ---- Round 7: exit confirm + licenses viewer + tab order editor ---- */
+  @State showExitConfirm: boolean = false;
+  @State showLicenses: boolean = false;
+  @State showTabsEdit: boolean = false;
+  @State tabsDraft: number[] = [0, 1, 2, 3];
+  /* ---- Round 7: tab display order + Tabs bar position ---- */
+  @State tabDisplay: number[] = [0, 1, 2, 3];
+  @State tabPos: number = 0;
+  /** app versionName read from bundleManager (About version pill) */
+  @State appVersion: string = '';
+  /** licenses.html Web controller */
+  private licWebCtl: web_webview.WebviewController = new web_webview.WebviewController();
+  /** guard: auto open-last-book only once per launch */
+  private lastBookAutoOpened: boolean = false;
+  /* Round 7: observed AppStorage mirrors so dynamic colors / font scale re-render */
+  @StorageProp('themeColorHex') stThemeHex: string = '#3949AB';
+  @StorageProp('accentColorHex') stAccentHex: string = '#03A9F4';
+  @StorageProp('fontScale') stFontScale: number = 1.0;
   /** sort mode: 0=recent 1=name 2=date 3=author 4=series */
   @State libSortMode: number = 0;
   /** batch selection mode (long-press a row to enter) */
@@ -285,6 +332,13 @@ struct Index {
       this.syncCfg = c;
       this.armAutoSync();
     });
+    /* Round 7: read the real versionName for the About pill */
+    try {
+      this.appVersion = bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT).versionName;
+    } catch (e) {
+      this.appVersion = '0.8.6';
+      console.error('[Index] getBundleInfoForSelfSync failed');
+    }
   }
 
   /** hr05: load persisted OPDS/WebDAV server lists. */
@@ -410,6 +464,16 @@ struct Index {
     /* Round 6: honor the preferred screen orientation */
     if (this.settings.screenOrientation > 0) {
       this.applyOrientation();
+    }
+    /* Round 7: dynamic theme/accent colors + UI font scale (AppStorage for all pages) */
+    AppStorage.setOrCreate<string>('themeColorHex', this.settings.themeColor.length > 0 ? this.settings.themeColor : '#3949AB');
+    AppStorage.setOrCreate<string>('accentColorHex', this.settings.accentColor.length > 0 ? this.settings.accentColor : '#03A9F4');
+    AppStorage.setOrCreate<number>('fontScale', this.settings.appFontScale > 0 ? this.settings.appFontScale : 1.0);
+    /* Round 7: tab display order */
+    this.loadTabOrder();
+    /* Round 7: fullscreen hides the status bar */
+    if (this.settings.fullscreen) {
+      this.applyFullscreen(true);
     }
     /* Round 6: optional device book scan on startup (block B) */
     if (this.settings.autoScanOnStart) {
@@ -784,6 +848,11 @@ struct Index {
       console.info(`[Index] Library loaded: ${this.recentBooks.length} recent, ${this.starredBooks.length} starred`);
       /* Round 6: refresh the missing-files badge */
       this.missingCount = findMissingBooks(this.recentBooks).length;
+      /* Round 7: open the last book on launch (once, after the library is ready) */
+      if (this.settings.openLastBook && !this.lastBookAutoOpened && this.recentBooks.length > 0) {
+        this.lastBookAutoOpened = true;
+        this.openBook(this.recentBooks[0]);
+      }
     } catch (e) {
       console.error('[Index] loadLibrary failed');
     }
@@ -799,7 +868,8 @@ struct Index {
     this.scanBusy = true;
     try {
       const ctx = getContext(this);
-      const hits: ScanHit[] = scanDeviceBooks(ctx);
+      /* Round 7: scan-format whitelist + .nomedia skip (Android AppState.support*) */
+      const hits: ScanHit[] = scanDeviceBooks(ctx, 3, parseScanFormats(this.settings.scanFormats), this.settings.skipNoMediaFolders);
       const known: string[] = [];
       for (let i = 0; i < this.recentBooks.length; i++) {
         known.push(this.recentBooks[i].path);
@@ -942,7 +1012,7 @@ struct Index {
       Text($r('app.string.prof_hint'))
         .fontSize(11).fontColor('#888')
       Text(`\u5F53\u524D\uFF1A${getCurrentProfile()}`)
-        .fontSize(12).fontColor($r('app.color.brand_primary'))
+        .fontSize(12).fontColor(this.thm())
       List() {
         ForEach(this.profileList, (name: string) => {
           ListItem() {
@@ -950,7 +1020,7 @@ struct Index {
               Text(name === DEFAULT_PROFILE ? $r('app.string.common_default') : name)
                 .fontSize(13).fontColor('#333').layoutWeight(1)
               if (name !== getCurrentProfile()) {
-                Text($r('app.string.common_switch')).fontSize(12).fontColor($r('app.color.brand_primary'))
+                Text($r('app.string.common_switch')).fontSize(12).fontColor(this.thm())
                   .onClick(() => {
                     this.doSwitchProfile(name);
                   })
@@ -977,7 +1047,7 @@ struct Index {
           })
         Button($r('app.string.common_new'))
           .fontSize(13).height(34)
-          .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+          .backgroundColor(this.thm()).fontColor(Color.White)
           .onClick(() => {
             this.doCreateProfile();
           })
@@ -1173,7 +1243,11 @@ struct Index {
   }
 
   private openBook(book: RecentBook): void {
-    router.pushUrl({ url: 'components/Reader', params: { docPath: book.path, title: book.title } })
+    /* Round 7: alwaysPage1 forces page 1 in the Reader (ignores saved progress) */
+    router.pushUrl({
+      url: 'components/Reader',
+      params: { docPath: book.path, title: book.title, alwaysPage1: this.settings.alwaysPage1 ? '1' : '0' }
+    })
       .then(() => {
         console.info(`[Index] Opened book: ${book.title}`);
       })
@@ -1186,11 +1260,12 @@ struct Index {
   @Builder
   BookRow(book: RecentBook) {
     Row() {
-      /* cover thumbnail */
-      if (book.coverPath.length > 0) {
+      /* cover thumbnail (Round 7: size pref + show-covers toggle) */
+      if (book.coverPath.length > 0 && this.settings.showBookCovers) {
         Image(book.coverPath)
-          .width(52).height(70)
-          .objectFit(ImageFit.Cover)
+          .width(this.settings.coverListSize > 0 ? this.settings.coverListSize : 52)
+          .height(this.settings.coverListSize > 0 ? Math.round(this.settings.coverListSize * 1.35) : 70)
+          .objectFit(this.settings.cropCovers ? ImageFit.Cover : ImageFit.Contain)
           .borderRadius(4)
           .backgroundColor('#eee')
       } else {
@@ -1254,7 +1329,7 @@ struct Index {
               this.pickRandomQuote();
             })
           Text(this.topTitle)
-            .fontSize(18).fontWeight(FontWeight.Bold).fontColor(Color.White)
+            .fontSize(this.fsp(18)).fontWeight(FontWeight.Bold).fontColor(Color.White)
             .layoutWeight(1)
             .textAlign(TextAlign.Start)
             .padding({ left: 6 })
@@ -1266,36 +1341,37 @@ struct Index {
             })
         }
         .width('100%').height(48)
-        .backgroundColor($r('app.color.brand_primary'))
+        .backgroundColor(this.thm())
 
-        // 4 tabs, bottom by default; top position optional (Android tapPositionTop)
-        Tabs({ barPosition: this.settings.tabPositionTop ? BarPosition.Start : BarPosition.End, index: this.currentTab }) {
+        // 4 tabs, bottom by default; top position optional (Android tapPositionTop).
+        // Round 7: tabsOrder drives the display order (content dispatcher) + icon-only labels.
+        Tabs({ barPosition: this.settings.tabPositionTop ? BarPosition.Start : BarPosition.End, index: this.tabPos }) {
           TabContent() {
-            this.buildDashboardTab()
+            this.tabContentFor(0)
           }
-          .tabBar(this.buildTabLabel($r('app.media.ic_home'), $r('app.string.tab_home'), 0))
-
-          TabContent() {
-            this.buildLibraryTab()
-          }
-          .tabBar(this.buildTabLabel($r('app.media.ic_book_open'), $r('app.string.tab_library'), 1))
+          .tabBar(this.tabLabelFor(0))
 
           TabContent() {
-            this.buildBrowseTab()
+            this.tabContentFor(1)
           }
-          .tabBar(this.buildTabLabel($r('app.media.ic_folder'), $r('app.string.tab_my_files'), 2))
+          .tabBar(this.tabLabelFor(1))
 
           TabContent() {
-            this.buildSettingsTab()
+            this.tabContentFor(2)
           }
-          .tabBar(this.buildTabLabel($r('app.media.ic_wrench'), $r('app.string.tab_prefs'), 3))
+          .tabBar(this.tabLabelFor(2))
+
+          TabContent() {
+            this.tabContentFor(3)
+          }
+          .tabBar(this.tabLabelFor(3))
         }
         .width('100%')
         .layoutWeight(1)
         .barMode(BarMode.Fixed)
-        .barBackgroundColor($r('app.color.brand_primary'))
-        .onChange((index: number) => {
-          this.switchTab(index);
+        .barBackgroundColor(this.thm())
+        .onChange((pos: number) => {
+          this.onTabPos(pos);
         })
       }
       .width('100%')
@@ -1308,7 +1384,7 @@ struct Index {
             .width(24).height(24).fillColor(Color.White)
         }
         .width(52).height(52)
-        .backgroundColor($r('app.color.brand_primary'))
+        .backgroundColor(this.thm())
         .borderRadius(26)
         .shadow({ radius: 8, color: '#44000000', offsetX: 0, offsetY: 2 })
         .margin({ right: 16, bottom: this.settings.tabPositionTop ? 24 : 62 })
@@ -1425,6 +1501,53 @@ struct Index {
             this.showProfile = false;
           })
         this.buildProfileOverlay()
+      }
+
+      /* Round 7 dialogs: option sheet / color picker / tab order / exit confirm / licenses */
+      if (this.showOptSheet) {
+        Column() {}
+          .width('100%').height('100%')
+          .backgroundColor('#66000000')
+          .onClick(() => {
+            this.showOptSheet = false;
+          })
+        this.buildOptSheet()
+      }
+      if (this.showColorPick) {
+        Column() {}
+          .width('100%').height('100%')
+          .backgroundColor('#66000000')
+          .onClick(() => {
+            this.showColorPick = false;
+          })
+        this.buildColorPick()
+      }
+      if (this.showTabsEdit) {
+        Column() {}
+          .width('100%').height('100%')
+          .backgroundColor('#66000000')
+          .onClick(() => {
+            this.showTabsEdit = false;
+          })
+        this.buildTabsEdit()
+      }
+      if (this.showExitConfirm) {
+        Column() {}
+          .width('100%').height('100%')
+          .backgroundColor('#66000000')
+          .onClick(() => {
+            this.showExitConfirm = false;
+          })
+        this.buildExitConfirm()
+      }
+      if (this.showLicenses) {
+        Column() {}
+          .width('100%').height('100%')
+          .backgroundColor('#66000000')
+          .onClick(() => {
+            this.showLicenses = false;
+          })
+        this.buildLicenses()
       }
 
       if (this.activeOverlay === 4) {
@@ -2052,6 +2175,42 @@ struct Index {
   }
 
   /** Tab bar label with icon + text (Android: selected white / unselected #ddffffff). */
+  /**
+   * Round 7: tab bar label for display position `pos` (order-aware, icon-only
+   * option). The old buildTabLabel(icon, text, idx) remains for any other use.
+   */
+  @Builder
+  tabLabelFor(pos: number) {
+    Column({ space: 2 }) {
+      Image(TAB_ICONS[this.tabDisplay[pos]])
+        .width(22).height(22)
+        .fillColor(this.tabPos === pos ? '#FFFFFF' : '#B3FFFFFF')
+      if (!this.settings.tabIconOnly) {
+        Text(TAB_NAMES[this.tabDisplay[pos]])
+          .fontSize(this.fsp(10))
+          .fontColor(this.tabPos === pos ? '#FFFFFF' : '#DDFFFFFF')
+      }
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Center)
+  }
+
+  /** Round 7: content dispatcher so tabsOrder can remap pages (TabContent slots are static).
+   *  Takes the SLOT position and reads tabDisplay inside the body so the content
+   *  re-renders when the order changes (by-value builder params are not tracked). */
+  @Builder
+  tabContentFor(pos: number) {
+    if (this.tabDisplay[pos] === 0) {
+      this.buildDashboardTab()
+    } else if (this.tabDisplay[pos] === 1) {
+      this.buildLibraryTab()
+    } else if (this.tabDisplay[pos] === 2) {
+      this.buildBrowseTab()
+    } else {
+      this.buildSettingsTab()
+    }
+  }
+
   @Builder
   buildTabLabel(icon: Resource, text: ResourceStr, idx: number) {
     Column({ space: 2 }) {
@@ -2066,9 +2225,10 @@ struct Index {
 
   // ---- Phase 1: shell helpers (top bar / drawer / dashboard / overlays) ----
 
-  /** Switch bottom tab and refresh the top bar title (Android: title = tab name). */
+  /** Switch to a TAB ID (0..3): map to its display position first (Round 7). */
   switchTab(index: number): void {
     this.currentTab = index;
+    this.tabPos = this.tabIndexOf(index);
     const names: string[] = [this.L($r('app.string.tab_home')), this.L($r('app.string.tab_library')), this.L($r('app.string.tab_my_files')), this.L($r('app.string.tab_prefs'))];
     this.topTitle = names[index];
     /* Phase 3: refresh stats whenever the dashboard becomes visible (also after Reader back) */
@@ -2131,8 +2291,12 @@ struct Index {
     console.info(`[Index] Night mode -> theme ${this.settings.theme}`);
   }
 
-  /** Drawer "exit" button: terminate the ability. */
+  /** Drawer "exit" button: optional confirm, then terminate the ability. */
   exitApp(): void {
+    if (this.settings.showExitDialog) {
+      this.showExitConfirm = true;
+      return;
+    }
     try {
       const ctx = getContext(this) as common.UIAbilityContext;
       ctx.terminateSelf();
@@ -2259,7 +2423,7 @@ struct Index {
           Column() {}
             .width(16)
             .height(v > 0 ? Math.max(4, Math.round(v / this.chartMax(this.chartValues) * 88)) : 3)
-            .backgroundColor($r('app.color.brand_primary'))
+            .backgroundColor(this.thm())
             .borderRadius(2)
           Text(this.chartLabels[idx].length > 5 ? this.chartLabels[idx].substring(5) : this.chartLabels[idx])
             .fontSize(7).fontColor('#999')
@@ -2283,7 +2447,7 @@ struct Index {
       Blank()
       if (moreAction >= 0) {
         Text($r('app.string.common_more'))
-          .fontSize(14).fontColor($r('app.color.brand_primary'))
+          .fontSize(14).fontColor(this.thm())
           .onClick(() => {
             if (moreAction === 7) {
               this.updateChartData();
@@ -2337,7 +2501,7 @@ struct Index {
   statCard(kind: number) {
     Column({ space: 6 }) {
       Text(this.statValue(kind))
-        .fontSize(24).fontWeight(FontWeight.Bold).fontColor($r('app.color.brand_primary')).maxLines(1)
+        .fontSize(24).fontWeight(FontWeight.Bold).fontColor(this.thm()).maxLines(1)
       Text(this.statLabel(kind))
         .fontSize(13).fontColor('#666').maxLines(1)
     }
@@ -2550,7 +2714,7 @@ struct Index {
               }
               .width(64).height(64)
               .justifyContent(FlexAlign.Center)
-              .backgroundColor($r('app.color.brand_primary'))
+              .backgroundColor(this.thm())
               .borderRadius(32)
               Text(s.name.length > 8 ? s.name.substring(0, 8) + '\u2026' : s.name)
                 .fontSize(12).fontColor('#666').maxLines(1)
@@ -2587,11 +2751,11 @@ struct Index {
             Column({ space: 4 }) {
               Text(label)
                 .fontSize(15)
-                .fontColor(this.chartRange === idx ? $r('app.color.brand_primary') : '#666')
+                .fontColor(this.chartRange === idx ? this.thm() : '#666')
               Divider()
                 .width(label.length * 15 + 8)
                 .strokeWidth(2)
-                .color(this.chartRange === idx ? $r('app.color.brand_primary') : Color.Transparent)
+                .color(this.chartRange === idx ? this.thm() : Color.Transparent)
             }
             .onClick(() => {
               this.chartRange = idx;
@@ -2661,13 +2825,13 @@ struct Index {
                 this.libQuery = v;
               })
             if (this.selMode) {
-              Button($r('app.string.common_cancel')).fontSize(12).height(28).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+              Button($r('app.string.common_cancel')).fontSize(12).height(28).backgroundColor(this.thm()).fontColor(Color.White)
                 .onClick(() => {
                   this.exitSel();
                 })
             } else {
               Text('' + this.getLibraryBooks().length)
-                .fontSize(14).fontColor($r('app.color.brand_primary'))
+                .fontSize(14).fontColor(this.thm())
             }
           }
           .layoutWeight(1).height(38)
@@ -2727,7 +2891,7 @@ struct Index {
       }
       .width('100%')
       .padding({ left: 8, right: 8, top: 6, bottom: 8 })
-      .backgroundColor($r('app.color.brand_primary'))
+      .backgroundColor(this.thm())
 
       /* status chips: 全部 / 未读 / 在读 / 已读 (white chip + blue border, selected = blue bg) */
       Scroll() {
@@ -2735,31 +2899,31 @@ struct Index {
           ForEach([$r('app.string.chip_all'), $r('app.string.chip_unread'), $r('app.string.chip_reading'), $r('app.string.chip_finished')], (label: string, idx: number) => {
             Text(label)
               .fontSize(13)
-              .fontColor(this.libStatusFilter === idx - 1 ? Color.White : $r('app.color.brand_primary'))
+              .fontColor(this.libStatusFilter === idx - 1 ? Color.White : this.thm())
               .height(28)
               .padding({ left: 14, right: 14 })
               .borderRadius(3)
-              .backgroundColor(this.libStatusFilter === idx - 1 ? $r('app.color.brand_primary') : Color.White)
-              .border({ width: 1, color: this.libStatusFilter === idx - 1 ? $r('app.color.brand_primary') : '#9FA8DA' })
+              .backgroundColor(this.libStatusFilter === idx - 1 ? this.thm() : Color.White)
+              .border({ width: 1, color: this.libStatusFilter === idx - 1 ? this.thm() : '#9FA8DA' })
               .onClick(() => {
                 this.libStatusFilter = this.libStatusFilter === idx - 1 ? -1 : idx - 1;
               })
           }, (label: string, idx: number) => `chip_${idx}`)
           Text(this.libStarFilter ? $r('app.string.chip_star_on') : $r('app.string.chip_star_off'))
             .fontSize(13)
-            .fontColor(this.libStarFilter ? Color.White : $r('app.color.brand_primary'))
+            .fontColor(this.libStarFilter ? Color.White : this.thm())
             .height(28)
             .padding({ left: 14, right: 14 })
             .borderRadius(3)
-            .backgroundColor(this.libStarFilter ? $r('app.color.brand_primary') : Color.White)
-            .border({ width: 1, color: this.libStarFilter ? $r('app.color.brand_primary') : '#9FA8DA' })
+            .backgroundColor(this.libStarFilter ? this.thm() : Color.White)
+            .border({ width: 1, color: this.libStarFilter ? this.thm() : '#9FA8DA' })
             .onClick(() => {
               this.libStarFilter = !this.libStarFilter;
               console.info(`[Index] Library star filter: ${this.libStarFilter}`);
             })
           Text($r('app.string.chip_playlist'))
             .fontSize(13)
-            .fontColor($r('app.color.brand_primary'))
+            .fontColor(this.thm())
             .height(28)
             .padding({ left: 14, right: 14 })
             .borderRadius(3)
@@ -2791,7 +2955,7 @@ struct Index {
             Text(this.libSearchBusy ? `\u5168\u6587\u641C\u7D22\u4E2D ${this.libSearchProgress}` : `\u5168\u6587\u641C\u7D22\u7ED3\u679C\uFF1A${this.libSearchHits.length} \u5904`)
               .fontSize(12).fontColor('#555').layoutWeight(1)
             if (this.libSearchBusy) {
-              Text($r('app.string.common_cancel')).fontSize(12).fontColor($r('app.color.brand_primary'))
+              Text($r('app.string.common_cancel')).fontSize(12).fontColor(this.thm())
                 .onClick(() => {
                   this.cancelLibSearch();
                 })
@@ -2829,8 +2993,8 @@ struct Index {
       /* batch selection bar */
       if (this.selMode) {
         Row({ space: 6 }) {
-          Text(this.selSet.length + ' \u9879\u5DF2\u9009').fontSize(12).fontColor($r('app.color.brand_primary'))
-          Button($r('app.string.lib_select_all')).fontSize(11).height(26).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+          Text(this.selSet.length + ' \u9879\u5DF2\u9009').fontSize(12).fontColor(this.thm())
+          Button($r('app.string.lib_select_all')).fontSize(11).height(26).backgroundColor(this.thm()).fontColor(Color.White)
             .onClick(() => {
               this.selectAll();
             })
@@ -2938,9 +3102,9 @@ struct Index {
     return mode === 0 ? this.L($r('app.string.sort_recent')) : mode === 1 ? this.L($r('app.string.common_name')) : mode === 2 ? this.L($r('app.string.sort_date')) : mode === 3 ? this.L($r('app.string.sort_author')) : this.L($r('app.string.sort_series'));
   }
 
-  /** Round 6: grid columns template from the coverColumns pref (2..4). */
+  /** Round 6: grid columns template from the coverColumns pref (1..8). */
   coverColsTemplate(): string {
-    const n: number = Math.max(2, Math.min(4, this.settings.coverColumns));
+    const n: number = Math.max(1, Math.min(8, this.settings.coverColumns));
     let t: string = '';
     for (let i = 0; i < n; i++) {
       t = t + (i > 0 ? ' ' : '') + '1fr';
@@ -3016,7 +3180,7 @@ struct Index {
     Row() {
       if (this.selMode) {
         Text(this.selSet.indexOf(book.path) >= 0 ? '\u2611' : '\u2610')
-          .fontSize(20).fontColor($r('app.color.brand_primary')).width(28).textAlign(TextAlign.Center)
+          .fontSize(20).fontColor(this.thm()).width(28).textAlign(TextAlign.Center)
       }
       if (book.coverPath.length > 0) {
         Image(book.coverPath)
@@ -3042,7 +3206,7 @@ struct Index {
         }
         if (book.totalPages > 0) {
           Progress({ value: Math.min(book.page + 1, book.totalPages), total: book.totalPages, type: ProgressType.Linear })
-            .width('100%').height(3).color($r('app.color.brand_primary')).backgroundColor('#e0e0e0')
+            .width('100%').height(3).color(this.thm()).backgroundColor('#e0e0e0')
         }
       }
       .layoutWeight(1)
@@ -3086,10 +3250,16 @@ struct Index {
           .borderRadius(2)
           .shadow({ radius: 6, color: '#77000000', offsetX: 0, offsetY: 4 })
           .offset({ y: 6 })
-        if (book.coverPath.length > 0) {
+        if (book.coverPath.length > 0 && this.settings.showBookCovers) {
           Image(book.coverPath)
-            .width('100%').aspectRatio(0.72)
-            .objectFit(ImageFit.Cover).backgroundColor('#eee')
+            .width(this.settings.coverGridSize > 0 ? this.settings.coverGridSize : '100%')
+            .aspectRatio(0.72)
+            .objectFit(this.settings.cropCovers ? ImageFit.Cover : ImageFit.Contain)
+            .backgroundColor('#eee')
+            .border({ width: this.settings.coverBorderShadow ? 1 : 0, color: '#00000022' })
+            .shadow(this.settings.coverEffect || this.settings.coverBorderShadow
+              ? { radius: 6, color: '#66000000', offsetX: 0, offsetY: 3 }
+              : { radius: 0, color: Color.Transparent, offsetX: 0, offsetY: 0 })
         } else {
           Column() {
             Text(book.title.length > 8 ? book.title.substring(0, 8) : book.title)
@@ -3234,7 +3404,7 @@ struct Index {
         Row({ space: 8 }) {
           Text($r('app.string.ai_protocol')).fontSize(14).fontColor('#333').width(70)
           Text($r('app.string.ai_openai_compat'))
-            .fontSize(14).fontColor($r('app.color.brand_primary'))
+            .fontSize(14).fontColor(this.thm())
         }
         .width('100%')
 
@@ -3243,9 +3413,9 @@ struct Index {
           ForEach(AI_PROVIDERS, (p: string, idx: number) => {
             Text(p)
               .fontSize(12)
-              .fontColor(this.aiCfg.provider === p ? Color.White : $r('app.color.brand_primary'))
-              .backgroundColor(this.aiCfg.provider === p ? $r('app.color.brand_primary') : Color.Transparent)
-              .border({ width: 1, color: $r('app.color.brand_primary') })
+              .fontColor(this.aiCfg.provider === p ? Color.White : this.thm())
+              .backgroundColor(this.aiCfg.provider === p ? this.thm() : Color.Transparent)
+              .border({ width: 1, color: this.thm() })
               .borderRadius(10)
               .padding({ left: 8, right: 8, top: 3, bottom: 3 })
               .onClick(() => {
@@ -3338,7 +3508,7 @@ struct Index {
             Text($r('app.string.ai_thinking')).fontSize(13).fontColor('#333')
             Checkbox({ name: 'thinking' })
               .select(this.aiCfg.thinking)
-              .selectedColor($r('app.color.brand_primary'))
+              .selectedColor(this.thm())
               .width(18).height(18)
               .onChange((v: boolean) => {
                 this.aiCfg.thinking = v;
@@ -3383,7 +3553,7 @@ struct Index {
             })
           Button($r('app.string.common_save'))
             .fontSize(14).height(36)
-            .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+            .backgroundColor(this.thm()).fontColor(Color.White)
             .onClick(() => {
               this.saveAiDialog();
             })
@@ -3476,7 +3646,7 @@ struct Index {
       Column({ space: 10 }) {
         Row({ space: 8 }) {
           Image($r('app.media.ic_sparkle'))
-            .width(20).height(20).fillColor($r('app.color.brand_primary'))
+            .width(20).height(20).fillColor(this.thm())
           Text($r('app.string.ai_intro_book'))
             .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
             .layoutWeight(1)
@@ -3496,7 +3666,7 @@ struct Index {
           Column() {
             if (this.aiIntroBusy) {
               Row({ space: 8 }) {
-                LoadingProgress().width(20).height(20).color($r('app.color.brand_primary'))
+                LoadingProgress().width(20).height(20).color(this.thm())
                 Text($r('app.string.ai_intro_generating')).fontSize(13).fontColor('#777')
               }
             } else {
@@ -3639,7 +3809,7 @@ struct Index {
           Row({ space: 6 }) {
             Checkbox({ name: 'syncEnabled' })
               .width(18).height(18)
-              .selectedColor($r('app.color.brand_primary'))
+              .selectedColor(this.thm())
               .select(this.syncCfg.enabled)
               .onChange((v: boolean) => {
                 this.syncCfg.enabled = v;
@@ -3677,7 +3847,7 @@ struct Index {
           Row({ space: 6 }) {
             Checkbox({ name: 'syncTrust' })
               .width(18).height(18)
-              .selectedColor($r('app.color.brand_primary'))
+              .selectedColor(this.thm())
               .select(this.syncCfg.trusted)
               .onChange((v: boolean) => {
                 this.syncCfg.trusted = v;
@@ -3718,7 +3888,7 @@ struct Index {
           Row({ space: 6 }) {
             Checkbox({ name: 'syncAuto' })
               .width(18).height(18)
-              .selectedColor($r('app.color.brand_primary'))
+              .selectedColor(this.thm())
               .select(this.syncCfg.autoSync)
               .onChange((v: boolean) => {
                 this.syncCfg.autoSync = v;
@@ -3792,7 +3962,7 @@ struct Index {
               })
             Button($r('app.string.common_save'))
               .fontSize(14).height(36)
-              .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+              .backgroundColor(this.thm()).fontColor(Color.White)
               .onClick(() => {
                 this.saveSyncDialog();
               })
@@ -3844,7 +4014,7 @@ struct Index {
               ListItem() {
                 Column({ space: 4 }) {
                   Text(`${this.fmtLogTime(e.time)} \u00B7 \u2191${e.up}\u672C \u00B7 \u5173\u8054${e.linked} \u00B7 ${e.ms}ms`)
-                    .fontSize(12).fontColor($r('app.color.brand_primary'))
+                    .fontSize(12).fontColor(this.thm())
                   ForEach(e.details, (d: string, di: number) => {
                     Text(d)
                       .fontSize(11).fontColor('#555')
@@ -3865,7 +4035,7 @@ struct Index {
 
         Button($r('app.string.common_close'))
           .fontSize(14).height(36).width('40%')
-          .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+          .backgroundColor(this.thm()).fontColor(Color.White)
           .onClick(() => {
             this.showSyncLog = false;
           })
@@ -3923,7 +4093,7 @@ struct Index {
   @Builder
   libMenuAiItem() {
     Row({ space: 14 }) {
-      Image($r('app.media.ic_sparkle')).width(20).height(20).fillColor($r('app.color.brand_primary'))
+      Image($r('app.media.ic_sparkle')).width(20).height(20).fillColor(this.thm())
       Text($r('app.string.ai_intro_book')).fontSize(15).fontColor('#333')
     }
     .width('100%')
@@ -3936,7 +4106,7 @@ struct Index {
   @Builder
   libMenuPlItem() {
     Row({ space: 14 }) {
-      Image($r('app.media.ic_list')).width(20).height(20).fillColor($r('app.color.brand_primary'))
+      Image($r('app.media.ic_list')).width(20).height(20).fillColor(this.thm())
       Text($r('app.string.pl_add')).fontSize(15).fontColor('#333')
     }
     .width('100%')
@@ -3952,7 +4122,7 @@ struct Index {
   @Builder
   libMenuItem(icon: Resource, label: string, status: number) {
     Row({ space: 14 }) {
-      Image(icon).width(20).height(20).fillColor($r('app.color.brand_primary'))
+      Image(icon).width(20).height(20).fillColor(this.thm())
       Text(label).fontSize(15).fontColor('#333')
     }
     .width('100%')
@@ -3970,7 +4140,7 @@ struct Index {
   libMenuStarItem() {
     Row({ space: 14 }) {
       Image(this.libMenuBook()?.star ? $r('app.media.ic_star_border') : $r('app.media.ic_star'))
-        .width(20).height(20).fillColor($r('app.color.brand_primary'))
+        .width(20).height(20).fillColor(this.thm())
       Text(this.libMenuBook()?.star ? $r('app.string.menu_unstar') : $r('app.string.menu_star'))
         .fontSize(15).fontColor('#333')
     }
@@ -4089,7 +4259,7 @@ struct Index {
           Column() {
             ForEach(this.plList, (p: PlaylistMeta) => {
               Row() {
-                Text('\u25B6').fontSize(14).fontColor($r('app.color.brand_primary'))
+                Text('\u25B6').fontSize(14).fontColor(this.thm())
                 Text(p.name)
                   .fontSize(14).fontColor('#333').layoutWeight(1)
                   .margin({ left: 10 }).maxLines(1)
@@ -4117,7 +4287,7 @@ struct Index {
             })
           Button($r('app.string.pl_new_add'))
             .fontSize(12).height(36)
-            .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+            .backgroundColor(this.thm()).fontColor(Color.White)
             .onClick(() => {
               const err = createPlaylist(getContext(this), this.plPickName);
               if (err.length > 0) {
@@ -4167,7 +4337,7 @@ struct Index {
           Column() {
             ForEach(this.plList, (p: PlaylistMeta) => {
               Row() {
-                Text('\u25B6').fontSize(14).fontColor($r('app.color.brand_primary'))
+                Text('\u25B6').fontSize(14).fontColor(this.thm())
                 Text(p.name)
                   .fontSize(14).fontColor('#333').layoutWeight(1)
                   .margin({ left: 10 }).maxLines(1)
@@ -4193,7 +4363,7 @@ struct Index {
             })
           Button($r('app.string.common_create'))
             .fontSize(12).height(36)
-            .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+            .backgroundColor(this.thm()).fontColor(Color.White)
             .onClick(() => {
               const err = createPlaylist(getContext(this), this.plNewName);
               if (err.length > 0) {
@@ -4251,12 +4421,12 @@ struct Index {
                     this.plOpenPath(path);
                   })
                 Text('\u2191')
-                  .fontSize(14).fontColor($r('app.color.brand_primary')).padding(6)
+                  .fontSize(14).fontColor(this.thm()).padding(6)
                   .onClick(() => {
                     this.plMoveItem(idx, -1);
                   })
                 Text('\u2193')
-                  .fontSize(14).fontColor($r('app.color.brand_primary')).padding(6)
+                  .fontSize(14).fontColor(this.thm()).padding(6)
                   .onClick(() => {
                     this.plMoveItem(idx, 1);
                   })
@@ -4322,7 +4492,7 @@ struct Index {
       }
       .width('100%').height(170)
       .justifyContent(FlexAlign.Center)
-      .linearGradient({ angle: 135, colors: [[$r('app.color.brand_primary'), 0.0], ['#5C6BC0', 1.0]] })
+      .linearGradient({ angle: 135, colors: [[this.thm(), 0.0], ['#5C6BC0', 1.0]] })
 
       /* nav items: 最近阅读 / 书库 / 我的文件 / 网上书库 / 书签笔记 */
       Column({ space: 0 }) {
@@ -4347,9 +4517,11 @@ struct Index {
 
       Divider().color(this.settings.theme > 0 ? '#333' : '#e0e0e0')
 
-      /* bottom bar: 设置选项 / 软件说明 / 晚上模式 / 退出 */
+      /* bottom bar: 设置选项 / 软件说明 / 晚上模式 / 退出 (Round 7: prefs entry optional) */
       Row() {
-        this.drawerBottomButton($r('app.media.ic_settings'), this.L($r('app.string.drawer_settings')), 0)
+        if (this.settings.showPrefsInDrawer) {
+          this.drawerBottomButton($r('app.media.ic_settings'), this.L($r('app.string.drawer_settings')), 0)
+        }
         this.drawerBottomButton($r('app.media.ic_info'), this.L($r('app.string.drawer_about')), 1)
         this.drawerBottomButton($r('app.media.ic_brightness'), this.L($r('app.string.drawer_night')), 2)
         this.drawerBottomButton($r('app.media.ic_close'), this.L($r('app.string.common_exit')), 3)
@@ -4365,7 +4537,7 @@ struct Index {
   @Builder
   drawerNavItem(icon: Resource, label: string, target: number) {
     Row({ space: 10 }) {
-      Image(icon).width(20).height(20).fillColor(this.settings.theme > 0 ? '#ddd' : $r('app.color.brand_primary'))
+      Image(icon).width(20).height(20).fillColor(this.settings.theme > 0 ? '#ddd' : this.thm())
       Text(label).fontSize(14).fontColor(this.drawerFg())
     }
     .width('100%').height(48)
@@ -4389,7 +4561,7 @@ struct Index {
   @Builder
   drawerBottomButton(icon: Resource, label: string, kind: number) {
     Column({ space: 2 }) {
-      Image(icon).width(18).height(18).fillColor(this.settings.theme > 0 ? '#ddd' : $r('app.color.brand_primary'))
+      Image(icon).width(18).height(18).fillColor(this.settings.theme > 0 ? '#ddd' : this.thm())
       Text(label).fontSize(10).fontColor(this.settings.theme > 0 ? '#999' : '#666')
     }
     .layoutWeight(1)
@@ -4498,14 +4670,14 @@ struct Index {
       Row({ space: 8 }) {
         Button(this.netSection === 0 ? $r('app.string.opds_star_title') : $r('app.string.opds_title'))
           .fontSize(12).height(30).layoutWeight(1)
-          .backgroundColor(this.netSection === 0 ? $r('app.color.brand_primary') : '#e0e0e0')
+          .backgroundColor(this.netSection === 0 ? this.thm() : '#e0e0e0')
           .fontColor(this.netSection === 0 ? Color.White : '#333')
           .onClick(() => {
             this.netSection = 0;
           })
         Button(this.netSection === 1 ? '\u2605 WebDAV' : 'WebDAV')
           .fontSize(12).height(30).layoutWeight(1)
-          .backgroundColor(this.netSection === 1 ? $r('app.color.brand_primary') : '#e0e0e0')
+          .backgroundColor(this.netSection === 1 ? this.thm() : '#e0e0e0')
           .fontColor(this.netSection === 1 ? Color.White : '#333')
           .onClick(() => {
             this.netSection = 1;
@@ -4555,7 +4727,7 @@ struct Index {
                   this.opdsUrl = v;
                 })
               Button($r('app.string.common_open'))
-                .fontSize(12).height(34).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+                .fontSize(12).height(34).backgroundColor(this.thm()).fontColor(Color.White)
                 .onClick(() => {
                   this.opdsOpen(this.opdsUrl);
                 })
@@ -4629,7 +4801,7 @@ struct Index {
 
       Button(this.webdavConnecting ? 'Connecting...' : 'Connect')
         .width('90%').height(34).margin({ top: 8 })
-        .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+        .backgroundColor(this.thm()).fontColor(Color.White)
         .onClick(() => {
           this.webdavConnect();
         })
@@ -4692,43 +4864,6 @@ struct Index {
     .width('100%').layoutWeight(1)
   }
 
-  /** Modal overlay: about (软件说明). */
-  @Builder
-  buildAboutOverlay() {
-    Column() {
-      Row() {
-        Text($r('app.string.drawer_about'))
-          .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333').layoutWeight(1)
-        Text('\u2716')
-          .fontSize(18).fontColor('#888').width(36).height(36).textAlign(TextAlign.Center)
-          .onClick(() => {
-            this.activeOverlay = 0;
-          })
-      }
-      .width('100%').padding({ left: 12, right: 6, top: 8 })
-      Divider().color('#eee')
-      Column({ space: 8 }) {
-        Text($r('app.string.about_brand'))
-          .fontSize(20).fontWeight(FontWeight.Bold).fontColor('#333')
-        Text($r('app.string.about_version'))
-          .fontSize(13).fontColor('#666')
-        Text($r('app.string.about_based'))
-          .fontSize(12).fontColor('#999')
-        Text($r('app.string.about_engine'))
-          .fontSize(12).fontColor('#999')
-        Text($r('app.string.drawer_tagline'))
-          .fontSize(15).fontColor($r('app.color.brand_primary')).margin({ top: 10 })
-      }
-      .width('100%')
-      .padding(20)
-      .alignItems(HorizontalAlign.Center)
-    }
-    .width('86%')
-    .backgroundColor('#ffffff')
-    .borderRadius(12)
-    .align(Alignment.Center)
-  }
-
   /** Modal overlay: create a new folder in the current browse dir. */
   @Builder
   buildNewFolderOverlay() {
@@ -4749,7 +4884,7 @@ struct Index {
             this.activeOverlay = 0;
           })
         Button($r('app.string.common_create'))
-          .fontSize(13).height(36).layoutWeight(1).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+          .fontSize(13).height(36).layoutWeight(1).backgroundColor(this.thm()).fontColor(Color.White)
           .onClick(() => {
             this.confirmNewFolder();
             this.activeOverlay = 0;
@@ -4837,7 +4972,7 @@ struct Index {
             this.activeOverlay = 0;
           })
         Button($r('app.string.common_ok'))
-          .fontSize(13).height(36).layoutWeight(1).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+          .fontSize(13).height(36).layoutWeight(1).backgroundColor(this.thm()).fontColor(Color.White)
           .onClick(() => {
             this.confirmRename();
             this.activeOverlay = 0;
@@ -4874,7 +5009,7 @@ struct Index {
 
       Button($r('app.string.common_unlock'))
         .fontSize(14).height(40).width('70%').margin({ top: 16 })
-        .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+        .backgroundColor(this.thm()).fontColor(Color.White)
         .onClick(() => {
           this.tryUnlock();
         })
@@ -4964,7 +5099,7 @@ struct Index {
       } else {
         /* folder browser: breadcrumb bar (home / up / path / view) */
         Row({ space: 6 }) {
-          Button('\u2302').fontSize(14).width(40).height(32).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+          Button('\u2302').fontSize(14).width(40).height(32).backgroundColor(this.thm()).fontColor(Color.White)
             .onClick(() => {
               this.browseHome();
             })
@@ -5052,7 +5187,7 @@ struct Index {
       /* bottom action row */
       Row({ space: 8 }) {
         Button($r('app.string.browse_new_folder'))
-          .fontSize(12).height(34).layoutWeight(1).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+          .fontSize(12).height(34).layoutWeight(1).backgroundColor(this.thm()).fontColor(Color.White)
           .onClick(() => {
             this.showNewFolder = true;
             this.activeOverlay = 4;
@@ -5075,12 +5210,12 @@ struct Index {
   browseSectionHeader(title: string, addKind: number) {
     Row() {
       Text(title)
-        .fontSize(16).fontWeight(FontWeight.Medium).fontColor($r('app.color.brand_primary'))
+        .fontSize(16).fontWeight(FontWeight.Medium).fontColor(this.thm())
       Blank()
       if (addKind > 0) {
         Row({ space: 2 }) {
-          Text('+').fontSize(16).fontColor($r('app.color.brand_primary'))
-          Text($r('app.string.common_add')).fontSize(14).fontColor($r('app.color.brand_primary'))
+          Text('+').fontSize(16).fontColor(this.thm())
+          Text($r('app.string.common_add')).fontSize(14).fontColor(this.thm())
         }
         .onClick(() => {
           if (addKind === 1) {
@@ -5202,7 +5337,7 @@ struct Index {
   browseOpdsRow(s: OpdsServer) {
     Row({ space: 12 }) {
       Image($r('app.media.ic_globe'))
-        .width(24).height(24).fillColor($r('app.color.brand_primary'))
+        .width(24).height(24).fillColor(this.thm())
       Column({ space: 2 }) {
         Text(s.name)
           .fontSize(15).fontColor('#555').maxLines(1)
@@ -5212,7 +5347,7 @@ struct Index {
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
       Image($r('app.media.ic_pencil'))
-        .width(20).height(20).fillColor($r('app.color.brand_primary'))
+        .width(20).height(20).fillColor(this.thm())
         .onClick(() => {
           this.openOpdsEdit(this.opdsServers.indexOf(s));
         })
@@ -5240,7 +5375,7 @@ struct Index {
   browseDavRow(s: DavServer, idx: number) {
     Row({ space: 12 }) {
       Image($r('app.media.ic_cloud'))
-        .width(24).height(24).fillColor($r('app.color.brand_primary'))
+        .width(24).height(24).fillColor(this.thm())
       Column({ space: 2 }) {
         Text(s.name)
           .fontSize(15).fontColor('#555').maxLines(1)
@@ -5250,7 +5385,7 @@ struct Index {
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
       Image($r('app.media.ic_pencil'))
-        .width(20).height(20).fillColor($r('app.color.brand_primary'))
+        .width(20).height(20).fillColor(this.thm())
         .onClick(() => {
           this.openDavEdit(idx);
         })
@@ -5315,7 +5450,7 @@ struct Index {
             })
           Button(this.opdsEditIdx >= 0 ? $r('app.string.common_save') : $r('app.string.common_add'))
             .fontSize(14).height(36)
-            .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+            .backgroundColor(this.thm()).fontColor(Color.White)
             .onClick(() => {
               this.saveOpdsEdit();
             })
@@ -5380,7 +5515,7 @@ struct Index {
         Row({ space: 6 }) {
           Checkbox({ name: 'davTrust' })
             .width(18).height(18)
-            .selectedColor($r('app.color.brand_primary'))
+            .selectedColor(this.thm())
             .select(this.davEditTrusted)
             .onChange((v: boolean) => {
               this.davEditTrusted = v;
@@ -5398,7 +5533,7 @@ struct Index {
             })
           Button(this.davEditIdx >= 0 ? $r('app.string.common_save') : $r('app.string.common_add'))
             .fontSize(14).height(36)
-            .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+            .backgroundColor(this.thm()).fontColor(Color.White)
             .onClick(() => {
               this.saveDavEdit();
             })
@@ -5418,9 +5553,9 @@ struct Index {
   browseEntryRow(icon: Resource, label: string) {
     Row({ space: 14 }) {
       Image(icon)
-        .width(24).height(24).fillColor($r('app.color.brand_primary'))
+        .width(24).height(24).fillColor(this.thm())
       Text(label)
-        .fontSize(16).fontColor($r('app.color.brand_primary'))
+        .fontSize(16).fontColor(this.thm())
         .maxLines(1)
         .layoutWeight(1)
     }
@@ -5437,13 +5572,13 @@ struct Index {
   browseFolderRow(f: LibFolder) {
     Row({ space: 14 }) {
       Image($r('app.media.ic_folder'))
-        .width(26).height(26).fillColor($r('app.color.brand_primary'))
+        .width(26).height(26).fillColor(this.thm())
       Text(f.name)
         .fontSize(16).fontColor('#555')
         .maxLines(1)
         .layoutWeight(1)
       Image($r('app.media.ic_star_border'))
-        .width(20).height(20).fillColor($r('app.color.brand_primary'))
+        .width(20).height(20).fillColor(this.thm())
     }
     .width('94%')
     .padding({ left: 12, right: 12, top: 12, bottom: 12 })
@@ -5493,7 +5628,7 @@ struct Index {
         }, (f: LibFolder) => f.path)
         Row({ space: 14 }) {
           Image($r('app.media.ic_book_open'))
-            .width(24).height(24).fillColor($r('app.color.brand_primary'))
+            .width(24).height(24).fillColor(this.thm())
           Text($r('app.string.browse_imported'))
             .fontSize(16).fontColor('#555')
             .layoutWeight(1)
@@ -5510,9 +5645,9 @@ struct Index {
         this.browseSectionHeader(this.L($r('app.string.common_search')), 0)
         Row({ space: 14 }) {
           Image($r('app.media.ic_db_search'))
-            .width(24).height(24).fillColor($r('app.color.brand_primary'))
+            .width(24).height(24).fillColor(this.thm())
           Text($r('app.string.browse_search_docs'))
-            .fontSize(16).fontColor($r('app.color.brand_primary'))
+            .fontSize(16).fontColor(this.thm())
             .layoutWeight(1)
         }
         .width('94%')
@@ -5679,15 +5814,47 @@ struct Index {
     this.listBrowseDir();
   }
 
-  /** Blue section header bar (Android hr07: 书库设置/常规设置/UI配置). */
+  /* ===================== Round 7: Android-aligned collapsible groups ===================== */
+
+  /** Round 7: collapsible group header bar (Android settings section + expand icon). */
   @Builder
-  settingsSectionBar(title: string) {
-    Text(title)
-      .fontSize(15).fontWeight(FontWeight.Medium).fontColor(Color.White)
-      .width('100%')
-      .padding({ left: 12, top: 9, bottom: 9 })
-      .backgroundColor($r('app.color.brand_primary'))
-      .borderRadius(2)
+  settingsGroupBar(title: string, key: string) {
+    Row({ space: 8 }) {
+      Image($r('app.media.ic_sliders'))
+        .width(18).height(18).fillColor(Color.White)
+      Text(title)
+        .fontSize(15).fontWeight(FontWeight.Medium).fontColor(Color.White)
+        .layoutWeight(1)
+      Image(this.groupExp[key] === true ? $r('app.media.ic_chevron_up') : $r('app.media.ic_chevron_down'))
+        .width(18).height(18).fillColor(Color.White)
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+    .backgroundColor(this.thm())
+    .borderRadius(2)
+    .onClick(() => {
+      this.toggleGroup(key);
+    })
+  }
+
+  /** Round 7: collapsible sub-section bar inside a group (Android nested headers). */
+  @Builder
+  settingsSubBar(title: string, key: string) {
+    Row({ space: 8 }) {
+      Text(title)
+        .fontSize(13).fontWeight(FontWeight.Medium).fontColor(Color.White)
+        .layoutWeight(1)
+      Image(this.groupExp[key] === true ? $r('app.media.ic_chevron_up') : $r('app.media.ic_chevron_down'))
+        .width(16).height(16).fillColor(Color.White)
+    }
+    .width('100%')
+    .padding({ left: 10, right: 10, top: 7, bottom: 7 })
+    .backgroundColor('#7986CB')
+    .borderRadius(2)
+    .margin({ left: 10 })
+    .onClick(() => {
+      this.toggleGroup(key);
+    })
   }
 
   /** Key-value row (Android hr07: label + blue underlined value). */
@@ -5695,14 +5862,101 @@ struct Index {
   settingsKvRow(label: string, value: string) {
     Row() {
       Text(label)
-        .fontSize(14).fontColor('#333').width(120)
+        .fontSize(14).fontColor(this.accentTextColor() ? this.acc() : '#333').width(120)
       Text(value)
-        .fontSize(14).fontColor($r('app.color.brand_primary'))
-        .decoration({ type: TextDecorationType.Underline, color: $r('app.color.brand_primary') })
+        .fontSize(14).fontColor(this.thm())
+        .decoration({ type: TextDecorationType.Underline, color: this.thm() })
         .maxLines(1)
     }
     .width('100%')
     .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+  }
+
+  /** Round 7: KV row that opens the option popup (Android ListPreference).
+   *  Reads the value inside the body (by-value builder params do not refresh). */
+  @Builder
+  settingsKvSheet(label: string, target: string) {
+    Row() {
+      Text(label)
+        .fontSize(14).fontColor(this.accentTextColor() ? this.acc() : '#333').width(120)
+      Text(this.kvValue(target))
+        .fontSize(14).fontColor(this.thm())
+        .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+        .maxLines(1)
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+    .onClick(() => {
+      this.openOptSheet(target);
+    })
+  }
+
+  /** Round 7: label + switch row (Android CheckBox rows).
+   *  Reads the pref inside the body (by-value builder params do not refresh). */
+  @Builder
+  settingsToggleRow(label: string, prefKey: string, hint: string) {
+    Row({ space: 8 }) {
+      Text(label)
+        .fontSize(this.fsp(14)).fontColor(this.accentTextColor() ? this.acc() : '#333')
+        .layoutWeight(1)
+      if (hint.length > 0) {
+        Text(hint).fontSize(10).fontColor('#999')
+      }
+      Toggle({ type: ToggleType.Switch, isOn: this.boolPref(prefKey) })
+        .selectedColor(this.thm())
+        .onChange((v: boolean) => {
+          this.applyBoolPref(prefKey, v);
+        })
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+  }
+
+  /** Round 7: color palette row (Android colorsLine + custom picker).
+   *  Reads settings inline (builder by-value params would not refresh). */
+  @Builder
+  settingsColorRow(label: string, target: number, presets: string[]) {
+    Column({ space: 6 }) {
+      Row({ space: 8 }) {
+        Text(label)
+          .fontSize(this.fsp(14)).fontColor(this.accentTextColor() ? this.acc() : '#333')
+          .layoutWeight(1)
+        Text(target === 0
+          ? (this.settings.themeColor.length > 0 ? this.settings.themeColor : '#3949AB')
+          : (this.settings.accentColor.length > 0 ? this.settings.accentColor : '#03A9F4'))
+          .fontSize(11).fontColor('#999')
+        Text(this.L($r('app.string.set_color_reset')))
+          .fontSize(11).fontColor(this.thm())
+          .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+          .onClick(() => {
+            this.resetColor(target);
+          })
+      }
+      .width('100%')
+      Row({ space: 8 }) {
+        ForEach(presets, (hex: string) => {
+          Circle({ width: 24, height: 24 })
+            .fill(hex)
+            .onClick(() => {
+              this.setColor(target, hex);
+            })
+        }, (hex: string) => `${target}_${hex}`)
+        Circle({ width: 24, height: 24 })
+          .fill(Color.White)
+          .stroke(this.thm())
+          .strokeWidth(1)
+          .onClick(() => {
+            this.colorTarget = target;
+            this.colorHexIn = '';
+            this.showColorPick = true;
+          })
+        Text('+')
+          .fontSize(14).fontColor(this.thm())
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 6, bottom: 6 })
   }
 
   @Builder
@@ -5712,7 +5966,7 @@ struct Index {
         /* ===== 偏好 sub-bar + profile (Android hr07) ===== */
         Row() {
           Text($r('app.string.tab_prefs'))
-            .fontSize(15).fontWeight(FontWeight.Medium).fontColor(Color.White)
+            .fontSize(this.fsp(15)).fontWeight(FontWeight.Medium).fontColor(Color.White)
             .onClick(() => {
               /* hidden diagnostics: tap the title 3 times to toggle the NAPI self-test */
               this.apiTestTaps++;
@@ -5724,11 +5978,10 @@ struct Index {
             })
           Blank()
           Text($r('app.string.drawer_exit_app'))
-            .fontSize(14).fontColor(Color.White)
+            .fontSize(this.fsp(14)).fontColor(Color.White)
             .decoration({ type: TextDecorationType.Underline, color: Color.White })
             .onClick(() => {
-              (getContext(this) as common.UIAbilityContext).terminateSelf();
-              console.info('[Index] Exit app requested from prefs');
+              this.exitApp();
             })
         }
         .width('100%')
@@ -5736,281 +5989,572 @@ struct Index {
         .padding({ left: 12, right: 12 })
         .backgroundColor('#4a5ac0')
 
-        /* 配置文件 row: avatar + name + gear */
+        /* 配置文件 row: avatar letter + profile name + gear (Android profile section) */
         Row({ space: 12 }) {
           Text($r('app.string.drawer_config'))
-            .fontSize(14).fontColor('#333')
+            .fontSize(this.fsp(14)).fontColor('#333')
           Blank()
           Column() {
-            Text('H')
+            Text(getCurrentProfile().length > 0 ? getCurrentProfile().charAt(0).toUpperCase() : 'H')
               .fontSize(18).fontWeight(FontWeight.Bold).fontColor(Color.White)
           }
           .width(42).height(42)
           .justifyContent(FlexAlign.Center)
-          .backgroundColor($r('app.color.brand_primary'))
+          .backgroundColor(this.thm())
           .borderRadius(21)
-          Text('HowRead')
-            .fontSize(15).fontColor($r('app.color.brand_primary'))
-            .decoration({ type: TextDecorationType.Underline, color: $r('app.color.brand_primary') })
+          Text(getCurrentProfile())
+            .fontSize(this.fsp(15)).fontColor(this.thm())
+            .decoration({ type: TextDecorationType.Underline, color: this.thm() })
           Image($r('app.media.ic_settings'))
             .width(22).height(22).fillColor('#00897B')
         }
         .width('100%')
         .padding({ left: 12, right: 12, top: 10, bottom: 2 })
+        .onClick(() => {
+          this.openProfilePanel();
+        })
 
         Text($r('app.string.common_reset'))
-          .fontSize(14).fontColor($r('app.color.brand_primary'))
-          .decoration({ type: TextDecorationType.Underline, color: $r('app.color.brand_primary') })
+          .fontSize(this.fsp(14)).fontColor(this.thm())
+          .decoration({ type: TextDecorationType.Underline, color: this.thm() })
           .width('100%')
           .padding({ left: 12, bottom: 4 })
           .onClick(() => {
             this.settings = defaultSettings();
             saveSettings(getContext(this), this.settings);
+            AppStorage.setOrCreate<string>('themeColorHex', '#3949AB');
+            AppStorage.setOrCreate<string>('accentColorHex', '#03A9F4');
+            AppStorage.setOrCreate<number>('fontScale', 1.0);
+            this.loadTabOrder();
             this.status = '\u5DF2\u91CD\u7F6E\u4E3A\u9ED8\u8BA4\u8BBE\u7F6E';
             console.info('[Index] Settings reset to defaults');
           })
 
-        /* ===== 常规设置: key-value rows ===== */
-        this.settingsSectionBar(this.L($r('app.string.set_general')))
-        this.settingsKvRow(this.L($r('app.string.set_screen')), this.L($r('app.string.set_screen_normal')))
-        this.settingsKvRow(this.L($r('app.string.set_orientation')), this.L($r('app.string.set_system')))
-        this.settingsKvRow(this.L($r('app.string.set_language')), this.L($r('app.string.set_lang_system')))
-        Row() {
-          Text($r('app.string.sync_title'))
-            .fontSize(14).fontColor('#333').width(120)
-          Text(this.syncCfg.enabled
-            ? (this.syncCfg.lastSyncTime.length > 0 ? '\u4E0A\u6B21\uFF1A' + this.syncCfg.lastSyncTime.substring(0, 16).replace('T', ' ') : $r('app.string.set_enabled'))
-            : $r('app.string.set_disabled'))
-            .fontSize(14).fontColor($r('app.color.brand_primary'))
-            .decoration({ type: TextDecorationType.Underline, color: $r('app.color.brand_primary') })
-            .maxLines(1)
-            .layoutWeight(1)
-        }
-        .width('100%')
-        .padding({ left: 12, right: 12, top: 9, bottom: 9 })
-        .onClick(() => {
-          loadSyncConfig(getContext(this)).then((c: SyncConfig) => {
-            this.syncCfg = c;
-            this.syncTestOut = '';
-            this.showSyncDialog = true;
-          });
-        })
-        Row() {
-          Text($r('app.string.set_ai_model'))
-            .fontSize(14).fontColor('#333').width(120)
-          Text(this.aiCfg.model.length > 0 ? this.aiCfg.provider + ' \u00B7 ' + this.aiCfg.model : $r('app.string.set_not_configured'))
-            .fontSize(14).fontColor($r('app.color.brand_primary'))
-            .decoration({ type: TextDecorationType.Underline, color: $r('app.color.brand_primary') })
-            .maxLines(1)
-            .layoutWeight(1)
-        }
-        .width('100%')
-        .padding({ left: 12, right: 12, top: 9, bottom: 9 })
-        .onClick(() => {
-          loadAiConfig(getContext(this)).then((c: AiConfig) => {
-            this.aiCfg = c;
-            this.aiTestIn = '';
-            this.aiTestOut = '';
-            this.aiModels = [];
-            this.showAiDialog = true;
-          });
-        })
+        /* ================= 1. 书库设置 (Android section1) ================= */
+        this.settingsGroupBar(this.L($r('app.string.set_library_group')), 'lib')
+        if (this.groupExp['lib'] === true) {
+          /* --- 格式设置 (Android populateFormats) --- */
+          this.settingsSubBar(this.L($r('app.string.set_formats_group')), 'fmt')
+          if (this.groupExp['fmt'] === true) {
+            Column({ space: 2 }) {
+              ForEach(FORMAT_ROWS, (row: string[]) => {
+                Row({ space: 8 }) {
+                  Text(row[1])
+                    .fontSize(this.fsp(13)).fontColor('#333').layoutWeight(1)
+                  Toggle({ type: ToggleType.Switch, isOn: this.fmtIsOn(row[0]) })
+                    .selectedColor(this.thm())
+                    .onChange((v: boolean) => {
+                      this.fmtToggle(row[0], v);
+                    })
+                }
+                .width('100%')
+                .padding({ left: 22, right: 12, top: 4, bottom: 4 })
+              }, (row: string[]) => `fmt_${row[0]}`)
+            }
+            .width('100%')
+            Text($r('app.string.set_formats_hint'))
+              .fontSize(10).fontColor('#999').width('100%').padding({ left: 22, bottom: 6 })
+          }
 
-        /* ===== Reader settings (sprint E) ===== */
-        this.settingsSectionBar(this.L($r('app.string.set_reading')))
+          /* --- 书库设置 (Android populateLibrarySettings) --- */
+          this.settingsSubBar(this.L($r('app.string.set_library_group')), 'libset')
+          if (this.groupExp['libset'] === true) {
+            this.settingsToggleRow(this.L($r('app.string.set_autoscan')), 'autoScanOnStart', '')
+            this.settingsToggleRow(this.L($r('app.string.set_hide_read')), 'hideReadBooks', '')
+            this.settingsToggleRow(this.L($r('app.string.set_show_desc')), 'showBookDescription', this.L($r('app.string.set_reserved')))
+            this.settingsToggleRow(this.L($r('app.string.set_surname_first')), 'authorSurnameFirst', this.L($r('app.string.set_reserved')))
+            this.settingsToggleRow(this.L($r('app.string.set_skip_nomedia')), 'skipNoMediaFolders', '')
+          }
 
-        // Theme
-        Row({ space: 8 }) {
-          Text($r('app.string.set_theme'))
-            .fontSize(13).fontColor('#555')
-          ForEach(THEME_NAMES, (name: string, idx: number) => {
-            Button(name)
+          /* --- 书库显示配置 (Android libraryDisplayConfig) --- */
+          this.settingsSubBar(this.L($r('app.string.set_lib_display')), 'libdisp')
+          if (this.groupExp['libdisp'] === true) {
+            this.settingsKvSheet(this.L($r('app.string.set_cover_columns')), 'cols')
+            Row({ space: 8 }) {
+              Text(this.L($r('app.string.set_list_cover_size')))
+                .fontSize(this.fsp(13)).fontColor('#555')
+              Slider({ value: this.settings.coverListSize, min: 0, max: 120, step: 4 })
+                .layoutWeight(1)
+                .onChange((value: number, mode: SliderChangeMode) => {
+                  this.settings.coverListSize = value;
+                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                    this.saveNow();
+                  }
+                })
+              Text(this.settings.coverListSize === 0 ? this.L($r('app.string.set_auto')) : '' + this.settings.coverListSize + 'dp')
+                .fontSize(11).fontColor('#777').width(52)
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            Row({ space: 8 }) {
+              Text(this.L($r('app.string.set_grid_cover_size')))
+                .fontSize(this.fsp(13)).fontColor('#555')
+              Slider({ value: this.settings.coverGridSize, min: 0, max: 200, step: 4 })
+                .layoutWeight(1)
+                .onChange((value: number, mode: SliderChangeMode) => {
+                  this.settings.coverGridSize = value;
+                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                    this.saveNow();
+                  }
+                })
+              Text(this.settings.coverGridSize === 0 ? this.L($r('app.string.set_auto')) : '' + this.settings.coverGridSize + 'dp')
+                .fontSize(11).fontColor('#777').width(52)
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            this.settingsToggleRow(this.L($r('app.string.set_show_covers')), 'showBookCovers', '')
+            /* desktop card prefs (Round 6, Android widget rows) */
+            Row({ space: 8 }) {
+              Text($r('app.string.set_card'))
+                .fontSize(this.fsp(13)).fontColor('#555')
+              Button(this.settings.cardSource === 0 ? $r('app.string.sort_recent') : $r('app.string.card_starred'))
+                .fontSize(12).height(32)
+                .backgroundColor(this.thm()).fontColor(Color.White)
+                .onClick(() => {
+                  this.settings.cardSource = this.settings.cardSource === 0 ? 1 : 0;
+                  this.saveNow();
+                })
+              Button('' + this.settings.cardCount + ' \u672C')
+                .fontSize(12).height(32)
+                .backgroundColor('#e0e0e0').fontColor('#333')
+                .onClick(() => {
+                  this.settings.cardCount = this.settings.cardCount >= 3 ? 1 : this.settings.cardCount + 1;
+                  this.saveNow();
+                })
+              Text($r('app.string.set_card_hint'))
+                .fontSize(10).fontColor('#999')
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+          }
+
+          /* --- 封面配置 (Android coversConfig) --- */
+          this.settingsSubBar(this.L($r('app.string.set_covers')), 'cov')
+          if (this.groupExp['cov'] === true) {
+            this.settingsToggleRow(this.L($r('app.string.set_cover_shadow')), 'coverEffect', '')
+            this.settingsToggleRow(this.L($r('app.string.set_cover_crop')), 'cropCovers', '')
+            this.settingsToggleRow(this.L($r('app.string.set_cover_border')), 'coverBorderShadow', '')
+          }
+
+          /* --- 阅读配置 (Android readingConfig) --- */
+          this.settingsSubBar(this.L($r('app.string.set_reading_cfg')), 'read')
+          if (this.groupExp['read'] === true) {
+            this.settingsKvSheet(this.L($r('app.string.set_single_tap')), 'singleTap')
+            this.settingsKvSheet(this.L($r('app.string.set_long_tap')), 'longTap')
+            this.settingsToggleRow(this.L($r('app.string.set_app_lock')), 'appLockEnabled', this.L($r('app.string.set_app_lock_hint')))
+            Row({ space: 8 }) {
+              Text($r('app.string.set_lock_pass'))
+                .fontSize(this.fsp(13)).fontColor('#555')
+              TextInput({ placeholder: $r('app.string.set_lock_pass_hint'), text: this.settings.appLockPass })
+                .fontSize(12).height(32).layoutWeight(1)
+                .onChange((v: string) => {
+                  this.settings.appLockPass = v;
+                  this.saveNow();
+                })
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            this.settingsToggleRow(this.L($r('app.string.pref_biometric')), 'appLockBiometric', this.L($r('app.string.set_biometric_hint')))
+            this.settingsToggleRow(this.L($r('app.string.set_open_last')), 'openLastBook', '')
+            this.settingsToggleRow(this.L($r('app.string.set_always_p1')), 'alwaysPage1', '')
+            this.settingsToggleRow(this.L($r('app.string.set_exit_confirm')), 'showExitDialog', '')
+
+            Text($r('app.string.set_reader_params'))
+              .fontSize(12).fontColor('#999').width('100%').padding({ left: 22, top: 6 })
+            Row({ space: 8 }) {
+              Text($r('app.string.set_default_zoom'))
+                .fontSize(this.fsp(13)).fontColor('#555')
+              Slider({ value: this.settings.zoom, min: 0.5, max: 4, step: 0.25 })
+                .layoutWeight(1)
+                .onChange((value: number, mode: SliderChangeMode) => {
+                  this.settings.zoom = value;
+                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                    this.saveNow();
+                  }
+                })
+              Text(`${Math.round(this.settings.zoom * 100)}%`)
+                .fontSize(11).fontColor('#777').width(40)
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12 })
+            Row({ space: 8 }) {
+              Text($r('app.string.set_page_turn'))
+                .fontSize(this.fsp(13)).fontColor('#555')
+              Button(this.settings.scrollMode === 0 ? $r('app.string.mode_horizontal') : $r('app.string.mode_vertical'))
+                .fontSize(12).height(32)
+                .backgroundColor('#e0e0e0').fontColor('#333')
+                .onClick(() => {
+                  this.settings.scrollMode = this.settings.scrollMode === 0 ? 1 : 0;
+                  this.saveNow();
+                })
+              Button(this.settings.pageMode === 0 ? $r('app.string.page_single') : (this.settings.pageMode === 1 ? $r('app.string.page_double') : $r('app.string.page_music')))
+                .fontSize(12).height(32)
+                .backgroundColor('#e0e0e0').fontColor('#333')
+                .onClick(() => {
+                  this.settings.pageMode = (this.settings.pageMode + 1) % 3;
+                  this.saveNow();
+                })
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12 })
+            Row({ space: 8 }) {
+              Text($r('app.string.reader_brightness'))
+                .fontSize(this.fsp(13)).fontColor('#555')
+              Slider({ value: this.settings.brightness, min: 1, max: 255, step: 4 })
+                .layoutWeight(1)
+                .onChange((value: number, mode: SliderChangeMode) => {
+                  this.settings.brightness = value;
+                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                    this.saveNow();
+                  }
+                })
+              Text(`${Math.round(this.settings.brightness / 2.55)}%`)
+                .fontSize(11).fontColor('#777').width(36)
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12 })
+            Row({ space: 8 }) {
+              Text($r('app.string.reader_autoflip'))
+                .fontSize(this.fsp(13)).fontColor('#555')
+              Button(this.settings.autoFlip ? $r('app.string.common_on') : $r('app.string.common_off'))
+                .fontSize(12).height(32)
+                .backgroundColor(this.settings.autoFlip ? '#2a7' : '#e0e0e0')
+                .fontColor(this.settings.autoFlip ? Color.White : '#333')
+                .onClick(() => {
+                  this.settings.autoFlip = !this.settings.autoFlip;
+                  this.saveNow();
+                })
+              Text(`${this.settings.autoFlipInterval}s`)
+                .fontSize(11).fontColor('#777')
+                .onClick(() => {
+                  this.settings.autoFlipInterval = this.settings.autoFlipInterval >= 5 ? 1 : this.settings.autoFlipInterval + 1;
+                  this.saveNow();
+                })
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12 })
+            Row({ space: 8 }) {
+              Text($r('app.string.set_tts_rate'))
+                .fontSize(this.fsp(13)).fontColor('#555')
+              Slider({ value: this.settings.ttsRate, min: 0.5, max: 2.0, step: 0.1 })
+                .layoutWeight(1)
+                .onChange((value: number, mode: SliderChangeMode) => {
+                  this.settings.ttsRate = value;
+                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                    this.saveNow();
+                  }
+                })
+              Text(`${this.settings.ttsRate.toFixed(1)}x`)
+                .fontSize(11).fontColor('#777').width(36)
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12 })
+            Row({ space: 8 }) {
+              Text($r('app.string.set_tts_pitch'))
+                .fontSize(this.fsp(13)).fontColor('#555')
+              Slider({ value: this.settings.ttsPitch, min: 0.5, max: 2.0, step: 0.1 })
+                .layoutWeight(1)
+                .onChange((value: number, mode: SliderChangeMode) => {
+                  this.settings.ttsPitch = value;
+                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                    this.saveNow();
+                  }
+                })
+              Text(`${this.settings.ttsPitch.toFixed(1)}x`)
+                .fontSize(11).fontColor('#777').width(36)
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12 })
+            Row({ space: 8 }) {
+              Text($r('app.string.set_rsvp'))
+                .fontSize(this.fsp(13)).fontColor('#555')
+              Slider({ value: this.settings.rsvpWpm, min: 100, max: 800, step: 50 })
+                .layoutWeight(1)
+                .onChange((value: number, mode: SliderChangeMode) => {
+                  this.settings.rsvpWpm = value;
+                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                    this.saveNow();
+                  }
+                })
+              Text(`${this.settings.rsvpWpm}`)
+                .fontSize(11).fontColor('#777').width(36)
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12 })
+            Text($r('app.string.set_reflow_typography'))
+              .fontSize(12).fontColor('#999').width('100%').padding({ left: 22, top: 6 })
+            Row({ space: 8 }) {
+              Text($r('app.string.set_font_size'))
+                .fontSize(this.fsp(13)).fontColor('#555')
+              Slider({ value: this.settings.fontSize, min: 10, max: 28, step: 1 })
+                .layoutWeight(1)
+                .onChange((value: number, mode: SliderChangeMode) => {
+                  this.settings.fontSize = value;
+                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                    this.saveNow();
+                  }
+                })
+              Text(`${this.settings.fontSize}`)
+                .fontSize(11).fontColor('#777').width(30)
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12 })
+            Row({ space: 8 }) {
+              Text($r('app.string.set_line_height'))
+                .fontSize(this.fsp(13)).fontColor('#555')
+              Slider({ value: this.settings.lineHeight, min: 1.0, max: 2.5, step: 0.1 })
+                .layoutWeight(1)
+                .onChange((value: number, mode: SliderChangeMode) => {
+                  this.settings.lineHeight = value;
+                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                    this.saveNow();
+                  }
+                })
+              Text(`${this.settings.lineHeight.toFixed(1)}`)
+                .fontSize(11).fontColor('#777').width(30)
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12 })
+            Row({ space: 8 }) {
+              Text($r('app.string.set_margin'))
+                .fontSize(this.fsp(13)).fontColor('#555')
+              Slider({ value: this.settings.margin, min: 0, max: 80, step: 4 })
+                .layoutWeight(1)
+                .onChange((value: number, mode: SliderChangeMode) => {
+                  this.settings.margin = value;
+                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                    this.saveNow();
+                  }
+                })
+              Text(`${this.settings.margin}pt`)
+                .fontSize(11).fontColor('#777').width(36)
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, bottom: 6 })
+          }
+        }
+
+        /* ================= 2. 常规设置 (Android section2) ================= */
+        this.settingsGroupBar(this.L($r('app.string.set_general')), 'gen')
+        if (this.groupExp['gen'] === true) {
+          this.settingsToggleRow(this.L($r('app.string.set_fullscreen')), 'fullscreen', '')
+          this.settingsKvSheet(this.L($r('app.string.set_orientation')), 'orient')
+          this.settingsKvSheet(this.L($r('app.string.set_language')), 'lang')
+          Row() {
+            Text($r('app.string.sync_title'))
+              .fontSize(this.fsp(14)).fontColor('#333').width(120)
+            Text(this.syncCfg.enabled
+              ? (this.syncCfg.lastSyncTime.length > 0 ? '\u4E0A\u6B21\uFF1A' + this.syncCfg.lastSyncTime.substring(0, 16).replace('T', ' ') : $r('app.string.set_enabled'))
+              : $r('app.string.set_disabled'))
+              .fontSize(14).fontColor(this.thm())
+              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+              .maxLines(1)
+              .layoutWeight(1)
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+          .onClick(() => {
+            loadSyncConfig(getContext(this)).then((c: SyncConfig) => {
+              this.syncCfg = c;
+              this.syncTestOut = '';
+              this.showSyncDialog = true;
+            });
+          })
+          Row() {
+            Text($r('app.string.set_ai_model'))
+              .fontSize(this.fsp(14)).fontColor('#333').width(120)
+            Text(this.aiCfg.model.length > 0 ? this.aiCfg.provider + ' \u00B7 ' + this.aiCfg.model : $r('app.string.set_not_configured'))
+              .fontSize(14).fontColor(this.thm())
+              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+              .maxLines(1)
+              .layoutWeight(1)
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+          .onClick(() => {
+            loadAiConfig(getContext(this)).then((c: AiConfig) => {
+              this.aiCfg = c;
+              this.aiTestIn = '';
+              this.aiTestOut = '';
+              this.aiModels = [];
+              this.showAiDialog = true;
+            });
+          })
+          Row({ space: 8 }) {
+            Text($r('app.string.set_reminder'))
+              .fontSize(this.fsp(13)).fontColor('#555')
+            Button(this.settings.readReminderMinutes === 0 ? $r('app.string.common_off') : this.settings.readReminderMinutes + ' \u5206\u949F')
               .fontSize(12).height(32)
-              .backgroundColor(this.settings.theme === idx ? '#2a7' : '#e0e0e0')
-              .fontColor(this.settings.theme === idx ? Color.White : '#333')
+              .backgroundColor(this.settings.readReminderMinutes > 0 ? '#2a7' : '#e0e0e0')
+              .fontColor(this.settings.readReminderMinutes > 0 ? Color.White : '#333')
               .onClick(() => {
-                this.settings.theme = idx;
+                this.settings.readReminderMinutes = this.settings.readReminderMinutes >= 120 ? 0 : (this.settings.readReminderMinutes === 0 ? 30 : this.settings.readReminderMinutes + 30);
                 this.saveNow();
               })
-          }, (name: string, idx: number) => `theme_${idx}`)
-        }
-
-        // Default zoom
-        Row({ space: 8 }) {
-          Text($r('app.string.set_default_zoom'))
-            .fontSize(13).fontColor('#555')
-          Slider({ value: this.settings.zoom, min: 0.5, max: 4, step: 0.25 })
-            .layoutWeight(1)
-            .onChange((value: number, mode: SliderChangeMode) => {
-              this.settings.zoom = value;
-              if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+            Text($r('app.string.set_reminder_hint'))
+              .fontSize(10).fontColor('#999')
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+          Row({ space: 8 }) {
+            Text($r('app.string.set_proxy'))
+              .fontSize(this.fsp(13)).fontColor('#555')
+            Button(this.settings.proxyType === 0 ? $r('app.string.common_off') : (this.settings.proxyType === 1 ? 'HTTP' : 'SOCKS'))
+              .fontSize(12).height(32)
+              .backgroundColor(this.settings.proxyType > 0 ? '#2a7' : '#e0e0e0')
+              .fontColor(this.settings.proxyType > 0 ? Color.White : '#333')
+              .onClick(() => {
+                this.settings.proxyType = (this.settings.proxyType + 1) % 3;
                 this.saveNow();
-              }
-            })
-          Text(`${Math.round(this.settings.zoom * 100)}%`)
-            .fontSize(11).fontColor('#777').width(40)
-        }
-
-        // Scroll mode & page mode
-        Row({ space: 8 }) {
-          Text($r('app.string.set_page_turn'))
-            .fontSize(13).fontColor('#555')
-          Button(this.settings.scrollMode === 0 ? $r('app.string.mode_horizontal') : $r('app.string.mode_vertical'))
-            .fontSize(12).height(32)
-            .backgroundColor('#e0e0e0').fontColor('#333')
-            .onClick(() => {
-              this.settings.scrollMode = this.settings.scrollMode === 0 ? 1 : 0;
-              this.saveNow();
-            })
-          Button(this.settings.pageMode === 0 ? $r('app.string.page_single') : (this.settings.pageMode === 1 ? $r('app.string.page_double') : $r('app.string.page_music')))
-            .fontSize(12).height(32)
-            .backgroundColor('#e0e0e0').fontColor('#333')
-            .onClick(() => {
-              this.settings.pageMode = (this.settings.pageMode + 1) % 3;
-              this.saveNow();
-            })
-        }
-
-        // Brightness
-        Row({ space: 8 }) {
-          Text($r('app.string.reader_brightness'))
-            .fontSize(13).fontColor('#555')
-          Slider({ value: this.settings.brightness, min: 1, max: 255, step: 4 })
-            .layoutWeight(1)
-            .onChange((value: number, mode: SliderChangeMode) => {
-              this.settings.brightness = value;
-              if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+              })
+            if (this.settings.proxyType > 0) {
+              Text(`${this.settings.proxyHost}:${this.settings.proxyPort}`)
+                .fontSize(11).fontColor('#777')
+            }
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+          Row({ space: 8 }) {
+            Text($r('app.string.set_quality'))
+              .fontSize(this.fsp(13)).fontColor('#555')
+            Button(this.settings.renderQuality === 0 ? $r('app.string.quality_fast') : (this.settings.renderQuality === 1 ? $r('app.string.quality_balanced') : $r('app.string.quality_high')))
+              .fontSize(12).height(32)
+              .backgroundColor('#e0e0e0').fontColor('#333')
+              .onClick(() => {
+                this.settings.renderQuality = (this.settings.renderQuality + 1) % 3;
                 this.saveNow();
-              }
-            })
-          Text(`${Math.round(this.settings.brightness / 2.55)}%`)
-            .fontSize(11).fontColor('#777').width(36)
-        }
-
-        // Auto flip
-        Row({ space: 8 }) {
-          Text($r('app.string.reader_autoflip'))
-            .fontSize(13).fontColor('#555')
-          Button(this.settings.autoFlip ? $r('app.string.common_on') : $r('app.string.common_off'))
-            .fontSize(12).height(32)
-            .backgroundColor(this.settings.autoFlip ? '#2a7' : '#e0e0e0')
-            .fontColor(this.settings.autoFlip ? Color.White : '#333')
-            .onClick(() => {
-              this.settings.autoFlip = !this.settings.autoFlip;
-              this.saveNow();
-            })
-          Text(`${this.settings.autoFlipInterval}s`)
-            .fontSize(11).fontColor('#777')
-            .onClick(() => {
-              this.settings.autoFlipInterval = this.settings.autoFlipInterval >= 5 ? 1 : this.settings.autoFlipInterval + 1;
-              this.saveNow();
-            })
-        }
-
-        // TTS rate / pitch / RSVP speed
-        Row({ space: 8 }) {
-          Text($r('app.string.set_tts_rate'))
-            .fontSize(13).fontColor('#555')
-          Slider({ value: this.settings.ttsRate, min: 0.5, max: 2.0, step: 0.1 })
-            .layoutWeight(1)
-            .onChange((value: number, mode: SliderChangeMode) => {
-              this.settings.ttsRate = value;
-              if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+              })
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+          Row({ space: 8 }) {
+            Text($r('app.string.set_flip_anim'))
+              .fontSize(this.fsp(13)).fontColor('#555')
+            Button(this.settings.flipAnimation === 0 ? $r('app.string.anim_slide') : (this.settings.flipAnimation === 1 ? $r('app.string.anim_curl') : $r('app.string.anim_fade')))
+              .fontSize(12).height(32)
+              .backgroundColor('#e0e0e0').fontColor('#333')
+              .onClick(() => {
+                this.settings.flipAnimation = (this.settings.flipAnimation + 1) % 3;
                 this.saveNow();
-              }
-            })
-          Text(`${this.settings.ttsRate.toFixed(1)}x`)
-            .fontSize(11).fontColor('#777').width(36)
+              })
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+          this.settingsToggleRow(this.L($r('app.string.pref_topbar_info')), 'showTopBarInfo', this.L($r('app.string.set_topbar_hint')))
         }
 
-        Row({ space: 8 }) {
-          Text($r('app.string.set_tts_pitch'))
-            .fontSize(13).fontColor('#555')
-          Slider({ value: this.settings.ttsPitch, min: 0.5, max: 2.0, step: 0.1 })
-            .layoutWeight(1)
-            .onChange((value: number, mode: SliderChangeMode) => {
-              this.settings.ttsPitch = value;
-              if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+        /* ================= 3. 备份配置 (Android backupConfig) ================= */
+        this.settingsGroupBar(this.L($r('app.string.set_backup')), 'backup')
+        if (this.groupExp['backup'] === true) {
+          Row({ space: 8 }) {
+            Button($r('app.string.backup_export'))
+              .fontSize(13).height(34).layoutWeight(1)
+              .backgroundColor('#2a7').fontColor(Color.White)
+              .onClick(() => this.doBackup())
+            Button($r('app.string.backup_restore'))
+              .fontSize(13).height(34).layoutWeight(1)
+              .backgroundColor('#ff9800').fontColor(Color.White)
+              .onClick(() => this.doRestore())
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+          if (this.backupText.length > 0) {
+            Text(this.backupText)
+              .fontSize(11).fontColor('#888').textAlign(TextAlign.Center).width('100%')
+          }
+          Column({ space: 4 }) {
+            Text($r('app.string.set_root_folder'))
+              .fontSize(this.fsp(13)).fontColor('#555')
+            TextInput({ placeholder: $r('app.string.set_folder_hint'), text: this.settings.rootFolder })
+              .fontSize(12).height(32)
+              .onChange((v: string) => {
+                this.settings.rootFolder = v;
                 this.saveNow();
-              }
-            })
-          Text(`${this.settings.ttsPitch.toFixed(1)}x`)
-            .fontSize(11).fontColor('#777').width(36)
-        }
-
-        Row({ space: 8 }) {
-          Text($r('app.string.set_rsvp'))
-            .fontSize(13).fontColor('#555')
-          Slider({ value: this.settings.rsvpWpm, min: 100, max: 800, step: 50 })
-            .layoutWeight(1)
-            .onChange((value: number, mode: SliderChangeMode) => {
-              this.settings.rsvpWpm = value;
-              if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+              })
+            Text($r('app.string.set_fonts_folder'))
+              .fontSize(this.fsp(13)).fontColor('#555')
+            TextInput({ placeholder: $r('app.string.set_folder_hint'), text: this.settings.fontsFolder })
+              .fontSize(12).height(32)
+              .onChange((v: string) => {
+                this.settings.fontsFolder = v;
                 this.saveNow();
-              }
-            })
-          Text(`${this.settings.rsvpWpm}`)
-            .fontSize(11).fontColor('#777').width(36)
-        }
-
-        // Reflowable typography
-        Text($r('app.string.set_reflow_typography'))
-          .fontSize(13).fontColor('#555')
-          .margin({ top: 4 })
-
-        Row({ space: 8 }) {
-          Text($r('app.string.set_font_size'))
-            .fontSize(13).fontColor('#555')
-          Slider({ value: this.settings.fontSize, min: 10, max: 28, step: 1 })
-            .layoutWeight(1)
-            .onChange((value: number, mode: SliderChangeMode) => {
-              this.settings.fontSize = value;
-              if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+              })
+            Text($r('app.string.set_dl_folder'))
+              .fontSize(this.fsp(13)).fontColor('#555')
+            TextInput({ placeholder: $r('app.string.set_folder_hint'), text: this.settings.downloadsFolder })
+              .fontSize(12).height(32)
+              .onChange((v: string) => {
+                this.settings.downloadsFolder = v;
                 this.saveNow();
-              }
-            })
-          Text(`${this.settings.fontSize}`)
-            .fontSize(11).fontColor('#777').width(30)
+              })
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+          .alignItems(HorizontalAlign.Start)
         }
 
-        Row({ space: 8 }) {
-          Text($r('app.string.set_line_height'))
-            .fontSize(13).fontColor('#555')
-          Slider({ value: this.settings.lineHeight, min: 1.0, max: 2.5, step: 0.1 })
-            .layoutWeight(1)
-            .onChange((value: number, mode: SliderChangeMode) => {
-              this.settings.lineHeight = value;
-              if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                this.saveNow();
-              }
-            })
-          Text(`${this.settings.lineHeight.toFixed(1)}`)
-            .fontSize(11).fontColor('#777').width(30)
+        /* ================= 4. UI 配置 (Android section4) ================= */
+        this.settingsGroupBar(this.L($r('app.string.set_ui')), 'ui')
+        if (this.groupExp['ui'] === true) {
+          /* --- 主题配置 (Android themeConfig) --- */
+          this.settingsSubBar(this.L($r('app.string.set_theme_cfg')), 'theme')
+          if (this.groupExp['theme'] === true) {
+            Row({ space: 8 }) {
+              Text($r('app.string.set_theme'))
+                .fontSize(this.fsp(13)).fontColor('#555')
+              ForEach(THEME_LABELS, (name: Resource, idx: number) => {
+                Button(name)
+                  .fontSize(12).height(32)
+                  .backgroundColor(this.settings.theme === idx ? '#2a7' : '#e0e0e0')
+                  .fontColor(this.settings.theme === idx ? Color.White : '#333')
+                  .onClick(() => {
+                    this.settings.theme = idx;
+                    this.saveNow();
+                  })
+              }, (name: Resource, idx: number) => `theme_${idx}`)
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            this.settingsColorRow(this.L($r('app.string.set_theme_color')), 0, THEME_PRESETS)
+            this.settingsColorRow(this.L($r('app.string.set_accent_color')), 1, ACCENT_PRESETS)
+            this.settingsToggleRow(this.L($r('app.string.set_accent_text')), 'accentTextColor', '')
+            this.settingsKvSheet(this.L($r('app.string.set_font_scale')), 'fontscale')
+          }
+
+          /* --- 标签栏配置 (Android tabsConfig) --- */
+          this.settingsSubBar(this.L($r('app.string.set_tabs_cfg')), 'tabs')
+          if (this.groupExp['tabs'] === true) {
+            this.settingsToggleRow(this.L($r('app.string.pref_tab_pos')), 'tabPositionTop', this.L($r('app.string.set_tabpos_hint')))
+            this.settingsToggleRow(this.L($r('app.string.set_tab_icon_only')), 'tabIconOnly', '')
+            this.settingsToggleRow(this.L($r('app.string.set_prefs_in_drawer')), 'showPrefsInDrawer', '')
+            Row({ space: 8 }) {
+              Button($r('app.string.set_tabs_edit'))
+                .fontSize(12).height(32).layoutWeight(1)
+                .backgroundColor(this.thm()).fontColor(Color.White)
+                .onClick(() => {
+                  this.openTabsEdit();
+                })
+              Button($r('app.string.set_tabs_reset'))
+                .fontSize(12).height(32).layoutWeight(1)
+                .backgroundColor('#e0e0e0').fontColor('#333')
+                .onClick(() => {
+                  this.settings.tabsOrder = '';
+                  this.saveNow();
+                  this.loadTabOrder();
+                })
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+          }
         }
 
-        Row({ space: 8 }) {
-          Text($r('app.string.set_margin'))
-            .fontSize(13).fontColor('#555')
-          Slider({ value: this.settings.margin, min: 0, max: 80, step: 4 })
-            .layoutWeight(1)
-            .onChange((value: number, mode: SliderChangeMode) => {
-              this.settings.margin = value;
-              if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                this.saveNow();
-              }
-            })
-          Text(`${this.settings.margin}pt`)
-            .fontSize(11).fontColor('#777').width(36)
-        }
-
-        /* ===== UI 配置 (Android hr07) ===== */
-        this.settingsSectionBar(this.L($r('app.string.set_ui')))
+        /* ================= 5. 关于 (Android aboutSoftware row) ================= */
         Row({ space: 12 }) {
           Image($r('app.media.ic_info'))
-            .width(22).height(22).fillColor('#00897B')
+            .width(22).height(22).fillColor(this.thm())
           Text($r('app.string.drawer_about'))
-            .fontSize(15).fontColor('#00897B')
-            .decoration({ type: TextDecorationType.Underline, color: '#00897B' })
+            .fontSize(this.fsp(15)).fontColor(this.thm())
+            .decoration({ type: TextDecorationType.Underline, color: this.thm() })
             .layoutWeight(1)
         }
         .width('100%')
@@ -6018,266 +6562,6 @@ struct Index {
         .onClick(() => {
           this.activeOverlay = 3;
         })
-
-        // ---- Sprint K: System integration settings ----
-        this.settingsSectionBar(this.L($r('app.string.set_integration')))
-
-        /* K2: App lock */
-        Row({ space: 8 }) {
-          Text($r('app.string.set_app_lock'))
-            .fontSize(13).fontColor('#555')
-          Button(this.settings.appLockEnabled ? $r('app.string.common_on') : $r('app.string.common_off'))
-            .fontSize(12).height(32)
-            .backgroundColor(this.settings.appLockEnabled ? '#e57373' : '#e0e0e0')
-            .fontColor(this.settings.appLockEnabled ? Color.White : '#333')
-            .onClick(() => {
-              this.settings.appLockEnabled = !this.settings.appLockEnabled;
-              this.saveNow();
-              console.info(`[Index] App lock: ${this.settings.appLockEnabled}`);
-            })
-          Text($r('app.string.set_app_lock_hint'))
-            .fontSize(10).fontColor('#999')
-        }
-
-        /* Phase 6: app lock passcode */
-        Row({ space: 8 }) {
-          Text($r('app.string.set_lock_pass'))
-            .fontSize(13).fontColor('#555')
-          TextInput({ placeholder: $r('app.string.set_lock_pass_hint'), text: this.settings.appLockPass })
-            .fontSize(12).height(32).layoutWeight(1)
-            .onChange((v: string) => {
-              this.settings.appLockPass = v;
-              this.saveNow();
-            })
-        }
-
-        /* Round 5: biometric unlock toggle */
-        Row({ space: 8 }) {
-          Text($r('app.string.pref_biometric'))
-            .fontSize(13).fontColor('#555')
-          Button(this.settings.appLockBiometric ? $r('app.string.common_on') : $r('app.string.common_off'))
-            .fontSize(12).height(32)
-            .backgroundColor(this.settings.appLockBiometric && biometricAvailable() ? '#2a7' : '#e0e0e0')
-            .fontColor(this.settings.appLockBiometric && biometricAvailable() ? Color.White : '#333')
-            .onClick(() => {
-              if (!biometricAvailable()) {
-                promptAction.showToast({ message: $r('app.string.pref_biometric_na') });
-                return;
-              }
-              this.settings.appLockBiometric = !this.settings.appLockBiometric;
-              this.saveNow();
-              console.info(`[Index] Biometric unlock: ${this.settings.appLockBiometric}`);
-            })
-          Text($r('app.string.set_biometric_hint'))
-            .fontSize(10).fontColor('#999')
-        }
-
-        /* Round 6: screen orientation */
-        Row({ space: 8 }) {
-          Text($r('app.string.set_orientation2'))
-            .fontSize(13).fontColor('#555')
-          Button(this.settings.screenOrientation === 0 ? $r('app.string.orient_auto') : (this.settings.screenOrientation === 1 ? $r('app.string.orient_portrait') : $r('app.string.orient_landscape')))
-            .fontSize(12).height(32)
-            .backgroundColor(this.settings.screenOrientation > 0 ? '#2a7' : '#e0e0e0')
-            .fontColor(this.settings.screenOrientation > 0 ? Color.White : '#333')
-            .onClick(() => {
-              this.settings.screenOrientation = (this.settings.screenOrientation + 1) % 3;
-              this.saveNow();
-              this.applyOrientation();
-              console.info(`[Index] Screen orientation: ${this.settings.screenOrientation}`);
-            })
-          Text($r('app.string.set_orientation_hint'))
-            .fontSize(10).fontColor('#999')
-        }
-
-        /* Round 6: auto scan on startup */
-        Row({ space: 8 }) {
-          Text($r('app.string.set_autoscan'))
-            .fontSize(13).fontColor('#555')
-          Button(this.settings.autoScanOnStart ? $r('app.string.common_on') : $r('app.string.common_off'))
-            .fontSize(12).height(32)
-            .backgroundColor(this.settings.autoScanOnStart ? '#2a7' : '#e0e0e0')
-            .fontColor(this.settings.autoScanOnStart ? Color.White : '#333')
-            .onClick(() => {
-              this.settings.autoScanOnStart = !this.settings.autoScanOnStart;
-              this.saveNow();
-              console.info(`[Index] Auto scan on start: ${this.settings.autoScanOnStart}`);
-            })
-          Text($r('app.string.set_autoscan_hint'))
-            .fontSize(10).fontColor('#999')
-        }
-
-        /* Round 6: cover grid columns */
-        Row({ space: 8 }) {
-          Text($r('app.string.set_cover_columns'))
-            .fontSize(13).fontColor('#555')
-          Button('' + this.settings.coverColumns)
-            .fontSize(12).height(32).width(52)
-            .backgroundColor('#e0e0e0').fontColor('#333')
-            .onClick(() => {
-              this.settings.coverColumns = this.settings.coverColumns >= 4 ? 2 : this.settings.coverColumns + 1;
-              this.saveNow();
-              console.info(`[Index] Cover columns: ${this.settings.coverColumns}`);
-            })
-          Text($r('app.string.set_cover_columns_hint'))
-            .fontSize(10).fontColor('#999')
-        }
-
-        /* Round 6: desktop card prefs */
-        Row({ space: 8 }) {
-          Text($r('app.string.set_card'))
-            .fontSize(13).fontColor('#555')
-          Button(this.settings.cardSource === 0 ? $r('app.string.sort_recent') : $r('app.string.card_starred'))
-            .fontSize(12).height(32)
-            .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
-            .onClick(() => {
-              this.settings.cardSource = this.settings.cardSource === 0 ? 1 : 0;
-              this.saveNow();
-              console.info(`[Index] Card source: ${this.settings.cardSource}`);
-            })
-          Button('' + this.settings.cardCount + ' \u672C')
-            .fontSize(12).height(32)
-            .backgroundColor('#e0e0e0').fontColor('#333')
-            .onClick(() => {
-              this.settings.cardCount = this.settings.cardCount >= 3 ? 1 : this.settings.cardCount + 1;
-              this.saveNow();
-              console.info(`[Index] Card count: ${this.settings.cardCount}`);
-            })
-          Text($r('app.string.set_card_hint'))
-            .fontSize(10).fontColor('#999')
-        }
-
-        /* Round 6: profile management */
-        Row({ space: 8 }) {
-          Text($r('app.string.set_profile'))
-            .fontSize(13).fontColor('#555')
-          Button(getCurrentProfile())
-            .fontSize(12).height(32)
-            .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
-            .onClick(() => {
-              this.openProfilePanel();
-            })
-          Text($r('app.string.prof_hint2'))
-            .fontSize(10).fontColor('#999')
-        }
-
-        /* Phase 6: reading reminder */
-        Row({ space: 8 }) {
-          Text($r('app.string.set_reminder'))
-            .fontSize(13).fontColor('#555')
-          Button(this.settings.readReminderMinutes === 0 ? $r('app.string.common_off') : this.settings.readReminderMinutes + ' \u5206\u949F')
-            .fontSize(12).height(32)
-            .backgroundColor(this.settings.readReminderMinutes > 0 ? '#2a7' : '#e0e0e0')
-            .fontColor(this.settings.readReminderMinutes > 0 ? Color.White : '#333')
-            .onClick(() => {
-              this.settings.readReminderMinutes = this.settings.readReminderMinutes >= 120 ? 0 : (this.settings.readReminderMinutes === 0 ? 30 : this.settings.readReminderMinutes + 30);
-              this.saveNow();
-            })
-          Text($r('app.string.set_reminder_hint'))
-            .fontSize(10).fontColor('#999')
-        }
-
-        /* Round 5: tab bar top/bottom */
-        Row({ space: 8 }) {
-          Text($r('app.string.pref_tab_pos'))
-            .fontSize(13).fontColor('#555')
-          Button(this.settings.tabPositionTop ? $r('app.string.pref_tab_top') : $r('app.string.pref_tab_bottom'))
-            .fontSize(12).height(32)
-            .backgroundColor(this.settings.tabPositionTop ? $r('app.color.brand_primary') : '#e0e0e0')
-            .fontColor(this.settings.tabPositionTop ? Color.White : '#333')
-            .onClick(() => {
-              this.settings.tabPositionTop = !this.settings.tabPositionTop;
-              this.saveNow();
-              console.info(`[Index] Tab position top: ${this.settings.tabPositionTop}`);
-            })
-          Text($r('app.string.set_tabpos_hint'))
-            .fontSize(10).fontColor('#999')
-        }
-
-        /* Round 5: reader top bar clock+battery */
-        Row({ space: 8 }) {
-          Text($r('app.string.pref_topbar_info'))
-            .fontSize(13).fontColor('#555')
-          Button(this.settings.showTopBarInfo ? $r('app.string.common_on') : $r('app.string.common_off'))
-            .fontSize(12).height(32)
-            .backgroundColor(this.settings.showTopBarInfo ? '#2a7' : '#e0e0e0')
-            .fontColor(this.settings.showTopBarInfo ? Color.White : '#333')
-            .onClick(() => {
-              this.settings.showTopBarInfo = !this.settings.showTopBarInfo;
-              this.saveNow();
-              console.info(`[Index] Top bar info: ${this.settings.showTopBarInfo}`);
-            })
-          Text($r('app.string.set_topbar_hint'))
-            .fontSize(10).fontColor('#999')
-        }
-
-        /* K3: Proxy settings */
-        Row({ space: 8 }) {
-          Text($r('app.string.set_proxy'))
-            .fontSize(13).fontColor('#555')
-          Button(this.settings.proxyType === 0 ? $r('app.string.common_off') : (this.settings.proxyType === 1 ? 'HTTP' : 'SOCKS'))
-            .fontSize(12).height(32)
-            .backgroundColor(this.settings.proxyType > 0 ? '#2a7' : '#e0e0e0')
-            .fontColor(this.settings.proxyType > 0 ? Color.White : '#333')
-            .onClick(() => {
-              this.settings.proxyType = (this.settings.proxyType + 1) % 3;
-              this.saveNow();
-              console.info(`[Index] Proxy type: ${this.settings.proxyType}`);
-            })
-          if (this.settings.proxyType > 0) {
-            Text(`${this.settings.proxyHost}:${this.settings.proxyPort}`)
-              .fontSize(11).fontColor('#777')
-          }
-        }
-
-        /* K4: Render quality */
-        Row({ space: 8 }) {
-          Text($r('app.string.set_quality'))
-            .fontSize(13).fontColor('#555')
-          Button(this.settings.renderQuality === 0 ? $r('app.string.quality_fast') : (this.settings.renderQuality === 1 ? $r('app.string.quality_balanced') : $r('app.string.quality_high')))
-            .fontSize(12).height(32)
-            .backgroundColor('#e0e0e0').fontColor('#333')
-            .onClick(() => {
-              this.settings.renderQuality = (this.settings.renderQuality + 1) % 3;
-              this.saveNow();
-              console.info(`[Index] Render quality: ${this.settings.renderQuality}`);
-            })
-        }
-
-        /* K6: Page flip animation */
-        Row({ space: 8 }) {
-          Text($r('app.string.set_flip_anim'))
-            .fontSize(13).fontColor('#555')
-          Button(this.settings.flipAnimation === 0 ? $r('app.string.anim_slide') : (this.settings.flipAnimation === 1 ? $r('app.string.anim_curl') : $r('app.string.anim_fade')))
-            .fontSize(12).height(32)
-            .backgroundColor('#e0e0e0').fontColor('#333')
-            .onClick(() => {
-              this.settings.flipAnimation = (this.settings.flipAnimation + 1) % 3;
-              this.saveNow();
-              console.info(`[Index] Flip animation: ${this.settings.flipAnimation}`);
-            })
-        }
-
-        Divider().color('#ddd')
-
-        // Backup / restore
-        Row({ space: 8 }) {
-          Button($r('app.string.backup_export'))
-            .fontSize(13).height(34).layoutWeight(1)
-            .backgroundColor('#2a7').fontColor(Color.White)
-            .onClick(() => this.doBackup())
-          Button($r('app.string.backup_restore'))
-            .fontSize(13).height(34).layoutWeight(1)
-            .backgroundColor('#ff9800').fontColor(Color.White)
-            .onClick(() => this.doRestore())
-        }
-
-        if (this.backupText.length > 0) {
-          Text(this.backupText)
-            .fontSize(11).fontColor('#888').textAlign(TextAlign.Center).width('100%')
-        }
-
-        Divider().color('#ddd')
 
         /* ===== NAPI self-test (diagnostics, hidden by default; tap 3x on title) ===== */
         if (this.showApiTest) {
@@ -6337,6 +6621,756 @@ struct Index {
     }
     .width('100%')
     .height('100%')
+  }
+
+  /* ===================== Round 7: helpers, dialogs and About ===================== */
+
+  /** Dynamic theme (brand) color from AppStorage (prefs themeColor, '' = default). */
+  private thm(): string {
+    return this.stThemeHex.length > 0 ? this.stThemeHex : '#3949AB';
+  }
+
+  /** Dynamic accent color from AppStorage (prefs accentColor, '' = default). */
+  private acc(): string {
+    return this.stAccentHex.length > 0 ? this.stAccentHex : '#03A9F4';
+  }
+
+  /** Accent used for text highlights (Android isAccentTextColor). */
+  private accentTextColor(): boolean {
+    return this.settings.accentTextColor;
+  }
+
+  /** Global UI font scale for key text sites (Android appFontScale). */
+  private fsp(n: number): number {
+    const k: number = this.stFontScale > 0 ? this.stFontScale : 1.0;
+    return Math.round(n * k);
+  }
+
+  /** Collapse/expand a pref group (reassign the Record so @State notices). */
+  private toggleGroup(key: string): void {
+    const r: Record<string, boolean> = {};
+    const keys: string[] = Object.keys(this.groupExp);
+    for (let i = 0; i < keys.length; i++) {
+      r[keys[i]] = this.groupExp[keys[i]] === true;
+    }
+    r[key] = !(this.groupExp[key] === true);
+    this.groupExp = r;
+  }
+
+  /** Current scan-format whitelist is empty (everything on)? */
+  private fmtIsOn(key: string): boolean {
+    const m: Record<string, boolean> = parseScanFormats(this.settings.scanFormats);
+    const keys: string[] = Object.keys(m);
+    if (keys.length === 0) {
+      return true;
+    }
+    return m[key] !== false;
+  }
+
+  /** Flip one scan-format family and persist (Android AppState.support*). */
+  private fmtToggle(key: string, on: boolean): void {
+    const m: Record<string, boolean> = parseScanFormats(this.settings.scanFormats);
+    m[key] = on;
+    this.settings.scanFormats = JSON.stringify(m);
+    this.saveNow();
+    console.info(`[Index] Scan format ${key}: ${on}`);
+  }
+
+  /** Apply a boolean pref by key (used by the switch rows). */
+  private applyBoolPref(key: string, v: boolean): void {
+    if (key === 'autoScanOnStart') {
+      this.settings.autoScanOnStart = v;
+    } else if (key === 'hideReadBooks') {
+      this.settings.hideReadBooks = v;
+      this.loadLibrary();
+    } else if (key === 'showBookDescription') {
+      this.settings.showBookDescription = v;
+    } else if (key === 'authorSurnameFirst') {
+      this.settings.authorSurnameFirst = v;
+    } else if (key === 'skipNoMediaFolders') {
+      this.settings.skipNoMediaFolders = v;
+    } else if (key === 'showBookCovers') {
+      this.settings.showBookCovers = v;
+    } else if (key === 'coverEffect') {
+      this.settings.coverEffect = v;
+    } else if (key === 'cropCovers') {
+      this.settings.cropCovers = v;
+    } else if (key === 'coverBorderShadow') {
+      this.settings.coverBorderShadow = v;
+    } else if (key === 'appLockEnabled') {
+      this.settings.appLockEnabled = v;
+    } else if (key === 'appLockBiometric') {
+      if (!biometricAvailable()) {
+        promptAction.showToast({ message: $r('app.string.pref_biometric_na') });
+        return;
+      }
+      this.settings.appLockBiometric = v;
+    } else if (key === 'openLastBook') {
+      this.settings.openLastBook = v;
+    } else if (key === 'alwaysPage1') {
+      this.settings.alwaysPage1 = v;
+    } else if (key === 'showExitDialog') {
+      this.settings.showExitDialog = v;
+    } else if (key === 'fullscreen') {
+      this.settings.fullscreen = v;
+      this.applyFullscreen(v);
+    } else if (key === 'accentTextColor') {
+      this.settings.accentTextColor = v;
+    } else if (key === 'tabPositionTop') {
+      this.settings.tabPositionTop = v;
+    } else if (key === 'tabIconOnly') {
+      this.settings.tabIconOnly = v;
+    } else if (key === 'showPrefsInDrawer') {
+      this.settings.showPrefsInDrawer = v;
+    } else if (key === 'showTopBarInfo') {
+      this.settings.showTopBarInfo = v;
+    }
+    this.saveNow();
+    console.info(`[Index] Pref ${key} = ${v}`);
+  }
+
+  /** Fullscreen: hide/show the system status bar (Android fullscreen popup). */
+  private applyFullscreen(on: boolean): void {
+    window.getLastWindow(getContext(this)).then((win: window.Window) => {
+      win.setWindowSystemBarEnable(on ? [] : ['status', 'navigation']).then(() => {
+        console.info(`[Index] Fullscreen ${on}`);
+      }).catch((err: Error) => {
+        console.error('[Index] setWindowSystemBarEnable failed: ' + JSON.stringify(err));
+      });
+    }).catch((err: Error) => {
+      console.error('[Index] getLastWindow failed: ' + JSON.stringify(err));
+    });
+  }
+
+  /** Open an external link / mailto via viewData want (Android Urls.open). */
+  private openExternal(url: string): void {
+    try {
+      const ctx = getContext(this) as common.UIAbilityContext;
+      const want: Want = {
+        action: 'ohos.want.action.viewData',
+        uri: url
+      };
+      ctx.startAbility(want).catch((err: Error) => {
+        console.error('[Index] openExternal failed: ' + JSON.stringify(err));
+        promptAction.showToast({ message: $r('app.string.browser_unavailable') });
+      });
+    } catch (e) {
+      console.error('[Index] openExternal error');
+    }
+  }
+
+  /** Apply in-app language; takes effect on next cold start (SDK limit). */
+  private applyAppLang(v: string): void {
+    try {
+      i18n.System.setAppPreferredLanguage(v === 'zh' ? 'zh-Hans' : (v === 'en' ? 'en-US' : ''));
+      console.info(`[Index] App preferred language: ${v}`);
+    } catch (e) {
+      console.error('[Index] setAppPreferredLanguage failed');
+    }
+    promptAction.showToast({ message: this.L($r('app.string.set_lang_restart')) });
+  }
+
+  /* ---- option popup sheet (Android ListPreference popup) ---- */
+
+  /** Round 7: current display value for an option-sheet KV row. */
+  private kvValue(target: string): string {
+    if (target === 'orient') {
+      return this.orientLabel();
+    }
+    if (target === 'lang') {
+      return this.langLabel();
+    }
+    if (target === 'cols') {
+      return '' + this.settings.coverColumns;
+    }
+    if (target === 'fontscale') {
+      return this.settings.appFontScale.toFixed(1) + 'x';
+    }
+    if (target === 'singleTap') {
+      return this.singleTapLabel();
+    }
+    if (target === 'longTap') {
+      return this.longTapLabel();
+    }
+    return '';
+  }
+
+  /** Round 7: current value of a boolean pref (switch rows read this live). */
+  private boolPref(key: string): boolean {
+    if (key === 'autoScanOnStart') {
+      return this.settings.autoScanOnStart;
+    }
+    if (key === 'hideReadBooks') {
+      return this.settings.hideReadBooks;
+    }
+    if (key === 'showBookDescription') {
+      return this.settings.showBookDescription;
+    }
+    if (key === 'authorSurnameFirst') {
+      return this.settings.authorSurnameFirst;
+    }
+    if (key === 'skipNoMediaFolders') {
+      return this.settings.skipNoMediaFolders;
+    }
+    if (key === 'showBookCovers') {
+      return this.settings.showBookCovers;
+    }
+    if (key === 'coverEffect') {
+      return this.settings.coverEffect;
+    }
+    if (key === 'cropCovers') {
+      return this.settings.cropCovers;
+    }
+    if (key === 'coverBorderShadow') {
+      return this.settings.coverBorderShadow;
+    }
+    if (key === 'appLockEnabled') {
+      return this.settings.appLockEnabled;
+    }
+    if (key === 'appLockBiometric') {
+      return this.settings.appLockBiometric && biometricAvailable();
+    }
+    if (key === 'openLastBook') {
+      return this.settings.openLastBook;
+    }
+    if (key === 'alwaysPage1') {
+      return this.settings.alwaysPage1;
+    }
+    if (key === 'showExitDialog') {
+      return this.settings.showExitDialog;
+    }
+    if (key === 'fullscreen') {
+      return this.settings.fullscreen;
+    }
+    if (key === 'accentTextColor') {
+      return this.settings.accentTextColor;
+    }
+    if (key === 'tabPositionTop') {
+      return this.settings.tabPositionTop;
+    }
+    if (key === 'tabIconOnly') {
+      return this.settings.tabIconOnly;
+    }
+    if (key === 'showPrefsInDrawer') {
+      return this.settings.showPrefsInDrawer;
+    }
+    if (key === 'showTopBarInfo') {
+      return this.settings.showTopBarInfo;
+    }
+    return false;
+  }
+
+  private openOptSheet(target: string): void {
+    this.optTarget = target;
+    if (target === 'orient') {
+      this.optTitle = this.L($r('app.string.set_orientation'));
+      this.optLabels = [this.L($r('app.string.orient_auto')), this.L($r('app.string.orient_portrait')), this.L($r('app.string.orient_landscape'))];
+      this.optSel = this.settings.screenOrientation;
+    } else if (target === 'lang') {
+      this.optTitle = this.L($r('app.string.set_language'));
+      this.optLabels = [this.L($r('app.string.set_lang_system')), '\u4E2D\u6587', 'English'];
+      this.optSel = this.settings.appLang === 'zh' ? 1 : (this.settings.appLang === 'en' ? 2 : 0);
+    } else if (target === 'cols') {
+      this.optTitle = this.L($r('app.string.set_cover_columns'));
+      this.optLabels = ['1', '2', '3', '4', '5', '6', '7', '8'];
+      this.optSel = Math.max(1, Math.min(8, this.settings.coverColumns)) - 1;
+    } else if (target === 'fontscale') {
+      this.optTitle = this.L($r('app.string.set_font_scale'));
+      this.optLabels = ['0.7x', '0.8x', '0.9x', '1.0x', '1.1x', '1.2x', '1.3x', '1.4x', '1.5x', '1.6x', '1.7x', '1.8x', '1.9x', '2.0x'];
+      const idx: number = Math.round((this.settings.appFontScale - 0.7) / 0.1);
+      this.optSel = Math.max(0, Math.min(13, idx));
+    } else if (target === 'singleTap') {
+      this.optTitle = this.L($r('app.string.set_single_tap'));
+      this.optLabels = [this.L($r('app.string.set_single_tap_page')), this.L($r('app.string.set_single_tap_menu')), this.L($r('app.string.set_action_none'))];
+      this.optSel = this.settings.singleTapAction;
+    } else if (target === 'longTap') {
+      this.optTitle = this.L($r('app.string.set_long_tap'));
+      this.optLabels = [this.L($r('app.string.set_long_tap_select')), this.L($r('app.string.set_long_tap_info')), this.L($r('app.string.set_single_tap_menu')), this.L($r('app.string.set_action_none'))];
+      this.optSel = this.settings.longTapAction;
+    }
+    this.showOptSheet = true;
+  }
+
+  private applyOptSel(idx: number): void {
+    const t: string = this.optTarget;
+    this.optSel = idx;
+    if (t === 'orient') {
+      this.settings.screenOrientation = idx;
+      this.saveNow();
+      this.applyOrientation();
+    } else if (t === 'lang') {
+      const vals: string[] = ['', 'zh', 'en'];
+      this.settings.appLang = vals[idx];
+      this.saveNow();
+      this.applyAppLang(vals[idx]);
+    } else if (t === 'cols') {
+      this.settings.coverColumns = idx + 1;
+      this.saveNow();
+    } else if (t === 'fontscale') {
+      this.settings.appFontScale = 0.7 + idx * 0.1;
+      AppStorage.setOrCreate<number>('fontScale', this.settings.appFontScale);
+      this.saveNow();
+    } else if (t === 'singleTap') {
+      this.settings.singleTapAction = idx;
+      this.saveNow();
+    } else if (t === 'longTap') {
+      this.settings.longTapAction = idx;
+      this.saveNow();
+    }
+    this.showOptSheet = false;
+  }
+
+  private orientLabel(): string {
+    return this.settings.screenOrientation === 0 ? this.L($r('app.string.orient_auto'))
+      : this.settings.screenOrientation === 1 ? this.L($r('app.string.orient_portrait'))
+        : this.L($r('app.string.orient_landscape'));
+  }
+
+  private langLabel(): string {
+    return this.settings.appLang === 'zh' ? '\u4E2D\u6587'
+      : this.settings.appLang === 'en' ? 'English'
+        : this.L($r('app.string.set_lang_system'));
+  }
+
+  private singleTapLabel(): string {
+    return this.settings.singleTapAction === 0 ? this.L($r('app.string.set_single_tap_page'))
+      : this.settings.singleTapAction === 1 ? this.L($r('app.string.set_single_tap_menu'))
+        : this.L($r('app.string.set_action_none'));
+  }
+
+  private longTapLabel(): string {
+    return this.settings.longTapAction === 0 ? this.L($r('app.string.set_long_tap_select'))
+      : this.settings.longTapAction === 1 ? this.L($r('app.string.set_long_tap_info'))
+        : this.settings.longTapAction === 2 ? this.L($r('app.string.set_single_tap_menu'))
+          : this.L($r('app.string.set_action_none'));
+  }
+
+  @Builder
+  buildOptSheet() {
+    Column({ space: 8 }) {
+      Text(this.optTitle)
+        .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333')
+        .width('100%')
+      List({ space: 2 }) {
+        ForEach(this.optLabels, (label: string, idx: number) => {
+          ListItem() {
+            Row({ space: 8 }) {
+              Text(label)
+                .fontSize(14).fontColor(this.optSel === idx ? this.thm() : '#333')
+                .layoutWeight(1)
+              if (this.optSel === idx) {
+                Image($r('app.media.ic_check'))
+                  .width(18).height(18).fillColor(this.thm())
+              }
+            }
+            .width('100%')
+            .padding({ left: 10, right: 10, top: 10, bottom: 10 })
+            .borderRadius(6)
+            .backgroundColor(this.optSel === idx ? '#f0f2ff' : '#fafafa')
+            .onClick(() => {
+              this.applyOptSel(idx);
+            })
+          }
+        }, (label: string, idx: number) => `opt_${idx}_${label}`)
+      }
+      .width('100%')
+      .height(Math.min(320, this.optLabels.length * 46 + 8))
+      Button($r('app.string.common_cancel'))
+        .fontSize(13).height(36).width('100%')
+        .backgroundColor('#e0e0e0').fontColor('#333')
+        .onClick(() => {
+          this.showOptSheet = false;
+        })
+    }
+    .width('72%')
+    .padding(14)
+    .backgroundColor('#ffffff')
+    .borderRadius(12)
+  }
+
+  /* ---- color picker (Android HSVColorPickerDialog, simplified to presets + hex) ---- */
+
+  private setColor(target: number, hex: string): void {
+    const v: string = hex.toUpperCase();
+    if (target === 0) {
+      this.settings.themeColor = v;
+      AppStorage.setOrCreate<string>('themeColorHex', v);
+    } else {
+      this.settings.accentColor = v;
+      AppStorage.setOrCreate<string>('accentColorHex', v);
+    }
+    this.saveNow();
+    console.info(`[Index] Color target ${target} = ${v}`);
+  }
+
+  private resetColor(target: number): void {
+    if (target === 0) {
+      this.settings.themeColor = '';
+      AppStorage.setOrCreate<string>('themeColorHex', '#3949AB');
+    } else {
+      this.settings.accentColor = '';
+      AppStorage.setOrCreate<string>('accentColorHex', '#03A9F4');
+    }
+    this.saveNow();
+  }
+
+  private confirmColorHex(): void {
+    const v: string = this.colorHexIn.trim().toUpperCase();
+    if (!/^#[0-9A-F]{6}$/.test(v)) {
+      promptAction.showToast({ message: $r('app.string.set_color_invalid') });
+      return;
+    }
+    this.setColor(this.colorTarget, v);
+    this.showColorPick = false;
+  }
+
+  @Builder
+  buildColorPick() {
+    Column({ space: 10 }) {
+      Text(this.colorTarget === 0 ? this.L($r('app.string.set_theme_color')) : this.L($r('app.string.set_accent_color')))
+        .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333')
+        .width('100%')
+      TextInput({ placeholder: $r('app.string.set_color_hex_hint'), text: this.colorHexIn })
+        .fontSize(13).height(36).width('100%')
+        .onChange((v: string) => {
+          this.colorHexIn = v;
+        })
+      Row({ space: 12 }) {
+        Button($r('app.string.common_cancel'))
+          .fontSize(13).height(36).layoutWeight(1)
+          .backgroundColor('#e0e0e0').fontColor('#333')
+          .onClick(() => {
+            this.showColorPick = false;
+          })
+        Button($r('app.string.common_ok'))
+          .fontSize(13).height(36).layoutWeight(1)
+          .backgroundColor(this.thm()).fontColor(Color.White)
+          .onClick(() => {
+            this.confirmColorHex();
+          })
+      }
+      .width('100%')
+    }
+    .width('72%')
+    .padding(14)
+    .backgroundColor('#ffffff')
+    .borderRadius(12)
+  }
+
+  /* ---- tab order editor (Android DragLinearLayout + apply) ---- */
+
+  private openTabsEdit(): void {
+    const d: number[] = [];
+    for (let i = 0; i < this.tabDisplay.length; i++) {
+      d.push(this.tabDisplay[i]);
+    }
+    this.tabsDraft = d;
+    this.showTabsEdit = true;
+  }
+
+  private moveTabDraft(from: number, to: number): void {
+    if (from === to || from < 0 || to < 0 || from >= this.tabsDraft.length || to >= this.tabsDraft.length) {
+      return;
+    }
+    const arr: number[] = this.tabsDraft.slice();
+    const v: number = arr[from];
+    arr.splice(from, 1);
+    arr.splice(to, 0, v);
+    this.tabsDraft = arr;
+  }
+
+  private tabArrow(idx: number, dir: number): void {
+    this.moveTabDraft(idx, idx + dir);
+  }
+
+  private applyTabsOrder(): void {
+    this.settings.tabsOrder = JSON.stringify(this.tabsDraft);
+    this.saveNow();
+    this.loadTabOrder();
+    this.showTabsEdit = false;
+    console.info(`[Index] Tabs order applied: ${this.settings.tabsOrder}`);
+  }
+
+  /** Load the tab display order from prefs (fallback 0,1,2,3). */
+  private loadTabOrder(): void {
+    let order: number[] = [0, 1, 2, 3];
+    try {
+      if (this.settings.tabsOrder.length > 0) {
+        const arr: number[] = JSON.parse(this.settings.tabsOrder) as number[];
+        if (arr.length === 4) {
+          let ok = true;
+          let mask = 0;
+          for (let i = 0; i < 4; i++) {
+            if (arr[i] < 0 || arr[i] > 3 || (mask & (1 << arr[i])) !== 0) {
+              ok = false;
+              break;
+            }
+            mask = mask | (1 << arr[i]);
+          }
+          if (ok) {
+            order = arr;
+          }
+        }
+      }
+    } catch (e) {
+      order = [0, 1, 2, 3];
+    }
+    this.tabDisplay = order;
+    if (this.tabPos >= 4) {
+      this.tabPos = 0;
+    }
+    console.info(`[Index] Tab order: ${order[0]},${order[1]},${order[2]},${order[3]}`);
+  }
+
+  private tabIndexOf(id: number): number {
+    for (let i = 0; i < this.tabDisplay.length; i++) {
+      if (this.tabDisplay[i] === id) {
+        return i;
+      }
+    }
+    return id;
+  }
+
+  /** Tabs onChange: display position -> tab id. */
+  private onTabPos(pos: number): void {
+    this.tabPos = pos;
+    const id: number = this.tabDisplay[pos] !== undefined ? this.tabDisplay[pos] : pos;
+    this.currentTab = id;
+    const names: string[] = [this.L($r('app.string.tab_home')), this.L($r('app.string.tab_library')), this.L($r('app.string.tab_my_files')), this.L($r('app.string.tab_prefs'))];
+    this.topTitle = names[id];
+    if (id === 0) {
+      this.loadStats();
+    }
+    console.info(`[Index] Tab position ${pos} -> tab ${id}`);
+  }
+
+  @Builder
+  buildTabsEdit() {
+    Column({ space: 10 }) {
+      Text($r('app.string.set_tabs_edit'))
+        .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333')
+        .width('100%')
+      List({ space: 6 }) {
+        ForEach(this.tabsDraft, (id: number, idx: number) => {
+          ListItem() {
+            Row({ space: 10 }) {
+              Image($r('app.media.ic_drag'))
+                .width(18).height(18).fillColor('#999')
+              Image(TAB_ICONS[id])
+                .width(20).height(20).fillColor(this.thm())
+              Text(TAB_NAMES[id])
+                .fontSize(14).fontColor('#333')
+                .layoutWeight(1)
+              Image($r('app.media.ic_chevron_up'))
+                .width(20).height(20).fillColor('#888')
+                .onClick(() => {
+                  this.tabArrow(idx, -1);
+                })
+              Image($r('app.media.ic_chevron_down'))
+                .width(20).height(20).fillColor('#888')
+                .onClick(() => {
+                  this.tabArrow(idx, 1);
+                })
+            }
+            .width('100%')
+            .padding(10)
+            .backgroundColor('#fafafa')
+            .borderRadius(6)
+          }
+        }, (id: number) => `tab_${id}`)
+      }
+      .width('100%')
+      .height(220)
+      .onItemMove((from: number, to: number) => {
+        this.moveTabDraft(from, to);
+        return true;
+      })
+      Row({ space: 12 }) {
+        Button($r('app.string.common_cancel'))
+          .fontSize(13).height(36).layoutWeight(1)
+          .backgroundColor('#e0e0e0').fontColor('#333')
+          .onClick(() => {
+            this.showTabsEdit = false;
+          })
+        Button($r('app.string.set_tabs_apply'))
+          .fontSize(13).height(36).layoutWeight(1)
+          .backgroundColor(this.thm()).fontColor(Color.White)
+          .onClick(() => {
+            this.applyTabsOrder();
+          })
+      }
+      .width('100%')
+    }
+    .width('78%')
+    .padding(14)
+    .backgroundColor('#ffffff')
+    .borderRadius(12)
+  }
+
+  /* ---- exit confirmation (Android isShowCloseAppDialog) ---- */
+
+  @Builder
+  buildExitConfirm() {
+    Column({ space: 12 }) {
+      Text($r('app.string.exit_confirm_title'))
+        .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333')
+      Text($r('app.string.exit_confirm_msg'))
+        .fontSize(13).fontColor('#555')
+      Row({ space: 12 }) {
+        Button($r('app.string.common_cancel'))
+          .fontSize(13).height(36).layoutWeight(1)
+          .backgroundColor('#e0e0e0').fontColor('#333')
+          .onClick(() => {
+            this.showExitConfirm = false;
+          })
+        Button($r('app.string.common_ok'))
+          .fontSize(13).height(36).layoutWeight(1)
+          .backgroundColor('#e57373').fontColor(Color.White)
+          .onClick(() => {
+            this.showExitConfirm = false;
+            try {
+              (getContext(this) as common.UIAbilityContext).terminateSelf();
+            } catch (e) {
+              console.error('[Index] exit failed');
+            }
+          })
+      }
+      .width('100%')
+    }
+    .width('72%')
+    .padding(14)
+    .backgroundColor('#ffffff')
+    .borderRadius(12)
+  }
+
+  /* ---- open-source licenses viewer (Android assets/licenses.html) ---- */
+
+  @Builder
+  buildLicenses() {
+    Column({ space: 8 }) {
+      Row() {
+        Text($r('app.string.about_licenses'))
+          .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333').layoutWeight(1)
+        Text('\u2716')
+          .fontSize(18).fontColor('#888').width(36).height(36).textAlign(TextAlign.Center)
+          .onClick(() => {
+            this.showLicenses = false;
+          })
+      }
+      .width('100%')
+      Web({ src: $rawfile('licenses.html'), controller: this.licWebCtl })
+        .width('100%')
+        .layoutWeight(1)
+    }
+    .width('90%')
+    .height('82%')
+    .padding(10)
+    .backgroundColor('#ffffff')
+    .borderRadius(12)
+  }
+
+  /** Version pill text (Android section6: "App: v1.2.3 build <time>"). */
+  private appVersionLabel(): string {
+    return 'HowRead: v' + this.appVersion + ' build ' + BUILD_TIME;
+  }
+
+  /** Modal overlay: about (软件说明, Android about_section.xml parity). */
+  @Builder
+  buildAboutOverlay() {
+    Column() {
+      Row() {
+        Text($r('app.string.drawer_about'))
+          .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333').layoutWeight(1)
+        Text('\u2716')
+          .fontSize(18).fontColor('#888').width(36).height(36).textAlign(TextAlign.Center)
+          .onClick(() => {
+            this.activeOverlay = 0;
+          })
+      }
+      .width('100%').padding({ left: 12, right: 6, top: 8 })
+      Divider().color('#eee')
+      Scroll() {
+        Column({ space: 10 }) {
+          /* version pill */
+          Text(this.appVersionLabel())
+            .fontSize(13).fontColor(Color.White)
+            .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+            .backgroundColor(this.thm())
+            .borderRadius(16)
+          /* app description */
+          Text($r('app.string.app_description'))
+            .fontSize(13).fontColor('#555')
+            .textAlign(TextAlign.Center)
+            .padding({ left: 8, right: 8 })
+          /* version row */
+          Text('v' + this.appVersion)
+            .fontSize(12).fontColor('#888')
+          /* what's new link */
+          Text($r('app.string.about_whatnew'))
+            .fontSize(14).fontColor(this.thm())
+            .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+            .onClick(() => {
+              this.openExternal(WHATSNEW_URL);
+            })
+          Divider().color('#eee')
+          /* GPL + licenses */
+          Row({ space: 8 }) {
+            Text($r('app.string.about_gpl'))
+              .fontSize(12).fontColor('#555')
+            Text($r('app.string.about_licenses'))
+              .fontSize(12).fontColor(this.thm())
+              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+              .onClick(() => {
+                this.showLicenses = true;
+              })
+          }
+          .justifyContent(FlexAlign.Center)
+          .width('100%')
+          /* support email */
+          Row({ space: 8 }) {
+            Text($r('app.string.about_support'))
+              .fontSize(12).fontColor('#555')
+            Text(SUPPORT_MAIL)
+              .fontSize(12).fontColor(this.thm())
+              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+              .onClick(() => {
+                this.openExternal('mailto:' + SUPPORT_MAIL);
+              })
+          }
+          .justifyContent(FlexAlign.Center)
+          .width('100%')
+          /* home page */
+          Row({ space: 8 }) {
+            Text($r('app.string.about_homepage'))
+              .fontSize(12).fontColor('#555')
+            Text('HowRead \u597D\u597D\u8BFB')
+              .fontSize(12).fontColor(this.thm())
+              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+              .onClick(() => {
+                this.openExternal(HOME_URL);
+              })
+          }
+          .justifyContent(FlexAlign.Center)
+          .width('100%')
+          /* fork footnote + tagline */
+          Text($r('app.string.fork_of_librera'))
+            .fontSize(11).fontColor('#999')
+            .textAlign(TextAlign.Center)
+          Text($r('app.string.drawer_tagline'))
+            .fontSize(15).fontColor(this.thm())
+        }
+        .width('100%')
+        .padding(16)
+        .alignItems(HorizontalAlign.Center)
+      }
+      .width('100%')
+      .height(360)
+      .align(Alignment.Top)
+    }
+    .width('86%')
+    .backgroundColor('#ffffff')
+    .borderRadius(12)
+    .align(Alignment.Center)
   }
 
   // ---- NAPI self-test (runs once on launch, results shown in Settings tab) ----

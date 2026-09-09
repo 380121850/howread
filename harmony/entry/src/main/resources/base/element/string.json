@@ -1815,6 +1815,258 @@
     {
       "name": "view_shelf",
       "value": "Shelf"
+    },
+    {
+      "name": "set_library_group",
+      "value": "Library settings"
+    },
+    {
+      "name": "set_formats_group",
+      "value": "Formats"
+    },
+    {
+      "name": "set_formats_hint",
+      "value": "Only filters scanning/import; decoding ability is unchanged"
+    },
+    {
+      "name": "set_lib_display",
+      "value": "Library display"
+    },
+    {
+      "name": "set_covers",
+      "value": "Book covers"
+    },
+    {
+      "name": "set_reading_cfg",
+      "value": "Reading"
+    },
+    {
+      "name": "set_backup",
+      "value": "Backup"
+    },
+    {
+      "name": "set_theme_cfg",
+      "value": "Theme"
+    },
+    {
+      "name": "set_tabs_cfg",
+      "value": "Tabs"
+    },
+    {
+      "name": "set_theme_light",
+      "value": "Light"
+    },
+    {
+      "name": "set_theme_dark",
+      "value": "Dark"
+    },
+    {
+      "name": "set_theme_oled",
+      "value": "OLED"
+    },
+    {
+      "name": "set_theme_ink",
+      "value": "Ink"
+    },
+    {
+      "name": "set_theme_color",
+      "value": "Theme color"
+    },
+    {
+      "name": "set_accent_color",
+      "value": "Accent color"
+    },
+    {
+      "name": "set_accent_text",
+      "value": "Use accent for text"
+    },
+    {
+      "name": "set_font_scale",
+      "value": "Font scale"
+    },
+    {
+      "name": "set_color_reset",
+      "value": "Reset"
+    },
+    {
+      "name": "set_color_hex_hint",
+      "value": "#RRGGBB"
+    },
+    {
+      "name": "set_color_invalid",
+      "value": "Invalid color (use #RRGGBB)"
+    },
+    {
+      "name": "set_single_tap",
+      "value": "Single tap"
+    },
+    {
+      "name": "set_long_tap",
+      "value": "Long press"
+    },
+    {
+      "name": "set_single_tap_page",
+      "value": "Page turn"
+    },
+    {
+      "name": "set_single_tap_menu",
+      "value": "Toggle menu"
+    },
+    {
+      "name": "set_action_none",
+      "value": "No action"
+    },
+    {
+      "name": "set_long_tap_select",
+      "value": "Text selection"
+    },
+    {
+      "name": "set_long_tap_info",
+      "value": "File info"
+    },
+    {
+      "name": "set_open_last",
+      "value": "Open last book on start"
+    },
+    {
+      "name": "set_always_p1",
+      "value": "Always open on page 1"
+    },
+    {
+      "name": "set_exit_confirm",
+      "value": "Confirm before exit"
+    },
+    {
+      "name": "set_show_desc",
+      "value": "Show book description"
+    },
+    {
+      "name": "set_reserved",
+      "value": "reserved"
+    },
+    {
+      "name": "set_surname_first",
+      "value": "Author surname first"
+    },
+    {
+      "name": "set_skip_nomedia",
+      "value": "Skip .nomedia folders"
+    },
+    {
+      "name": "set_hide_read",
+      "value": "Hide read books"
+    },
+    {
+      "name": "set_list_cover_size",
+      "value": "List cover size"
+    },
+    {
+      "name": "set_grid_cover_size",
+      "value": "Grid cover size"
+    },
+    {
+      "name": "set_auto",
+      "value": "Auto"
+    },
+    {
+      "name": "set_show_covers",
+      "value": "Show book covers"
+    },
+    {
+      "name": "set_cover_shadow",
+      "value": "Cover shadow effect"
+    },
+    {
+      "name": "set_cover_crop",
+      "value": "Crop covers"
+    },
+    {
+      "name": "set_cover_border",
+      "value": "Cover border & shadow"
+    },
+    {
+      "name": "set_fullscreen",
+      "value": "Fullscreen"
+    },
+    {
+      "name": "set_root_folder",
+      "value": "Storage root folder"
+    },
+    {
+      "name": "set_fonts_folder",
+      "value": "Fonts folder"
+    },
+    {
+      "name": "set_dl_folder",
+      "value": "Downloads folder"
+    },
+    {
+      "name": "set_folder_hint",
+      "value": "Enter a path; empty = default"
+    },
+    {
+      "name": "set_tab_icon_only",
+      "value": "Icons only"
+    },
+    {
+      "name": "set_prefs_in_drawer",
+      "value": "Preferences entry in drawer"
+    },
+    {
+      "name": "set_tabs_edit",
+      "value": "Edit tab order"
+    },
+    {
+      "name": "set_tabs_apply",
+      "value": "Apply"
+    },
+    {
+      "name": "set_tabs_reset",
+      "value": "Default order"
+    },
+    {
+      "name": "set_lang_restart",
+      "value": "Language applies after restart"
+    },
+    {
+      "name": "set_reader_params",
+      "value": "Reader defaults"
+    },
+    {
+      "name": "exit_confirm_title",
+      "value": "Exit"
+    },
+    {
+      "name": "exit_confirm_msg",
+      "value": "Exit HowRead now?"
+    },
+    {
+      "name": "about_whatnew",
+      "value": "What's new"
+    },
+    {
+      "name": "about_gpl",
+      "value": "GNU GPL v3"
+    },
+    {
+      "name": "about_licenses",
+      "value": "Licenses for libraries"
+    },
+    {
+      "name": "about_support",
+      "value": "Support:"
+    },
+    {
+      "name": "about_homepage",
+      "value": "Home page:"
+    },
+    {
+      "name": "app_description",
+      "value": "An open-source e-book reader focused on personal reading experience"
+    },
+    {
+      "name": "fork_of_librera",
+      "value": "This is a HarmonyOS port fork of Librera Reader"
     }
   ]
 }

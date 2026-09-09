@@ -1807,6 +1807,258 @@
     {
       "name": "view_shelf",
       "value": "书架"
+    },
+    {
+      "name": "set_library_group",
+      "value": "书库设置"
+    },
+    {
+      "name": "set_formats_group",
+      "value": "格式设置"
+    },
+    {
+      "name": "set_formats_hint",
+      "value": "仅过滤扫描与导入，不影响解码能力"
+    },
+    {
+      "name": "set_lib_display",
+      "value": "书库显示配置"
+    },
+    {
+      "name": "set_covers",
+      "value": "封面配置"
+    },
+    {
+      "name": "set_reading_cfg",
+      "value": "阅读配置"
+    },
+    {
+      "name": "set_backup",
+      "value": "备份配置"
+    },
+    {
+      "name": "set_theme_cfg",
+      "value": "主题配置"
+    },
+    {
+      "name": "set_tabs_cfg",
+      "value": "标签栏配置"
+    },
+    {
+      "name": "set_theme_light",
+      "value": "浅色"
+    },
+    {
+      "name": "set_theme_dark",
+      "value": "深色"
+    },
+    {
+      "name": "set_theme_oled",
+      "value": "OLED"
+    },
+    {
+      "name": "set_theme_ink",
+      "value": "墨"
+    },
+    {
+      "name": "set_theme_color",
+      "value": "主题色"
+    },
+    {
+      "name": "set_accent_color",
+      "value": "强调色"
+    },
+    {
+      "name": "set_accent_text",
+      "value": "强调色用于文字"
+    },
+    {
+      "name": "set_font_scale",
+      "value": "字体缩放"
+    },
+    {
+      "name": "set_color_reset",
+      "value": "恢复默认"
+    },
+    {
+      "name": "set_color_hex_hint",
+      "value": "#RRGGBB"
+    },
+    {
+      "name": "set_color_invalid",
+      "value": "颜色格式无效（需 #RRGGBB）"
+    },
+    {
+      "name": "set_single_tap",
+      "value": "单击动作"
+    },
+    {
+      "name": "set_long_tap",
+      "value": "长按动作"
+    },
+    {
+      "name": "set_single_tap_page",
+      "value": "翻页"
+    },
+    {
+      "name": "set_single_tap_menu",
+      "value": "切换菜单"
+    },
+    {
+      "name": "set_action_none",
+      "value": "无操作"
+    },
+    {
+      "name": "set_long_tap_select",
+      "value": "选择文本"
+    },
+    {
+      "name": "set_long_tap_info",
+      "value": "文件信息"
+    },
+    {
+      "name": "set_open_last",
+      "value": "启动时打开最后一本书"
+    },
+    {
+      "name": "set_always_p1",
+      "value": "总是从第 1 页打开"
+    },
+    {
+      "name": "set_exit_confirm",
+      "value": "退出确认对话框"
+    },
+    {
+      "name": "set_show_desc",
+      "value": "显示书籍描述"
+    },
+    {
+      "name": "set_reserved",
+      "value": "预留"
+    },
+    {
+      "name": "set_surname_first",
+      "value": "作者姓氏在前"
+    },
+    {
+      "name": "set_skip_nomedia",
+      "value": "跳过 .nomedia 目录"
+    },
+    {
+      "name": "set_hide_read",
+      "value": "隐藏已读书籍"
+    },
+    {
+      "name": "set_list_cover_size",
+      "value": "列表封面大小"
+    },
+    {
+      "name": "set_grid_cover_size",
+      "value": "网格封面大小"
+    },
+    {
+      "name": "set_auto",
+      "value": "自动"
+    },
+    {
+      "name": "set_show_covers",
+      "value": "显示书籍封面"
+    },
+    {
+      "name": "set_cover_shadow",
+      "value": "封面阴影效果"
+    },
+    {
+      "name": "set_cover_crop",
+      "value": "裁剪封面"
+    },
+    {
+      "name": "set_cover_border",
+      "value": "封面边框和阴影"
+    },
+    {
+      "name": "set_fullscreen",
+      "value": "全屏"
+    },
+    {
+      "name": "set_root_folder",
+      "value": "存储根目录"
+    },
+    {
+      "name": "set_fonts_folder",
+      "value": "字体目录"
+    },
+    {
+      "name": "set_dl_folder",
+      "value": "下载目录"
+    },
+    {
+      "name": "set_folder_hint",
+      "value": "输入路径，留空使用默认"
+    },
+    {
+      "name": "set_tab_icon_only",
+      "value": "仅显示图标"
+    },
+    {
+      "name": "set_prefs_in_drawer",
+      "value": "抽屉显示偏好入口"
+    },
+    {
+      "name": "set_tabs_edit",
+      "value": "编辑标签顺序"
+    },
+    {
+      "name": "set_tabs_apply",
+      "value": "应用"
+    },
+    {
+      "name": "set_tabs_reset",
+      "value": "恢复默认顺序"
+    },
+    {
+      "name": "set_lang_restart",
+      "value": "语言将在重启应用后生效"
+    },
+    {
+      "name": "set_reader_params",
+      "value": "阅读器默认参数"
+    },
+    {
+      "name": "exit_confirm_title",
+      "value": "退出应用"
+    },
+    {
+      "name": "exit_confirm_msg",
+      "value": "确定要退出 HowRead 吗？"
+    },
+    {
+      "name": "about_whatnew",
+      "value": "更新日志"
+    },
+    {
+      "name": "about_gpl",
+      "value": "GNU GPL v3"
+    },
+    {
+      "name": "about_licenses",
+      "value": "开源许可"
+    },
+    {
+      "name": "about_support",
+      "value": "支持："
+    },
+    {
+      "name": "about_homepage",
+      "value": "主页："
+    },
+    {
+      "name": "app_description",
+      "value": "一个专注于个人阅读体验的开源电子书阅读软件"
+    },
+    {
+      "name": "fork_of_librera",
+      "value": "基于 Librera Reader 的鸿蒙移植版"
     }
   ]
 }

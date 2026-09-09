@@ -7,6 +7,12 @@ import { addNote, AiNote } from '../model/Notes';
  * 发送给AI page (Android hr13): editable selected text + optional question +
  * AI answer area + 保存到笔记. Opened from the Reader selection menu (action 6).
  */
+/** Round 7: dynamic theme color shared via AppStorage (prefs themeColor). */
+function thmColor(): string {
+  const c: string | undefined = AppStorage.get<string>('themeColorHex');
+  return c !== undefined && c.length > 0 ? c : '#3949AB';
+}
+
 @Entry
 @Component
 struct AiChat {
@@ -149,7 +155,7 @@ struct AiChat {
           Row({ space: 10 }) {
             Button($r('app.string.aichat_send'))
               .fontSize(14).height(38)
-              .backgroundColor(this.busy ? '#9fa8da' : $r('app.color.brand_primary')).fontColor(Color.White)
+              .backgroundColor(this.busy ? '#9fa8da' : thmColor()).fontColor(Color.White)
               .layoutWeight(1)
               .onClick(() => {
                 this.send();
@@ -171,7 +177,7 @@ struct AiChat {
           Column() {
             if (this.busy) {
               Row({ space: 8 }) {
-                LoadingProgress().width(22).height(22).color($r('app.color.brand_primary'))
+                LoadingProgress().width(22).height(22).color(thmColor())
                 Text($r('app.string.ai_requesting')).fontSize(13).fontColor('#777')
               }
             } else if (this.answer.length > 0) {

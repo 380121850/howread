@@ -16,6 +16,63 @@ import { RecentBook } from './ReadingProgress';
 /** File extensions treated as books during the device scan. */
 const BOOK_EXTS: string[] = ['pdf', 'epub', 'txt', 'html', 'htm', 'mobi', 'fb2', 'docx', 'rtf', 'md', 'cbz'];
 
+/** Round 7: scan-format families (Android AppState.support* -> ExtUtils.seachExts).
+ *  The whitelist only filters scanning/import, never decoding ability. */
+export const FORMAT_KEYS: string[] =
+  ['pdf', 'epub', 'fb2', 'txtmd', 'mobi', 'djvu', 'xps', 'doc', 'rtf', 'odt', 'cbz', 'zip', 'html'];
+
+const FORMAT_EXTS: Record<string, string[]> = {
+  'pdf': ['pdf'],
+  'epub': ['epub'],
+  'fb2': ['fb2'],
+  'txtmd': ['txt', 'md'],
+  'mobi': ['mobi', 'azw', 'azw3', 'prc'],
+  'djvu': ['djvu', 'djv'],
+  'xps': ['xps', 'oxps'],
+  'doc': ['doc', 'docx'],
+  'rtf': ['rtf'],
+  'odt': ['odt'],
+  'cbz': ['cbz', 'cbr'],
+  'zip': ['zip'],
+  'html': ['html', 'htm']
+};
+
+/** Parse the persisted whitelist JSON; an empty string = no filter (all allowed). */
+export function parseScanFormats(json: string): Record<string, boolean> {
+  const r: Record<string, boolean> = {};
+  if (json.length === 0) {
+    return r;
+  }
+  try {
+    const o: object = JSON.parse(json) as object;
+    const m: Record<string, boolean> = o as Record<string, boolean>;
+    const keys: string[] = Object.keys(o);
+    for (let i = 0; i < keys.length; i++) {
+      r[keys[i]] = m[keys[i]] === true;
+    }
+  } catch (e) {
+    return {};
+  }
+  return r;
+}
+
+/** Is `ext` allowed under the whitelist? Empty map = everything allowed. */
+export function isExtAllowed(ext: string, fmt: Record<string, boolean>): boolean {
+  const keys: string[] = Object.keys(fmt);
+  if (keys.length === 0) {
+    return true;
+  }
+  const e: string = ext.toLowerCase();
+  const fkeys: string[] = Object.keys(FORMAT_EXTS);
+  for (let i = 0; i < fkeys.length; i++) {
+    const exts: string[] = FORMAT_EXTS[fkeys[i]];
+    if (exts.indexOf(e) >= 0) {
+      return fmt[fkeys[i]] !== false;
+    }
+  }
+  return true; /* unknown family: not filtered */
+}
+
 /** Per-book page cap for full-text search (keeps huge PDFs bounded). */
 const SEARCH_PAGE_CAP: number = 300;
 
@@ -34,16 +91,17 @@ export interface LibSearchHit {
   excerpt: string;
 }
 
-function hasBookExt(name: string): boolean {
+function hasBookExt(name: string, fmt: Record<string, boolean>): boolean {
   const dot: number = name.lastIndexOf('.');
   if (dot < 0 || dot === name.length - 1) {
     return false;
   }
   const ext: string = name.substring(dot + 1).toLowerCase();
-  return BOOK_EXTS.indexOf(ext) >= 0;
+  return BOOK_EXTS.indexOf(ext) >= 0 && isExtAllowed(ext, fmt);
 }
 
-function listBooksInDir(dir: string, out: ScanHit[], depth: number, maxDepth: number): void {
+function listBooksInDir(dir: string, out: ScanHit[], depth: number, maxDepth: number,
+  fmt: Record<string, boolean>, skipNoMedia: boolean): void {
   if (depth > maxDepth) {
     return;
   }
@@ -52,6 +110,9 @@ function listBooksInDir(dir: string, out: ScanHit[], depth: number, maxDepth: nu
     names = fs.listFileSync(dir);
   } catch (e) {
     return; /* unreadable/forbidden dir — skip silently */
+  }
+  if (skipNoMedia && names.indexOf('.nomedia') >= 0) {
+    return; /* Android semantics: folder marked with .nomedia is skipped */
   }
   for (let i = 0; i < names.length; i++) {
     const full: string = dir.endsWith('/') ? dir + names[i] : dir + '/' + names[i];
@@ -62,8 +123,8 @@ function listBooksInDir(dir: string, out: ScanHit[], depth: number, maxDepth: nu
       continue;
     }
     if (isDir) {
-      listBooksInDir(full, out, depth + 1, maxDepth);
-    } else if (hasBookExt(names[i])) {
+      listBooksInDir(full, out, depth + 1, maxDepth, fmt, skipNoMedia);
+    } else if (hasBookExt(names[i], fmt)) {
       out.push({ path: full, name: names[i] });
     }
   }
@@ -73,8 +134,11 @@ function listBooksInDir(dir: string, out: ScanHit[], depth: number, maxDepth: nu
  * Scan well-known folders for book files. Directories that cannot be listed
  * (platform sandbox limits) are skipped; the result contains whatever was
  * reachable. External paths are attempted before the app sandbox ones.
+ * `fmt` (Round 7) is the optional scan-format whitelist; `skipNoMedia`
+ * skips folders marked with a .nomedia file.
  */
-export function scanDeviceBooks(ctx: Context, maxDepth: number = 3): ScanHit[] {
+export function scanDeviceBooks(ctx: Context, maxDepth: number = 3,
+  fmt: Record<string, boolean> = {}, skipNoMedia: boolean = true): ScanHit[] {
   const candidates: string[] = [
     '/storage/emulated/0/Download',
     '/storage/emulated/0/Documents',
@@ -84,7 +148,7 @@ export function scanDeviceBooks(ctx: Context, maxDepth: number = 3): ScanHit[] {
   ];
   const out: ScanHit[] = [];
   for (let i = 0; i < candidates.length; i++) {
-    listBooksInDir(candidates[i], out, 0, maxDepth);
+    listBooksInDir(candidates[i], out, 0, maxDepth, fmt, skipNoMedia);
   }
   return out;
 }

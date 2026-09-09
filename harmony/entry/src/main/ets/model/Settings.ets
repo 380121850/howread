@@ -101,6 +101,60 @@ export interface ReaderSettings {
   cardCount: number;
   /** In-app language: ''=system, 'zh', 'en' (restart to apply) */
   appLang: string;
+
+  /* ---- Round 7: Android-aligned preferences (PrefFragment2) ---- */
+  /** Scan/import whitelist, JSON map ext->bool; '' = defaults (all known formats) */
+  scanFormats: string;
+  /** Cover width cap in list views, dp (40..120; 0 = auto) */
+  coverListSize: number;
+  /** Cover width cap in the cover grid, dp (40..200; 0 = fill the cell) */
+  coverGridSize: number;
+  /** Show cover images in the library (false = plain title blocks) */
+  showBookCovers: boolean;
+  /** Cover drop-shadow effect */
+  coverEffect: boolean;
+  /** Crop covers to fill the frame (Cover) instead of fit (Contain) */
+  cropCovers: boolean;
+  /** Cover border + shadow frame */
+  coverBorderShadow: boolean;
+  /** Show the book description under its title (library rows) */
+  showBookDescription: boolean;
+  /** Author surname first (reserved: scan metadata not yet extracted) */
+  authorSurnameFirst: boolean;
+  /** Skip folders containing .nomedia during scans */
+  skipNoMediaFolders: boolean;
+  /** Reader single tap: 0=page turn, 1=toggle scroll mode, 2=none */
+  singleTapAction: number;
+  /** Reader long press: 0=file info, 1=bookmark menu, 2=none */
+  longTapAction: number;
+  /** Open the most recent book on launch */
+  openLastBook: boolean;
+  /** Always open books on page 1 (ignore saved progress) */
+  alwaysPage1: boolean;
+  /** Confirm before exiting the app */
+  showExitDialog: boolean;
+  /** Fullscreen: hide the system status bar */
+  fullscreen: boolean;
+  /** Global UI font scale 0.7..2.0 (applied to key text sites) */
+  appFontScale: number;
+  /** Theme (brand) color hex like '#3949AB'; '' = resource default */
+  themeColor: string;
+  /** Accent color hex like '#FF4081'; '' = resource default */
+  accentColor: string;
+  /** Use the accent color for text highlights */
+  accentTextColor: boolean;
+  /** Tab label style: false = icon+name, true = icons only */
+  tabIconOnly: boolean;
+  /** Show the preferences entry in the left drawer */
+  showPrefsInDrawer: boolean;
+  /** Tab display order, JSON array of tab indexes; '' = default 0,1,2,3 */
+  tabsOrder: string;
+  /** Library storage root ('' = default /sdcard/HowRead) */
+  rootFolder: string;
+  /** Fonts folder for reflow typography ('' = none) */
+  fontsFolder: string;
+  /** Downloads folder for fetched books ('' = default Download/HowRead) */
+  downloadsFolder: string;
 }
 
 const PREF_NAME = 'librera_settings';
@@ -161,7 +215,33 @@ export function defaultSettings(): ReaderSettings {
     coverColumns: 3,
     cardSource: 0,
     cardCount: 3,
-    appLang: ''
+    appLang: '',
+    scanFormats: '',
+    coverListSize: 0,
+    coverGridSize: 0,
+    showBookCovers: true,
+    coverEffect: false,
+    cropCovers: true,
+    coverBorderShadow: false,
+    showBookDescription: false,
+    authorSurnameFirst: false,
+    skipNoMediaFolders: true,
+    singleTapAction: 0,
+    longTapAction: 0,
+    openLastBook: false,
+    alwaysPage1: false,
+    showExitDialog: false,
+    fullscreen: false,
+    appFontScale: 1.0,
+    themeColor: '',
+    accentColor: '',
+    accentTextColor: false,
+    tabIconOnly: false,
+    showPrefsInDrawer: true,
+    tabsOrder: '',
+    rootFolder: '',
+    fontsFolder: '',
+    downloadsFolder: ''
   };
 }
 
@@ -217,7 +297,33 @@ export async function loadSettings(ctx: Context): Promise<ReaderSettings> {
       coverColumns: typeof r.coverColumns === 'number' ? r.coverColumns : d.coverColumns,
       cardSource: typeof r.cardSource === 'number' ? r.cardSource : d.cardSource,
       cardCount: typeof r.cardCount === 'number' ? r.cardCount : d.cardCount,
-      appLang: typeof r.appLang === 'string' ? r.appLang : d.appLang
+      appLang: typeof r.appLang === 'string' ? r.appLang : d.appLang,
+      scanFormats: typeof r.scanFormats === 'string' ? r.scanFormats : d.scanFormats,
+      coverListSize: typeof r.coverListSize === 'number' ? r.coverListSize : d.coverListSize,
+      coverGridSize: typeof r.coverGridSize === 'number' ? r.coverGridSize : d.coverGridSize,
+      showBookCovers: r.showBookCovers !== false,
+      coverEffect: r.coverEffect === true,
+      cropCovers: r.cropCovers !== false,
+      coverBorderShadow: r.coverBorderShadow === true,
+      showBookDescription: r.showBookDescription === true,
+      authorSurnameFirst: r.authorSurnameFirst === true,
+      skipNoMediaFolders: r.skipNoMediaFolders !== false,
+      singleTapAction: typeof r.singleTapAction === 'number' ? r.singleTapAction : d.singleTapAction,
+      longTapAction: typeof r.longTapAction === 'number' ? r.longTapAction : d.longTapAction,
+      openLastBook: r.openLastBook === true,
+      alwaysPage1: r.alwaysPage1 === true,
+      showExitDialog: r.showExitDialog === true,
+      fullscreen: r.fullscreen === true,
+      appFontScale: typeof r.appFontScale === 'number' ? r.appFontScale : d.appFontScale,
+      themeColor: typeof r.themeColor === 'string' ? r.themeColor : d.themeColor,
+      accentColor: typeof r.accentColor === 'string' ? r.accentColor : d.accentColor,
+      accentTextColor: r.accentTextColor === true,
+      tabIconOnly: r.tabIconOnly === true,
+      showPrefsInDrawer: r.showPrefsInDrawer !== false,
+      tabsOrder: typeof r.tabsOrder === 'string' ? r.tabsOrder : d.tabsOrder,
+      rootFolder: typeof r.rootFolder === 'string' ? r.rootFolder : d.rootFolder,
+      fontsFolder: typeof r.fontsFolder === 'string' ? r.fontsFolder : d.fontsFolder,
+      downloadsFolder: typeof r.downloadsFolder === 'string' ? r.downloadsFolder : d.downloadsFolder
     };
     return s;
   } catch (e) {

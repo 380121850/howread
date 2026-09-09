@@ -81,6 +81,15 @@
 8. ✅ 待续项已全部完成（2026-09-08 第二批，见下节）。
 
 
+### 阶段 14（2026-09-09）：第六批功能移植（偏好设置页 1:1 对齐安卓 PrefFragment2 + 软件说明页完整对齐 AboutSectionBinder）✅ 已完成（0.8.6 / versionCode 37）
+
+1. ✅ **设置页分组重构**：安卓式单页长滚动 + 可折叠分组（图标+箭头）：书库设置（格式设置/书库设置/书库显示配置/封面配置/阅读配置 子区）→ 常规设置 → 备份配置 → UI 配置（主题配置/标签栏配置）→ 关于；档案区对齐（首字母头像+档案名+面板）；原「系统集成」分组取消、散项归位。
+2. ✅ **新设置项**：扫描格式白名单 14 族（仅过滤扫描/导入，LibrarySearch parseScanFormats/isExtAllowed + .nomedia 跳过）；封面列数 1-8、列表/网格封面大小、显示封面、封面阴影/裁剪/边框（LibGridCell/BookRow 生效）；单击/长按动作（Reader tapCenterAction 覆盖 + action 4；长按 文件信息/菜单/无操作/默认选择）；打开最后一本书；总是第 1 页；退出确认；全屏（setWindowSystemBarEnable）；字体缩放 0.7-2.0（fsp() 关键文本）；语言切换（i18n.System.setAppPreferredLanguage，重启生效）；KV 行+弹层选择（buildOptSheet）；主题色/强调色色板+HEX 弹层；tab 拖拽排序（tabsOrder + List onItemMove + 箭头兜底 + 应用/恢复默认，tabContentFor(pos) 内容调度 + 显示序↔id 映射）；文件夹三行手输。
+3. ✅ **动态主题色**：brand_primary 资源引用全量替换 thm()/acc()（Index 79/Reader 13/AiChat 2），@StorageProp(themeColorHex/accentColorHex/fontScale) 全局实时换色；Reader.persistSettings 改合并式保存（不再重置 Index 管理字段）。
+4. ✅ **About 完整对齐**：版本 pill（bundleManager 真实版本 + build_hap_all.sh 自动生成 BuildInfo.ets BUILD_TIME）、应用描述、更新日志外链、GPL+开源许可（licenses.html → rawfile + Web 弹窗）、支持邮箱 mailto、主页链接、fork 尾注。
+5. ✅ **验证**（模拟器 uitest）：分组/子区折叠、各行为取值、tab 重排+内容映射+持久化+恢复默认、主题色一键全局换色、语言弹层+toast、仅显示图标、重置联动、About 全条目+许可页渲染、阅读器回归正常。
+6. ⏸ **待真机/待续**：tab 拖拽手势复验；字体缩放仅关键文本；存储根/字体/下载目录消费点接线；作者姓氏/书籍描述预留（无扫描元数据）。
+
 ### 阶段 13（2026-09-09）：第五批功能移植（阅读器 UI 对齐 / 全库搜索 / PDF 密码 / TTS 播控卡片 / 偏好补齐 / 多档案 / i18n 第二批）✅ 已完成（部分待真机）
 
 1. ✅ **阅读器 UI 对齐 + 图标补齐**：顶栏补 跳页/TTS/工具行开关 4 钮（对齐 document_title_bar）；顶栏下 2px 阅读进度条 + 二级按钮排（缩放±/亮度/对比度/页面分割，对齐 document_title_buttons）；底部工具栏横向滚动补齐 返回上一位置/缩略图/TTS/模式切换（对齐 document_footer）；垂直模式快速滚动条（PanGesture，FastScroller 对应）；补 32 个 SVG 图标（共 96）。

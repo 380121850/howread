@@ -641,6 +641,8 @@ struct Reader {
   @State rtlEnabled: boolean = false;         /* I2: right-to-left reading direction */
   @State showGestureConfig: boolean = false;  /* I4: gesture configuration dialog */
   @State tapLeftAction: number = 0;           /* I4: 0=prev, 1=menu, 2=toc, 3=bookmark */
+  /* Round 7: prefs long-press action: 0=text selection, 1=file info, 2=menu, 3=none */
+  @State longTapActionPref: number = 0;
   @State tapCenterAction: number = 0;         /* I4: 0=menu, 1=fullscreen, 2=brightness */
   @State tapRightAction: number = 0;          /* I4: 0=next, 1=menu, 2=toc, 3=bookmark */
   @State showTextReplace: boolean = false;    /* I7: text replacement panel */
@@ -678,11 +680,13 @@ struct Reader {
           return;
         }
 
-        /* Round 6: optional direct jump page from library full-text search hits */
+        /* Round 6: optional direct jump page from library full-text search hits.
+         * Round 7: alwaysPage1 pref forces page 1 and ignores saved progress. */
         const jump: number = params !== null && params !== undefined && params['jumpPage'] !== undefined
           ? parseInt(String(params['jumpPage']), 10) : -1;
+        const alwaysP1: boolean = params['alwaysPage1'] === '1';
         getPageForPath(ctx, this.documentPath).then((savedPage: number) => {
-          this.currentPage = jump >= 0 ? jump : savedPage;
+          this.currentPage = jump >= 0 ? jump : (alwaysP1 ? 0 : savedPage);
           console.info(`[Reader] Restoring page ${this.currentPage + 1}`);
           this.initReader();
         }).catch(() => {
@@ -758,6 +762,14 @@ struct Reader {
     this.pageMargin = s.margin;
     this.blueLightFilter = s.blueLightFilter;
     this.bgImagePath = s.bgImagePath;
+    /* Round 7: global single-tap action from the prefs (Android readingMode):
+     * 0 = reader-panel default, 1 = menu toggle, 2 = no action */
+    if (s.singleTapAction === 1) {
+      this.tapCenterAction = 1;
+    } else if (s.singleTapAction === 2) {
+      this.tapCenterAction = 4;
+    }
+    this.longTapActionPref = s.longTapAction;
     this.dataSource.setZoom(this.zoomLevel);
     this.dataSource.setInvert(this.nightMode);
     if (this.brightnessLevel > 0) {
@@ -769,8 +781,12 @@ struct Reader {
     }
   }
 
-  /** Persist the current runtime settings (called on exit and panel changes). */
+  /** Persist the current runtime settings (called on exit and panel changes).
+   *  Round 7: merge over the stored settings so Index-managed fields
+   *  (lock, proxy, library, tabs, colors, …) survive reader-side saves. */
   private async persistSettings(): Promise<void> {
+    const ctx = getContext(this);
+    const cur: ReaderSettings = await loadSettings(ctx);
     const s: ReaderSettings = {
       theme: this.theme,
       zoom: this.zoomLevel,
@@ -788,33 +804,59 @@ struct Reader {
       fontSize: this.fontSize,
       lineHeight: this.lineHeight,
       margin: this.pageMargin,
-      appLockEnabled: false, /* loaded from global prefs on Index side */
-      appLockPass: '1234',
-      readReminderMinutes: 0,
+      appLockEnabled: cur.appLockEnabled,
+      appLockPass: cur.appLockPass,
+      readReminderMinutes: cur.readReminderMinutes,
       blueLightFilter: this.blueLightFilter,
       bgImagePath: this.bgImagePath,
-      proxyHost: '',
-      proxyPort: 8080,
-      proxyType: 0,
+      proxyHost: cur.proxyHost,
+      proxyPort: cur.proxyPort,
+      proxyType: cur.proxyType,
       renderQuality: this.renderQualityLevel,
       ttsVoiceIndex: this.ttsVoiceIndex,
       ttsLang: this.ttsLang,
       textIndent: this.textIndent,
       dropCapEnabled: this.dropCapEnabled,
       fontFamily: ['default', 'serif', 'sans-serif', 'monospace'][this.fontFamilyIdx],
-      flipAnimation: 0,
-      tabPositionTop: false, /* managed on the Index side */
+      flipAnimation: cur.flipAnimation,
+      tabPositionTop: cur.tabPositionTop,
       showTopBarInfo: this.showTopBarInfo,
-      appLockBiometric: false, /* managed on the Index side */
-      screenOrientation: 0, /* managed on the Index side */
-      autoScanOnStart: false,
-      hideReadBooks: false,
-      coverColumns: 3,
-      cardSource: 0,
-      cardCount: 3,
-      appLang: ''
+      appLockBiometric: cur.appLockBiometric,
+      screenOrientation: cur.screenOrientation,
+      autoScanOnStart: cur.autoScanOnStart,
+      hideReadBooks: cur.hideReadBooks,
+      coverColumns: cur.coverColumns,
+      cardSource: cur.cardSource,
+      cardCount: cur.cardCount,
+      appLang: cur.appLang,
+      scanFormats: cur.scanFormats,
+      coverListSize: cur.coverListSize,
+      coverGridSize: cur.coverGridSize,
+      showBookCovers: cur.showBookCovers,
+      coverEffect: cur.coverEffect,
+      cropCovers: cur.cropCovers,
+      coverBorderShadow: cur.coverBorderShadow,
+      showBookDescription: cur.showBookDescription,
+      authorSurnameFirst: cur.authorSurnameFirst,
+      skipNoMediaFolders: cur.skipNoMediaFolders,
+      singleTapAction: cur.singleTapAction,
+      longTapAction: cur.longTapAction,
+      openLastBook: cur.openLastBook,
+      alwaysPage1: cur.alwaysPage1,
+      showExitDialog: cur.showExitDialog,
+      fullscreen: cur.fullscreen,
+      appFontScale: cur.appFontScale,
+      themeColor: cur.themeColor,
+      accentColor: cur.accentColor,
+      accentTextColor: cur.accentTextColor,
+      tabIconOnly: cur.tabIconOnly,
+      showPrefsInDrawer: cur.showPrefsInDrawer,
+      tabsOrder: cur.tabsOrder,
+      rootFolder: cur.rootFolder,
+      fontsFolder: cur.fontsFolder,
+      downloadsFolder: cur.downloadsFolder
     };
-    await saveSettings(getContext(this), s);
+    await saveSettings(ctx, s);
   }
 
   /** Phase 7: pick a background image via the system picker and persist its sandbox path. */
@@ -850,6 +892,14 @@ struct Reader {
     console.info(`[Reader] Theme: ${THEME_NAMES[t]}`);
   }
 
+  /* Round 7: observed AppStorage mirror for the dynamic brand color */
+  @StorageProp('themeColorHex') stThemeHex: string = '#3949AB';
+
+  /** Round 7: dynamic theme (brand) color from AppStorage (prefs themeColor). */
+  private thm(): string {
+    return this.stThemeHex.length > 0 ? this.stThemeHex : '#3949AB';
+  }
+
   /** Reading-area / bottom-bar background per theme. */
   private chromeBg(): string {
     if (this.theme === 3) {
@@ -869,7 +919,7 @@ struct Reader {
     if (this.nightMode) {
       return '#282b40';
     }
-    return '#3949AB';
+    return this.thm(); /* Round 7: dynamic brand color */
   }
 
   /** Re-layout a reflowable doc with the current typography settings. */
@@ -2408,6 +2458,8 @@ struct Reader {
     } else if (action === 3) {
       /* bookmark */
       this.toggleBookmark();
+    } else if (action === 4) {
+      /* Round 7: no action (prefs singleTapAction = none) */
     }
     console.info(`[Reader] Tap zone action: ${action}`);
   }
@@ -2800,7 +2852,7 @@ struct Reader {
         Row({ space: 6 }) {
           Checkbox({ name: 'transBilingual' })
             .width(18).height(18)
-            .selectedColor($r('app.color.brand_primary'))
+            .selectedColor(this.thm())
             .select(this.transInPage && this.biSupported())
             .enabled(this.biSupported())
             .onChange((v: boolean) => {
@@ -2816,8 +2868,8 @@ struct Reader {
               .padding({ left: 6, right: 6, top: 1, bottom: 1 })
           } else {
             Text($r('app.string.trans_panel_mode'))
-              .fontSize(11).fontColor($r('app.color.brand_primary'))
-              .border({ width: 1, color: $r('app.color.brand_primary') })
+              .fontSize(11).fontColor(this.thm())
+              .border({ width: 1, color: this.thm() })
               .borderRadius(8)
               .padding({ left: 6, right: 6, top: 1, bottom: 1 })
           }
@@ -2827,7 +2879,7 @@ struct Reader {
         Row({ space: 6 }) {
           Checkbox({ name: 'transSave' })
             .width(18).height(18)
-            .selectedColor($r('app.color.brand_primary'))
+            .selectedColor(this.thm())
             .select(this.transSave)
             .onChange((v: boolean) => {
               this.transSave = v;
@@ -2838,7 +2890,7 @@ struct Reader {
 
         if (this.transBusy && this.transResult.length > 0) {
           Text(this.transResult)
-            .fontSize(12).fontColor($r('app.color.brand_primary'))
+            .fontSize(12).fontColor(this.thm())
             .width('100%').maxLines(2)
         }
 
@@ -2852,7 +2904,7 @@ struct Reader {
             })
           Button($r('app.string.trans_start'))
             .fontSize(14).height(36)
-            .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+            .backgroundColor(this.thm()).fontColor(Color.White)
             .onClick(() => {
               this.startTranslate();
             })
@@ -3293,6 +3345,18 @@ struct Reader {
               .gesture(
                 LongPressGesture({ repeat: false, duration: 600 })
                   .onAction((event: LongPressGestureEvent) => {
+                    /* Round 7: prefs longTapAction: 0=selection, 1=file info, 2=menu, 3=none */
+                    if (this.longTapActionPref === 1) {
+                      this.openFileInfo();
+                      return;
+                    }
+                    if (this.longTapActionPref === 2) {
+                      this.showMenu = !this.showMenu;
+                      return;
+                    }
+                    if (this.longTapActionPref === 3) {
+                      return;
+                    }
                     this.loadTextRects();
                     this.parseSelLines();
                     this.selMode = true;
@@ -3568,7 +3632,7 @@ struct Reader {
             .width('100%')
             .height(42)
             .padding({ left: 14, right: 14 })
-            .backgroundColor($r('app.color.brand_primary'))
+            .backgroundColor(this.thm())
 
             /* selected text + TTS entries */
             Row({ space: 10 }) {
@@ -4423,7 +4487,7 @@ struct Reader {
                 .fontSize(16).fontWeight(FontWeight.Bold)
               Blank()
               Text($r('app.string.reader_export'))
-                .fontSize(13).fontColor($r('app.color.brand_primary'))
+                .fontSize(13).fontColor(this.thm())
                 .onClick(() => {
                   this.showExportDialog = true;
                 })
@@ -4481,7 +4545,7 @@ struct Reader {
                     Row({ space: 8 }) {
                       Text(n.kind)
                         .fontSize(10).fontColor(Color.White)
-                        .backgroundColor($r('app.color.brand_primary'))
+                        .backgroundColor(this.thm())
                         .borderRadius(4)
                         .padding({ left: 5, right: 5, top: 2, bottom: 2 })
                       Column({ space: 2 }) {
@@ -4539,7 +4603,7 @@ struct Reader {
                 .fontSize(12).fontColor('#999')
               Blank()
               Text($r('app.string.common_refresh'))
-                .fontSize(13).fontColor($r('app.color.brand_primary'))
+                .fontSize(13).fontColor(this.thm())
                 .onClick(() => {
                   this.openAnnPanel();
                 })
@@ -4623,7 +4687,7 @@ struct Reader {
               })
             Button($r('app.string.common_unlock'))
               .fontSize(14).height(36).layoutWeight(1)
-              .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+              .backgroundColor(this.thm()).fontColor(Color.White)
               .onClick(() => {
                 this.doUnlockDoc();
               })
@@ -4656,7 +4720,7 @@ struct Reader {
               })
             Button($r('app.string.jump_go'))
               .fontSize(14).height(36).layoutWeight(1)
-              .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+              .backgroundColor(this.thm()).fontColor(Color.White)
               .onClick(() => {
                 this.doJump();
               })
@@ -4701,7 +4765,7 @@ struct Reader {
               .fontSize(11).fontColor('#999')
             Button('TXT')
               .width('80%').height(38).fontSize(13)
-              .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+              .backgroundColor(this.thm()).fontColor(Color.White)
               .onClick(() => {
                 this.doExportNotes(false);
               })
