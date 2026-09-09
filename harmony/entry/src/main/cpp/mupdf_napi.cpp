@@ -201,6 +201,59 @@ napi_value PageCount(napi_env env, napi_callback_info info)
     return result;
 }
 
+/* Round 6: encrypted-document support. fz_open_document succeeds on encrypted
+ * PDFs (structure is readable), but page rendering fails until the document is
+ * authenticated. needsPassword(handle) queries the state; authenticateDocument
+ * (handle, password) returns the fz_authenticate_password bitmask (0 = fail). */
+napi_value NeedsPassword(napi_env env, napi_callback_info info)
+{
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    auto *h = GetHandle(env, args[0]);
+    if (h == nullptr) {
+        return nullptr;
+    }
+    bool needed = false;
+    pthread_mutex_lock(&g_mu);
+    needed = fz_needs_password(h->ctx, h->doc) != 0;
+    pthread_mutex_unlock(&g_mu);
+    napi_value result;
+    napi_get_boolean(env, needed, &result);
+    return result;
+}
+
+napi_value AuthenticateDocument(napi_env env, napi_callback_info info)
+{
+    size_t argc = 2;
+    napi_value args[2];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 2) {
+        napi_throw_type_error(env, nullptr, "authenticateDocument(handle, password) required");
+        return nullptr;
+    }
+    auto *h = GetHandle(env, args[0]);
+    if (h == nullptr) {
+        return nullptr;
+    }
+    char pwbuf[256];
+    size_t pwlen = 0;
+    napi_status st = napi_get_value_string_utf8(env, args[1], pwbuf, sizeof(pwbuf), &pwlen);
+    if (st != napi_ok) {
+        napi_throw_type_error(env, nullptr, "password must be a string");
+        return nullptr;
+    }
+
+    int auth = 0;
+    pthread_mutex_lock(&g_mu);
+    auth = fz_authenticate_password(h->ctx, h->doc, pwbuf);
+    pthread_mutex_unlock(&g_mu);
+
+    napi_value result;
+    napi_create_int32(env, auth, &result);
+    return result;
+}
+
 napi_value RenderPage(napi_env env, napi_callback_info info)
 {
     size_t argc = 3;
@@ -2133,6 +2186,8 @@ napi_value Init(napi_env env, napi_value exports)
         {"searchDocument", nullptr, SearchDocument, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getDocumentInfo", nullptr, GetDocumentInfo, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"closeDocument", nullptr, CloseDocument, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"needsPassword", nullptr, NeedsPassword, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"authenticateDocument", nullptr, AuthenticateDocument, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     return exports;

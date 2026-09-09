@@ -1,4 +1,5 @@
 import fs from '@ohos.file.fs';
+import { getCurrentProfile, DEFAULT_PROFILE } from './Profiles';
 import util from '@ohos.util';
 
 /**
@@ -18,7 +19,10 @@ export interface PlaylistMeta {
 }
 
 function playlistsDir(ctx: Context): string {
-  return ctx.filesDir + '/' + DIR_NAME;
+  /* Round 6: per-profile playlist directory (default keeps the original) */
+  const prof: string = getCurrentProfile();
+  return prof === DEFAULT_PROFILE ? ctx.filesDir + '/' + DIR_NAME
+    : ctx.filesDir + '/' + DIR_NAME + '_' + prof;
 }
 
 function ensureDir(ctx: Context): void {

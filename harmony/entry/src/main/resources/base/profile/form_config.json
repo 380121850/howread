@@ -19,6 +19,26 @@
       "supportDimensions": [
         "2*2"
       ]
+    },
+    {
+      "name": "TtsCard",
+      "isDefault": false,
+      "uiSyntax": "arkts",
+      "displayName": "$string:form_tts_label",
+      "description": "$string:form_tts_desc",
+      "src": "./ets/form/TtsCard.ets",
+      "window": {
+        "designWidth": 720,
+        "autoDesignWidth": true
+      },
+      "colorMode": "auto",
+      "updateEnabled": true,
+      "scheduledUpdateTime": "07:30",
+      "updateDuration": 2,
+      "defaultDimension": "2*4",
+      "supportDimensions": [
+        "2*4"
+      ]
     }
   ]
 }

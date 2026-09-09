@@ -1,4 +1,5 @@
 import preferences from '@ohos.data.preferences';
+import { storeName } from './Profiles';
 
 /**
  * Global reader settings persisted via @ohos.data.preferences (sprint E).
@@ -85,16 +86,35 @@ export interface ReaderSettings {
   showTopBarInfo: boolean;
   /** Try biometric unlock (fingerprint/face) before the passcode (round 5) */
   appLockBiometric: boolean;
+  /* ---- Round 6 ---- */
+  /** Preferred screen orientation: 0=auto, 1=portrait, 2=landscape */
+  screenOrientation: number;
+  /** Scan known device folders for books on startup */
+  autoScanOnStart: boolean;
+  /** Hide fully-read books from the library list */
+  hideReadBooks: boolean;
+  /** Cover-grid column count (2..4) */
+  coverColumns: number;
+  /** Desktop card content: 0=recent books, 1=starred books */
+  cardSource: number;
+  /** Desktop card entry count (1..3) */
+  cardCount: number;
+  /** In-app language: ''=system, 'zh', 'en' (restart to apply) */
+  appLang: string;
 }
 
 const PREF_NAME = 'librera_settings';
 const KEY_SETTINGS = 'settings';
 
 let prefInstance: preferences.Preferences | undefined = undefined;
+let prefInstanceStore: string = '';
 
 async function getPrefs(ctx: Context): Promise<preferences.Preferences> {
-  if (prefInstance === undefined) {
-    prefInstance = await preferences.getPreferences(ctx, PREF_NAME);
+  /* Round 6: profile-aware store name; re-open when the profile switches */
+  const store: string = storeName(PREF_NAME);
+  if (prefInstance === undefined || prefInstanceStore !== store) {
+    prefInstanceStore = store;
+    prefInstance = await preferences.getPreferences(ctx, store);
   }
   return prefInstance;
 }
@@ -134,7 +154,14 @@ export function defaultSettings(): ReaderSettings {
     flipAnimation: 0,
     tabPositionTop: false,
     showTopBarInfo: false,
-    appLockBiometric: false
+    appLockBiometric: false,
+    screenOrientation: 0,
+    autoScanOnStart: false,
+    hideReadBooks: false,
+    coverColumns: 3,
+    cardSource: 0,
+    cardCount: 3,
+    appLang: ''
   };
 }
 
@@ -183,7 +210,14 @@ export async function loadSettings(ctx: Context): Promise<ReaderSettings> {
       flipAnimation: typeof r.flipAnimation === 'number' ? r.flipAnimation : d.flipAnimation,
       tabPositionTop: r.tabPositionTop === true,
       showTopBarInfo: r.showTopBarInfo === true,
-      appLockBiometric: r.appLockBiometric === true
+      appLockBiometric: r.appLockBiometric === true,
+      screenOrientation: typeof r.screenOrientation === 'number' ? r.screenOrientation : d.screenOrientation,
+      autoScanOnStart: r.autoScanOnStart === true,
+      hideReadBooks: r.hideReadBooks === true,
+      coverColumns: typeof r.coverColumns === 'number' ? r.coverColumns : d.coverColumns,
+      cardSource: typeof r.cardSource === 'number' ? r.cardSource : d.cardSource,
+      cardCount: typeof r.cardCount === 'number' ? r.cardCount : d.cardCount,
+      appLang: typeof r.appLang === 'string' ? r.appLang : d.appLang
     };
     return s;
   } catch (e) {

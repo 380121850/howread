@@ -31,6 +31,7 @@ import {
   searchText, searchDocument, getText, getAnnotations, addHighlight, addInkStroke, deleteAnnotation, saveDocument,
   addMarkupAnnotation, addTextNote,
   layoutDocument, isReflowable, getDocumentInfo, getTextRects, loadFont,
+  needsPassword, authenticateDocument,
   RenderResult, RenderOptions, TocEntry, CropRect, TextRect, TextLine, AnnotationInfo, DocumentInfo
 } from 'libmupdf_napi.so';
 import { saveRecentBook, getPageForPath, RecentBook } from '../model/ReadingProgress';
@@ -42,7 +43,7 @@ import { exportNotesFile, ExportData } from '../model/Export';
 import { isBilingualDoc, buildBilingual } from '../model/Bilingual';
 import { TextUtils } from '../model/TextUtils';
 import { loadSettings, saveSettings, THEME_NAMES, ReaderSettings } from '../model/Settings';
-import { startTtsBackgroundTask, stopTtsBackgroundTask, showTtsNotification, cancelTtsNotification } from '../service/TtsService';
+import { startTtsBackgroundTask, stopTtsBackgroundTask, showTtsNotification, cancelTtsNotification, syncTtsCardState } from '../service/TtsService';
 
 const LEFT_ZONE_RATIO: number = 0.3;
 const RIGHT_ZONE_RATIO: number = 0.3;
@@ -349,12 +350,12 @@ struct TocPanel {
 
   build() {
     Column() {
-      Text('目录 (TOC)')
+      Text($r('app.string.reader_toc'))
         .fontSize(16).fontWeight(FontWeight.Bold)
         .margin({ bottom: 8 })
 
       if (this.tocEntries.length === 0) {
-        Text('(无目录)')
+        Text($r('app.string.reader_toc_empty'))
           .fontSize(13).fontColor(Color.Gray)
       } else {
         List() {
@@ -468,6 +469,11 @@ const TRANS_DST: string[] = ['\u4E2D\u6587', '\u82F1\u6587', '\u65E5\u6587', '\u
 @Entry
 @Component
 struct Reader {
+
+  /* Round 6: resolve a string resource into a plain string */
+  private L(r: Resource): string {
+    return getContext(this).resourceManager.getStringSync(r);
+  }
   @State currentPage: number = 0;
   @State totalPages: number = 0;
   @State showMenu: boolean = false;
@@ -529,6 +535,16 @@ struct Reader {
   @State thumbBusy: boolean = false;
   /* Round 5: page-jump history (返回上一位置) */
   private pageHistory: number[] = [];
+  /* Round 6: reader UI alignment (document_title_bar / document_title_buttons) */
+  @State showToolRow: boolean = true;       /* secondary quick-buttons row under the top bar */
+  @State showJump: boolean = false;         /* jump-to-page dialog */
+  @State jumpInput: string = '';            /* target page typed by the user */
+  @State fastScrolling: boolean = false;    /* vertical fast-scroll rail active */
+  private fastStartPage: number = 0;
+  /* Round 6: encrypted-document unlock */
+  @State showPwd: boolean = false;          /* password dialog */
+  @State pwdInput: string = '';
+  @State renderEpoch: number = 0;           /* bumped after unlock to force re-render */
   private aiCfg: AiConfig = { provider: '', url: '', key: '', model: '', maxTokens: 8192, thinking: false };
   @State annotations: AnnotationInfo[] = []; /* current page annotations */
   @State drawMode: boolean = false;         /* freehand drawing mode */
@@ -541,7 +557,7 @@ struct Reader {
 
   /* ---- TTS reading (D1) ---- */
   @State showTts: boolean = false;
-  @State ttsStatus: string = '就绪';
+  @State ttsStatus: string = this.L($r('app.string.tts_ready'));
   @State ttsEngineOk: boolean = true;
   @State ttsRate: number = 1.0;             /* 0.5..2.0 */
   @State ttsPitch: number = 1.0;            /* 0.5..2.0 */
@@ -662,11 +678,17 @@ struct Reader {
           return;
         }
 
+        /* Round 6: optional direct jump page from library full-text search hits */
+        const jump: number = params !== null && params !== undefined && params['jumpPage'] !== undefined
+          ? parseInt(String(params['jumpPage']), 10) : -1;
         getPageForPath(ctx, this.documentPath).then((savedPage: number) => {
-          this.currentPage = savedPage;
-          console.info(`[Reader] Restoring page ${savedPage + 1}`);
+          this.currentPage = jump >= 0 ? jump : savedPage;
+          console.info(`[Reader] Restoring page ${this.currentPage + 1}`);
           this.initReader();
         }).catch(() => {
+          if (jump >= 0) {
+            this.currentPage = jump;
+          }
           this.initReader();
         });
       });
@@ -783,7 +805,14 @@ struct Reader {
       flipAnimation: 0,
       tabPositionTop: false, /* managed on the Index side */
       showTopBarInfo: this.showTopBarInfo,
-      appLockBiometric: false /* managed on the Index side */
+      appLockBiometric: false, /* managed on the Index side */
+      screenOrientation: 0, /* managed on the Index side */
+      autoScanOnStart: false,
+      hideReadBooks: false,
+      coverColumns: 3,
+      cardSource: 0,
+      cardCount: 3,
+      appLang: ''
     };
     await saveSettings(getContext(this), s);
   }
@@ -873,6 +902,17 @@ struct Reader {
     try {
       this.dataSource.openDoc(this.documentPath);
       const handle: ESObject | undefined = this.dataSource.getDocHandle();
+      /* Round 6: encrypted document? ask for the password before rendering */
+      if (handle !== undefined) {
+        try {
+          if (needsPassword(handle) as boolean) {
+            this.showPwd = true;
+            console.info('[Reader] Encrypted document: password required');
+          }
+        } catch (_e) {
+          /* needsPassword probe failed — treat as unencrypted */
+        }
+      }
       if (handle !== undefined) {
         try {
           this.isReflow = isReflowable(handle);
@@ -1371,6 +1411,57 @@ struct Reader {
     console.info(`[Reader] Back to page ${this.currentPage + 1} (history)`);
   }
 
+  /* ---- Round 6: jump-to-page dialog + vertical fast-scroll rail ---- */
+
+  /** Apply the typed page number (1-based input, clamped). */
+  private doJump(): void {
+    const n: number = parseInt(this.jumpInput, 10);
+    if (isNaN(n) || n < 1 || n > this.totalPages) {
+      promptAction.showToast({ message: `页码范围 1-${this.totalPages}` });
+      return;
+    }
+    this.pushPageHistory();
+    this.showJump = false;
+    const target: number = n - 1;
+    this.currentPage = target;
+    this.onPageChanged(target);
+    console.info(`[Reader] Jump to page ${n}`);
+  }
+
+  /** Fast-scroll rail: map vertical pan distance onto the page index. */
+  private fastPanUpdate(offsetY: number): void {
+    const railH: number = this.pageAreaH > 0 ? this.pageAreaH : 600;
+    const delta: number = Math.round(offsetY / Math.max(railH, 1) * this.totalPages);
+    const target: number = Math.max(0, Math.min(this.fastStartPage + delta, this.totalPages - 1));
+    if (target !== this.currentPage) {
+      this.currentPage = target;
+      this.onPageChanged(target);
+    }
+    this.vScroller.scrollToIndex(target, false);
+  }
+
+  /** Round 6: try to unlock the encrypted document with the typed password. */
+  private doUnlockDoc(): void {
+    const handle: ESObject | undefined = this.dataSource.getDocHandle();
+    if (handle === undefined || this.pwdInput.length === 0) {
+      return;
+    }
+    try {
+      const r: number = authenticateDocument(handle, this.pwdInput) as number;
+      if (r > 0) {
+        this.showPwd = false;
+        this.pwdInput = '';
+        /* force every page renderer to retry now that the doc is unlocked */
+        this.renderEpoch++;
+        console.info('[Reader] Document unlocked');
+      } else {
+        promptAction.showToast({ message: $r('app.string.pwd_wrong') });
+      }
+    } catch (e) {
+      promptAction.showToast({ message: $r('app.string.pwd_unlock_failed') });
+    }
+  }
+
   /* ---- Round 5: page thumbnail grid (Android page thumbnails parity) ---- */
 
   private openThumbs(): void {
@@ -1548,7 +1639,7 @@ struct Reader {
     this.ttsStopped = false;
     this.ttsPaused = false;
     this.ttsIndex = 0;
-    this.ttsStatus = '准备中...';
+    this.ttsStatus = this.L($r('app.string.tts_preparing'));
     this.probeTtsEngine();
     this.loadTtsSentences(this.currentPage).then(() => {
       console.info(`[Reader] TTS panel opened: page ${this.currentPage + 1}, ${this.ttsSentences.length} sentences`);
@@ -1576,7 +1667,7 @@ struct Reader {
       const count: number = parseInt(res, 10);
       if (count <= 0) {
         this.ttsEngineOk = false;
-        this.ttsStatus = count === -1 ? '语音引擎不可用' : '未检测到语音包';
+        this.ttsStatus = count === -1 ? this.L($r('app.string.tts_engine_unavailable')) : this.L($r('app.string.tts_no_voice'));
         console.warn(`[Reader] TTS probe: ${count}`);
       } else {
         this.ttsEngineOk = true;
@@ -1584,7 +1675,7 @@ struct Reader {
       }
     } catch (e) {
       this.ttsEngineOk = false;
-      this.ttsStatus = 'Web 引擎不可用';
+      this.ttsStatus = this.L($r('app.string.tts_web_unavailable'));
       console.error('[Reader] TTS probe failed');
     }
   }
@@ -1626,12 +1717,12 @@ struct Reader {
       if (code !== 0) {
         this.ttsEngineOk = false;
         this.ttsStopped = true;
-        this.ttsStatus = code === -2 ? '未检测到语音包' : '语音引擎不可用';
+        this.ttsStatus = code === -2 ? this.L($r('app.string.tts_no_voice')) : this.L($r('app.string.tts_engine_unavailable'));
         this.stopTtsPoll();
         console.warn(`[Reader] TTS speak rejected: ${code}`);
         return;
       }
-      this.ttsStatus = '朗读中';
+      this.ttsStatus = this.L($r('app.string.tts_speaking'));
       this.ttsPaused = false;
       this.startTtsPoll();
       /* Round 5: keep app alive + ongoing notification while reading aloud */
@@ -1641,7 +1732,7 @@ struct Reader {
     } catch (e) {
       this.ttsEngineOk = false;
       this.ttsStopped = true;
-      this.ttsStatus = 'Web 引擎不可用';
+      this.ttsStatus = this.L($r('app.string.tts_web_unavailable'));
       this.stopTtsPoll();
       console.error('[Reader] TTS speak JS call failed');
     }
@@ -1678,6 +1769,8 @@ struct Reader {
     const sent: string = this.ttsIndex >= 0 && this.ttsIndex < this.ttsSentences.length
       ? this.ttsSentences[this.ttsIndex] : '';
     showTtsNotification(getContext(this), this.docTitle, sent, this.ttsPaused);
+    /* Round 6: mirror the state to the TtsCard desktop card */
+    syncTtsCardState(getContext(this), this.docTitle, sent, !this.ttsStopped && !this.ttsPaused);
   }
 
   private stopTtsPoll(): void {
@@ -1702,7 +1795,7 @@ struct Reader {
       const code: number = parseInt(res, 10);
       if (code === 2) {
         this.ttsPaused = true;
-        this.ttsStatus = '已暂停';
+        this.ttsStatus = this.L($r('app.string.tts_paused'));
         return;
       }
       if (code === 1) {
@@ -1727,7 +1820,7 @@ struct Reader {
     if (this.ttsPaused) {
       this.webController.runJavaScript('ttsResume()').then((r: string) => {
         this.ttsPaused = false;
-        this.ttsStatus = '朗读中';
+        this.ttsStatus = this.L($r('app.string.tts_speaking'));
         this.refreshTtsNotification();
         console.info('[Reader] TTS resumed');
       }).catch(() => {
@@ -1735,7 +1828,7 @@ struct Reader {
     } else {
       this.webController.runJavaScript('ttsPause()').then((r: string) => {
         this.ttsPaused = true;
-        this.ttsStatus = '已暂停';
+        this.ttsStatus = this.L($r('app.string.tts_paused'));
         this.refreshTtsNotification();
         console.info('[Reader] TTS paused');
       }).catch(() => {
@@ -1752,7 +1845,9 @@ struct Reader {
     });
     stopTtsBackgroundTask(getContext(this));
     cancelTtsNotification();
-    this.ttsStatus = '已停止';
+    /* Round 6: clear the TtsCard state */
+    syncTtsCardState(getContext(this), this.docTitle, '', false);
+    this.ttsStatus = this.L($r('app.string.tts_stopped'));
     console.info('[Reader] TTS stopped');
   }
 
@@ -1776,7 +1871,7 @@ struct Reader {
     if (this.currentPage >= this.totalPages - 1) {
       this.ttsStopped = true;
       this.stopTtsPoll();
-      this.ttsStatus = '朗读完成';
+      this.ttsStatus = this.L($r('app.string.tts_finished'));
       console.info('[Reader] TTS finished (last page)');
       return;
     }
@@ -1823,7 +1918,7 @@ struct Reader {
       this.ttsStatus = `\u5DF2\u5BFC\u51FA: tts_export.txt (${raw.length} \u5B57)`;
       console.info(`[Reader] TTS text exported: ${path}`);
     } catch (e) {
-      this.ttsStatus = '\u5BFC\u51FA\u5931\u8D25';
+      this.ttsStatus = this.L($r('app.string.common_export_failed'));
     }
   }
 
@@ -1952,7 +2047,7 @@ struct Reader {
       this.stopRsvpTimer();
       this.rsvpRunning = false;
       this.rsvpWord = '';
-      this.rsvpProgress = '完成';
+      this.rsvpProgress = this.L($r('app.string.common_done'));
       console.info('[Reader] RSVP finished (last page)');
       return;
     }
@@ -2340,7 +2435,7 @@ struct Reader {
         } catch (_e) {}
       }
 
-      parts.push(`页数: ${this.totalPages > 0 ? this.totalPages + ' 页' : '未知'}`);
+      parts.push(`页数: ${this.totalPages > 0 ? this.totalPages + ' 页' : $r('app.string.common_unknown')}`);
       parts.push(`当前页: p${this.currentPage + 1}`);
 
       /* File size */
@@ -2358,7 +2453,7 @@ struct Reader {
       this.fileInfoText = parts.join('\n');
       console.info(`[Reader] File info generated for ${this.docTitle}`);
     } catch (e) {
-      this.fileInfoText = '获取信息失败';
+      this.fileInfoText = this.L($r('app.string.info_failed'));
     }
   }
 
@@ -2412,7 +2507,7 @@ struct Reader {
       this.dataSource.openDoc(newPath);
     } catch (e) {
       console.error('[Reader] swapDoc open failed: ' + String(e));
-      promptAction.showToast({ message: '\u53CC\u8BED\u7248\u6253\u5F00\u5931\u8D25\uFF0C\u5DF2\u4FDD\u7559\u539F\u6587' });
+      promptAction.showToast({ message: $r('app.string.trans_bi_open_failed') });
       return;
     }
     const handle: ESObject | undefined = this.dataSource.getDocHandle();
@@ -2465,7 +2560,7 @@ struct Reader {
       return;
     }
     if (!aiConfigReady(this.aiCfg)) {
-      promptAction.showToast({ message: '\u8BF7\u5148\u5728\u504F\u597D\u4E2D\u914D\u7F6E AI \u5927\u6A21\u578B' });
+      promptAction.showToast({ message: $r('app.string.ai_not_configured') });
       return;
     }
     const dst: string = TRANS_DST[this.transDstIdx];
@@ -2474,19 +2569,19 @@ struct Reader {
       if (this.biOriginalPath.length > 0) {
         /* currently reading the bilingual copy → restore the original */
         this.transBusy = true;
-        this.transResult = '\u6B63\u5728\u6062\u590D\u539F\u6587\u2026';
+        this.transResult = this.L($r('app.string.trans_restoring'));
         const orig = this.biOriginalPath;
         this.swapDoc(orig).then(() => {
           this.biOriginalPath = '';
           this.transBusy = false;
           this.transResult = '';
           this.showTrans = false;
-          promptAction.showToast({ message: '\u5DF2\u6062\u590D\u539F\u6587' });
+          promptAction.showToast({ message: $r('app.string.trans_restored') });
         });
         return;
       }
       this.transBusy = true;
-      this.transResult = '\u51C6\u5907\u4E2D\u2026';
+      this.transResult = this.L($r('app.string.tts_preparing2'));
       const srcPath = this.documentPath;
       buildBilingual(getContext(this), this.aiCfg, srcPath, dst, (msg: string) => {
         this.transResult = msg;
@@ -2500,7 +2595,7 @@ struct Reader {
         this.biOriginalPath = srcPath;
         this.swapDoc(outPath).then(() => {
           this.showTrans = false;
-          promptAction.showToast({ message: '\u53CC\u8BED\u7248\u5DF2\u751F\u6210\uFF0C\u8BD1\u6587\u4EE5\u84DD\u8272\u663E\u793A' });
+          promptAction.showToast({ message: $r('app.string.trans_bi_done') });
         }).catch((e: Object) => {
           this.transBusy = false;
           promptAction.showToast({ message: '\u53CC\u8BED\u7248\u5E94\u7528\u5931\u8D25\uFF1A' + String(e).substring(0, 40) });
@@ -2510,7 +2605,7 @@ struct Reader {
     }
     const text = this.selText.length > 0 ? this.selText : this.pageTextForTrans();
     if (text.length === 0) {
-      promptAction.showToast({ message: '\u5F53\u524D\u9875\u65E0\u53EF\u63D0\u53D6\u6587\u672C' });
+      promptAction.showToast({ message: $r('app.string.trans_no_text') });
       return;
     }
     this.transBusy = true;
@@ -2535,7 +2630,7 @@ struct Reader {
   }
 
   private saveTransNote(): void {
-    if (this.transResult.length === 0 || this.transResult.startsWith('\u7FFB\u8BD1\u5931\u8D25')) {
+    if (this.transResult.length === 0 || this.transResult.startsWith(this.L($r('app.string.trans_failed')))) {
       return;
     }
     const n: AiNote = {
@@ -2543,11 +2638,11 @@ struct Reader {
       title: this.docTitle,
       page: this.currentPage,
       date: new Date().toISOString(),
-      kind: 'AI\u7FFB\u8BD1',
+      kind: this.L($r('app.string.trans_title')),
       text: this.transResult
     };
     addNote(getContext(this), n).then((ok: boolean) => {
-      promptAction.showToast({ message: ok ? '\u8BD1\u6587\u5DF2\u4FDD\u5B58\u5230\u7B14\u8BB0' : '\u4FDD\u5B58\u5931\u8D25' });
+      promptAction.showToast({ message: ok ? $r('app.string.trans_saved') : $r('app.string.common_save_failed') });
       if (ok) {
         this.loadAiNotes();
       }
@@ -2665,7 +2760,7 @@ struct Reader {
         })
       Column({ space: 12 }) {
         Row() {
-          Text('AI\u7FFB\u8BD1')
+          Text($r('app.string.trans_title'))
             .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
             .layoutWeight(1)
           Image($r('app.media.ic_close'))
@@ -2677,7 +2772,7 @@ struct Reader {
         .width('100%')
 
         Row({ space: 8 }) {
-          Text('\u6E90\u8BED\u8A00').fontSize(14).fontColor('#333').width(70)
+          Text($r('app.string.trans_src')).fontSize(14).fontColor('#333').width(70)
           Select(this.toSelectOptions(TRANS_SRC))
             .selected(this.transSrcIdx)
             .value(TRANS_SRC[this.transSrcIdx])
@@ -2690,7 +2785,7 @@ struct Reader {
         .width('100%')
 
         Row({ space: 8 }) {
-          Text('\u76EE\u6807\u8BED\u8A00').fontSize(14).fontColor('#333').width(70)
+          Text($r('app.string.trans_dst')).fontSize(14).fontColor('#333').width(70)
           Select(this.toSelectOptions(TRANS_DST))
             .selected(this.transDstIdx)
             .value(TRANS_DST[this.transDstIdx])
@@ -2711,16 +2806,16 @@ struct Reader {
             .onChange((v: boolean) => {
               this.transInPage = v;
             })
-          Text('\u5728\u9875\u9762\u5185\u663E\u793A\u8BD1\u6587\uFF08\u53CC\u8BED\u5BF9\u7167\uFF09')
+          Text($r('app.string.trans_bilingual'))
             .fontSize(13).fontColor(this.biSupported() ? '#333' : '#999')
           if (this.biSupported()) {
-            Text('\u672C\u4E66\u53EF\u7528')
+            Text($r('app.string.trans_bi_ok'))
               .fontSize(11).fontColor('#00897B')
               .border({ width: 1, color: '#00897B' })
               .borderRadius(8)
               .padding({ left: 6, right: 6, top: 1, bottom: 1 })
           } else {
-            Text('\u9762\u677F\u6A21\u5F0F')
+            Text($r('app.string.trans_panel_mode'))
               .fontSize(11).fontColor($r('app.color.brand_primary'))
               .border({ width: 1, color: $r('app.color.brand_primary') })
               .borderRadius(8)
@@ -2737,7 +2832,7 @@ struct Reader {
             .onChange((v: boolean) => {
               this.transSave = v;
             })
-          Text('AI\u7FFB\u8BD1\u7ED3\u679C\u4FDD\u5B58').fontSize(13).fontColor('#333')
+          Text($r('app.string.trans_result_save')).fontSize(13).fontColor('#333')
         }
         .width('100%')
 
@@ -2749,13 +2844,13 @@ struct Reader {
 
         Row({ space: 12 }) {
           Blank()
-          Button('\u53D6\u6D88')
+          Button($r('app.string.common_cancel'))
             .fontSize(14).height(36)
             .backgroundColor('#e0e0e0').fontColor('#333')
             .onClick(() => {
               this.showTrans = false;
             })
-          Button('\u5F00\u59CB\u7FFB\u8BD1')
+          Button($r('app.string.trans_start'))
             .fontSize(14).height(36)
             .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
             .onClick(() => {
@@ -2784,7 +2879,7 @@ struct Reader {
         })
       Column({ space: 10 }) {
         Row() {
-          Text('AI \u7FFB\u8BD1\u7ED3\u679C')
+          Text($r('app.string.trans_result'))
             .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333')
             .layoutWeight(1)
           Image($r('app.media.ic_close'))
@@ -2808,13 +2903,13 @@ struct Reader {
 
         Row({ space: 12 }) {
           Blank()
-          Button('\u5173\u95ED')
+          Button($r('app.string.common_close'))
             .fontSize(14).height(36)
             .backgroundColor('#e0e0e0').fontColor('#333')
             .onClick(() => {
               this.showTransPanel = false;
             })
-          Button('\u4FDD\u5B58\u5230\u7B14\u8BB0')
+          Button($r('app.string.trans_save_note'))
             .fontSize(14).height(36)
             .backgroundColor('#00897B').fontColor(Color.White)
             .onClick(() => {
@@ -2891,14 +2986,14 @@ struct Reader {
       (getContext(this) as common.UIAbilityContext).openLink(url);
       console.info('[Reader] openLink: ' + url);
     } catch (e) {
-      promptAction.showToast({ message: '\u65E0\u6CD5\u6253\u5F00\u6D4F\u89C8\u5668' });
+      promptAction.showToast({ message: $r('app.string.browser_unavailable') });
       console.error('[Reader] openLink failed');
     }
   }
 
   private openWebSearch(text: string): void {
     if (text.trim().length === 0) {
-      promptAction.showToast({ message: '\u672A\u9009\u4E2D\u6587\u672C' });
+      promptAction.showToast({ message: $r('app.string.sel_none') });
       return;
     }
     this.openExternal('https://www.google.com/search?q=' + encodeURIComponent(text));
@@ -2906,7 +3001,7 @@ struct Reader {
 
   private openWebDictionary(text: string): void {
     if (text.trim().length === 0) {
-      promptAction.showToast({ message: '\u672A\u9009\u4E2D\u6587\u672C' });
+      promptAction.showToast({ message: $r('app.string.sel_none') });
       return;
     }
     this.openExternal('https://dict.youdao.com/result?word=' + encodeURIComponent(text) + '&lang=en');
@@ -2915,7 +3010,7 @@ struct Reader {
   /** System share sheet for the selected text; clipboard fallback. */
   private shareSelText(): void {
     if (this.selText.trim().length === 0) {
-      promptAction.showToast({ message: '\u672A\u9009\u4E2D\u6587\u672C' });
+      promptAction.showToast({ message: $r('app.string.sel_none') });
       return;
     }
     try {
@@ -2929,11 +3024,11 @@ struct Reader {
       controller.show(getContext(this) as common.UIAbilityContext, {})
         .catch(() => {
           this.copySelText();
-          promptAction.showToast({ message: '\u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F\uFF08\u7CFB\u7EDF\u5206\u4EAB\u4E0D\u53EF\u7528\uFF09' });
+          promptAction.showToast({ message: $r('app.string.sel_copied_fallback') });
         });
     } catch (e) {
       this.copySelText();
-      promptAction.showToast({ message: '\u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F\uFF08\u7CFB\u7EDF\u5206\u4EAB\u4E0D\u53EF\u7528\uFF09' });
+      promptAction.showToast({ message: $r('app.string.sel_copied_fallback') });
     }
   }
 
@@ -2966,30 +3061,48 @@ struct Reader {
             .margin({ right: 12 })
           }
 
+          Image($r('app.media.ic_page_fit'))
+            .width(22).height(22).fillColor(Color.White).margin({ right: 14 })
+            .onClick(() => {
+              this.jumpInput = String(this.currentPage + 1);
+              this.showJump = true;
+              console.info('[Reader] Jump-to-page dialog opened (top bar)');
+            })
+          Image($r('app.media.ic_headphones'))
+            .width(22).height(22).fillColor(Color.White).margin({ right: 14 })
+            .onClick(() => {
+              this.openTtsPanel();
+            })
+          Image($r('app.media.ic_sliders'))
+            .width(22).height(22).fillColor(this.showToolRow ? '#ffd54f' : Color.White).margin({ right: 14 })
+            .onClick(() => {
+              this.showToolRow = !this.showToolRow;
+              console.info(`[Reader] Tool row toggled: ${this.showToolRow}`);
+            })
           Image($r('app.media.ic_toc'))
-            .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
+            .width(22).height(22).fillColor(Color.White).margin({ right: 14 })
             .onClick(() => {
               this.showToc = true;
               console.info('[Reader] TOC opened (top bar)');
             })
           Image($r('app.media.ic_brightness'))
-            .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
+            .width(22).height(22).fillColor(Color.White).margin({ right: 14 })
             .onClick(() => {
               this.brightnessLevel = this.brightnessLevel > 200 ? 64 : this.brightnessLevel + 32;
               this.setBrightness(this.brightnessLevel);
             })
           Image($r('app.media.ic_fullscreen'))
-            .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
+            .width(22).height(22).fillColor(Color.White).margin({ right: 14 })
             .onClick(() => {
               this.toggleFullscreen();
             })
           Image($r('app.media.ic_ai'))
-            .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
+            .width(22).height(22).fillColor(Color.White).margin({ right: 14 })
             .onClick(() => {
               this.openTransDialog();
             })
           Image($r('app.media.ic_settings'))
-            .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
+            .width(22).height(22).fillColor(Color.White).margin({ right: 14 })
             .onClick(() => {
               this.showMenu = !this.showMenu;
               console.info(`[Reader] Menu toggled (top bar): ${this.showMenu}`);
@@ -3005,10 +3118,59 @@ struct Reader {
         .padding({ left: 12, right: 12 })
         .backgroundColor(this.barBg())
 
+        /* Round 6: thin reading-progress line under the title bar (Android ProgressDraw) */
+        Progress({ value: this.totalPages > 0 ? this.currentPage + 1 : 0, total: this.totalPages > 0 ? this.totalPages : 1, type: ProgressType.Linear })
+          .width('100%').height(2)
+          .style({ strokeWidth: 2 })
+          .color(Color.White)
+          .backgroundColor('#5c6bc0')
+
+        /* Round 6: secondary quick-buttons row (Android document_title_buttons) */
+        if (this.showToolRow) {
+          Row({ space: 12 }) {
+            Image($r('app.media.ic_zoom_out'))
+              .width(18).height(18).fillColor(Color.White)
+              .onClick(() => this.zoomOut())
+            Image($r('app.media.ic_zoom_in'))
+              .width(18).height(18).fillColor(Color.White)
+              .onClick(() => this.zoomIn())
+            Image($r('app.media.ic_brightness'))
+              .width(16).height(16).fillColor(Color.White)
+            Slider({ value: this.brightnessLevel, min: 1, max: 255, step: 1 })
+              .layoutWeight(1).height(22)
+              .selectedColor(Color.White).trackColor('#5c6bc0').blockColor(Color.White)
+              .onChange((value: number, mode: SliderChangeMode) => {
+                if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                  this.brightnessLevel = Math.round(value);
+                  this.setBrightness(this.brightnessLevel);
+                }
+              })
+            Image($r('app.media.ic_circle_half'))
+              .width(16).height(16).fillColor(Color.White)
+            Slider({ value: this.contrastLevel, min: 0, max: 100, step: 5 })
+              .layoutWeight(1).height(22)
+              .selectedColor(Color.White).trackColor('#5c6bc0').blockColor(Color.White)
+              .onChange((value: number, mode: SliderChangeMode) => {
+                if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                  this.contrastLevel = Math.round(value);
+                }
+              })
+            Image($r('app.media.ic_page_split'))
+              .width(18).height(18).fillColor(this.pageSplit ? '#ffd54f' : Color.White)
+              .onClick(() => {
+                this.pageSplit = !this.pageSplit;
+                console.info(`[Reader] Page split toggled (tool row): ${this.pageSplit}`);
+              })
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 2, bottom: 2 })
+          .backgroundColor(this.barBg())
+        }
+
         // Search bar (visible when opened)
         if (this.showSearch) {
           Row({ space: 8 }) {
-            TextInput({ placeholder: '搜索...', text: this.searchQuery })
+            TextInput({ placeholder: $r('app.string.search_placeholder'), text: this.searchQuery })
               .layoutWeight(1)
               .height(36)
               .fontSize(14)
@@ -3017,7 +3179,7 @@ struct Reader {
               .onChange((value: string) => {
                 this.searchQuery = value;
               })
-            Button('搜索')
+            Button($r('app.string.common_search'))
               .fontSize(13).height(36)
               .backgroundColor('#2a7').fontColor(Color.White)
               .onClick(() => {
@@ -3073,7 +3235,7 @@ struct Reader {
                     contrastLevel: this.contrastLevel
                   })
                 }
-              }, (item: number) => `${item}_${this.zoomLevel}_${this.nightMode}_${this.pageMode}_${this.reflowVersion}_${this.pageSplit}_${this.contrastLevel}`)
+              }, (item: number) => `${item}_${this.zoomLevel}_${this.nightMode}_${this.pageMode}_${this.reflowVersion}_${this.pageSplit}_${this.contrastLevel}_${this.renderEpoch}`)
             }
             .index(this.rtlEnabled ? (this.totalPages - 1 - this.currentPage) : this.currentPage)
             .width('100%').height('100%')
@@ -3175,86 +3337,147 @@ struct Reader {
             this.pageGlobalY = typeof gp.y === 'number' ? gp.y : 0;
           })
         } else {
-          /* Vertical continuous scroll mode */
-          List({ scroller: this.vScroller }) {
-            ForEach(this.pageList, (pageIdx: number) => {
-              ListItem() {
-                PageRenderer({ pageIndex: pageIdx, dataSource: this.dataSource, contrastLevel: this.contrastLevel })
+          /* Vertical continuous scroll mode + Round 6 fast-scroll rail */
+          Stack({ alignContent: Alignment.End }) {
+            List({ scroller: this.vScroller }) {
+              ForEach(this.pageList, (pageIdx: number) => {
+                ListItem() {
+                  PageRenderer({ pageIndex: pageIdx, dataSource: this.dataSource, contrastLevel: this.contrastLevel })
+                }
+                .width('100%')
+                .height('100vh')
+              }, (item: number) => `v_${item}_${this.zoomLevel}_${this.nightMode}_${this.reflowVersion}_${this.contrastLevel}_${this.renderEpoch}`)
+            }
+            .width('100%').height('100%')
+            .cachedCount(1)
+            .scrollBar(BarState.Auto)
+            .edgeEffect(EdgeEffect.Spring)
+            .onScrollIndex((index: number) => {
+              if (index !== this.currentPage) {
+                this.onPageChanged(index);
               }
-              .width('100%')
-              .height('100vh')
-            }, (item: number) => `v_${item}_${this.zoomLevel}_${this.nightMode}_${this.reflowVersion}_${this.contrastLevel}`)
+            })
+            .onReachEnd(() => {
+              if (this.autoScroll) {
+                this.autoScroll = false;
+                this.stopAutoScroll();
+              }
+            })
+            .onTouch(() => {
+              /* any manual touch stops the auto-scroll */
+              if (this.autoScroll) {
+                this.autoScroll = false;
+                this.stopAutoScroll();
+              }
+            })
+
+            /* Round 6: fast-scroll rail (drag to seek pages, Android FastScroller parity) */
+            Stack({ alignContent: Alignment.Center }) {
+              if (this.fastScrolling) {
+                Text(`${this.currentPage + 1}/${this.totalPages}`)
+                  .fontSize(13).fontColor('#333')
+                  .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+                  .borderRadius(14)
+                  .backgroundColor('#f5f5f5')
+              }
+            }
+            .width(36).height('100%')
+            .gesture(
+              PanGesture({ fingers: 1, distance: 5 })
+                .onActionStart(() => {
+                  this.fastStartPage = this.currentPage;
+                  this.fastScrolling = true;
+                })
+                .onActionUpdate((event: PanGestureEvent) => {
+                  this.fastPanUpdate(event.offsetY);
+                })
+                .onActionEnd(() => {
+                  this.fastScrolling = false;
+                })
+            )
           }
           .width('100%').layoutWeight(1)
-          .cachedCount(1)
-          .scrollBar(BarState.Auto)
-          .edgeEffect(EdgeEffect.Spring)
-          .onScrollIndex((index: number) => {
-            if (index !== this.currentPage) {
-              this.onPageChanged(index);
-            }
-          })
-          .onReachEnd(() => {
-            if (this.autoScroll) {
-              this.autoScroll = false;
-              this.stopAutoScroll();
-            }
-          })
-          .onTouch(() => {
-            /* any manual touch stops the auto-scroll */
-            if (this.autoScroll) {
-              this.autoScroll = false;
-              this.stopAutoScroll();
-            }
+          .onAreaChange((oldArea: Area, newArea: Area) => {
+            this.pageAreaW = typeof newArea.width === 'number' ? newArea.width : 0;
+            this.pageAreaH = typeof newArea.height === 'number' ? newArea.height : 0;
           })
         }
 
-        // Bottom toolbar (Android hr10/11: brand blue bar, white icons)
-        Row() {
-          Image($r('app.media.ic_search'))
-            .width(22).height(22).fillColor(Color.White).margin({ right: 22 })
-            .onClick(() => this.openSearch())
+        // Bottom toolbar (Android hr10/11: brand blue bar, white icons; Round 6: scrollable + full icon set)
+        Scroll() {
+          Row() {
+            Image($r('app.media.ic_search'))
+              .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
+              .onClick(() => this.openSearch())
 
-          Image($r('app.media.ic_edit'))
-            .width(22).height(22).fillColor(Color.White).margin({ right: 22 })
-            .onClick(() => {
-              this.loadTextRects();
-              this.parseSelLines();
-              this.selMode = true;
-              console.info(`[Reader] Selection mode (bottom bar) on page ${this.currentPage}`);
-            })
+            Image($r('app.media.ic_edit'))
+              .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
+              .onClick(() => {
+                this.loadTextRects();
+                this.parseSelLines();
+                this.selMode = true;
+                console.info(`[Reader] Selection mode (bottom bar) on page ${this.currentPage}`);
+              })
 
-          Image($r('app.media.ic_bookmark'))
-            .width(22).height(22).fillColor(Color.White).margin({ right: 22 })
-            .onClick(() => {
-              this.toggleBookmark();
-            })
+            Image($r('app.media.ic_bookmark'))
+              .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
+              .onClick(() => {
+                this.toggleBookmark();
+              })
 
-          Image($r('app.media.ic_list'))
-            .width(22).height(22).fillColor(Color.White).margin({ right: 22 })
-            .onClick(() => {
-              this.loadBookmarks().then(() => {
-                this.showBookmarks = true;
-                console.info('[Reader] Bookmark panel opened (bottom bar)');
-              });
-            })
+            Image($r('app.media.ic_list'))
+              .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
+              .onClick(() => {
+                this.loadBookmarks().then(() => {
+                  this.showBookmarks = true;
+                  console.info('[Reader] Bookmark panel opened (bottom bar)');
+                });
+              })
 
-          Blank()
+            Image($r('app.media.ic_rewind'))
+              .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
+              .onClick(() => {
+                this.popPageHistory();
+              })
 
-          Image($r('app.media.ic_lock'))
-            .width(22).height(22).fillColor(Color.White).margin({ right: 22 })
-            .onClick(() => {
-              this.toggleFullscreen();
-              console.info('[Reader] Lock/fullscreen toggled (bottom bar)');
-            })
+            Image($r('app.media.ic_thumbnails'))
+              .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
+              .onClick(() => {
+                this.openThumbs();
+              })
 
-          Image($r('app.media.ic_more_vert'))
-            .width(22).height(22).fillColor(Color.White)
-            .onClick(() => {
-              this.showMenu = !this.showMenu;
-              console.info(`[Reader] Menu toggled (bottom bar): ${this.showMenu}`);
-            })
+            Image($r('app.media.ic_headphones'))
+              .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
+              .onClick(() => {
+                this.openTtsPanel();
+              })
+
+            Image($r('app.media.ic_exchange'))
+              .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
+              .onClick(() => {
+                this.toggleScrollMode();
+                console.info(`[Reader] Scroll mode switched (bottom bar): ${this.scrollMode}`);
+              })
+
+            Blank()
+
+            Image($r('app.media.ic_lock'))
+              .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
+              .onClick(() => {
+                this.toggleFullscreen();
+                console.info('[Reader] Lock/fullscreen toggled (bottom bar)');
+              })
+
+            Image($r('app.media.ic_more_vert'))
+              .width(22).height(22).fillColor(Color.White)
+              .onClick(() => {
+                this.showMenu = !this.showMenu;
+                console.info(`[Reader] Menu toggled (bottom bar): ${this.showMenu}`);
+              })
+          }
         }
+        .scrollable(ScrollDirection.Horizontal)
+        .scrollBar(BarState.Off)
         .width('100%').height(44)
         .padding({ left: 16, right: 16 })
         .backgroundColor(this.barBg())
@@ -3333,7 +3556,7 @@ struct Reader {
           Column() {
             /* blue header: 文本 + close */
             Row() {
-              Text('\u6587\u672C')
+              Text($r('app.string.sel_text'))
                 .fontSize(16).fontColor(Color.White)
               Blank()
               Image($r('app.media.ic_close'))
@@ -3351,14 +3574,14 @@ struct Reader {
             Row({ space: 10 }) {
               Text(this.selText.length > 0
                 ? (this.selText.length > 18 ? this.selText.substring(0, 18) + '…' : this.selText)
-                : '\u9009\u62E9\u6587\u672C')
+                : $r('app.string.sel_pick'))
                 .fontSize(15).fontColor('#333')
                 .maxLines(1)
                 .layoutWeight(1)
               Image($r('app.media.ic_sparkle'))
                 .width(22).height(22).fillColor('#00897B')
                 .onClick(() => {
-                  promptAction.showToast({ message: 'AI \u529F\u80FD\u5C06\u5728\u540E\u7EED\u7248\u672C\u63D0\u4F9B' });
+                  promptAction.showToast({ message: $r('app.string.sel_ai_todo') });
                 })
               Image($r('app.media.ic_book_open'))
                 .width(22).height(22).fillColor('#00897B')
@@ -3369,19 +3592,19 @@ struct Reader {
 
             /* markup row */
             Row({ space: 6 }) {
-              Button('\u4E0B\u5212')
+              Button($r('app.string.sel_underline'))
                 .fontSize(11).height(30).layoutWeight(1).padding({ left: 0, right: 0 })
                 .backgroundColor('#1e88e5').fontColor(Color.White)
                 .onClick(() => this.applySelMarkup('underline'))
-              Button('\u5220\u9664')
+              Button($r('app.string.common_delete'))
                 .fontSize(11).height(30).layoutWeight(1).padding({ left: 0, right: 0 })
                 .backgroundColor('#e53935').fontColor(Color.White)
                 .onClick(() => this.applySelMarkup('strikeout'))
-              Button('\u6CE2\u6D6A')
+              Button($r('app.string.sel_squiggly'))
                 .fontSize(11).height(30).layoutWeight(1).padding({ left: 0, right: 0 })
                 .backgroundColor('#8e24aa').fontColor(Color.White)
                 .onClick(() => this.applySelMarkup('squiggly'))
-              Button('\u9AD8\u4EAE')
+              Button($r('app.string.ann_highlight'))
                 .fontSize(11).height(30).layoutWeight(1).padding({ left: 0, right: 0 })
                 .backgroundColor('#fbc02d').fontColor(Color.White)
                 .onClick(() => this.applySelMarkup('highlight'))
@@ -3391,12 +3614,12 @@ struct Reader {
 
             if (this.showSelNoteInput) {
               Row({ space: 8 }) {
-                TextInput({ text: this.selNoteInput, placeholder: '\u7B14\u8BB0\u5185\u5BB9' })
+                TextInput({ text: this.selNoteInput, placeholder: $r('app.string.sel_note_hint') })
                   .layoutWeight(1).height(36).fontSize(13)
                   .onChange((value: string) => {
                     this.selNoteInput = value;
                   })
-                Button('\u6DFB\u52A0')
+                Button($r('app.string.common_add'))
                   .fontSize(12).height(32)
                   .backgroundColor('#00897B').fontColor(Color.White)
                   .onClick(() => this.applySelNote())
@@ -3408,15 +3631,15 @@ struct Reader {
             Divider().color('#eeeeee')
 
             /* menu rows (Android hr12 list) */
-            this.selMenuRow($r('app.media.ic_bookmark'), '\u52A0\u5165\u4E66\u7B7E', 1)
-            this.selMenuRow($r('app.media.ic_share'), '\u5206\u4EAB', 5)
-            this.selMenuRow($r('app.media.ic_copy'), '\u590D\u5236', 2)
-            this.selMenuRow($r('app.media.ic_search'), '\u6587\u5185\u641C\u7D22', 3)
-            this.selMenuRow($r('app.media.ic_sparkle'), '\u53D1\u9001\u7ED9AI', 6)
-            this.selMenuRow($r('app.media.ic_edit'), '\u7B14\u8BB0', 4)
+            this.selMenuRow($r('app.media.ic_bookmark'), this.L($r('app.string.sel_add_bookmark')), 1)
+            this.selMenuRow($r('app.media.ic_share'), this.L($r('app.string.reader_share')), 5)
+            this.selMenuRow($r('app.media.ic_copy'), this.L($r('app.string.sel_copy')), 2)
+            this.selMenuRow($r('app.media.ic_search'), this.L($r('app.string.sel_inbook_search')), 3)
+            this.selMenuRow($r('app.media.ic_sparkle'), this.L($r('app.string.sel_send_ai')), 6)
+            this.selMenuRow($r('app.media.ic_edit'), this.L($r('app.string.sel_note')), 4)
             Divider().color('#eeeeee')
-            this.selMenuRow($r('app.media.ic_globe'), '\u7F51\u7EDC\u641C\u7D22(\u8C37\u6B4C\u7B49)', 7)
-            this.selMenuRow($r('app.media.ic_book_open'), '\u7F51\u7EDC\u8BCD\u5178(\u725B\u6D25\u8BCD\u5178\u7B49)', 8)
+            this.selMenuRow($r('app.media.ic_globe'), this.L($r('app.string.sel_web_search')), 7)
+            this.selMenuRow($r('app.media.ic_book_open'), this.L($r('app.string.sel_web_dict')), 8)
           }
           .width('82%')
           .backgroundColor(Color.White)
@@ -3440,7 +3663,7 @@ struct Reader {
 
           Scroll() {
             Column({ space: 14 }) {
-              Text('阅读设置')
+              Text($r('app.string.reader_settings'))
                 .fontSize(16).fontWeight(FontWeight.Bold)
 
           // Zoom controls
@@ -3457,9 +3680,9 @@ struct Reader {
 
           // Mode toggle
           Row({ space: 8 }) {
-            Text('模式:')
+            Text($r('app.string.reader_mode'))
               .fontSize(13).fontColor('#555')
-            Button(this.scrollMode === 0 ? '水平翻页' : '垂直滚动')
+            Button(this.scrollMode === 0 ? $r('app.string.mode_horizontal') : $r('app.string.mode_vertical'))
               .fontSize(12).height(32)
               .backgroundColor('#e0e0e0').fontColor('#333')
               .onClick(() => this.toggleScrollMode())
@@ -3467,9 +3690,9 @@ struct Reader {
 
           // Page mode toggle (single/double/musician)
           Row({ space: 8 }) {
-            Text('页面:')
+            Text($r('app.string.reader_page'))
               .fontSize(13).fontColor('#555')
-            Button(this.pageMode === 0 ? '单页' : (this.pageMode === 1 ? '双页' : '乐谱'))
+            Button(this.pageMode === 0 ? $r('app.string.page_single') : (this.pageMode === 1 ? $r('app.string.page_double') : $r('app.string.page_music')))
               .fontSize(12).height(32)
               .backgroundColor('#e0e0e0').fontColor('#333')
               .onClick(() => this.togglePageMode())
@@ -3477,9 +3700,9 @@ struct Reader {
 
           // Night mode toggle
           Row({ space: 8 }) {
-            Text('夜间:')
+            Text($r('app.string.reader_night'))
               .fontSize(13).fontColor('#555')
-            Button(this.nightMode ? '开' : '关')
+            Button(this.nightMode ? $r('app.string.common_on') : $r('app.string.common_off'))
               .fontSize(12).height(32)
               .backgroundColor(this.nightMode ? '#333' : '#e0e0e0')
               .fontColor(this.nightMode ? Color.White : '#333')
@@ -3488,7 +3711,7 @@ struct Reader {
 
           // Brightness slider
           Row({ space: 8 }) {
-            Text('亮度:')
+            Text($r('app.string.reader_brightness'))
               .fontSize(13).fontColor('#555')
             Slider({
               value: this.brightnessLevel,
@@ -3506,9 +3729,9 @@ struct Reader {
 
           // Auto-flip toggle
           Row({ space: 8 }) {
-            Text('自动翻页:')
+            Text($r('app.string.reader_autoflip'))
               .fontSize(13).fontColor('#555')
-            Button(this.autoFlip ? '开' : '关')
+            Button(this.autoFlip ? $r('app.string.common_on') : $r('app.string.common_off'))
               .fontSize(12).height(32)
               .backgroundColor(this.autoFlip ? '#2a7' : '#e0e0e0')
               .fontColor(this.autoFlip ? Color.White : '#333')
@@ -3526,9 +3749,9 @@ struct Reader {
 
           // A: auto-scroll toggle (vertical scroll mode)
           Row({ space: 8 }) {
-            Text('\u81EA\u52A8\u6EDA\u52A8:')
+            Text($r('app.string.reader_autoscroll'))
               .fontSize(13).fontColor('#555')
-            Button(this.autoScroll ? '\u5F00' : '\u5173')
+            Button(this.autoScroll ? $r('app.string.common_on') : $r('app.string.common_off'))
               .fontSize(12).height(32)
               .backgroundColor(this.autoScroll ? '#2a7' : '#e0e0e0')
               .fontColor(this.autoScroll ? Color.White : '#333')
@@ -3550,16 +3773,16 @@ struct Reader {
 
           // Annotations & bookmarks
           Row({ space: 8 }) {
-            Button('高亮')
+            Button($r('app.string.ann_highlight'))
               .fontSize(12).height(32)
               .backgroundColor('#ff9800').fontColor(Color.White)
               .onClick(() => this.addHighlightOnPage())
-            Button('手绘')
+            Button($r('app.string.ann_ink'))
               .fontSize(12).height(32)
               .backgroundColor(this.drawMode ? '#333' : '#e0e0e0')
               .fontColor(this.drawMode ? Color.White : '#333')
               .onClick(() => this.toggleDrawMode())
-            Button('保存')
+            Button($r('app.string.common_save'))
               .fontSize(12).height(32)
               .backgroundColor('#2a7').fontColor(Color.White)
               .onClick(() => this.saveAnnotatedDoc())
@@ -3567,9 +3790,9 @@ struct Reader {
 
           // H6: Quick crop toggle (10% margin trim)
           Row({ space: 8 }) {
-            Text('\u88C1\u526A:')
+            Text($r('app.string.reader_crop'))
               .fontSize(13).fontColor('#555')
-            Button(this.cropEnabled ? '\u5F00' : '\u5173')
+            Button(this.cropEnabled ? $r('app.string.common_on') : $r('app.string.common_off'))
               .fontSize(12).height(32)
               .backgroundColor(this.cropEnabled ? '#2a7' : '#e0e0e0')
               .fontColor(this.cropEnabled ? Color.White : '#333')
@@ -3584,9 +3807,9 @@ struct Reader {
 
           /* I1: Fullscreen toggle */
           Row({ space: 8 }) {
-            Text('\u5168\u5C4F:')
+            Text($r('app.string.reader_fullscreen'))
               .fontSize(13).fontColor('#555')
-            Button(this.isFullscreen ? '\u9000\u51FA' : '\u8FDB\u5165')
+            Button(this.isFullscreen ? $r('app.string.common_exit') : $r('app.string.reader_fs_enter'))
               .fontSize(12).height(32)
               .backgroundColor(this.isFullscreen ? '#e57373' : '#e0e0e0')
               .fontColor(this.isFullscreen ? Color.White : '#333')
@@ -3597,7 +3820,7 @@ struct Reader {
 
           /* I5: Blue light filter */
           Row({ space: 8 }) {
-            Text('\u84DD\u5149:')
+            Text($r('app.string.reader_bluelight'))
               .fontSize(13).fontColor('#555')
             Slider({ value: this.blueLightFilter, min: 0, max: 100, step: 5 })
               .layoutWeight(1)
@@ -3608,7 +3831,7 @@ struct Reader {
                   this.persistSettings();
                 }
               })
-            Text(this.blueLightFilter > 0 ? `${this.blueLightFilter}%` : '\u5173')
+            Text(this.blueLightFilter > 0 ? `${this.blueLightFilter}%` : $r('app.string.common_off'))
               .fontSize(11).fontColor('#777').width(36)
           }
 
@@ -3616,7 +3839,7 @@ struct Reader {
           Row({ space: 8 }) {
             Text('RTL:')
               .fontSize(13).fontColor('#555')
-            Button(this.rtlEnabled ? '\u5F00' : '\u5173')
+            Button(this.rtlEnabled ? $r('app.string.common_on') : $r('app.string.common_off'))
               .fontSize(12).height(32)
               .backgroundColor(this.rtlEnabled ? '#2a7' : '#e0e0e0')
               .fontColor(this.rtlEnabled ? Color.White : '#333')
@@ -3633,7 +3856,7 @@ struct Reader {
 
           /* I4: Gesture configuration */
           Row({ space: 8 }) {
-            Button('\u624B\u52BF\u914D\u7F6E')
+            Button($r('app.string.reader_gestures'))
               .fontSize(12).height(32)
               .backgroundColor('#7e57c2').fontColor(Color.White)
               .onClick(() => {
@@ -3645,7 +3868,7 @@ struct Reader {
 
           /* I6: Background image (Phase 7: real picker → sandbox path) */
           Row({ space: 8 }) {
-            Button(this.bgImagePath.length > 0 ? '\u80CC\u666F\u56FE \u2713' : '\u80CC\u666F\u56FE')
+            Button(this.bgImagePath.length > 0 ? $r('app.string.reader_bgimage_on') : $r('app.string.reader_bgimage'))
               .fontSize(12).height(32)
               .backgroundColor('#4db6ac').fontColor(Color.White)
               .onClick(() => {
@@ -3666,7 +3889,7 @@ struct Reader {
 
           /* I7: Text replacement */
           Row({ space: 8 }) {
-            Button('\u6587\u672C\u66FF\u6362')
+            Button($r('app.string.reader_text_replace'))
               .fontSize(12).height(32)
               .backgroundColor('#ff8a65').fontColor(Color.White)
               .onClick(() => {
@@ -3680,7 +3903,7 @@ struct Reader {
             Row({ space: 8 }) {
               Text(`标注 ${this.annotations.length}:`)
                 .fontSize(12).fontColor('#555')
-              Button(`删除第1条`)
+              Button($r('app.string.reader_del_first'))
                 .fontSize(11).height(28)
                 .backgroundColor('#e57373').fontColor(Color.White)
                 .onClick(() => this.deleteAnnotationAt(0))
@@ -3741,14 +3964,14 @@ struct Reader {
 
           // TTS & RSVP entries (sprint D)
           Row({ space: 8 }) {
-            Button('🔊 TTS 朗读')
+            Button($r('app.string.menu_tts'))
               .fontSize(12).height(32)
               .backgroundColor('#7b68ee').fontColor(Color.White)
               .onClick(() => {
                 this.showMenu = false;
                 this.openTtsPanel();
               })
-            Button('⚡ 速读')
+            Button($r('app.string.menu_rsvp'))
               .fontSize(12).height(32)
               .backgroundColor('#e91e63').fontColor(Color.White)
               .onClick(() => {
@@ -3759,7 +3982,7 @@ struct Reader {
 
           // Settings button (sprint E)
           Row({ space: 8 }) {
-            Button('⚙ 设置')
+            Button($r('app.string.menu_settings'))
               .fontSize(12).height(32)
               .backgroundColor('#607d8b').fontColor(Color.White)
               .onClick(() => {
@@ -3772,7 +3995,7 @@ struct Reader {
           // Typography panel toggle (sprint H4/H5) - only for reflowable docs
           if (this.isReflow) {
             Row({ space: 8 }) {
-              Button('\u6392\u7248')
+              Button($r('app.string.reader_typography'))
                 .fontSize(12).height(32)
                 .backgroundColor('#ff7043').fontColor(Color.White)
                 .onClick(() => {
@@ -3785,7 +4008,7 @@ struct Reader {
 
           // TOC button
           if (this.tocEntries.length > 0) {
-            Button('目录 (TOC)')
+            Button($r('app.string.reader_toc'))
               .fontSize(13).height(36)
               .backgroundColor('#2a7').fontColor(Color.White)
               .onClick(() => {
@@ -3796,7 +4019,7 @@ struct Reader {
 
           /* K1: Share book */
           Row({ space: 8 }) {
-            Button('\u5206\u4EAB')
+            Button($r('app.string.reader_share'))
               .fontSize(12).height(32)
               .backgroundColor('#42a5f5').fontColor(Color.White)
               .onClick(() => {
@@ -3807,7 +4030,7 @@ struct Reader {
           }
 
           // File info (sprint G6)
-          Button('📄 文件信息')
+          Button($r('app.string.reader_file_info'))
             .fontSize(13).height(36)
             .backgroundColor('#90a4ae').fontColor(Color.White)
             .onClick(() => {
@@ -3818,7 +4041,7 @@ struct Reader {
             })
 
           // Close menu
-          Button('关闭')
+          Button($r('app.string.common_close'))
             .fontSize(13).height(36)
             .backgroundColor('#f0f0f0').fontColor('#555')
             .onClick(() => {
@@ -3848,26 +4071,26 @@ struct Reader {
 
           Scroll() {
             Column({ space: 12 }) {
-              Text('\u624B\u52BF\u914D\u7F6E')
+              Text($r('app.string.reader_gestures'))
                 .fontSize(15).fontWeight(FontWeight.Bold)
 
               /* Left tap zone */
               Row({ space: 6 }) {
-                Text('\u5DE6\u533A:')
+                Text($r('app.string.reader_zone_left'))
                   .fontSize(12).fontColor('#555').width(40)
-                Button('\u4E0A\u9875').fontSize(11).height(28)
+                Button($r('app.string.action_prev_page')).fontSize(11).height(28)
                   .backgroundColor(this.tapLeftAction === 0 ? '#2a7' : '#e0e0e0')
                   .fontColor(this.tapLeftAction === 0 ? Color.White : '#333')
                   .onClick(() => { this.tapLeftAction = 0; })
-                Button('\u83DC\u5355').fontSize(11).height(28)
+                Button($r('app.string.reader_menu')).fontSize(11).height(28)
                   .backgroundColor(this.tapLeftAction === 1 ? '#2a7' : '#e0e0e0')
                   .fontColor(this.tapLeftAction === 1 ? Color.White : '#333')
                   .onClick(() => { this.tapLeftAction = 1; })
-                Button('\u76EE\u5F55').fontSize(11).height(28)
+                Button($r('app.string.reader_contents')).fontSize(11).height(28)
                   .backgroundColor(this.tapLeftAction === 2 ? '#2a7' : '#e0e0e0')
                   .fontColor(this.tapLeftAction === 2 ? Color.White : '#333')
                   .onClick(() => { this.tapLeftAction = 2; })
-                Button('\u4E66\u7B7E').fontSize(11).height(28)
+                Button($r('app.string.reader_bookmark')).fontSize(11).height(28)
                   .backgroundColor(this.tapLeftAction === 3 ? '#2a7' : '#e0e0e0')
                   .fontColor(this.tapLeftAction === 3 ? Color.White : '#333')
                   .onClick(() => { this.tapLeftAction = 3; })
@@ -3875,17 +4098,17 @@ struct Reader {
 
               /* Center tap zone */
               Row({ space: 6 }) {
-                Text('\u4E2D\u533A:')
+                Text($r('app.string.reader_zone_center'))
                   .fontSize(12).fontColor('#555').width(40)
-                Button('\u83DC\u5355').fontSize(11).height(28)
+                Button($r('app.string.reader_menu')).fontSize(11).height(28)
                   .backgroundColor(this.tapCenterAction === 0 ? '#2a7' : '#e0e0e0')
                   .fontColor(this.tapCenterAction === 0 ? Color.White : '#333')
                   .onClick(() => { this.tapCenterAction = 0; })
-                Button('\u5168\u5C4F').fontSize(11).height(28)
+                Button($r('app.string.action_fullscreen')).fontSize(11).height(28)
                   .backgroundColor(this.tapCenterAction === 1 ? '#2a7' : '#e0e0e0')
                   .fontColor(this.tapCenterAction === 1 ? Color.White : '#333')
                   .onClick(() => { this.tapCenterAction = 1; })
-                Button('\u4EAE\u5EA6').fontSize(11).height(28)
+                Button($r('app.string.reader_brightness_n')).fontSize(11).height(28)
                   .backgroundColor(this.tapCenterAction === 2 ? '#2a7' : '#e0e0e0')
                   .fontColor(this.tapCenterAction === 2 ? Color.White : '#333')
                   .onClick(() => { this.tapCenterAction = 2; })
@@ -3893,27 +4116,27 @@ struct Reader {
 
               /* Right tap zone */
               Row({ space: 6 }) {
-                Text('\u53F3\u533A:')
+                Text($r('app.string.reader_zone_right'))
                   .fontSize(12).fontColor('#555').width(40)
-                Button('\u4E0B\u9875').fontSize(11).height(28)
+                Button($r('app.string.action_next_page')).fontSize(11).height(28)
                   .backgroundColor(this.tapRightAction === 0 ? '#2a7' : '#e0e0e0')
                   .fontColor(this.tapRightAction === 0 ? Color.White : '#333')
                   .onClick(() => { this.tapRightAction = 0; })
-                Button('\u83DC\u5355').fontSize(11).height(28)
+                Button($r('app.string.reader_menu')).fontSize(11).height(28)
                   .backgroundColor(this.tapRightAction === 1 ? '#2a7' : '#e0e0e0')
                   .fontColor(this.tapRightAction === 1 ? Color.White : '#333')
                   .onClick(() => { this.tapRightAction = 1; })
-                Button('\u76EE\u5F55').fontSize(11).height(28)
+                Button($r('app.string.reader_contents')).fontSize(11).height(28)
                   .backgroundColor(this.tapRightAction === 2 ? '#2a7' : '#e0e0e0')
                   .fontColor(this.tapRightAction === 2 ? Color.White : '#333')
                   .onClick(() => { this.tapRightAction = 2; })
-                Button('\u4E66\u7B7E').fontSize(11).height(28)
+                Button($r('app.string.reader_bookmark')).fontSize(11).height(28)
                   .backgroundColor(this.tapRightAction === 3 ? '#2a7' : '#e0e0e0')
                   .fontColor(this.tapRightAction === 3 ? Color.White : '#333')
                   .onClick(() => { this.tapRightAction = 3; })
               }
 
-              Button('\u4FDD\u5B58')
+              Button($r('app.string.common_save'))
                 .fontSize(13).height(34)
                 .backgroundColor('#2a7').fontColor(Color.White)
                 .margin({ top: 8 })
@@ -3941,19 +4164,19 @@ struct Reader {
             .onClick(() => { this.showTextReplace = false; })
 
           Column({ space: 12 }) {
-            Text('\u6587\u672C\u66FF\u6362 (reflow)')
+            Text($r('app.string.repl_title'))
               .fontSize(15).fontWeight(FontWeight.Bold)
 
-            TextInput({ placeholder: '\u641C\u7D22\u6587\u672C...' })
+            TextInput({ placeholder: $r('app.string.repl_find_placeholder') })
               .fontSize(13).height(36)
               .onChange((v: string) => { this.replaceFrom = v; })
 
-            TextInput({ placeholder: '\u66FF\u6362\u4E3A...' })
+            TextInput({ placeholder: $r('app.string.repl_replace') })
               .fontSize(13).height(36)
               .onChange((v: string) => { this.replaceTo = v; })
 
             Row({ space: 8 }) {
-              Button('\u5E94\u7528')
+              Button($r('app.string.common_apply'))
                 .fontSize(12).height(32).layoutWeight(1)
                 .backgroundColor('#2a7').fontColor(Color.White)
                 .onClick(() => {
@@ -3962,18 +4185,18 @@ struct Reader {
                   this.showTextReplace = false;
                 })
               Row() {
-                Button('\uD83D\uDCE5 \u5BFC\u51FA\u6587\u672C')
+                Button($r('app.string.repl_export'))
                   .fontSize(12).height(30)
                   .onClick(() => { this.exportTtsText(); })
               }.width('90%').margin({ top: 8 })
 
-              Button('\u5173\u95ED')
+              Button($r('app.string.common_close'))
                 .fontSize(12).height(32).layoutWeight(1)
                 .backgroundColor('#e0e0e0').fontColor('#333')
                 .onClick(() => { this.showTextReplace = false; })
             }
 
-            Text('\u6CE8: \u4EC5\u5BF9 reflowable \u6587\u6863 (EPUB/HTML) \u751F\u6548')
+            Text($r('app.string.repl_hint'))
               .fontSize(10).fontColor('#999')
           }
           .width('80%')
@@ -3995,26 +4218,26 @@ struct Reader {
 
           Scroll() {
             Column({ space: 12 }) {
-              Text('\u6392\u7248\u8BBE\u7F6E (EPUB/HTML)')
+              Text($r('app.string.typo_title'))
                 .fontSize(15).fontWeight(FontWeight.Bold)
 
               /* H4: Text alignment */
               Row({ space: 6 }) {
-                Text('\u5BF9\u9F50:')
+                Text($r('app.string.typo_align'))
                   .fontSize(12).fontColor('#555')
-                Button('\u5DE6').fontSize(11).height(30)
+                Button($r('app.string.typo_left')).fontSize(11).height(30)
                   .backgroundColor(this.textAlign === 0 ? '#2a7' : '#e0e0e0')
                   .fontColor(this.textAlign === 0 ? Color.White : '#333')
                   .onClick(() => { this.textAlign = 0; this.applyTypography(); })
-                Button('\u4E2D').fontSize(11).height(30)
+                Button($r('app.string.typo_center')).fontSize(11).height(30)
                   .backgroundColor(this.textAlign === 1 ? '#2a7' : '#e0e0e0')
                   .fontColor(this.textAlign === 1 ? Color.White : '#333')
                   .onClick(() => { this.textAlign = 1; this.applyTypography(); })
-                Button('\u53F3').fontSize(11).height(30)
+                Button($r('app.string.typo_right')).fontSize(11).height(30)
                   .backgroundColor(this.textAlign === 2 ? '#2a7' : '#e0e0e0')
                   .fontColor(this.textAlign === 2 ? Color.White : '#333')
                   .onClick(() => { this.textAlign = 2; this.applyTypography(); })
-                Button('\u4E24\u7AEF').fontSize(11).height(30)
+                Button($r('app.string.typo_justify')).fontSize(11).height(30)
                   .backgroundColor(this.textAlign === 3 ? '#2a7' : '#e0e0e0')
                   .fontColor(this.textAlign === 3 ? Color.White : '#333')
                   .onClick(() => { this.textAlign = 3; this.applyTypography(); })
@@ -4022,7 +4245,7 @@ struct Reader {
 
               /* H4: Paragraph spacing */
               Row({ space: 8 }) {
-                Text('\u6BB5\u8D70:')
+                Text($r('app.string.typo_indent'))
                   .fontSize(12).fontColor('#555')
                 Slider({ value: this.paragraphSpacing, min: 0, max: 32, step: 2 })
                   .layoutWeight(1)
@@ -4038,9 +4261,9 @@ struct Reader {
 
               /* H5: Hyphenation toggle */
               Row({ space: 8 }) {
-                Text('\u8FDE\u5B57\u7B26:')
+                Text($r('app.string.typo_hyphen'))
                   .fontSize(12).fontColor('#555')
-                Button(this.hyphenationEnabled ? '\u5F00' : '\u5173')
+                Button(this.hyphenationEnabled ? $r('app.string.common_on') : $r('app.string.common_off'))
                   .fontSize(12).height(30)
                   .backgroundColor(this.hyphenationEnabled ? '#2a7' : '#e0e0e0')
                   .fontColor(this.hyphenationEnabled ? Color.White : '#333')
@@ -4048,14 +4271,14 @@ struct Reader {
                     this.hyphenationEnabled = !this.hyphenationEnabled;
                     this.applyTypography();
                   })
-                Text('(\u82F1\u6587)')
+                Text($r('app.string.typo_hyphen_en'))
                   .fontSize(10).fontColor('#999')
               }
 
 
                 /* Sprint L: text indent slider */
                 Row() {
-                  Text('\u7F29\u8FDB').fontSize(12).fontColor('#555').width(50)
+                  Text($r('app.string.typo_indent_n')).fontSize(12).fontColor('#555').width(50)
                   Slider({ value: this.textIndent, min: 0, max: 4, step: 0.5 })
                     .layoutWeight(1)
                     .onChange((v: number) => { this.textIndent = v; })
@@ -4063,8 +4286,8 @@ struct Reader {
 
                 /* Sprint L: drop cap toggle */
                 Row() {
-                  Text('\u9996\u5B57\u4E0B\u6C89').fontSize(12).fontColor('#555')
-                  Button(this.dropCapEnabled ? '\u5F00' : '\u5173')
+                  Text($r('app.string.typo_dropcap')).fontSize(12).fontColor('#555')
+                  Button(this.dropCapEnabled ? $r('app.string.common_on') : $r('app.string.common_off'))
                     .fontSize(12).height(30)
                     .backgroundColor(this.dropCapEnabled ? '#2a7' : '#e0e0e0')
                     .fontColor(this.dropCapEnabled ? Color.White : '#333')
@@ -4076,29 +4299,29 @@ struct Reader {
 
                 /* Sprint L: font family selector */
                 Row() {
-                  Text('\u5B57\u4F53').fontSize(12).fontColor('#555').width(50)
-                  Button('\u9ED8\u8BA4')
+                  Text($r('app.string.typo_font')).fontSize(12).fontColor('#555').width(50)
+                  Button($r('app.string.common_default'))
                     .height(28).fontSize(11).layoutWeight(1)
                     .backgroundColor(this.fontFamilyIdx === 0 ? '#2a7' : '#e0e0e0')
                     .fontColor(this.fontFamilyIdx === 0 ? Color.White : '#333')
                     .onClick(() => { this.fontFamilyIdx = 0; this.applyTypography(); })
-                  Button('\u886C\u7EBF')
+                  Button($r('app.string.font_serif'))
                     .height(28).fontSize(11).layoutWeight(1).margin({ left: 4 })
                     .backgroundColor(this.fontFamilyIdx === 1 ? '#2a7' : '#e0e0e0')
                     .fontColor(this.fontFamilyIdx === 1 ? Color.White : '#333')
                     .onClick(() => { this.fontFamilyIdx = 1; this.applyTypography(); })
-                  Button('\u65E0\u886C')
+                  Button($r('app.string.font_sans'))
                     .height(28).fontSize(11).layoutWeight(1).margin({ left: 4 })
                     .backgroundColor(this.fontFamilyIdx === 2 ? '#2a7' : '#e0e0e0')
                     .fontColor(this.fontFamilyIdx === 2 ? Color.White : '#333')
                     .onClick(() => { this.fontFamilyIdx = 2; this.applyTypography(); })
-                  Button('\u7B49\u5BBD')
+                  Button($r('app.string.font_mono'))
                     .height(28).fontSize(11).layoutWeight(1).margin({ left: 4 })
                     .backgroundColor(this.fontFamilyIdx === 3 ? '#2a7' : '#e0e0e0')
                     .fontColor(this.fontFamilyIdx === 3 ? Color.White : '#333')
                     .onClick(() => { this.fontFamilyIdx = 3; this.applyTypography(); })
                 }.width('90%').margin({ top: 8 })
-              Button('\u5B8C\u6210')
+              Button($r('app.string.common_done'))
                 .fontSize(13).height(34)
                 .backgroundColor('#e0e0e0').fontColor('#333')
                 .margin({ top: 8 })
@@ -4128,7 +4351,7 @@ struct Reader {
             })
 
           Column({ space: 10 }) {
-            Text('📄 文件信息')
+            Text($r('app.string.reader_file_info'))
               .fontSize(16).fontWeight(FontWeight.Bold)
 
             if (this.fileInfoText.length > 0) {
@@ -4137,11 +4360,11 @@ struct Reader {
                 .width('100%')
                 .textAlign(TextAlign.Start)
             } else {
-              Text('加载中...')
+              Text($r('app.string.common_loading'))
                 .fontSize(13).fontColor('#999')
             }
 
-            Button('关闭')
+            Button($r('app.string.common_close'))
               .fontSize(13).height(34)
               .backgroundColor('#e0e0e0').fontColor('#333')
               .margin({ top: 8 })
@@ -4196,10 +4419,10 @@ struct Reader {
 
           Column() {
             Row({ space: 8 }) {
-              Text('书签')
+              Text($r('app.string.reader_bookmark'))
                 .fontSize(16).fontWeight(FontWeight.Bold)
               Blank()
-              Text('\u5BFC\u51FA')
+              Text($r('app.string.reader_export'))
                 .fontSize(13).fontColor($r('app.color.brand_primary'))
                 .onClick(() => {
                   this.showExportDialog = true;
@@ -4209,14 +4432,14 @@ struct Reader {
             .margin({ bottom: 8 })
 
             if (this.bookmarks.length === 0) {
-              Text('(暂无书签，点顶栏 🔖 添加)')
+              Text($r('app.string.bookmarks_empty'))
                 .fontSize(13).fontColor(Color.Gray)
             } else {
               List() {
                 ForEach(this.bookmarks, (bm: Bookmark) => {
                   ListItem() {
                     Row() {
-                      Text(`p${bm.page + 1}  ${bm.label.length > 0 ? bm.label : '书签'}`)
+                      Text(`p${bm.page + 1}  ${bm.label.length > 0 ? bm.label : $r('app.string.reader_bookmark')}`)
                         .fontSize(13).fontColor('#333')
                         .layoutWeight(1)
                         .onClick(() => {
@@ -4241,7 +4464,7 @@ struct Reader {
             /* AI 笔记 (hr17): AI 回答 / 简介 / 翻译，按时间倒序 */
             Divider().color('#eeeeee').margin({ top: 8, bottom: 8 })
             Row({ space: 6 }) {
-              Text('AI \u7B14\u8BB0')
+              Text($r('app.string.ai_notes'))
                 .fontSize(14).fontWeight(FontWeight.Bold).fontColor('#333')
               Text(`(${this.aiNotes.length})`)
                 .fontSize(12).fontColor('#999')
@@ -4249,7 +4472,7 @@ struct Reader {
             .width('100%')
 
             if (this.aiNotes.length === 0) {
-              Text('(\u6682\u65E0\uFF0C\u9009\u4E2D\u6587\u672C\u53D1\u9001\u7ED9AI\u6216\u4F7F\u7528AI\u7FFB\u8BD1)')
+              Text($r('app.string.ai_notes_empty'))
                 .fontSize(12).fontColor(Color.Gray)
             } else {
               List() {
@@ -4315,7 +4538,7 @@ struct Reader {
               Text(`(${this.annAll.length})`)
                 .fontSize(12).fontColor('#999')
               Blank()
-              Text('刷新')
+              Text($r('app.string.common_refresh'))
                 .fontSize(13).fontColor($r('app.color.brand_primary'))
                 .onClick(() => {
                   this.openAnnPanel();
@@ -4377,6 +4600,75 @@ struct Reader {
         .justifyContent(FlexAlign.End)
       }
 
+      /* Round 6: encrypted-document password dialog */
+      if (this.showPwd) {
+        Column({ space: 12 }) {
+          Text($r('app.string.pwd_dialog_title'))
+            .fontSize(16).fontWeight(FontWeight.Medium).fontColor('#212121')
+          Text($r('app.string.pwd_dialog_hint'))
+            .fontSize(12).fontColor('#888')
+          TextInput({ placeholder: $r('app.string.common_password'), text: this.pwdInput })
+            .type(InputType.Password)
+            .height(40).width('100%').fontSize(14)
+            .onChange((v: string) => {
+              this.pwdInput = v;
+            })
+          Row({ space: 10 }) {
+            Button($r('app.string.common_cancel'))
+              .fontSize(14).height(36).layoutWeight(1)
+              .backgroundColor('#e0e0e0').fontColor('#333')
+              .onClick(() => {
+                this.showPwd = false;
+                router.back();
+              })
+            Button($r('app.string.common_unlock'))
+              .fontSize(14).height(36).layoutWeight(1)
+              .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+              .onClick(() => {
+                this.doUnlockDoc();
+              })
+          }
+          .width('100%')
+        }
+        .width('72%')
+        .padding(16)
+        .borderRadius(12)
+        .backgroundColor(this.chromeBg())
+      }
+
+      /* Round 6: jump-to-page dialog */
+      if (this.showJump) {
+        Column({ space: 12 }) {
+          Text($r('app.string.jump_title'))
+            .fontSize(16).fontWeight(FontWeight.Medium).fontColor('#212121')
+          TextInput({ placeholder: `1-${this.totalPages}`, text: this.jumpInput })
+            .type(InputType.Number)
+            .height(40).width('100%').fontSize(14)
+            .onChange((v: string) => {
+              this.jumpInput = v;
+            })
+          Row({ space: 10 }) {
+            Button($r('app.string.common_cancel'))
+              .fontSize(14).height(36).layoutWeight(1)
+              .backgroundColor('#e0e0e0').fontColor('#333')
+              .onClick(() => {
+                this.showJump = false;
+              })
+            Button($r('app.string.jump_go'))
+              .fontSize(14).height(36).layoutWeight(1)
+              .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+              .onClick(() => {
+                this.doJump();
+              })
+          }
+          .width('100%')
+        }
+        .width('72%')
+        .padding(16)
+        .borderRadius(12)
+        .backgroundColor(this.chromeBg())
+      }
+
       /* Round 5: page thumbnail grid dialog */
       if (this.showThumbs) {
         this.buildThumbDialog()
@@ -4403,9 +4695,9 @@ struct Reader {
             })
 
           Column({ space: 12 }) {
-            Text('\u5BFC\u51FA\u7B14\u8BB0\u4E0E\u4E66\u7B7E')
+            Text($r('app.string.export_title'))
               .fontSize(15).fontWeight(FontWeight.Bold)
-            Text('\u5305\u542B\u4E66\u7B7E\u4E0E AI \u7B14\u8BB0\uFF0C\u6BCF\u6761\u5E26\u4F4D\u7F6E\u4E0E\u65F6\u95F4')
+            Text($r('app.string.export_hint'))
               .fontSize(11).fontColor('#999')
             Button('TXT')
               .width('80%').height(38).fontSize(13)
@@ -4419,7 +4711,7 @@ struct Reader {
               .onClick(() => {
                 this.doExportNotes(true);
               })
-            Button('\u53D6\u6D88')
+            Button($r('app.string.common_cancel'))
               .width('80%').height(34).fontSize(13)
               .backgroundColor('#e0e0e0').fontColor('#333')
               .onClick(() => {
@@ -4462,19 +4754,19 @@ struct Reader {
 
           Scroll() {
             Column({ space: 12 }) {
-              Text('朗读 (TTS)')
+              Text($r('app.string.tts_panel_title'))
                 .fontSize(16).fontWeight(FontWeight.Bold)
 
               Text(this.ttsStatus)
                 .fontSize(13).fontColor(this.ttsEngineOk ? '#2a7' : '#e57373')
 
               if (!this.ttsEngineOk) {
-                Text('当前设备未提供语音引擎，可改用速读模式。')
+                Text($r('app.string.tts_no_engine_hint'))
                   .fontSize(11).fontColor('#e57373').textAlign(TextAlign.Center)
               }
 
               Text(this.ttsSentences.length > 0 && this.ttsIndex < this.ttsSentences.length
-                ? this.ttsSentences[this.ttsIndex] : '(本页无文本)')
+                ? this.ttsSentences[this.ttsIndex] : $r('app.string.tts_no_text'))
                 .fontSize(12).fontColor('#333').maxLines(2)
                 .textOverflow({ overflow: TextOverflow.Ellipsis })
 
@@ -4490,18 +4782,18 @@ struct Reader {
                   .fontSize(16).height(40).width(56)
                   .backgroundColor('#e57373').fontColor(Color.White)
                   .onClick(() => this.ttsStop())
-                Button('上一句')
+                Button($r('app.string.tts_prev_sentence'))
                   .fontSize(12).height(40)
                   .backgroundColor('#e0e0e0').fontColor('#333')
                   .onClick(() => this.ttsPrevSentence())
-                Button('下一句')
+                Button($r('app.string.tts_next_sentence'))
                   .fontSize(12).height(40)
                   .backgroundColor('#e0e0e0').fontColor('#333')
                   .onClick(() => this.ttsNextSentence())
               }
 
               Row({ space: 8 }) {
-                Text('语速:')
+                Text($r('app.string.tts_rate'))
                   .fontSize(13).fontColor('#555')
                 Slider({
                   value: this.ttsRate,
@@ -4516,7 +4808,7 @@ struct Reader {
               }
 
               Row({ space: 8 }) {
-                Text('音调:')
+                Text($r('app.string.tts_pitch'))
                   .fontSize(13).fontColor('#555')
                 Slider({
                   value: this.ttsPitch,
@@ -4531,14 +4823,14 @@ struct Reader {
               }
 
               Row({ space: 8 }) {
-                Button('⚡ 转速读')
+                Button($r('app.string.tts_switch_rsvp'))
                   .fontSize(12).height(36)
                   .backgroundColor('#e91e63').fontColor(Color.White)
                   .onClick(() => {
                     this.closeTtsPanel();
                     this.openRsvpPanel();
                   })
-                Button('关闭')
+                Button($r('app.string.common_close'))
                   .fontSize(13).height(36)
                   .backgroundColor('#f0f0f0').fontColor('#555')
                   .onClick(() => this.closeTtsPanel())
@@ -4569,7 +4861,7 @@ struct Reader {
 
           Scroll() {
             Column({ space: 12 }) {
-              Text('速读 (RSVP)')
+              Text($r('app.string.rsvp_title'))
                 .fontSize(16).fontWeight(FontWeight.Bold)
 
               Text(`${this.rsvpWpm} 字/分`)
@@ -4577,7 +4869,7 @@ struct Reader {
 
               /* word flash area */
               Column() {
-                Text(this.rsvpWord.length > 0 ? this.rsvpWord : '▶ 开始')
+                Text(this.rsvpWord.length > 0 ? this.rsvpWord : $r('app.string.rsvp_start'))
                   .fontSize(44).fontWeight(FontWeight.Bold)
                   .fontColor('#222')
                   .textAlign(TextAlign.Center)
@@ -4593,22 +4885,22 @@ struct Reader {
                 .fontSize(11).fontColor('#777')
 
               Row({ space: 10 }) {
-                Button(this.rsvpPaused ? '▶ 继续' : '▶ 开始')
+                Button(this.rsvpPaused ? $r('app.string.rsvp_resume') : $r('app.string.rsvp_start'))
                   .fontSize(13).height(40)
                   .backgroundColor('#e91e63').fontColor(Color.White)
                   .onClick(() => this.rsvpToggle())
-                Button('⏸ 暂停')
+                Button($r('app.string.rsvp_pause'))
                   .fontSize(13).height(40)
                   .backgroundColor('#ff9800').fontColor(Color.White)
                   .onClick(() => this.rsvpPause())
-                Button('⏹ 停止')
+                Button($r('app.string.rsvp_stop'))
                   .fontSize(13).height(40)
                   .backgroundColor('#e57373').fontColor(Color.White)
                   .onClick(() => this.rsvpStop())
               }
 
               Row({ space: 8 }) {
-                Text('速度:')
+                Text($r('app.string.rsvp_speed'))
                   .fontSize(13).fontColor('#555')
                 Slider({
                   value: this.rsvpWpm,
@@ -4622,10 +4914,10 @@ struct Reader {
                   .fontSize(11).fontColor('#777').width(36)
               }
 
-              Text('读完当前页自动进入下一页 · 手动翻页会重置到新页')
+              Text($r('app.string.rsvp_hint'))
                 .fontSize(11).fontColor('#999').textAlign(TextAlign.Center)
 
-              Button('🔊 转朗读')
+              Button($r('app.string.rsvp_switch_tts'))
                 .fontSize(12).height(36)
                 .backgroundColor('#7b68ee').fontColor(Color.White)
                 .onClick(() => {
@@ -4633,7 +4925,7 @@ struct Reader {
                   this.openTtsPanel();
                 })
 
-              Button('关闭')
+              Button($r('app.string.common_close'))
                 .fontSize(13).height(36)
                 .backgroundColor('#f0f0f0').fontColor('#555')
                 .onClick(() => this.closeRsvpPanel())
@@ -4664,11 +4956,11 @@ struct Reader {
 
           Scroll() {
             Column({ space: 12 }) {
-              Text('阅读设置')
+              Text($r('app.string.reader_settings'))
                 .fontSize(16).fontWeight(FontWeight.Bold)
 
               Row({ space: 8 }) {
-                Text('主题:')
+                Text($r('app.string.set_theme'))
                   .fontSize(13).fontColor('#555')
                 ForEach(THEME_NAMES, (name: string, idx: number) => {
                   Button(name)
@@ -4681,7 +4973,7 @@ struct Reader {
 
               if (this.isReflow) {
                 Row({ space: 8 }) {
-                  Text('字号:')
+                  Text($r('app.string.set_font_size'))
                     .fontSize(13).fontColor('#555')
                   Slider({ value: this.fontSize, min: 10, max: 28, step: 1 })
                     .layoutWeight(1)
@@ -4696,7 +4988,7 @@ struct Reader {
                 }
 
                 Row({ space: 8 }) {
-                  Text('行距:')
+                  Text($r('app.string.set_line_height'))
                     .fontSize(13).fontColor('#555')
                   Slider({ value: this.lineHeight, min: 1.0, max: 2.5, step: 0.1 })
                     .layoutWeight(1)
@@ -4711,7 +5003,7 @@ struct Reader {
                 }
 
                 Row({ space: 8 }) {
-                  Text('页边距:')
+                  Text($r('app.string.set_margin'))
                     .fontSize(13).fontColor('#555')
                   Slider({ value: this.pageMargin, min: 0, max: 80, step: 4 })
                     .layoutWeight(1)
@@ -4725,14 +5017,14 @@ struct Reader {
                     .fontSize(11).fontColor('#777').width(36)
                 }
               } else {
-                Text('PDF 为固定版面：字号/行距/页边距不可调，使用 A-/A+ 缩放')
+                Text($r('app.string.set_pdf_fixed_hint'))
                   .fontSize(11).fontColor('#888').textAlign(TextAlign.Center)
               }
 
-              Text('主题变更即时生效：深色/OLED 反色渲染，墨色为纸张暖色')
+              Text($r('app.string.set_theme_hint'))
                 .fontSize(11).fontColor('#999').textAlign(TextAlign.Center)
 
-              Button('关闭')
+              Button($r('app.string.common_close'))
                 .fontSize(13).height(36)
                 .backgroundColor('#f0f0f0').fontColor('#555')
                 .onClick(() => {

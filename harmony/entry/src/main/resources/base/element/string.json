@@ -185,8 +185,1636 @@
       "value": "Biometrics unavailable"
     },
     {
+      "name": "form_tts_label",
+      "value": "TTS Playback"
+    },
+    {
+      "name": "form_tts_desc",
+      "value": "Control text-to-speech playback"
+    },
+    {
       "name": "biom_fail",
       "value": "Verification failed"
+    },
+    {
+      "name": "about_based",
+      "value": "Ported from the Android version"
+    },
+    {
+      "name": "about_brand",
+      "value": "HowRead"
+    },
+    {
+      "name": "about_engine",
+      "value": "MuPDF 1.23.7 engine · multi-format reading"
+    },
+    {
+      "name": "about_version",
+      "value": "HarmonyOS port 1.0.0"
+    },
+    {
+      "name": "action_fullscreen",
+      "value": "Full screen"
+    },
+    {
+      "name": "action_next_page",
+      "value": "Next page"
+    },
+    {
+      "name": "action_prev_page",
+      "value": "Prev page"
+    },
+    {
+      "name": "ai_config_title",
+      "value": "AI model"
+    },
+    {
+      "name": "ai_intro_book",
+      "value": "AI book intro"
+    },
+    {
+      "name": "ai_intro_generating",
+      "value": "Generating intro…"
+    },
+    {
+      "name": "ai_intro_saved",
+      "value": "AI intro saved to notes"
+    },
+    {
+      "name": "ai_intro_title",
+      "value": "AI intro"
+    },
+    {
+      "name": "ai_key",
+      "value": "API key"
+    },
+    {
+      "name": "ai_list_models",
+      "value": "List models"
+    },
+    {
+      "name": "ai_max_tokens",
+      "value": "Max tokens"
+    },
+    {
+      "name": "ai_model",
+      "value": "Model"
+    },
+    {
+      "name": "ai_models_failed",
+      "value": "List models failed"
+    },
+    {
+      "name": "ai_models_failed2",
+      "value": "List models failed: "
+    },
+    {
+      "name": "ai_models_found",
+      "value": "Found "
+    },
+    {
+      "name": "ai_not_configured",
+      "value": "Configure an AI model in Preferences first"
+    },
+    {
+      "name": "ai_notes",
+      "value": "AI notes"
+    },
+    {
+      "name": "ai_notes_empty",
+      "value": "(None yet; select text and send to AI, or use AI translate)"
+    },
+    {
+      "name": "ai_openai_compat",
+      "value": "OpenAI compatible"
+    },
+    {
+      "name": "ai_protocol",
+      "value": "Protocol"
+    },
+    {
+      "name": "ai_provider",
+      "value": "Provider"
+    },
+    {
+      "name": "ai_request_failed",
+      "value": "Request failed: "
+    },
+    {
+      "name": "ai_requesting",
+      "value": "Requesting model…"
+    },
+    {
+      "name": "ai_saved",
+      "value": "AI configuration saved"
+    },
+    {
+      "name": "ai_test_failed2",
+      "value": "Test failed: "
+    },
+    {
+      "name": "ai_test_hint",
+      "value": "Type text to test the model"
+    },
+    {
+      "name": "ai_thinking",
+      "value": "Thinking mode"
+    },
+    {
+      "name": "ai_url",
+      "value": "API URL"
+    },
+    {
+      "name": "aichat_answer",
+      "value": "AI answer"
+    },
+    {
+      "name": "aichat_answer_hint",
+      "value": "(The model answer appears here after you tap Send)"
+    },
+    {
+      "name": "aichat_no_text",
+      "value": "Enter or paste text first"
+    },
+    {
+      "name": "aichat_not_configured",
+      "value": "Configure an AI model in Preferences - General first"
+    },
+    {
+      "name": "aichat_not_configured2",
+      "value": "No AI model configured; fill in the API info in Preferences - General first"
+    },
+    {
+      "name": "aichat_q",
+      "value": "Q: "
+    },
+    {
+      "name": "aichat_question_example",
+      "value": "e.g. What does this passage mean?"
+    },
+    {
+      "name": "aichat_question_hint",
+      "value": "Your question (optional; empty = explain the text)"
+    },
+    {
+      "name": "aichat_saved",
+      "value": "Saved to notes"
+    },
+    {
+      "name": "aichat_send",
+      "value": "Send"
+    },
+    {
+      "name": "aichat_text_hint",
+      "value": "Selected text (editable)"
+    },
+    {
+      "name": "aichat_text_placeholder",
+      "value": "Type or paste text…"
+    },
+    {
+      "name": "aichat_title",
+      "value": "AI Q&A"
+    },
+    {
+      "name": "anim_curl",
+      "value": "Curl"
+    },
+    {
+      "name": "anim_fade",
+      "value": "Fade"
+    },
+    {
+      "name": "anim_slide",
+      "value": "Slide"
+    },
+    {
+      "name": "ann_highlight",
+      "value": "Highlight"
+    },
+    {
+      "name": "ann_ink",
+      "value": "Ink"
+    },
+    {
+      "name": "backup_export",
+      "value": "Export backup"
+    },
+    {
+      "name": "backup_invalid",
+      "value": "Invalid backup file"
+    },
+    {
+      "name": "backup_restore",
+      "value": "Restore backup"
+    },
+    {
+      "name": "backup_restore_failed",
+      "value": "Restore failed (export first)"
+    },
+    {
+      "name": "bm_empty_index",
+      "value": "No bookmarks yet; tap 🔖 in the reader to add"
+    },
+    {
+      "name": "bm_no_match",
+      "value": "No matches"
+    },
+    {
+      "name": "bm_search_placeholder",
+      "value": "Search bookmarks..."
+    },
+    {
+      "name": "bookmarks_empty",
+      "value": "(No bookmarks; tap 🔖 in the top bar to add)"
+    },
+    {
+      "name": "bookmarks_empty_alt",
+      "value": "No bookmarks yet; tap \\u{1F516} in the reader to add"
+    },
+    {
+      "name": "browse_books",
+      "value": "Readable files"
+    },
+    {
+      "name": "browse_delete",
+      "value": "✖ Delete"
+    },
+    {
+      "name": "browse_empty",
+      "value": "Empty folder"
+    },
+    {
+      "name": "browse_files",
+      "value": "Files / folders"
+    },
+    {
+      "name": "browse_folder_name",
+      "value": "Folder name"
+    },
+    {
+      "name": "browse_grid_btn",
+      "value": "▦ Grid"
+    },
+    {
+      "name": "browse_imported",
+      "value": "Imported books (library)"
+    },
+    {
+      "name": "browse_library_folder",
+      "value": "Library folder"
+    },
+    {
+      "name": "browse_list_btn",
+      "value": "≡ List"
+    },
+    {
+      "name": "browse_new_folder",
+      "value": "New folder"
+    },
+    {
+      "name": "browse_opds",
+      "value": "Online catalogs (OPDS)"
+    },
+    {
+      "name": "browse_open",
+      "value": "\\u{1F4C4} Open"
+    },
+    {
+      "name": "browse_rename",
+      "value": "✏ Rename"
+    },
+    {
+      "name": "browse_search_docs",
+      "value": "Search across documents"
+    },
+    {
+      "name": "browser_unavailable",
+      "value": "Cannot open the browser"
+    },
+    {
+      "name": "card_starred",
+      "value": "★ Starred"
+    },
+    {
+      "name": "chip_all",
+      "value": "All"
+    },
+    {
+      "name": "chip_finished",
+      "value": "Finished"
+    },
+    {
+      "name": "chip_playlist",
+      "value": "▶ Playlists"
+    },
+    {
+      "name": "chip_reading",
+      "value": "Reading"
+    },
+    {
+      "name": "chip_star_off",
+      "value": "☆ Starred"
+    },
+    {
+      "name": "chip_star_on",
+      "value": "★ Starred"
+    },
+    {
+      "name": "chip_unread",
+      "value": "Unread"
+    },
+    {
+      "name": "common_account",
+      "value": "Account"
+    },
+    {
+      "name": "common_add",
+      "value": "Add"
+    },
+    {
+      "name": "common_apply",
+      "value": "Apply"
+    },
+    {
+      "name": "common_close",
+      "value": "Close"
+    },
+    {
+      "name": "common_confirm",
+      "value": "OK"
+    },
+    {
+      "name": "common_create",
+      "value": "Create"
+    },
+    {
+      "name": "common_default",
+      "value": "Default"
+    },
+    {
+      "name": "common_done",
+      "value": "Done"
+    },
+    {
+      "name": "common_download",
+      "value": "Download"
+    },
+    {
+      "name": "common_empty",
+      "value": "No content"
+    },
+    {
+      "name": "common_exit",
+      "value": "Exit"
+    },
+    {
+      "name": "common_export_failed",
+      "value": "Export failed"
+    },
+    {
+      "name": "common_load_failed",
+      "value": "Load failed"
+    },
+    {
+      "name": "common_loading",
+      "value": "Loading..."
+    },
+    {
+      "name": "common_more",
+      "value": "More"
+    },
+    {
+      "name": "common_name",
+      "value": "Name"
+    },
+    {
+      "name": "common_new",
+      "value": "New"
+    },
+    {
+      "name": "common_new_name",
+      "value": "New name"
+    },
+    {
+      "name": "common_off",
+      "value": "Off"
+    },
+    {
+      "name": "common_on",
+      "value": "On"
+    },
+    {
+      "name": "common_open",
+      "value": "Open"
+    },
+    {
+      "name": "common_password",
+      "value": "Password"
+    },
+    {
+      "name": "common_refresh",
+      "value": "Refresh"
+    },
+    {
+      "name": "common_rename",
+      "value": "Rename"
+    },
+    {
+      "name": "common_reset",
+      "value": "Reset"
+    },
+    {
+      "name": "common_save_failed",
+      "value": "Save failed"
+    },
+    {
+      "name": "common_search",
+      "value": "Search"
+    },
+    {
+      "name": "common_switch",
+      "value": "Switch"
+    },
+    {
+      "name": "common_test_connection",
+      "value": "Test connection"
+    },
+    {
+      "name": "common_test_failed",
+      "value": "Test failed"
+    },
+    {
+      "name": "common_unknown",
+      "value": "Unknown"
+    },
+    {
+      "name": "common_unlock",
+      "value": "Unlock"
+    },
+    {
+      "name": "dash_empty",
+      "value": "No content or load failed"
+    },
+    {
+      "name": "dash_no_bookmarks",
+      "value": "No bookmarks or notes"
+    },
+    {
+      "name": "dav_add",
+      "value": "Add WebDAV server"
+    },
+    {
+      "name": "dav_cloud_title",
+      "value": "☁ WebDAV drive"
+    },
+    {
+      "name": "dav_deleted",
+      "value": "WebDAV server deleted"
+    },
+    {
+      "name": "dav_download_error",
+      "value": "Download error"
+    },
+    {
+      "name": "dav_download_failed",
+      "value": "Download failed: "
+    },
+    {
+      "name": "dav_downloaded",
+      "value": "Downloaded: "
+    },
+    {
+      "name": "dav_edit",
+      "value": "Edit WebDAV server"
+    },
+    {
+      "name": "dav_name_hint",
+      "value": "Name (e.g. MyNAS)"
+    },
+    {
+      "name": "dav_none",
+      "value": "No servers yet"
+    },
+    {
+      "name": "dav_saved",
+      "value": "WebDAV server saved"
+    },
+    {
+      "name": "dav_up_dir",
+      "value": "⬆ Parent folder"
+    },
+    {
+      "name": "dav_url_required",
+      "value": "WebDAV URL cannot be empty"
+    },
+    {
+      "name": "drawer_config",
+      "value": "Profile"
+    },
+    {
+      "name": "drawer_exit_app",
+      "value": "Exit app"
+    },
+    {
+      "name": "drawer_tagline",
+      "value": "Worth reading, read well"
+    },
+    {
+      "name": "export_hint",
+      "value": "Includes bookmarks and AI notes, each with position and time"
+    },
+    {
+      "name": "export_title",
+      "value": "Export notes & bookmarks"
+    },
+    {
+      "name": "font_mono",
+      "value": "Mono"
+    },
+    {
+      "name": "font_sans",
+      "value": "Sans"
+    },
+    {
+      "name": "font_serif",
+      "value": "Serif"
+    },
+    {
+      "name": "info_failed",
+      "value": "Failed to get document info"
+    },
+    {
+      "name": "jump_go",
+      "value": "Go"
+    },
+    {
+      "name": "jump_title",
+      "value": "Go to page"
+    },
+    {
+      "name": "lang_auto",
+      "value": "Auto detect"
+    },
+    {
+      "name": "lang_de",
+      "value": "German"
+    },
+    {
+      "name": "lang_en",
+      "value": "English"
+    },
+    {
+      "name": "lang_es",
+      "value": "Spanish"
+    },
+    {
+      "name": "lang_fr",
+      "value": "French"
+    },
+    {
+      "name": "lang_ja",
+      "value": "Japanese"
+    },
+    {
+      "name": "lang_ru",
+      "value": "Russian"
+    },
+    {
+      "name": "lang_zh",
+      "value": "Chinese"
+    },
+    {
+      "name": "lib_empty",
+      "value": "No reading history yet"
+    },
+    {
+      "name": "lib_empty_import",
+      "value": "No reading history yet; tap ＋ to import books"
+    },
+    {
+      "name": "lib_filter",
+      "value": "Filter:"
+    },
+    {
+      "name": "lib_fulltext",
+      "value": "Full text"
+    },
+    {
+      "name": "lib_import",
+      "value": "Import books"
+    },
+    {
+      "name": "lib_select_all",
+      "value": "Select all"
+    },
+    {
+      "name": "lib_tags",
+      "value": "Tags"
+    },
+    {
+      "name": "lock_placeholder",
+      "value": "Passcode"
+    },
+    {
+      "name": "lock_title",
+      "value": "App locked; enter the passcode"
+    },
+    {
+      "name": "menu_mark_finished",
+      "value": "Mark as finished"
+    },
+    {
+      "name": "menu_mark_reading",
+      "value": "Mark as reading"
+    },
+    {
+      "name": "menu_mark_unread",
+      "value": "Mark as unread (clear progress)"
+    },
+    {
+      "name": "menu_rsvp",
+      "value": "⚡ Speed read"
+    },
+    {
+      "name": "menu_settings",
+      "value": "⚙ Settings"
+    },
+    {
+      "name": "menu_star",
+      "value": "Star"
+    },
+    {
+      "name": "menu_tts",
+      "value": "🔊 TTS"
+    },
+    {
+      "name": "menu_unstar",
+      "value": "Unstar"
+    },
+    {
+      "name": "mode_horizontal",
+      "value": "Horizontal"
+    },
+    {
+      "name": "mode_vertical",
+      "value": "Vertical"
+    },
+    {
+      "name": "opds_add",
+      "value": "Add OPDS catalog"
+    },
+    {
+      "name": "opds_back",
+      "value": "← Back"
+    },
+    {
+      "name": "opds_custom",
+      "value": "Custom OPDS URL"
+    },
+    {
+      "name": "opds_deleted",
+      "value": "OPDS catalog deleted"
+    },
+    {
+      "name": "opds_edit",
+      "value": "Edit OPDS catalog"
+    },
+    {
+      "name": "opds_name_hint",
+      "value": "Name (e.g. Project Gutenberg)"
+    },
+    {
+      "name": "opds_none",
+      "value": "No catalogs yet"
+    },
+    {
+      "name": "opds_saved",
+      "value": "OPDS catalog saved"
+    },
+    {
+      "name": "opds_star_title",
+      "value": "★ OPDS catalogs"
+    },
+    {
+      "name": "opds_title",
+      "value": "OPDS catalogs"
+    },
+    {
+      "name": "opds_url_required",
+      "value": "OPDS URL cannot be empty"
+    },
+    {
+      "name": "orient_auto",
+      "value": "Auto"
+    },
+    {
+      "name": "orient_landscape",
+      "value": "Landscape"
+    },
+    {
+      "name": "orient_portrait",
+      "value": "Portrait"
+    },
+    {
+      "name": "page_double",
+      "value": "Double"
+    },
+    {
+      "name": "page_music",
+      "value": "Music"
+    },
+    {
+      "name": "page_single",
+      "value": "Single"
+    },
+    {
+      "name": "pl_add",
+      "value": "Add to playlist"
+    },
+    {
+      "name": "pl_already",
+      "value": "Already in this playlist"
+    },
+    {
+      "name": "pl_created_added",
+      "value": "Created and added"
+    },
+    {
+      "name": "pl_delete",
+      "value": "Delete playlist"
+    },
+    {
+      "name": "pl_empty",
+      "value": "No playlists yet; create one below"
+    },
+    {
+      "name": "pl_new_add",
+      "value": "New playlist & add"
+    },
+    {
+      "name": "pl_new_name",
+      "value": "New playlist name"
+    },
+    {
+      "name": "pl_no_items",
+      "value": "No books in this playlist"
+    },
+    {
+      "name": "pl_not_in_library",
+      "value": "This book is not in the library"
+    },
+    {
+      "name": "pl_play_first",
+      "value": "Play first"
+    },
+    {
+      "name": "pl_title",
+      "value": "Playlists"
+    },
+    {
+      "name": "prof_created",
+      "value": "Profile created; tap Switch to use it"
+    },
+    {
+      "name": "prof_hint",
+      "value": "Each profile has its own library, bookmarks, notes and reading settings"
+    },
+    {
+      "name": "prof_hint2",
+      "value": "(Multiple profiles, Android Profile parity)"
+    },
+    {
+      "name": "prof_invalid",
+      "value": "Invalid or duplicate profile name"
+    },
+    {
+      "name": "prof_new_name",
+      "value": "New profile name"
+    },
+    {
+      "name": "prof_nodelete",
+      "value": "The default profile cannot be deleted"
+    },
+    {
+      "name": "prof_title",
+      "value": "Profiles"
+    },
+    {
+      "name": "pwd_dialog_hint",
+      "value": "Enter the password to read this document"
+    },
+    {
+      "name": "pwd_dialog_title",
+      "value": "🔒 Encrypted document"
+    },
+    {
+      "name": "pwd_unlock_failed",
+      "value": "Unlock failed"
+    },
+    {
+      "name": "pwd_wrong",
+      "value": "Wrong password, try again"
+    },
+    {
+      "name": "quality_balanced",
+      "value": "Balanced"
+    },
+    {
+      "name": "quality_fast",
+      "value": "Fast"
+    },
+    {
+      "name": "quality_high",
+      "value": "High"
+    },
+    {
+      "name": "quick_bookmark",
+      "value": "Quick bookmark"
+    },
+    {
+      "name": "range_month",
+      "value": "Month"
+    },
+    {
+      "name": "range_week",
+      "value": "Week"
+    },
+    {
+      "name": "range_year",
+      "value": "Year"
+    },
+    {
+      "name": "reader_autoflip",
+      "value": "Auto flip:"
+    },
+    {
+      "name": "reader_autoscroll",
+      "value": "Auto scroll:"
+    },
+    {
+      "name": "reader_bgimage",
+      "value": "Background"
+    },
+    {
+      "name": "reader_bgimage_on",
+      "value": "Background ✓"
+    },
+    {
+      "name": "reader_bluelight",
+      "value": "Blue light:"
+    },
+    {
+      "name": "reader_bookmark",
+      "value": "Bookmark"
+    },
+    {
+      "name": "reader_brightness",
+      "value": "Brightness:"
+    },
+    {
+      "name": "reader_brightness_n",
+      "value": "Brightness"
+    },
+    {
+      "name": "reader_contents",
+      "value": "Contents"
+    },
+    {
+      "name": "reader_crop",
+      "value": "Crop:"
+    },
+    {
+      "name": "reader_del_first",
+      "value": "Delete rule 1"
+    },
+    {
+      "name": "reader_export",
+      "value": "Export"
+    },
+    {
+      "name": "reader_file_info",
+      "value": "📄 File info"
+    },
+    {
+      "name": "reader_fs_enter",
+      "value": "On"
+    },
+    {
+      "name": "reader_fullscreen",
+      "value": "Full screen:"
+    },
+    {
+      "name": "reader_gestures",
+      "value": "Gesture config"
+    },
+    {
+      "name": "reader_menu",
+      "value": "Menu"
+    },
+    {
+      "name": "reader_mode",
+      "value": "Mode:"
+    },
+    {
+      "name": "reader_night",
+      "value": "Night:"
+    },
+    {
+      "name": "reader_page",
+      "value": "Page:"
+    },
+    {
+      "name": "reader_settings",
+      "value": "Reading settings"
+    },
+    {
+      "name": "reader_share",
+      "value": "Share"
+    },
+    {
+      "name": "reader_text_replace",
+      "value": "Text replace"
+    },
+    {
+      "name": "reader_toc",
+      "value": "Contents (TOC)"
+    },
+    {
+      "name": "reader_toc_empty",
+      "value": "(No TOC)"
+    },
+    {
+      "name": "reader_typography",
+      "value": "Typography"
+    },
+    {
+      "name": "reader_zone_center",
+      "value": "Center zone:"
+    },
+    {
+      "name": "reader_zone_left",
+      "value": "Left zone:"
+    },
+    {
+      "name": "reader_zone_right",
+      "value": "Right zone:"
+    },
+    {
+      "name": "reminder_prefix",
+      "value": "Reading for "
+    },
+    {
+      "name": "repl_export",
+      "value": "📥 Export text"
+    },
+    {
+      "name": "repl_find_placeholder",
+      "value": "Find text..."
+    },
+    {
+      "name": "repl_hint",
+      "value": "Note: only for reflowable documents (EPUB/HTML)"
+    },
+    {
+      "name": "repl_replace",
+      "value": "Replace with..."
+    },
+    {
+      "name": "repl_title",
+      "value": "Text replace (reflow)"
+    },
+    {
+      "name": "rsvp_hint",
+      "value": "Auto-advances to the next page when finished · manual page turns reset it"
+    },
+    {
+      "name": "rsvp_pause",
+      "value": "⏸ Pause"
+    },
+    {
+      "name": "rsvp_resume",
+      "value": "▶ Resume"
+    },
+    {
+      "name": "rsvp_speed",
+      "value": "Speed:"
+    },
+    {
+      "name": "rsvp_start",
+      "value": "▶ Start"
+    },
+    {
+      "name": "rsvp_stop",
+      "value": "⏹ Stop"
+    },
+    {
+      "name": "rsvp_switch_tts",
+      "value": "🔊 To TTS"
+    },
+    {
+      "name": "rsvp_title",
+      "value": "Speed reading (RSVP)"
+    },
+    {
+      "name": "search_placeholder",
+      "value": "Search..."
+    },
+    {
+      "name": "sec_bookmarks",
+      "value": "Bookmarks & notes"
+    },
+    {
+      "name": "sec_favorites",
+      "value": "My favorites"
+    },
+    {
+      "name": "sec_online",
+      "value": "Online catalogs"
+    },
+    {
+      "name": "sec_recent",
+      "value": "Recent"
+    },
+    {
+      "name": "sec_stats",
+      "value": "Reading stats"
+    },
+    {
+      "name": "sel_add_bookmark",
+      "value": "Add bookmark"
+    },
+    {
+      "name": "sel_ai_todo",
+      "value": "AI features coming in a later version"
+    },
+    {
+      "name": "sel_copied_fallback",
+      "value": "Copied to clipboard (system share unavailable)"
+    },
+    {
+      "name": "sel_copy",
+      "value": "Copy"
+    },
+    {
+      "name": "sel_inbook_search",
+      "value": "Search in book"
+    },
+    {
+      "name": "sel_none",
+      "value": "No text selected"
+    },
+    {
+      "name": "sel_note",
+      "value": "Note"
+    },
+    {
+      "name": "sel_note_hint",
+      "value": "Note content"
+    },
+    {
+      "name": "sel_pick",
+      "value": "Select text"
+    },
+    {
+      "name": "sel_send_ai",
+      "value": "Send to AI"
+    },
+    {
+      "name": "sel_squiggly",
+      "value": "Squiggly"
+    },
+    {
+      "name": "sel_text",
+      "value": "Text"
+    },
+    {
+      "name": "sel_underline",
+      "value": "Underline"
+    },
+    {
+      "name": "sel_web_dict",
+      "value": "Web dictionary (Oxford…)"
+    },
+    {
+      "name": "sel_web_search",
+      "value": "Web search (Google…)"
+    },
+    {
+      "name": "set_ai_model",
+      "value": "AI model"
+    },
+    {
+      "name": "set_app_lock",
+      "value": "App lock:"
+    },
+    {
+      "name": "set_app_lock_hint",
+      "value": "(Fingerprint / passcode)"
+    },
+    {
+      "name": "set_autoscan",
+      "value": "Scan on start:"
+    },
+    {
+      "name": "set_autoscan_hint",
+      "value": "(Scan device folders for books on startup)"
+    },
+    {
+      "name": "set_biometric_hint",
+      "value": "(Fingerprint / face; falls back to passcode)"
+    },
+    {
+      "name": "set_card",
+      "value": "Desktop card:"
+    },
+    {
+      "name": "set_card_hint",
+      "value": "(Recent or starred books, 1-3)"
+    },
+    {
+      "name": "set_cover_columns",
+      "value": "Cover columns:"
+    },
+    {
+      "name": "set_cover_columns_hint",
+      "value": "(2-4 columns for grid/cover/shelf views)"
+    },
+    {
+      "name": "set_default_zoom",
+      "value": "Default zoom:"
+    },
+    {
+      "name": "set_disabled",
+      "value": "Disabled"
+    },
+    {
+      "name": "set_enabled",
+      "value": "Enabled"
+    },
+    {
+      "name": "set_flip_anim",
+      "value": "Flip animation:"
+    },
+    {
+      "name": "set_font_size",
+      "value": "Font size:"
+    },
+    {
+      "name": "set_general",
+      "value": "General"
+    },
+    {
+      "name": "set_integration",
+      "value": "System"
+    },
+    {
+      "name": "set_lang_system",
+      "value": "System default"
+    },
+    {
+      "name": "set_language",
+      "value": "Language"
+    },
+    {
+      "name": "set_last_read",
+      "value": "Last: "
+    },
+    {
+      "name": "set_line_height",
+      "value": "Line height:"
+    },
+    {
+      "name": "set_lock_pass",
+      "value": "Passcode:"
+    },
+    {
+      "name": "set_lock_pass_hint",
+      "value": "Default 1234"
+    },
+    {
+      "name": "set_margin",
+      "value": "Margin:"
+    },
+    {
+      "name": "set_not_configured",
+      "value": "Not configured"
+    },
+    {
+      "name": "set_orientation",
+      "value": "Orientation"
+    },
+    {
+      "name": "set_orientation2",
+      "value": "Orientation:"
+    },
+    {
+      "name": "set_orientation_hint",
+      "value": "(Auto / portrait / landscape)"
+    },
+    {
+      "name": "set_page_turn",
+      "value": "Page turn:"
+    },
+    {
+      "name": "set_pdf_fixed_hint",
+      "value": "PDF has fixed layout: font/line/margin are fixed; use A-/A+ to zoom"
+    },
+    {
+      "name": "set_profile",
+      "value": "Profile:"
+    },
+    {
+      "name": "set_proxy",
+      "value": "Proxy:"
+    },
+    {
+      "name": "set_quality",
+      "value": "Render quality:"
+    },
+    {
+      "name": "set_reading",
+      "value": "Reading"
+    },
+    {
+      "name": "set_reflow_typography",
+      "value": "Reflow typography (EPUB/HTML):"
+    },
+    {
+      "name": "set_reminder",
+      "value": "Reading reminder:"
+    },
+    {
+      "name": "set_reminder_hint",
+      "value": "(Continuous reading reminder)"
+    },
+    {
+      "name": "set_rsvp",
+      "value": "Speed read:"
+    },
+    {
+      "name": "set_screen",
+      "value": "Screen"
+    },
+    {
+      "name": "set_screen_normal",
+      "value": "Normal"
+    },
+    {
+      "name": "set_system",
+      "value": "System"
+    },
+    {
+      "name": "set_tabpos_hint",
+      "value": "(Android tapPositionTop parity)"
+    },
+    {
+      "name": "set_theme",
+      "value": "Theme:"
+    },
+    {
+      "name": "set_theme_hint",
+      "value": "Theme applies instantly: Dark/OLED invert colors, Ink is warm paper"
+    },
+    {
+      "name": "set_topbar_hint",
+      "value": "(Show clock/battery in the reader title bar)"
+    },
+    {
+      "name": "set_tts_pitch",
+      "value": "TTS pitch:"
+    },
+    {
+      "name": "set_tts_rate",
+      "value": "TTS rate:"
+    },
+    {
+      "name": "set_ui",
+      "value": "UI"
+    },
+    {
+      "name": "sort_author",
+      "value": "Author"
+    },
+    {
+      "name": "sort_date",
+      "value": "Date"
+    },
+    {
+      "name": "sort_recent",
+      "value": "Recent"
+    },
+    {
+      "name": "sort_series",
+      "value": "Series"
+    },
+    {
+      "name": "star_empty",
+      "value": "No favorites yet; tap ☆ on a row to star a book"
+    },
+    {
+      "name": "stat_books",
+      "value": "Books"
+    },
+    {
+      "name": "stat_finished",
+      "value": "Finished"
+    },
+    {
+      "name": "stat_speed",
+      "value": "Speed (pages/min)"
+    },
+    {
+      "name": "stat_time",
+      "value": "Total time"
+    },
+    {
+      "name": "stat_today",
+      "value": "Today"
+    },
+    {
+      "name": "sync_addr_hint",
+      "value": "http://dav.example.com:5005"
+    },
+    {
+      "name": "sync_auto",
+      "value": "Scheduled sync (while the app runs)"
+    },
+    {
+      "name": "sync_conflict",
+      "value": "Conflict strategy"
+    },
+    {
+      "name": "sync_done",
+      "value": "WebDAV sync finished"
+    },
+    {
+      "name": "sync_enable",
+      "value": "Enable sync (progress & bookmarks)"
+    },
+    {
+      "name": "sync_failed",
+      "value": "Sync failed: "
+    },
+    {
+      "name": "sync_independent",
+      "value": "Independent of the WebDAV servers in My files"
+    },
+    {
+      "name": "sync_interval",
+      "value": "Interval (minutes)"
+    },
+    {
+      "name": "sync_log",
+      "value": "Sync log"
+    },
+    {
+      "name": "sync_log_empty",
+      "value": "(No sync log yet; tap Sync now)"
+    },
+    {
+      "name": "sync_now",
+      "value": "Sync now"
+    },
+    {
+      "name": "sync_path",
+      "value": "Sync path"
+    },
+    {
+      "name": "sync_running",
+      "value": "Syncing…"
+    },
+    {
+      "name": "sync_saved",
+      "value": "Sync configuration saved"
+    },
+    {
+      "name": "sync_title",
+      "value": "WebDAV sync"
+    },
+    {
+      "name": "sync_trust_selfsigned",
+      "value": "Trust self-signed certificates"
+    },
+    {
+      "name": "tag_none",
+      "value": "Untagged"
+    },
+    {
+      "name": "trans_bi_done",
+      "value": "Bilingual copy ready; translation shown in blue"
+    },
+    {
+      "name": "trans_bi_failed",
+      "value": "Bilingual apply failed: "
+    },
+    {
+      "name": "trans_bi_ok",
+      "value": "Supported for this book"
+    },
+    {
+      "name": "trans_bi_open_failed",
+      "value": "Failed to open bilingual copy; original kept"
+    },
+    {
+      "name": "trans_bilingual",
+      "value": "Show translation in page (bilingual)"
+    },
+    {
+      "name": "trans_dst",
+      "value": "Target language"
+    },
+    {
+      "name": "trans_failed",
+      "value": "Translation failed"
+    },
+    {
+      "name": "trans_failed2",
+      "value": "Translation failed: "
+    },
+    {
+      "name": "trans_no_text",
+      "value": "No extractable text on this page"
+    },
+    {
+      "name": "trans_panel_mode",
+      "value": "Panel mode"
+    },
+    {
+      "name": "trans_restored",
+      "value": "Original restored"
+    },
+    {
+      "name": "trans_restoring",
+      "value": "Restoring original…"
+    },
+    {
+      "name": "trans_result",
+      "value": "AI translation"
+    },
+    {
+      "name": "trans_result_save",
+      "value": "AI translation saved"
+    },
+    {
+      "name": "trans_save_note",
+      "value": "Save to notes"
+    },
+    {
+      "name": "trans_saved",
+      "value": "Translation saved to notes"
+    },
+    {
+      "name": "trans_src",
+      "value": "Source language"
+    },
+    {
+      "name": "trans_start",
+      "value": "Translate"
+    },
+    {
+      "name": "trans_title",
+      "value": "AI translate"
+    },
+    {
+      "name": "tts_engine_unavailable",
+      "value": "Speech engine unavailable"
+    },
+    {
+      "name": "tts_finished",
+      "value": "Finished"
+    },
+    {
+      "name": "tts_next_sentence",
+      "value": "Next sentence"
+    },
+    {
+      "name": "tts_no_engine_hint",
+      "value": "No speech engine on this device; try speed reading instead."
+    },
+    {
+      "name": "tts_no_text",
+      "value": "(No text on this page)"
+    },
+    {
+      "name": "tts_no_voice",
+      "value": "No voice pack detected"
+    },
+    {
+      "name": "tts_panel_title",
+      "value": "Read aloud (TTS)"
+    },
+    {
+      "name": "tts_paused",
+      "value": "Paused"
+    },
+    {
+      "name": "tts_pitch",
+      "value": "Pitch:"
+    },
+    {
+      "name": "tts_preparing",
+      "value": "Preparing..."
+    },
+    {
+      "name": "tts_preparing2",
+      "value": "Preparing…"
+    },
+    {
+      "name": "tts_prev_sentence",
+      "value": "Prev sentence"
+    },
+    {
+      "name": "tts_rate",
+      "value": "Rate:"
+    },
+    {
+      "name": "tts_ready",
+      "value": "Ready"
+    },
+    {
+      "name": "tts_speaking",
+      "value": "Speaking"
+    },
+    {
+      "name": "tts_stopped",
+      "value": "Stopped"
+    },
+    {
+      "name": "tts_switch_rsvp",
+      "value": "⚡ To speed read"
+    },
+    {
+      "name": "tts_web_unavailable",
+      "value": "Web engine unavailable"
+    },
+    {
+      "name": "typo_align",
+      "value": "Align:"
+    },
+    {
+      "name": "typo_center",
+      "value": "Center"
+    },
+    {
+      "name": "typo_dropcap",
+      "value": "Drop cap"
+    },
+    {
+      "name": "typo_font",
+      "value": "Font"
+    },
+    {
+      "name": "typo_hyphen",
+      "value": "Hyphens:"
+    },
+    {
+      "name": "typo_hyphen_en",
+      "value": "(English)"
+    },
+    {
+      "name": "typo_indent",
+      "value": "Indent:"
+    },
+    {
+      "name": "typo_indent_n",
+      "value": "Indent"
+    },
+    {
+      "name": "typo_justify",
+      "value": "Justify"
+    },
+    {
+      "name": "typo_left",
+      "value": "Left"
+    },
+    {
+      "name": "typo_right",
+      "value": "Right"
+    },
+    {
+      "name": "typo_title",
+      "value": "Typography (EPUB/HTML)"
+    },
+    {
+      "name": "view_compact",
+      "value": "Compact"
+    },
+    {
+      "name": "view_cover",
+      "value": "Cover"
+    },
+    {
+      "name": "view_grid",
+      "value": "Grid"
+    },
+    {
+      "name": "view_list",
+      "value": "List"
+    },
+    {
+      "name": "view_shelf",
+      "value": "Shelf"
     }
   ]
 }

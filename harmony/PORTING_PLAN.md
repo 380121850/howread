@@ -81,6 +81,17 @@
 8. ✅ 待续项已全部完成（2026-09-08 第二批，见下节）。
 
 
+### 阶段 13（2026-09-09）：第五批功能移植（阅读器 UI 对齐 / 全库搜索 / PDF 密码 / TTS 播控卡片 / 偏好补齐 / 多档案 / i18n 第二批）✅ 已完成（部分待真机）
+
+1. ✅ **阅读器 UI 对齐 + 图标补齐**：顶栏补 跳页/TTS/工具行开关 4 钮（对齐 document_title_bar）；顶栏下 2px 阅读进度条 + 二级按钮排（缩放±/亮度/对比度/页面分割，对齐 document_title_buttons）；底部工具栏横向滚动补齐 返回上一位置/缩略图/TTS/模式切换（对齐 document_footer）；垂直模式快速滚动条（PanGesture，FastScroller 对应）；补 32 个 SVG 图标（共 96）。
+2. ✅ **全库全文搜索 + 找书导入 + 书库清理**：LibrarySearch.ets 逐本逐页 getText 检索（进度/取消/坏书跳过），书库「全文」按钮 + 结果面板点击直达书页（Reader jumpPage 参数）；scanDeviceBooks 尽力扫描设备目录一键导入；失效文件横幅 + 确认清理。模拟器实测 fox 跨 4 书命中并直达 ✅。
+3. ✅ **PDF 密码 + 格式验证**：NAPI 新增 needsPassword/authenticateDocument；加密 PDF 密码对话框（错误不关/正确解锁重渲染，模拟器实测 ✅）；格式实测：FB2 ✅、**MD ✅（MuPDF txt handler 扩展名表加 md/markdown，两 ABI 重编 libmupdf）**、RTF/DOCX/MOBI ❌（引擎无 handler，0 页不崩溃）。txt/md 顶部一行 CSS 文本残留为固有已知项。
+4. ✅ **TTS 播控桌面卡片**：TtsCard 2×4（上一句/暂停继续/下一句，postCardAction tts_cmd 复用通知播控通路）；TTS 状态经 preferences（librera_ttsstate）跨进程 + formProvider.updateForm 主动推；FormAbility 按表单分支载荷，RecentCard 支持卡片偏好（最近/星标、1-3 本）。⏸ 真机复验添加到桌面。
+5. ✅ **偏好补齐**：屏幕方向（@ohos.window setPreferredOrientation）/启动扫描/封面列数 2-4/桌面卡片配置/隐藏已读；应用内语言切换 SDK 23 无 setAppLanguage API，放弃。
+6. ✅ **多 Profile 档案**：Profiles.ets storeName 后缀方案，default 沿用原存储名零迁移；Settings/ReadingProgress/Bookmarks/Notes/ReadingStats/Playlists 档案感知；档案面板 新建/切换/删除；模拟器实测 work 档案书库隔离、切回恢复 ✅。
+7. ✅ **i18n 第二批全量**：Reader/Index/AiChat 546 处资源化（直显位 $r / 字符串位 this.L 助手）；base(en)+zh_CN 各 +405 key（共 452+）；拼接碎片与 AI 提示词保留原文（待续）。en 语言切换抽查 ⏸ 真机。
+8. ⏸ **仍待续**：RTF/DOCX/MOBI 引擎级支持（需移植安卓外部抽取器或 MuPDF 定制 handler）；txt/md CSS 残留清理；TTS 录音导出；i18n 43 语铺开；桌面卡片/生物识别/分享接收/真实 WebDAV PROPFIND/真实 AI 凭据真机复验。
+
 ### 阶段 12（2026-09-09）：第四批功能移植（TTS 后台播控 / 桌面卡片 / WebDAV 目录浏览 / 批注管理 / 生物识别 / 小功能包 / i18n 第一批）✅ 已完成（部分待真机）
 
 1. ✅ **UI 资源收敛 + 图标补齐**：101 处硬编码品牌色 → `$r('app.color.*')`；补 26 个 Material SVG（TTS 播控/云盘/版式/手势类）；Tab 顶底切换（tapPositionTop 对齐）；阅读器顶栏时钟+电量。

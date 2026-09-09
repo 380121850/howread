@@ -4,6 +4,7 @@ import router from '@ohos.router';
 import picker from '@ohos.file.picker';
 import util from '@ohos.util';
 import common from '@ohos.app.ability.common';
+import window from '@ohos.window';
 import {
   version, openDocument, pageCount, renderPage, renderPageAsync,
   getText, searchText, searchDocument, getDocumentInfo, getToc, getPageSize, layoutDocument, closeDocument,
@@ -20,6 +21,8 @@ import {
   loadSettings, saveSettings, defaultSettings, THEME_NAMES, ReaderSettings
 } from '../model/Settings';
 import { importUriToSandbox } from '../model/FileImport';
+import { scanDeviceBooks, importPathToSandbox, searchLibraryText, findMissingBooks, ScanHit, LibSearchHit } from '../model/LibrarySearch';
+import { initProfiles, listProfiles, createProfile, switchProfile, deleteProfile, getCurrentProfile, DEFAULT_PROFILE } from '../model/Profiles';
 import { getTagList, addTagToBook, removeTagFromBook, getSeriesList } from '../model/Tags';
 import { getReadingStats, getDailyStats, getMonthlyStats, ReadingStatsData, DayStat, MonthStat } from '../model/ReadingStats';
 import { fetchOpds, OPDS_PRESETS, OpdsEntry } from '../model/Opds';
@@ -120,7 +123,7 @@ struct Index {
 
   // ---- Phase 1: Android-aligned shell (top bar + 4 tabs + left drawer + FAB) ----
   /** top bar title = current tab name (Android 18sp bold white) */
-  @State topTitle: string = '\u9996\u9875';
+  @State topTitle: string = this.L($r('app.string.tab_home'));
   /** left drawer visibility (Android DrawerLayout) */
   @State showDrawer: boolean = false;
   /** modal overlay: 0=none 1=bookmarks 2=network(OPDS/WebDAV) 3=about */
@@ -138,6 +141,16 @@ struct Index {
   @State libStatusFilter: number = -1;
   /** view mode: 0=list 1=compact 2=grid 3=cover 4=bookshelf */
   @State libViewMode: number = 0;
+  /* ---- Round 6: full-text search + device scan + missing cleanup ---- */
+  @State libSearchBusy: boolean = false;
+  @State libSearchProgress: string = '';
+  @State libSearchHits: LibSearchHit[] = [];
+  @State missingCount: number = 0;
+  private scanBusy: boolean = false;
+  /* Round 6: profile management */
+  @State showProfile: boolean = false;
+  @State profileList: string[] = [DEFAULT_PROFILE];
+  @State profileInput: string = '';
   /** sort mode: 0=recent 1=name 2=date 3=author 4=series */
   @State libSortMode: number = 0;
   /** batch selection mode (long-press a row to enter) */
@@ -248,6 +261,11 @@ struct Index {
   @State syncTestOut: string = '';
   @State showSyncLog: boolean = false;
   @State syncLogs: SyncLogEntry[] = [];
+
+  /* Round 6: resolve a string resource into a plain string */
+  private L(r: Resource): string {
+    return getContext(this).resourceManager.getStringSync(r);
+  }
 
   aboutToAppear(): void {
     this.runApiTest();
@@ -385,8 +403,18 @@ struct Index {
 
   private async initSettings(): Promise<void> {
     const ctx = getContext(this);
+    /* Round 6: load the active profile before any profile-aware store opens */
+    await initProfiles(ctx);
     this.settings = await loadSettings(ctx);
     console.info(`[Index] Settings loaded: theme=${this.settings.theme} font=${this.settings.fontSize}`);
+    /* Round 6: honor the preferred screen orientation */
+    if (this.settings.screenOrientation > 0) {
+      this.applyOrientation();
+    }
+    /* Round 6: optional device book scan on startup (block B) */
+    if (this.settings.autoScanOnStart) {
+      this.runDeviceScan();
+    }
     this.checkAppLock();
   }
 
@@ -454,7 +482,7 @@ struct Index {
       this.browseCurrentDir = '';
       this.browseDirs = [];
       this.browseFiles = [];
-      this.libFolders = [{ name: '\u4E66\u5E93', path: ctx.cacheDir }];
+      this.libFolders = [{ name: this.L($r('app.string.tab_library')), path: ctx.cacheDir }];
       console.info('[Index] Browse root initialized');
     } catch (e) {
       this.browseCurrentDir = '';
@@ -577,7 +605,7 @@ struct Index {
       this.backupText = `已导出 ${recents.length} 本记录 / ${bookmarks.length} 条书签 → ${target}`;
       console.info(`[Index] Backup written: ${target}`);
     } catch (e) {
-      this.backupText = '导出失败';
+      this.backupText = this.L($r('app.string.common_export_failed'));
       console.error('[Index] backup failed');
     }
   }
@@ -590,7 +618,7 @@ struct Index {
       const content = fs.readTextSync(target);
       const payload = JSON.parse(content) as BackupFile;
       if (payload.app !== 'librera-harmony' || payload.settings === undefined) {
-        this.backupText = '备份文件无效';
+        this.backupText = this.L($r('app.string.backup_invalid'));
         return;
       }
       await saveSettings(ctx, payload.settings);
@@ -601,7 +629,7 @@ struct Index {
       this.backupText = `已恢复设置 + ${payload.recents.length} 本记录 + ${payload.bookmarks.length} 条书签`;
       console.info(`[Index] Backup restored from ${target}`);
     } catch (e) {
-      this.backupText = '恢复失败（请先导出）';
+      this.backupText = this.L($r('app.string.backup_restore_failed'));
       console.error('[Index] restore failed');
     }
   }
@@ -754,9 +782,219 @@ struct Index {
       /* Sprint N: load tag list */
       this.allTags = await getTagList(ctx);
       console.info(`[Index] Library loaded: ${this.recentBooks.length} recent, ${this.starredBooks.length} starred`);
+      /* Round 6: refresh the missing-files badge */
+      this.missingCount = findMissingBooks(this.recentBooks).length;
     } catch (e) {
       console.error('[Index] loadLibrary failed');
     }
+  }
+
+  /* ---- Round 6: device scan / full-text search / missing cleanup (block B) ---- */
+
+  /** Scan well-known folders and import books that are not in the library yet. */
+  async runDeviceScan(): Promise<void> {
+    if (this.scanBusy) {
+      return;
+    }
+    this.scanBusy = true;
+    try {
+      const ctx = getContext(this);
+      const hits: ScanHit[] = scanDeviceBooks(ctx);
+      const known: string[] = [];
+      for (let i = 0; i < this.recentBooks.length; i++) {
+        known.push(this.recentBooks[i].path);
+      }
+      let added: number = 0;
+      for (let i = 0; i < hits.length && added < 20; i++) {
+        if (known.indexOf(hits[i].path) >= 0) {
+          continue;
+        }
+        const target: string = importPathToSandbox(ctx, hits[i].path);
+        if (target.length === 0) {
+          continue;
+        }
+        const book: RecentBook = {
+          path: target,
+          title: hits[i].name,
+          page: 0,
+          totalPages: 0,
+          lastRead: new Date().toISOString(),
+          star: false,
+          coverPath: '',
+          author: '',
+          tags: [],
+          series: '',
+          genre: '',
+          status: 0
+        };
+        await saveRecentBook(ctx, book);
+        this.generateCover(ctx, book);
+        added++;
+      }
+      await this.loadLibrary();
+      promptAction.showToast({ message: `\u626B\u63CF\u5B8C\u6210\uFF1A\u53D1\u73B0 ${hits.length} \u4E2A\u6587\u4EF6\uFF0C\u65B0\u5BFC\u5165 ${added} \u672C` });
+      console.info(`[Index] Device scan: ${hits.length} files, ${added} imported`);
+    } finally {
+      this.scanBusy = false;
+    }
+  }
+
+  /** Run the full-text search over the whole library with progress. */
+  async runLibSearch(): Promise<void> {
+    const q: string = this.libQuery.trim();
+    if (q.length === 0 || this.libSearchBusy) {
+      return;
+    }
+    this.libSearchBusy = true;
+    this.libSearchHits = [];
+    this.libSearchProgress = '0/' + this.recentBooks.length;
+    const hits: LibSearchHit[] = await searchLibraryText(this.recentBooks, q, (done: number, total: number) => {
+      this.libSearchProgress = done + '/' + total;
+      return this.libSearchBusy; /* false when cancelled */
+    });
+    this.libSearchHits = hits;
+    this.libSearchBusy = false;
+    promptAction.showToast({ message: `\u5168\u6587\u641C\u7D22\uFF1A${hits.length} \u5904\u547D\u4E2D` });
+    console.info(`[Index] Full-text search '${q}': ${hits.length} hits`);
+  }
+
+  /** Cancel a running full-text search. */
+  cancelLibSearch(): void {
+    this.libSearchBusy = false;
+  }
+
+  /** Open a full-text hit at its page. */
+  openLibHit(hit: LibSearchHit): void {
+    router.pushUrl({ url: 'components/Reader', params: { docPath: hit.path, title: hit.title, jumpPage: String(hit.page) } });
+  }
+
+  /** Remove library entries whose backing files have disappeared. */
+  async cleanupMissing(): Promise<void> {
+    const missing: string[] = findMissingBooks(this.recentBooks);
+    if (missing.length === 0) {
+      return;
+    }
+    const keep: RecentBook[] = this.recentBooks.filter((b: RecentBook) => missing.indexOf(b.path) < 0);
+    await replaceRecentBooks(getContext(this), keep);
+    await this.loadLibrary();
+    promptAction.showToast({ message: `\u5DF2\u79FB\u9664 ${missing.length} \u6761\u5931\u6548\u8BB0\u5F55` });
+  }
+
+  /* ---- Round 6: profile management (block G) ---- */
+
+  /** Open the profile panel and refresh the profile list. */
+  async openProfilePanel(): Promise<void> {
+    this.profileList = await listProfiles(getContext(this));
+    this.profileInput = '';
+    this.showProfile = true;
+  }
+
+  /** Create a new empty profile. */
+  async doCreateProfile(): Promise<void> {
+    const ok: boolean = await createProfile(getContext(this), this.profileInput);
+    if (!ok) {
+      promptAction.showToast({ message: $r('app.string.prof_invalid') });
+      return;
+    }
+    this.profileInput = '';
+    this.profileList = await listProfiles(getContext(this));
+    promptAction.showToast({ message: $r('app.string.prof_created') });
+  }
+
+  /** Switch the active profile and reload all profile-scoped data. */
+  async doSwitchProfile(name: string): Promise<void> {
+    const ok: boolean = await switchProfile(getContext(this), name);
+    if (!ok) {
+      return;
+    }
+    this.showProfile = false;
+    this.settings = await loadSettings(getContext(this));
+    await this.loadLibrary();
+    this.loadAllBookmarks();
+    this.loadStats();
+    promptAction.showToast({ message: `\u5DF2\u5207\u6362\u5230\u6863\u6848\uFF1A${name}` });
+    console.info(`[Index] Profile switched to ${name}`);
+  }
+
+  /** Delete a non-default profile (its data becomes unreachable). */
+  async doDeleteProfile(name: string): Promise<void> {
+    const ok: boolean = await deleteProfile(getContext(this), name);
+    if (!ok) {
+      promptAction.showToast({ message: $r('app.string.prof_nodelete') });
+      return;
+    }
+    if (getCurrentProfile() === DEFAULT_PROFILE) {
+      this.settings = await loadSettings(getContext(this));
+      await this.loadLibrary();
+      this.loadAllBookmarks();
+      this.loadStats();
+    }
+    this.profileList = await listProfiles(getContext(this));
+    promptAction.showToast({ message: `\u6863\u6848 ${name} \u5DF2\u5220\u9664` });
+  }
+
+  /** Profile management overlay (list / switch / create / delete). */
+  @Builder
+  buildProfileOverlay() {
+    Column({ space: 10 }) {
+      Text($r('app.string.prof_title'))
+        .fontSize(16).fontWeight(FontWeight.Medium).fontColor('#212121')
+      Text($r('app.string.prof_hint'))
+        .fontSize(11).fontColor('#888')
+      Text(`\u5F53\u524D\uFF1A${getCurrentProfile()}`)
+        .fontSize(12).fontColor($r('app.color.brand_primary'))
+      List() {
+        ForEach(this.profileList, (name: string) => {
+          ListItem() {
+            Row({ space: 8 }) {
+              Text(name === DEFAULT_PROFILE ? $r('app.string.common_default') : name)
+                .fontSize(13).fontColor('#333').layoutWeight(1)
+              if (name !== getCurrentProfile()) {
+                Text($r('app.string.common_switch')).fontSize(12).fontColor($r('app.color.brand_primary'))
+                  .onClick(() => {
+                    this.doSwitchProfile(name);
+                  })
+                Text($r('app.string.common_delete')).fontSize(12).fontColor('#b71c1c')
+                  .onClick(() => {
+                    this.doDeleteProfile(name);
+                  })
+              } else {
+                Text('\u2713').fontSize(14).fontColor('#2a7')
+              }
+            }
+            .width('100%').padding({ top: 8, bottom: 8, left: 8, right: 8 })
+          }
+        }, (name: string) => name)
+      }
+      .height(140)
+      .divider({ strokeWidth: 1, color: '#f0f0f0', startMargin: 8, endMargin: 8 })
+
+      Row({ space: 8 }) {
+        TextInput({ placeholder: $r('app.string.prof_new_name'), text: this.profileInput })
+          .fontSize(13).height(34).layoutWeight(1)
+          .onChange((v: string) => {
+            this.profileInput = v;
+          })
+        Button($r('app.string.common_new'))
+          .fontSize(13).height(34)
+          .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+          .onClick(() => {
+            this.doCreateProfile();
+          })
+      }
+      .width('100%')
+
+      Button($r('app.string.common_close'))
+        .fontSize(13).height(34).width('100%')
+        .backgroundColor('#e0e0e0').fontColor('#333')
+        .onClick(() => {
+          this.showProfile = false;
+        })
+    }
+    .width('78%')
+    .padding(14)
+    .borderRadius(12)
+    .backgroundColor(Color.White)
   }
 
   /**
@@ -1178,6 +1416,17 @@ struct Index {
           })
         this.buildAboutOverlay()
       }
+      /* Round 6: profile management overlay */
+      if (this.showProfile) {
+        Column() {}
+          .width('100%').height('100%')
+          .backgroundColor('#66000000')
+          .onClick(() => {
+            this.showProfile = false;
+          })
+        this.buildProfileOverlay()
+      }
+
       if (this.activeOverlay === 4) {
         Column() {}
           .width('100%').height('100%')
@@ -1274,7 +1523,7 @@ struct Index {
     for (let i = 0; i < filtered.length; i++) {
       const book = filtered[i];
       const key = this.recentViewMode === 2 ? book.series : book.author;
-      const label = key.length > 0 ? key : '\u672A\u5206\u7C7B';
+      const label = key.length > 0 ? key : this.L($r('app.string.tag_none'));
       if (groups.has(label)) {
         groups.get(label)!.push(book);
       } else {
@@ -1294,14 +1543,14 @@ struct Index {
       Column({ space: 8 }) {
         /* Sprint N: sort + filter bar */
         Row() {
-          Button(this.recentSortMode === 0 ? '\u6700\u8FD1' : this.recentSortMode === 1 ? 'A-Z' : '\u4F5C\u8005')
+          Button(this.recentSortMode === 0 ? $r('app.string.sort_recent') : this.recentSortMode === 1 ? 'A-Z' : $r('app.string.sort_author'))
             .fontSize(11).height(26)
             .onClick(() => { this.recentSortMode = (this.recentSortMode + 1) % 3; })
-          Button(this.recentViewMode === 0 ? '\u5217\u8868' : this.recentViewMode === 1 ? '\u4F5C\u8005' : '\u7CFB\u5217')
+          Button(this.recentViewMode === 0 ? $r('app.string.view_list') : this.recentViewMode === 1 ? $r('app.string.sort_author') : $r('app.string.sort_series'))
             .fontSize(11).height(26).margin({ left: 6 })
             .onClick(() => { this.recentViewMode = (this.recentViewMode + 1) % 3; })
           if (this.allTags.length > 0) {
-            Text(this.activeTagFilter ? '\u7B5B:' + this.activeTagFilter : '\u6807\u7B7E')
+            Text(this.activeTagFilter ? '\u7B5B:' + this.activeTagFilter : $r('app.string.lib_tags'))
               .fontSize(11).fontColor('#2a7').height(26)
               .margin({ left: 6 })
               .onClick(() => {
@@ -1312,7 +1561,7 @@ struct Index {
         }.width('94%').margin({ bottom: 8 })
 
         if (this.getFilteredRecent().length === 0) {
-          Text('\u8FD8\u6CA1\u6709\u9605\u8BFB\u8BB0\u5F55')
+          Text($r('app.string.lib_empty'))
             .fontSize(13).fontColor('#999')
             .margin({ top: 40 })
         } else if (this.recentViewMode > 0) {
@@ -1351,7 +1600,7 @@ struct Index {
     Scroll() {
       Column({ space: 8 }) {
         if (this.starredBooks.length === 0) {
-          Text('还没有收藏，点列表右侧 ☆ 收藏书籍')
+          Text($r('app.string.star_empty'))
             .fontSize(13).fontColor('#999')
             .margin({ top: 40 })
         } else {
@@ -1638,15 +1887,15 @@ struct Index {
       return;
     }
     this.opdsLoading = true;
-    this.opdsStatus = '\u52A0\u8F7D\u4E2D...';
+    this.opdsStatus = this.L($r('app.string.common_loading'));
     try {
       const entries: OpdsEntry[] = await fetchOpds(url, 15000, getContext(this));
       this.opdsEntries = entries;
-      this.opdsStatus = entries.length > 0 ? '\u5171 ' + entries.length + ' \u9879' : '\u65E0\u5185\u5BB9\u6216\u52A0\u8F7D\u5931\u8D25';
+      this.opdsStatus = entries.length > 0 ? '\u5171 ' + entries.length + ' \u9879' : this.L($r('app.string.dash_empty'));
       this.opdsStack.push(url);
       console.info(`[Index] OPDS opened: ${url} -> ${entries.length} entries`);
     } catch (e) {
-      this.opdsStatus = '\u52A0\u8F7D\u5931\u8D25';
+      this.opdsStatus = this.L($r('app.string.common_load_failed'));
     }
     this.opdsLoading = false;
   }
@@ -1662,13 +1911,13 @@ struct Index {
     this.opdsStack.pop();
     const prev: string = this.opdsStack[this.opdsStack.length - 1];
     this.opdsLoading = true;
-    this.opdsStatus = '\u52A0\u8F7D\u4E2D...';
+    this.opdsStatus = this.L($r('app.string.common_loading'));
     fetchOpds(prev, 15000, getContext(this)).then((entries: OpdsEntry[]) => {
       this.opdsEntries = entries;
-      this.opdsStatus = entries.length > 0 ? '\u5171 ' + entries.length + ' \u9879' : '\u65E0\u5185\u5BB9';
+      this.opdsStatus = entries.length > 0 ? '\u5171 ' + entries.length + ' \u9879' : this.L($r('app.string.common_empty'));
       this.opdsLoading = false;
     }).catch(() => {
-      this.opdsStatus = '\u52A0\u8F7D\u5931\u8D25';
+      this.opdsStatus = this.L($r('app.string.common_load_failed'));
       this.opdsLoading = false;
     });
   }
@@ -1731,7 +1980,7 @@ struct Index {
       }
       req.destroy();
     } catch (e) {
-      this.opdsStatus = '\u4E0B\u8F7D\u9519\u8BEF';
+      this.opdsStatus = this.L($r('app.string.dav_download_error'));
     }
   }
 
@@ -1763,7 +2012,7 @@ struct Index {
 
       if (this.webdavPath.length > 0) {
         Row() {
-          Text('⬆ 上级目录').fontSize(13).fontColor('#3949AB')
+          Text($r('app.string.dav_up_dir')).fontSize(13).fontColor('#3949AB')
           Text(this.webdavPath).fontSize(11).fontColor('#888').margin({ left: 10 }).layoutWeight(1).maxLines(1)
         }
         .width('90%').padding({ top: 6, bottom: 6 })
@@ -1820,7 +2069,7 @@ struct Index {
   /** Switch bottom tab and refresh the top bar title (Android: title = tab name). */
   switchTab(index: number): void {
     this.currentTab = index;
-    const names: string[] = ['\u9996\u9875', '\u4E66\u5E93', '\u6211\u7684\u6587\u4EF6', '\u504F\u597D'];
+    const names: string[] = [this.L($r('app.string.tab_home')), this.L($r('app.string.tab_library')), this.L($r('app.string.tab_my_files')), this.L($r('app.string.tab_prefs'))];
     this.topTitle = names[index];
     /* Phase 3: refresh stats whenever the dashboard becomes visible (also after Reader back) */
     if (index === 0) {
@@ -2033,7 +2282,7 @@ struct Index {
         .fontSize(17).fontWeight(FontWeight.Medium).fontColor('#333')
       Blank()
       if (moreAction >= 0) {
-        Text('更多')
+        Text($r('app.string.common_more'))
           .fontSize(14).fontColor($r('app.color.brand_primary'))
           .onClick(() => {
             if (moreAction === 7) {
@@ -2118,18 +2367,18 @@ struct Index {
 
   statLabel(kind: number): string {
     if (kind === 0) {
-      return '\u4E66\u7C4D\u603B\u6570';
+      return this.L($r('app.string.stat_books'));
     }
     if (kind === 1) {
-      return '\u5DF2\u8BFB\u4E66\u7C4D';
+      return this.L($r('app.string.stat_finished'));
     }
     if (kind === 2) {
-      return '\u603B\u9605\u8BFB\u65F6\u95F4';
+      return this.L($r('app.string.stat_time'));
     }
     if (kind === 3) {
-      return '\u4ECA\u65E5\u9605\u8BFB';
+      return this.L($r('app.string.stat_today'));
     }
-    return '\u9605\u8BFB\u901F\u5EA6\uFF08\u9875/\u5206\uFF09';
+    return this.L($r('app.string.stat_speed'));
   }
 
   /** Quick-access circle: colored disc + icon + caption (Android 我的文件/网上书库 rows). */
@@ -2192,7 +2441,7 @@ struct Index {
     Scroll() {
       Column() {
         /* 最近阅读: horizontal cover shelf */
-        this.sectionHeader('\u6700\u8FD1\u9605\u8BFB', 0)
+        this.sectionHeader(this.L($r('app.string.sec_recent')), 0)
         Scroll() {
           Row({ space: 12 }) {
             ForEach(this.recentBooks, (book: RecentBook) => {
@@ -2205,9 +2454,9 @@ struct Index {
         .width('100%')
 
         /* 书签笔记: per-book cards */
-        this.sectionHeader('\u4E66\u7B7E\u7B14\u8BB0', 9)
+        this.sectionHeader(this.L($r('app.string.sec_bookmarks')), 9)
         if (this.bookmarkCards().length === 0) {
-          Text('\u6682\u65E0\u4E66\u7B7E\u7B14\u8BB0')
+          Text($r('app.string.dash_no_bookmarks'))
             .fontSize(12).fontColor('#999')
             .width('94%').padding({ left: 12, top: 2, bottom: 6 })
         } else {
@@ -2227,7 +2476,7 @@ struct Index {
                   Column({ space: 4 }) {
                     Text(card.title.length > 16 ? card.title.substring(0, 16) + '\u2026' : card.title)
                       .fontSize(14).fontWeight(FontWeight.Medium).fontColor('#333').maxLines(1)
-                    Text('\u5FEB\u901F\u4E66\u7B7E').fontSize(12).fontColor('#888')
+                    Text($r('app.string.quick_bookmark')).fontSize(12).fontColor('#888')
                     Text(card.percent).fontSize(12).fontColor('#999')
                   }
                   .alignItems(HorizontalAlign.Start)
@@ -2251,7 +2500,7 @@ struct Index {
 
         /* 我的珍藏 */
         if (this.starredBooks.length > 0) {
-          this.sectionHeader('\u6211\u7684\u73CD\u85CF', 1)
+          this.sectionHeader(this.L($r('app.string.sec_favorites')), 1)
           Scroll() {
             Row({ space: 12 }) {
               ForEach(this.starredBooks, (book: RecentBook) => {
@@ -2265,7 +2514,7 @@ struct Index {
         }
 
         /* 阅读统计: 3 + 2 white cards */
-        this.sectionHeader('\u9605\u8BFB\u7EDF\u8BA1', 7)
+        this.sectionHeader(this.L($r('app.string.sec_stats')), 7)
         Row({ space: 10 }) {
           this.statCard(0)
           this.statCard(1)
@@ -2280,7 +2529,7 @@ struct Index {
         .margin({ top: 10 })
 
         /* 我的文件: quick circles */
-        this.sectionHeader('\u6211\u7684\u6587\u4EF6', 2)
+        this.sectionHeader(this.L($r('app.string.tab_my_files')), 2)
         Row({ space: 20 }) {
           if (this.webdavUrl.length > 0) {
             this.shortcutCircle($r('app.media.ic_cloud'), '#4db6ac', 'WebDAV', 2)
@@ -2291,7 +2540,7 @@ struct Index {
         .padding({ top: 4, bottom: 6 })
 
         /* 网上书库: OPDS circles (persisted server list, first 2) */
-        this.sectionHeader('\u7F51\u4E0A\u4E66\u5E93', 8)
+        this.sectionHeader(this.L($r('app.string.sec_online')), 8)
         Row({ space: 20 }) {
           ForEach(this.opdsServers.slice(0, 2), (s: OpdsServer) => {
             Column({ space: 6 }) {
@@ -2334,7 +2583,7 @@ struct Index {
         })
       Column({ space: 14 }) {
         Row({ space: 28 }) {
-          ForEach(['\u8FD11\u5468', '\u8FD11\u6708', '\u8FD11\u5E74'], (label: string, idx: number) => {
+          ForEach([$r('app.string.range_week'), $r('app.string.range_month'), $r('app.string.range_year')], (label: string, idx: number) => {
             Column({ space: 4 }) {
               Text(label)
                 .fontSize(15)
@@ -2354,7 +2603,7 @@ struct Index {
         this.buildBarChart()
         Row() {
           Blank()
-          Text('\u786E\u8BA4')
+          Text($r('app.string.common_confirm'))
             .fontSize(16).fontColor('#00897B')
             .padding({ left: 20, top: 6, bottom: 2 })
             .onClick(() => {
@@ -2404,7 +2653,7 @@ struct Index {
           Row({ space: 6 }) {
             Image($r('app.media.ic_search'))
               .width(18).height(18).fillColor('#999')
-            TextInput({ placeholder: '\u641C\u7D22', text: this.libQuery })
+            TextInput({ placeholder: $r('app.string.common_search'), text: this.libQuery })
               .fontSize(14).height(38).layoutWeight(1)
               .backgroundColor(Color.Transparent)
               .padding(0)
@@ -2412,7 +2661,7 @@ struct Index {
                 this.libQuery = v;
               })
             if (this.selMode) {
-              Button('\u53D6\u6D88').fontSize(12).height(28).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+              Button($r('app.string.common_cancel')).fontSize(12).height(28).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
                 .onClick(() => {
                   this.exitSel();
                 })
@@ -2425,6 +2674,29 @@ struct Index {
           .backgroundColor(Color.White)
           .borderRadius(3)
           .padding({ left: 8, right: 8 })
+
+          /* Round 6: full-text search trigger (tap again to cancel) */
+          Column({ space: 2 }) {
+            Text($r('app.string.lib_fulltext')).fontSize(13).fontColor(Color.White)
+            if (this.libSearchBusy) {
+              Text(this.libSearchProgress).fontSize(9).fontColor('#c5cae9')
+            }
+          }
+          .height(38).justifyContent(FlexAlign.Center).padding({ left: 4, right: 4 })
+          .onClick(() => {
+            if (this.libSearchBusy) {
+              this.cancelLibSearch();
+            } else {
+              this.runLibSearch();
+            }
+          })
+
+          /* Round 6: device scan + import */
+          Image($r('app.media.ic_import'))
+            .width(20).height(20).fillColor(Color.White).margin({ right: 4 })
+            .onClick(() => {
+              this.runDeviceScan();
+            })
 
           /* sort: label + chevron */
           Row({ space: 2 }) {
@@ -2460,7 +2732,7 @@ struct Index {
       /* status chips: 全部 / 未读 / 在读 / 已读 (white chip + blue border, selected = blue bg) */
       Scroll() {
         Row({ space: 8 }) {
-          ForEach(['\u5168\u90E8', '\u672A\u8BFB', '\u5728\u8BFB', '\u5DF2\u8BFB'], (label: string, idx: number) => {
+          ForEach([$r('app.string.chip_all'), $r('app.string.chip_unread'), $r('app.string.chip_reading'), $r('app.string.chip_finished')], (label: string, idx: number) => {
             Text(label)
               .fontSize(13)
               .fontColor(this.libStatusFilter === idx - 1 ? Color.White : $r('app.color.brand_primary'))
@@ -2473,7 +2745,7 @@ struct Index {
                 this.libStatusFilter = this.libStatusFilter === idx - 1 ? -1 : idx - 1;
               })
           }, (label: string, idx: number) => `chip_${idx}`)
-          Text(this.libStarFilter ? '\u2605 \u6536\u85CF' : '\u2606 \u6536\u85CF')
+          Text(this.libStarFilter ? $r('app.string.chip_star_on') : $r('app.string.chip_star_off'))
             .fontSize(13)
             .fontColor(this.libStarFilter ? Color.White : $r('app.color.brand_primary'))
             .height(28)
@@ -2485,7 +2757,7 @@ struct Index {
               this.libStarFilter = !this.libStarFilter;
               console.info(`[Index] Library star filter: ${this.libStarFilter}`);
             })
-          Text('\u25B6 \u64AD\u653E\u5217\u8868')
+          Text($r('app.string.chip_playlist'))
             .fontSize(13)
             .fontColor($r('app.color.brand_primary'))
             .height(28)
@@ -2501,23 +2773,76 @@ struct Index {
       .scrollable(ScrollDirection.Horizontal)
       .width('94%').margin({ top: 8 })
 
+      /* Round 6: missing-files cleanup banner */
+      if (this.missingCount > 0) {
+        Text(`\u26A0 ${this.missingCount} \u672C\u4E66\u6587\u4EF6\u5DF2\u4E22\u5931\uFF0C\u70B9\u51FB\u6E05\u7406\u4E66\u5E93\u8BB0\u5F55`)
+          .fontSize(12).fontColor('#b71c1c')
+          .height(30).padding({ left: 12, right: 12 }).margin({ top: 6 })
+          .borderRadius(3).backgroundColor('#ffcdd2')
+          .onClick(() => {
+            this.cleanupMissing();
+          })
+      }
+
+      /* Round 6: full-text search progress + results panel */
+      if (this.libSearchBusy || this.libSearchHits.length > 0) {
+        Column({ space: 4 }) {
+          Row({ space: 8 }) {
+            Text(this.libSearchBusy ? `\u5168\u6587\u641C\u7D22\u4E2D ${this.libSearchProgress}` : `\u5168\u6587\u641C\u7D22\u7ED3\u679C\uFF1A${this.libSearchHits.length} \u5904`)
+              .fontSize(12).fontColor('#555').layoutWeight(1)
+            if (this.libSearchBusy) {
+              Text($r('app.string.common_cancel')).fontSize(12).fontColor($r('app.color.brand_primary'))
+                .onClick(() => {
+                  this.cancelLibSearch();
+                })
+            } else {
+              Text($r('app.string.common_close')).fontSize(12).fontColor('#999')
+                .onClick(() => {
+                  this.libSearchHits = [];
+                })
+            }
+          }
+          .width('100%')
+
+          List() {
+            ForEach(this.libSearchHits, (hit: LibSearchHit) => {
+              ListItem() {
+                Column({ space: 2 }) {
+                  Text(`${hit.title} \u00B7 \u7B2C ${hit.page + 1} \u9875`).fontSize(12).fontColor('#333')
+                  Text(hit.excerpt).fontSize(11).fontColor('#888').maxLines(2)
+                }
+                .alignItems(HorizontalAlign.Start)
+                .width('100%').padding({ top: 6, bottom: 6, left: 8, right: 8 })
+                .onClick(() => {
+                  this.openLibHit(hit);
+                })
+              }
+            }, (hit: LibSearchHit) => hit.path + '_' + hit.page)
+          }
+          .height(180)
+          .divider({ strokeWidth: 1, color: '#f0f0f0', startMargin: 8, endMargin: 8 })
+        }
+        .width('94%').margin({ top: 6 }).padding(8)
+        .backgroundColor(Color.White).borderRadius(6)
+      }
+
       /* batch selection bar */
       if (this.selMode) {
         Row({ space: 6 }) {
           Text(this.selSet.length + ' \u9879\u5DF2\u9009').fontSize(12).fontColor($r('app.color.brand_primary'))
-          Button('\u5168\u9009').fontSize(11).height(26).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+          Button($r('app.string.lib_select_all')).fontSize(11).height(26).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
             .onClick(() => {
               this.selectAll();
             })
-          Button('\u5DF2\u8BFB').fontSize(11).height(26).backgroundColor('#e0e0e0').fontColor('#333')
+          Button($r('app.string.chip_finished')).fontSize(11).height(26).backgroundColor('#e0e0e0').fontColor('#333')
             .onClick(() => {
               this.batchMarkStatus(2);
             })
-          Button('\u672A\u8BFB').fontSize(11).height(26).backgroundColor('#e0e0e0').fontColor('#333')
+          Button($r('app.string.chip_unread')).fontSize(11).height(26).backgroundColor('#e0e0e0').fontColor('#333')
             .onClick(() => {
               this.batchMarkStatus(0);
             })
-          Button('\u5728\u8BFB').fontSize(11).height(26).backgroundColor('#e0e0e0').fontColor('#333')
+          Button($r('app.string.chip_reading')).fontSize(11).height(26).backgroundColor('#e0e0e0').fontColor('#333')
             .onClick(() => {
               this.batchMarkStatus(1);
             })
@@ -2527,7 +2852,7 @@ struct Index {
 
       /* content by view mode */
       if (this.getLibraryBooks().length === 0) {
-        Text('\u8FD8\u6CA1\u6709\u9605\u8BFB\u8BB0\u5F55\uff0c\u70B9\u53F3\u4E0A\u89D2 \uff0b \u5BFC\u5165\u4E66\u7C4D')
+        Text($r('app.string.lib_empty_import'))
           .fontSize(13).fontColor('#999').margin({ top: 60 })
       } else if (this.libViewMode <= 1) {
         /* list / compact */
@@ -2556,7 +2881,7 @@ struct Index {
                   }
                 }, (item: RecentBook) => `${item.path}_${item.page}_${item.status}_${item.star}`)
               }
-              .columnsTemplate('1fr 1fr 1fr')
+              .columnsTemplate(this.coverColsTemplate())
               .columnsGap(8).rowsGap(12)
               .width('94%')
               .padding({ top: 4 })
@@ -2585,6 +2910,10 @@ struct Index {
       if (this.libStatusFilter >= 0 && b.status !== this.libStatusFilter) {
         continue;
       }
+      /* Round 6: hide fully-read books (pref hideReadBooks) */
+      if (this.settings.hideReadBooks && b.status === 2) {
+        continue;
+      }
       if (q.length > 0) {
         const hay: string = (b.title + ' ' + b.author + ' ' + b.series + ' ' + b.tags.join(' ')).toLowerCase();
         if (hay.indexOf(q) < 0) {
@@ -2606,15 +2935,42 @@ struct Index {
   }
 
   sortName(mode: number): string {
-    return mode === 0 ? '\u6700\u8FD1' : mode === 1 ? '\u540D\u79F0' : mode === 2 ? '\u65E5\u671F' : mode === 3 ? '\u4F5C\u8005' : '\u7CFB\u5217';
+    return mode === 0 ? this.L($r('app.string.sort_recent')) : mode === 1 ? this.L($r('app.string.common_name')) : mode === 2 ? this.L($r('app.string.sort_date')) : mode === 3 ? this.L($r('app.string.sort_author')) : this.L($r('app.string.sort_series'));
+  }
+
+  /** Round 6: grid columns template from the coverColumns pref (2..4). */
+  coverColsTemplate(): string {
+    const n: number = Math.max(2, Math.min(4, this.settings.coverColumns));
+    let t: string = '';
+    for (let i = 0; i < n; i++) {
+      t = t + (i > 0 ? ' ' : '') + '1fr';
+    }
+    return t;
+  }
+
+  /** Round 6: apply the preferred screen orientation (auto/portrait/landscape). */
+  applyOrientation(): void {
+    window.getLastWindow(getContext(this)).then((win: window.Window) => {
+      const o: number = this.settings.screenOrientation;
+      const target = o === 1 ? window.Orientation.PORTRAIT
+        : o === 2 ? window.Orientation.LANDSCAPE
+        : window.Orientation.UNSPECIFIED;
+      win.setPreferredOrientation(target).then(() => {
+        console.info(`[Index] Orientation set to ${o}`);
+      }).catch((err: Error) => {
+        console.error('[Index] setPreferredOrientation failed: ' + JSON.stringify(err));
+      });
+    }).catch((err: Error) => {
+      console.error('[Index] getLastWindow failed: ' + JSON.stringify(err));
+    });
   }
 
   viewName(mode: number): string {
-    return mode === 0 ? '\u5217\u8868' : mode === 1 ? '\u7D27\u51D1' : mode === 2 ? '\u7F51\u683C' : mode === 3 ? '\u5C01\u9762' : '\u4E66\u67B6';
+    return mode === 0 ? this.L($r('app.string.view_list')) : mode === 1 ? this.L($r('app.string.view_compact')) : mode === 2 ? this.L($r('app.string.view_grid')) : mode === 3 ? this.L($r('app.string.view_cover')) : this.L($r('app.string.view_shelf'));
   }
 
   statusLabel(s: number): string {
-    return s === 0 ? '\u672A\u8BFB' : s === 1 ? '\u5728\u8BFB' : '\u5DF2\u8BFB';
+    return s === 0 ? this.L($r('app.string.chip_unread')) : s === 1 ? this.L($r('app.string.chip_reading')) : this.L($r('app.string.chip_finished'));
   }
 
   statusColor(s: number): string {
@@ -2808,7 +3164,7 @@ struct Index {
       this.aiCfg.maxTokens = 8192;
     }
     saveAiConfig(getContext(this), this.aiCfg).then(() => {
-      this.status = 'AI \u914D\u7F6E\u5DF2\u4FDD\u5B58';
+      this.status = this.L($r('app.string.ai_saved'));
       this.showAiDialog = false;
     });
   }
@@ -2864,7 +3220,7 @@ struct Index {
         })
       Column({ space: 10 }) {
         Row() {
-          Text('AI \u5927\u6A21\u578B\u63A5\u5165')
+          Text($r('app.string.ai_config_title'))
             .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
             .layoutWeight(1)
           Image($r('app.media.ic_close'))
@@ -2876,14 +3232,14 @@ struct Index {
         .width('100%')
 
         Row({ space: 8 }) {
-          Text('\u534F\u8BAE').fontSize(14).fontColor('#333').width(70)
-          Text('OpenAI \u517C\u5BB9')
+          Text($r('app.string.ai_protocol')).fontSize(14).fontColor('#333').width(70)
+          Text($r('app.string.ai_openai_compat'))
             .fontSize(14).fontColor($r('app.color.brand_primary'))
         }
         .width('100%')
 
         Row({ space: 8 }) {
-          Text('\u6A21\u578B\u5382\u5546').fontSize(14).fontColor('#333').width(70)
+          Text($r('app.string.ai_provider')).fontSize(14).fontColor('#333').width(70)
           ForEach(AI_PROVIDERS, (p: string, idx: number) => {
             Text(p)
               .fontSize(12)
@@ -2900,7 +3256,7 @@ struct Index {
         .width('100%')
 
         Row({ space: 8 }) {
-          Text('API \u5730\u5740').fontSize(14).fontColor('#333').width(70)
+          Text($r('app.string.ai_url')).fontSize(14).fontColor('#333').width(70)
           TextInput({ text: this.aiCfg.url, placeholder: 'https://...' })
             .fontSize(13).height(38).layoutWeight(1)
             .backgroundColor(Color.White)
@@ -2913,7 +3269,7 @@ struct Index {
         .width('100%')
 
         Row({ space: 8 }) {
-          Text('\u5BC6\u94A5').fontSize(14).fontColor('#333').width(70)
+          Text($r('app.string.ai_key')).fontSize(14).fontColor('#333').width(70)
           TextInput({ text: this.aiCfg.key, placeholder: 'sk-...' })
             .type(InputType.Password)
             .fontSize(13).height(38).layoutWeight(1)
@@ -2927,7 +3283,7 @@ struct Index {
         .width('100%')
 
         Row({ space: 8 }) {
-          Text('\u6A21\u578B\u540D').fontSize(14).fontColor('#333').width(70)
+          Text($r('app.string.ai_model')).fontSize(14).fontColor('#333').width(70)
           TextInput({ text: this.aiCfg.model, placeholder: 'glm-4.5-air' })
             .fontSize(13).height(38).layoutWeight(1)
             .backgroundColor(Color.White)
@@ -2936,7 +3292,7 @@ struct Index {
             .onChange((v: string) => {
               this.aiCfg.model = v;
             })
-          Text('\u83B7\u53D6\u6A21\u578B')
+          Text($r('app.string.ai_list_models'))
             .fontSize(13).fontColor('#00897B')
             .onClick(() => {
               this.fetchAiModels();
@@ -2967,7 +3323,7 @@ struct Index {
         }
 
         Row({ space: 8 }) {
-          Text('\u8F93\u51FA\u4E0A\u9650').fontSize(14).fontColor('#333').width(70)
+          Text($r('app.string.ai_max_tokens')).fontSize(14).fontColor('#333').width(70)
           TextInput({ text: this.aiCfg.maxTokens + '' })
             .type(InputType.Number)
             .fontSize(13).height(38).width(120)
@@ -2979,7 +3335,7 @@ struct Index {
             })
           Blank()
           Row({ space: 6 }) {
-            Text('\u601D\u8003\u6A21\u5F0F').fontSize(13).fontColor('#333')
+            Text($r('app.string.ai_thinking')).fontSize(13).fontColor('#333')
             Checkbox({ name: 'thinking' })
               .select(this.aiCfg.thinking)
               .selectedColor($r('app.color.brand_primary'))
@@ -2991,14 +3347,14 @@ struct Index {
         }
         .width('100%')
 
-        Text('\u6D4B\u8BD5\u8FDE\u63A5')
+        Text($r('app.string.common_test_connection'))
           .fontSize(13).fontColor('#00897B')
           .width('100%')
           .onClick(() => {
             this.aiTestSend();
           })
 
-        TextInput({ text: this.aiTestIn, placeholder: '\u8F93\u5165\u6587\u5B57\uFF0C\u6D4B\u8BD5\u6A21\u578B\u662F\u5426\u6709\u54CD\u5E94' })
+        TextInput({ text: this.aiTestIn, placeholder: $r('app.string.ai_test_hint') })
           .fontSize(13).height(38).width('100%')
           .backgroundColor(Color.White)
           .border({ width: 1, color: '#cccccc' })
@@ -3008,8 +3364,8 @@ struct Index {
           })
 
         if (this.aiTestOut.length > 0 || this.aiBusy) {
-          Text(this.aiBusy ? '\u6B63\u5728\u8BF7\u6C42\u6A21\u578B\u2026' : this.aiTestOut)
-            .fontSize(12).fontColor(this.aiTestOut.startsWith('\u6D4B\u8BD5\u5931\u8D25') || this.aiTestOut.startsWith('\u83B7\u53D6\u6A21\u578B\u5931\u8D25') ? '#d32f2f' : '#333')
+          Text(this.aiBusy ? $r('app.string.ai_requesting') : this.aiTestOut)
+            .fontSize(12).fontColor(this.aiTestOut.startsWith(this.L($r('app.string.common_test_failed'))) || this.aiTestOut.startsWith(this.L($r('app.string.ai_models_failed'))) ? '#d32f2f' : '#333')
             .width('100%')
             .maxLines(6)
             .padding(8)
@@ -3019,13 +3375,13 @@ struct Index {
 
         Row({ space: 12 }) {
           Blank()
-          Button('\u5173\u95ED')
+          Button($r('app.string.common_close'))
             .fontSize(14).height(36)
             .backgroundColor('#e0e0e0').fontColor('#333')
             .onClick(() => {
               this.showAiDialog = false;
             })
-          Button('\u4FDD\u5B58')
+          Button($r('app.string.common_save'))
             .fontSize(14).height(36)
             .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
             .onClick(() => {
@@ -3052,7 +3408,7 @@ struct Index {
       loadAiConfig(getContext(this)).then((c: AiConfig) => {
         this.aiCfg = c;
         if (!aiConfigReady(c)) {
-          this.status = '\u8BF7\u5148\u5728\u504F\u597D\u4E2D\u914D\u7F6E AI \u5927\u6A21\u578B';
+          this.status = this.L($r('app.string.ai_not_configured'));
           this.showAiDialog = true;
           loadAiConfig(getContext(this));
         } else {
@@ -3071,7 +3427,7 @@ struct Index {
     this.aiIntroText = '';
     this.aiIntroBusy = true;
     this.showAiIntro = true;
-    const author = book.author.length > 0 ? book.author : '\u672A\u77E5';
+    const author = book.author.length > 0 ? book.author : $r('app.string.common_unknown');
     const msgs: AiMessage[] = [
       { role: 'system', content: '\u4F60\u662F\u4E13\u4E1A\u7684\u9605\u8BFB\u52A9\u624B\uFF0C\u8BF7\u7528\u7B80\u4F53\u4E2D\u6587\u56DE\u7B54\u3002' },
       {
@@ -3097,11 +3453,11 @@ struct Index {
       title: this.aiIntroTitle,
       page: 0,
       date: new Date().toISOString(),
-      kind: 'AI\u7B80\u4ECB',
+      kind: this.L($r('app.string.ai_intro_title')),
       text: this.aiIntroText
     };
     addNote(getContext(this), n).then((ok: boolean) => {
-      promptAction.showToast({ message: ok ? 'AI \u7B80\u4ECB\u5DF2\u4FDD\u5B58\u5230\u7B14\u8BB0' : '\u4FDD\u5B58\u5931\u8D25' });
+      promptAction.showToast({ message: ok ? $r('app.string.ai_intro_saved') : $r('app.string.common_save_failed') });
       if (ok) {
         this.showAiIntro = false;
       }
@@ -3121,7 +3477,7 @@ struct Index {
         Row({ space: 8 }) {
           Image($r('app.media.ic_sparkle'))
             .width(20).height(20).fillColor($r('app.color.brand_primary'))
-          Text('AI \u7B80\u4ECB\u4E66\u7C4D')
+          Text($r('app.string.ai_intro_book'))
             .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
             .layoutWeight(1)
           Image($r('app.media.ic_close'))
@@ -3141,7 +3497,7 @@ struct Index {
             if (this.aiIntroBusy) {
               Row({ space: 8 }) {
                 LoadingProgress().width(20).height(20).color($r('app.color.brand_primary'))
-                Text('\u6B63\u5728\u751F\u6210\u7B80\u4ECB\u2026').fontSize(13).fontColor('#777')
+                Text($r('app.string.ai_intro_generating')).fontSize(13).fontColor('#777')
               }
             } else {
               Text(this.aiIntroText)
@@ -3159,13 +3515,13 @@ struct Index {
 
         Row({ space: 12 }) {
           Blank()
-          Button('\u5173\u95ED')
+          Button($r('app.string.common_close'))
             .fontSize(14).height(36)
             .backgroundColor('#e0e0e0').fontColor('#333')
             .onClick(() => {
               this.showAiIntro = false;
             })
-          Button('\u4FDD\u5B58\u5230\u7B14\u8BB0')
+          Button($r('app.string.trans_save_note'))
             .fontSize(14).height(36)
             .backgroundColor('#00897B').fontColor(Color.White)
             .opacity(this.aiIntroText.length > 0 && !this.aiIntroBusy ? 1 : 0.4)
@@ -3206,7 +3562,7 @@ struct Index {
   private saveSyncDialog(): void {
     saveSyncConfig(getContext(this), this.syncCfg).then(() => {
       this.armAutoSync();
-      this.status = '\u540C\u6B65\u914D\u7F6E\u5DF2\u4FDD\u5B58';
+      this.status = this.L($r('app.string.sync_saved'));
       this.showSyncDialog = false;
     });
   }
@@ -3229,7 +3585,7 @@ struct Index {
       return;
     }
     this.syncBusy = true;
-    this.syncTestOut = '\u6B63\u5728\u540C\u6B65\u2026';
+    this.syncTestOut = this.L($r('app.string.sync_running'));
     saveSyncConfig(getContext(this), this.syncCfg);
     runSync(getContext(this), this.syncCfg).then((entry: SyncLogEntry) => {
       this.syncCfg.lastSyncTime = entry.time;
@@ -3238,7 +3594,7 @@ struct Index {
       this.syncCfg.lastMs = entry.ms;
       this.syncTestOut = `\u540C\u6B65\u5B8C\u6210\uFF1A\u5173\u8054 ${entry.linked} \u672C\uFF0C\u4E0A\u4F20 ${entry.up} \u672C\uFF0C\u8017\u65F6 ${entry.ms}ms`;
       this.syncBusy = false;
-      this.status = 'WebDAV \u540C\u6B65\u5B8C\u6210';
+      this.status = this.L($r('app.string.sync_done'));
     }).catch((e: Object) => {
       this.syncTestOut = '\u540C\u6B65\u5931\u8D25\uFF1A' + (e instanceof Error ? e.message : String(e));
       this.syncBusy = false;
@@ -3269,7 +3625,7 @@ struct Index {
       Scroll() {
         Column({ space: 10 }) {
           Row() {
-            Text('WebDAV \u540C\u6B65')
+            Text($r('app.string.sync_title'))
               .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
               .layoutWeight(1)
             Image($r('app.media.ic_close'))
@@ -3288,11 +3644,11 @@ struct Index {
               .onChange((v: boolean) => {
                 this.syncCfg.enabled = v;
               })
-            Text('\u542F\u7528\u540C\u6B65\uFF08\u9605\u8BFB\u8FDB\u5EA6\u4E0E\u4E66\u7B7E\uFF09').fontSize(13).fontColor('#333')
+            Text($r('app.string.sync_enable')).fontSize(13).fontColor('#333')
           }
           .width('100%')
 
-          TextInput({ text: this.syncCfg.url, placeholder: '\u5730\u5740 http://dav.example.com:5005' })
+          TextInput({ text: this.syncCfg.url, placeholder: $r('app.string.sync_addr_hint') })
             .fontSize(13).height(38).width('100%')
             .backgroundColor(Color.White)
             .border({ width: 1, color: '#cccccc' })
@@ -3300,7 +3656,7 @@ struct Index {
             .onChange((v: string) => {
               this.syncCfg.url = v;
             })
-          TextInput({ text: this.syncCfg.user, placeholder: '\u8D26\u53F7' })
+          TextInput({ text: this.syncCfg.user, placeholder: $r('app.string.common_account') })
             .fontSize(13).height(38).width('100%')
             .backgroundColor(Color.White)
             .border({ width: 1, color: '#cccccc' })
@@ -3308,7 +3664,7 @@ struct Index {
             .onChange((v: string) => {
               this.syncCfg.user = v;
             })
-          TextInput({ text: this.syncCfg.password, placeholder: '\u5BC6\u7801' })
+          TextInput({ text: this.syncCfg.password, placeholder: $r('app.string.common_password') })
             .type(InputType.Password)
             .fontSize(13).height(38).width('100%')
             .backgroundColor(Color.White)
@@ -3326,12 +3682,12 @@ struct Index {
               .onChange((v: boolean) => {
                 this.syncCfg.trusted = v;
               })
-            Text('\u4FE1\u4EFB\u81EA\u7B7E\u540D\u8BC1\u4E66').fontSize(13).fontColor('#333')
+            Text($r('app.string.sync_trust_selfsigned')).fontSize(13).fontColor('#333')
           }
           .width('100%')
 
           Row({ space: 8 }) {
-            Text('\u540C\u6B65\u8DEF\u5F84').fontSize(14).fontColor('#333').width(70)
+            Text($r('app.string.sync_path')).fontSize(14).fontColor('#333').width(70)
             TextInput({ text: this.syncCfg.remotePath })
               .fontSize(13).height(38).layoutWeight(1)
               .backgroundColor(Color.White)
@@ -3344,7 +3700,7 @@ struct Index {
           .width('100%')
 
           Row({ space: 8 }) {
-            Text('\u51B2\u7A81\u7B56\u7565').fontSize(14).fontColor('#333').width(70)
+            Text($r('app.string.sync_conflict')).fontSize(14).fontColor('#333').width(70)
             Select(SYNC_CONFLICTS.map((v: string) => {
               const o: SelectOption = { value: v };
               return o;
@@ -3367,13 +3723,13 @@ struct Index {
               .onChange((v: boolean) => {
                 this.syncCfg.autoSync = v;
               })
-            Text('\u5B9A\u65F6\u540C\u6B65\uFF08\u5E94\u7528\u8FD0\u884C\u671F\u95F4\uFF09').fontSize(13).fontColor('#333')
+            Text($r('app.string.sync_auto')).fontSize(13).fontColor('#333')
           }
           .width('100%')
 
           if (this.syncCfg.autoSync) {
             Row({ space: 8 }) {
-              Text('\u95F4\u9694\uFF08\u5206\u949F\uFF09').fontSize(14).fontColor('#333').width(70)
+              Text($r('app.string.sync_interval')).fontSize(14).fontColor('#333').width(70)
               TextInput({ text: '' + this.syncCfg.autoSyncMin })
                 .fontSize(13).height(38).layoutWeight(1)
                 .backgroundColor(Color.White)
@@ -3389,17 +3745,17 @@ struct Index {
           }
 
           Row({ space: 16 }) {
-            Text('\u6D4B\u8BD5\u8FDE\u63A5')
+            Text($r('app.string.common_test_connection'))
               .fontSize(13).fontColor('#00897B')
               .onClick(() => {
                 this.syncTest();
               })
-            Text('\u540C\u6B65\u65E5\u5FD7')
+            Text($r('app.string.sync_log'))
               .fontSize(13).fontColor('#00897B')
               .onClick(() => {
                 this.openSyncLog();
               })
-            Text('\u7ACB\u5373\u540C\u6B65')
+            Text($r('app.string.sync_now'))
               .fontSize(13).fontColor('#00897B')
               .onClick(() => {
                 this.syncRunNow();
@@ -3421,20 +3777,20 @@ struct Index {
             Text(`\u4E0A\u6B21\u540C\u6B65\uFF1A${this.fmtLogTime(this.syncCfg.lastSyncTime)} \u00B7 \u2191${this.syncCfg.lastUp}\u672C \u00B7 \u5173\u8054${this.syncCfg.lastLinked} \u00B7 ${this.syncCfg.lastMs}ms`)
               .fontSize(12).fontColor('#666')
               .width('100%')
-            Text('\u4E0E\u201C\u6211\u7684\u6587\u4EF6\u201D\u4E2D\u7684 WebDAV \u670D\u52A1\u5668\u76F8\u4E92\u72EC\u7ACB')
+            Text($r('app.string.sync_independent'))
               .fontSize(11).fontColor('#999')
               .width('100%')
           }
 
           Row({ space: 12 }) {
             Blank()
-            Button('\u5173\u95ED')
+            Button($r('app.string.common_close'))
               .fontSize(14).height(36)
               .backgroundColor('#e0e0e0').fontColor('#333')
               .onClick(() => {
                 this.showSyncDialog = false;
               })
-            Button('\u4FDD\u5B58')
+            Button($r('app.string.common_save'))
               .fontSize(14).height(36)
               .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
               .onClick(() => {
@@ -3465,7 +3821,7 @@ struct Index {
         })
       Column({ space: 10 }) {
         Row() {
-          Text('\u540C\u6B65\u65E5\u5FD7')
+          Text($r('app.string.sync_log'))
             .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
             .layoutWeight(1)
           Image($r('app.media.ic_close'))
@@ -3477,7 +3833,7 @@ struct Index {
         .width('100%')
 
         if (this.syncLogs.length === 0) {
-          Text('(\u6682\u65E0\u540C\u6B65\u8BB0\u5F55\uFF0C\u70B9\u201C\u7ACB\u5373\u540C\u6B65\u201D\u751F\u6210)')
+          Text($r('app.string.sync_log_empty'))
             .fontSize(13).fontColor('#999')
             .width('100%')
             .textAlign(TextAlign.Center)
@@ -3507,7 +3863,7 @@ struct Index {
           .layoutWeight(1)
         }
 
-        Button('\u5173\u95ED')
+        Button($r('app.string.common_close'))
           .fontSize(14).height(36).width('40%')
           .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
           .onClick(() => {
@@ -3548,9 +3904,9 @@ struct Index {
         Divider().color('#eeeeee')
         this.libMenuPlItem()
         Divider().color('#eeeeee')
-        this.libMenuItem($r('app.media.ic_check'), '\u6807\u8BB0\u4E3A\u5DF2\u8BFB', 2)
-        this.libMenuItem($r('app.media.ic_circle_half'), '\u6807\u8BB0\u4E3A\u5728\u8BFB', 1)
-        this.libMenuItem($r('app.media.ic_circle_empty'), '\u6807\u8BB0\u4E3A\u672A\u8BFB\uFF08\u6E05\u7A7A\u8FDB\u5EA6\uFF09', 0)
+        this.libMenuItem($r('app.media.ic_check'), this.L($r('app.string.menu_mark_finished')), 2)
+        this.libMenuItem($r('app.media.ic_circle_half'), this.L($r('app.string.menu_mark_reading')), 1)
+        this.libMenuItem($r('app.media.ic_circle_empty'), this.L($r('app.string.menu_mark_unread')), 0)
         Divider().color('#eeeeee')
         this.libMenuStarItem()
         Divider().color('#eeeeee')
@@ -3568,7 +3924,7 @@ struct Index {
   libMenuAiItem() {
     Row({ space: 14 }) {
       Image($r('app.media.ic_sparkle')).width(20).height(20).fillColor($r('app.color.brand_primary'))
-      Text('AI \u7B80\u4ECB\u4E66\u7C4D').fontSize(15).fontColor('#333')
+      Text($r('app.string.ai_intro_book')).fontSize(15).fontColor('#333')
     }
     .width('100%')
     .padding({ left: 18, right: 18, top: 13, bottom: 13 })
@@ -3581,7 +3937,7 @@ struct Index {
   libMenuPlItem() {
     Row({ space: 14 }) {
       Image($r('app.media.ic_list')).width(20).height(20).fillColor($r('app.color.brand_primary'))
-      Text('\u52A0\u5165\u64AD\u653E\u5217\u8868').fontSize(15).fontColor('#333')
+      Text($r('app.string.pl_add')).fontSize(15).fontColor('#333')
     }
     .width('100%')
     .padding({ left: 18, right: 18, top: 13, bottom: 13 })
@@ -3615,7 +3971,7 @@ struct Index {
     Row({ space: 14 }) {
       Image(this.libMenuBook()?.star ? $r('app.media.ic_star_border') : $r('app.media.ic_star'))
         .width(20).height(20).fillColor($r('app.color.brand_primary'))
-      Text(this.libMenuBook()?.star ? '\u53D6\u6D88\u6536\u85CF' : '\u6536\u85CF')
+      Text(this.libMenuBook()?.star ? $r('app.string.menu_unstar') : $r('app.string.menu_star'))
         .fontSize(15).fontColor('#333')
     }
     .width('100%')
@@ -3633,7 +3989,7 @@ struct Index {
   libMenuDeleteItem() {
     Row({ space: 14 }) {
       Image($r('app.media.ic_close')).width(20).height(20).fillColor('#d32f2f')
-      Text('\u5220\u9664').fontSize(15).fontColor('#d32f2f')
+      Text($r('app.string.common_delete')).fontSize(15).fontColor('#d32f2f')
     }
     .width('100%')
     .padding({ left: 18, right: 18, top: 13, bottom: 13 })
@@ -3709,7 +4065,7 @@ struct Index {
         return;
       }
     }
-    promptAction.showToast({ message: '\u8BE5\u4E66\u4E0D\u5728\u4E66\u5E93\u4E2D' });
+    promptAction.showToast({ message: $r('app.string.pl_not_in_library') });
   }
 
   /** Add-to-playlist picker (from the per-book menu). */
@@ -3723,10 +4079,10 @@ struct Index {
           this.showPlPick = false;
         })
       Column({ space: 10 }) {
-        Text('\u52A0\u5165\u64AD\u653E\u5217\u8868')
+        Text($r('app.string.pl_add'))
           .fontSize(16).fontWeight(FontWeight.Bold)
         if (this.plList.length === 0) {
-          Text('\u6682\u65E0\u64AD\u653E\u5217\u8868\uFF0C\u4E0B\u65B9\u65B0\u5EFA')
+          Text($r('app.string.pl_empty'))
             .fontSize(12).fontColor('#999')
         }
         Scroll() {
@@ -3743,7 +4099,7 @@ struct Index {
               .onClick(() => {
                 const added = addToPlaylist(getContext(this), p.name, this.plAddPath);
                 promptAction.showToast({
-                  message: added ? '\u5DF2\u52A0\u5165\u300C' + p.name + '\u300D' : '\u5DF2\u5728\u8BE5\u64AD\u653E\u5217\u4E2D'
+                  message: added ? '\u5DF2\u52A0\u5165\u300C' + p.name + '\u300D' : $r('app.string.pl_already')
                 });
                 this.showPlPick = false;
               })
@@ -3754,12 +4110,12 @@ struct Index {
         .constraintSize({ maxHeight: 220 })
 
         Row({ space: 8 }) {
-          TextInput({ placeholder: '\u65B0\u5EFA\u64AD\u653E\u5217\u540D\u79F0', text: this.plPickName })
+          TextInput({ placeholder: $r('app.string.pl_new_name'), text: this.plPickName })
             .fontSize(13).height(36).layoutWeight(1)
             .onChange((v: string) => {
               this.plPickName = v;
             })
-          Button('\u65B0\u5EFA\u5E76\u52A0\u5165')
+          Button($r('app.string.pl_new_add'))
             .fontSize(12).height(36)
             .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
             .onClick(() => {
@@ -3769,13 +4125,13 @@ struct Index {
                 return;
               }
               addToPlaylist(getContext(this), this.plPickName.trim(), this.plAddPath);
-              promptAction.showToast({ message: '\u5DF2\u521B\u5EFA\u5E76\u52A0\u5165' });
+              promptAction.showToast({ message: $r('app.string.pl_created_added') });
               this.showPlPick = false;
             })
         }
         .width('100%')
 
-        Button('\u53D6\u6D88')
+        Button($r('app.string.common_cancel'))
           .fontSize(13).height(34).width('60%')
           .backgroundColor('#e0e0e0').fontColor('#333')
           .onClick(() => {
@@ -3801,10 +4157,10 @@ struct Index {
           this.showPlManage = false;
         })
       Column({ space: 10 }) {
-        Text('\u64AD\u653E\u5217\u8868')
+        Text($r('app.string.pl_title'))
           .fontSize(16).fontWeight(FontWeight.Bold)
         if (this.plList.length === 0) {
-          Text('\u6682\u65E0\u64AD\u653E\u5217\u8868\uFF0C\u4E0B\u65B9\u65B0\u5EFA')
+          Text($r('app.string.pl_empty'))
             .fontSize(12).fontColor('#999')
         }
         Scroll() {
@@ -3830,12 +4186,12 @@ struct Index {
         .constraintSize({ maxHeight: 260 })
 
         Row({ space: 8 }) {
-          TextInput({ placeholder: '\u65B0\u5EFA\u64AD\u653E\u5217\u540D\u79F0', text: this.plNewName })
+          TextInput({ placeholder: $r('app.string.pl_new_name'), text: this.plNewName })
             .fontSize(13).height(36).layoutWeight(1)
             .onChange((v: string) => {
               this.plNewName = v;
             })
-          Button('\u521B\u5EFA')
+          Button($r('app.string.common_create'))
             .fontSize(12).height(36)
             .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
             .onClick(() => {
@@ -3850,7 +4206,7 @@ struct Index {
         }
         .width('100%')
 
-        Button('\u5173\u95ED')
+        Button($r('app.string.common_close'))
           .fontSize(13).height(34).width('60%')
           .backgroundColor('#e0e0e0').fontColor('#333')
           .onClick(() => {
@@ -3880,7 +4236,7 @@ struct Index {
           .fontSize(16).fontWeight(FontWeight.Bold)
           .maxLines(1)
         if (this.plItems.length === 0) {
-          Text('\u6682\u65E0\u4E66\u76EE')
+          Text($r('app.string.pl_no_items'))
             .fontSize(12).fontColor('#999')
         }
         Scroll() {
@@ -3919,7 +4275,7 @@ struct Index {
         .constraintSize({ maxHeight: 320 })
 
         Row({ space: 8 }) {
-          Button('\u64AD\u653E\u7B2C\u4E00\u672C')
+          Button($r('app.string.pl_play_first'))
             .fontSize(12).height(34).layoutWeight(1)
             .backgroundColor('#00897B').fontColor(Color.White)
             .onClick(() => {
@@ -3927,7 +4283,7 @@ struct Index {
                 this.plOpenPath(this.plItems[0]);
               }
             })
-          Button('\u5220\u9664\u5217\u8868')
+          Button($r('app.string.pl_delete'))
             .fontSize(12).height(34).layoutWeight(1)
             .backgroundColor('#e57373').fontColor(Color.White)
             .onClick(() => {
@@ -3939,7 +4295,7 @@ struct Index {
         }
         .width('100%')
 
-        Button('\u5173\u95ED')
+        Button($r('app.string.common_close'))
           .fontSize(13).height(34).width('60%')
           .backgroundColor('#e0e0e0').fontColor('#333')
           .onClick(() => {
@@ -3960,7 +4316,7 @@ struct Index {
     Column() {
       /* banner with brand tagline */
       Column() {
-        Text('\u503C\u5F97\u8BFB\uff0c\u597D\u597D\u8BFB')
+        Text($r('app.string.drawer_tagline'))
           .fontSize(30).fontWeight(FontWeight.Bold).fontColor(Color.White)
           .textAlign(TextAlign.Center)
       }
@@ -3970,11 +4326,11 @@ struct Index {
 
       /* nav items: 最近阅读 / 书库 / 我的文件 / 网上书库 / 书签笔记 */
       Column({ space: 0 }) {
-        this.drawerNavItem($r('app.media.ic_toc'), '\u6700\u8FD1\u9605\u8BFB', 0)
-        this.drawerNavItem($r('app.media.ic_book_open'), '\u4E66\u5E93', 1)
-        this.drawerNavItem($r('app.media.ic_folder'), '\u6211\u7684\u6587\u4EF6', 2)
-        this.drawerNavItem($r('app.media.ic_globe'), '\u7F51\u4E0A\u4E66\u5E93', 3)
-        this.drawerNavItem($r('app.media.ic_bookmark'), '\u4E66\u7B7E\u7B14\u8BB0', 4)
+        this.drawerNavItem($r('app.media.ic_toc'), this.L($r('app.string.sec_recent')), 0)
+        this.drawerNavItem($r('app.media.ic_book_open'), this.L($r('app.string.tab_library')), 1)
+        this.drawerNavItem($r('app.media.ic_folder'), this.L($r('app.string.tab_my_files')), 2)
+        this.drawerNavItem($r('app.media.ic_globe'), this.L($r('app.string.sec_online')), 3)
+        this.drawerNavItem($r('app.media.ic_bookmark'), this.L($r('app.string.sec_bookmarks')), 4)
       }
       .width('100%').margin({ top: 6 })
 
@@ -3993,10 +4349,10 @@ struct Index {
 
       /* bottom bar: 设置选项 / 软件说明 / 晚上模式 / 退出 */
       Row() {
-        this.drawerBottomButton($r('app.media.ic_settings'), '\u8BBE\u7F6E\u9009\u9879', 0)
-        this.drawerBottomButton($r('app.media.ic_info'), '\u8F6F\u4EF6\u8BF4\u660E', 1)
-        this.drawerBottomButton($r('app.media.ic_brightness'), '\u665A\u4E0A\u6A21\u5F0F', 2)
-        this.drawerBottomButton($r('app.media.ic_close'), '\u9000\u51FA', 3)
+        this.drawerBottomButton($r('app.media.ic_settings'), this.L($r('app.string.drawer_settings')), 0)
+        this.drawerBottomButton($r('app.media.ic_info'), this.L($r('app.string.drawer_about')), 1)
+        this.drawerBottomButton($r('app.media.ic_brightness'), this.L($r('app.string.drawer_night')), 2)
+        this.drawerBottomButton($r('app.media.ic_close'), this.L($r('app.string.common_exit')), 3)
       }
       .width('100%')
     }
@@ -4059,7 +4415,7 @@ struct Index {
   buildBookmarkOverlay() {
     Column() {
       Row() {
-        Text('\u4E66\u7B7E\u7B14\u8BB0')
+        Text($r('app.string.sec_bookmarks'))
           .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333').layoutWeight(1)
         Text('\u2716')
           .fontSize(18).fontColor('#888').width(36).height(36).textAlign(TextAlign.Center)
@@ -4070,7 +4426,7 @@ struct Index {
       .width('100%').padding({ left: 12, right: 6, top: 8 })
       Divider().color('#eee')
       Row({ space: 8 }) {
-        TextInput({ placeholder: '\u641C\u7D22\u4E66\u7B7E...' })
+        TextInput({ placeholder: $r('app.string.bm_search_placeholder') })
           .fontSize(13).height(34).layoutWeight(1)
           .onChange((value: string) => {
             this.bookmarkFilter = value;
@@ -4080,7 +4436,7 @@ struct Index {
       Scroll() {
         Column({ space: 6 }) {
           if (this.getFilteredBookmarks().length === 0) {
-            Text(this.allBookmarks.length === 0 ? '\u8FD8\u6CA1\u6709\u4E66\u7B7E\uff0c\u5728\u9605\u8BFB\u5668\u4E2D\u70B9 \u{1F516} \u6DFB\u52A0' : '\u65E0\u5339\u914D\u7ED3\u679C')
+            Text(this.allBookmarks.length === 0 ? $r('app.string.bookmarks_empty_alt') : $r('app.string.bm_no_match'))
               .fontSize(13).fontColor('#999').margin({ top: 40 })
           } else {
             ForEach(this.getFilteredBookmarks(), (bm: Bookmark) => {
@@ -4127,7 +4483,7 @@ struct Index {
   buildNetworkOverlay() {
     Column() {
       Row() {
-        Text('\u7F51\u4E0A\u4E66\u5E93')
+        Text($r('app.string.sec_online'))
           .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333').layoutWeight(1)
         Text('\u2716')
           .fontSize(18).fontColor('#888').width(36).height(36).textAlign(TextAlign.Center)
@@ -4140,7 +4496,7 @@ struct Index {
 
       /* section toggle: OPDS 目录 / WebDAV 云盘 */
       Row({ space: 8 }) {
-        Button(this.netSection === 0 ? '\u2605 OPDS \u76EE\u5F55' : 'OPDS \u76EE\u5F55')
+        Button(this.netSection === 0 ? $r('app.string.opds_star_title') : $r('app.string.opds_title'))
           .fontSize(12).height(30).layoutWeight(1)
           .backgroundColor(this.netSection === 0 ? $r('app.color.brand_primary') : '#e0e0e0')
           .fontColor(this.netSection === 0 ? Color.White : '#333')
@@ -4193,12 +4549,12 @@ struct Index {
               })
             }, (s: OpdsServer) => s.url)
             Row({ space: 8 }) {
-              TextInput({ placeholder: '\u81EA\u5B9A\u4E49 OPDS \u5730\u5740', text: this.opdsUrl })
+              TextInput({ placeholder: $r('app.string.opds_custom'), text: this.opdsUrl })
                 .fontSize(12).height(34).layoutWeight(1)
                 .onChange((v: string) => {
                   this.opdsUrl = v;
                 })
-              Button('\u6253\u5F00')
+              Button($r('app.string.common_open'))
                 .fontSize(12).height(34).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
                 .onClick(() => {
                   this.opdsOpen(this.opdsUrl);
@@ -4212,7 +4568,7 @@ struct Index {
       } else {
         /* feed drill-down */
         Row({ space: 6 }) {
-          Button('\u2190 \u8FD4\u56DE')
+          Button($r('app.string.opds_back'))
             .fontSize(12).height(30).backgroundColor('#e0e0e0').fontColor('#333')
             .onClick(() => {
               this.opdsBack();
@@ -4261,7 +4617,7 @@ struct Index {
   @Builder
   buildWebdavPanel() {
     Column() {
-      Text('\u2601 WebDAV \u4E91\u76D8')
+      Text($r('app.string.dav_cloud_title'))
         .fontSize(13).fontWeight(FontWeight.Bold).fontColor('#333')
         .margin({ top: 10, bottom: 6 })
 
@@ -4341,7 +4697,7 @@ struct Index {
   buildAboutOverlay() {
     Column() {
       Row() {
-        Text('\u8F6F\u4EF6\u8BF4\u660E')
+        Text($r('app.string.drawer_about'))
           .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333').layoutWeight(1)
         Text('\u2716')
           .fontSize(18).fontColor('#888').width(36).height(36).textAlign(TextAlign.Center)
@@ -4352,15 +4708,15 @@ struct Index {
       .width('100%').padding({ left: 12, right: 6, top: 8 })
       Divider().color('#eee')
       Column({ space: 8 }) {
-        Text('HowRead \u597D\u597D\u8BFB')
+        Text($r('app.string.about_brand'))
           .fontSize(20).fontWeight(FontWeight.Bold).fontColor('#333')
-        Text('\u9E3F\u8499\u79FB\u690D\u7248 1.0.0')
+        Text($r('app.string.about_version'))
           .fontSize(13).fontColor('#666')
-        Text('\u57FA\u4E8E Android V1.0.0 \u79FB\u690D\u9002\u914D')
+        Text($r('app.string.about_based'))
           .fontSize(12).fontColor('#999')
-        Text('MuPDF 1.23.7 \u5F15\u64CE \u00B7 \u591A\u683C\u5F0F\u9605\u8BFB')
+        Text($r('app.string.about_engine'))
           .fontSize(12).fontColor('#999')
-        Text('\u503C\u5F97\u8BFB\uff0c\u597D\u597D\u8BFB')
+        Text($r('app.string.drawer_tagline'))
           .fontSize(15).fontColor($r('app.color.brand_primary')).margin({ top: 10 })
       }
       .width('100%')
@@ -4377,22 +4733,22 @@ struct Index {
   @Builder
   buildNewFolderOverlay() {
     Column() {
-      Text('\u65B0\u5EFA\u6587\u4EF6\u5939')
+      Text($r('app.string.browse_new_folder'))
         .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333')
         .margin({ top: 16, bottom: 12 })
-      TextInput({ placeholder: '\u6587\u4EF6\u5939\u540D\u79F0', text: this.newFolderName })
+      TextInput({ placeholder: $r('app.string.browse_folder_name'), text: this.newFolderName })
         .fontSize(13).height(38).width('86%')
         .onChange((v: string) => {
           this.newFolderName = v;
         })
       Row({ space: 12 }) {
-        Button('\u53D6\u6D88')
+        Button($r('app.string.common_cancel'))
           .fontSize(13).height(36).layoutWeight(1).backgroundColor('#e0e0e0').fontColor('#333')
           .onClick(() => {
             this.showNewFolder = false;
             this.activeOverlay = 0;
           })
-        Button('\u521B\u5EFA')
+        Button($r('app.string.common_create'))
           .fontSize(13).height(36).layoutWeight(1).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
           .onClick(() => {
             this.confirmNewFolder();
@@ -4415,11 +4771,11 @@ struct Index {
         .fontSize(13).fontColor('#333').maxLines(1)
         .margin({ top: 16, bottom: 6 })
         .padding({ left: 12, right: 12 })
-      Text(this.isBookFile(this.opsFile) ? '\u53EF\u9605\u8BFB\u6587\u4EF6' : '\u6587\u4EF6/\u76EE\u5F55')
+      Text(this.isBookFile(this.opsFile) ? $r('app.string.browse_books') : $r('app.string.browse_files'))
         .fontSize(10).fontColor('#999').margin({ bottom: 8 })
       Divider().color('#eee')
       Row() {
-        Text('\u{1F4C4} \u6253\u5F00').fontSize(14).fontColor('#333').layoutWeight(1).padding({ left: 12 })
+        Text($r('app.string.browse_open')).fontSize(14).fontColor('#333').layoutWeight(1).padding({ left: 12 })
         Text('\u203A').fontSize(16).fontColor('#ccc').margin({ right: 12 })
       }
       .width('100%').height(46)
@@ -4429,7 +4785,7 @@ struct Index {
         this.openBrowseEntry(this.opsFile);
       })
       Row() {
-        Text('\u270F \u91CD\u547D\u540D').fontSize(14).fontColor('#333').layoutWeight(1).padding({ left: 12 })
+        Text($r('app.string.browse_rename')).fontSize(14).fontColor('#333').layoutWeight(1).padding({ left: 12 })
         Text('\u203A').fontSize(16).fontColor('#ccc').margin({ right: 12 })
       }
       .width('100%').height(46)
@@ -4438,7 +4794,7 @@ struct Index {
         this.activeOverlay = 6;
       })
       Row() {
-        Text('\u2716 \u5220\u9664').fontSize(14).fontColor('#d32f2f').layoutWeight(1).padding({ left: 12 })
+        Text($r('app.string.browse_delete')).fontSize(14).fontColor('#d32f2f').layoutWeight(1).padding({ left: 12 })
         Text('\u203A').fontSize(16).fontColor('#ccc').margin({ right: 12 })
       }
       .width('100%').height(46)
@@ -4447,7 +4803,7 @@ struct Index {
         this.activeOverlay = 0;
       })
       Divider().color('#eee')
-      Button('\u5173\u95ED')
+      Button($r('app.string.common_close'))
         .fontSize(13).height(40).width('90%').margin({ top: 8, bottom: 12 })
         .backgroundColor('#e0e0e0').fontColor('#333')
         .onClick(() => {
@@ -4465,22 +4821,22 @@ struct Index {
   @Builder
   buildRenameOverlay() {
     Column() {
-      Text('\u91CD\u547D\u540D')
+      Text($r('app.string.common_rename'))
         .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333')
         .margin({ top: 16, bottom: 12 })
-      TextInput({ placeholder: '\u65B0\u540D\u79F0', text: this.renameInput })
+      TextInput({ placeholder: $r('app.string.common_new_name'), text: this.renameInput })
         .fontSize(13).height(38).width('86%')
         .onChange((v: string) => {
           this.renameInput = v;
         })
       Row({ space: 12 }) {
-        Button('\u53D6\u6D88')
+        Button($r('app.string.common_cancel'))
           .fontSize(13).height(36).layoutWeight(1).backgroundColor('#e0e0e0').fontColor('#333')
           .onClick(() => {
             this.showRename = false;
             this.activeOverlay = 0;
           })
-        Button('\u786E\u5B9A')
+        Button($r('app.string.common_ok'))
           .fontSize(13).height(36).layoutWeight(1).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
           .onClick(() => {
             this.confirmRename();
@@ -4501,14 +4857,14 @@ struct Index {
     Column() {
       Column() {
         Text('\u{1F512}').fontSize(40)
-        Text('HowRead \u597D\u597D\u8BFB')
+        Text($r('app.string.about_brand'))
           .fontSize(18).fontWeight(FontWeight.Bold).fontColor(Color.White).margin({ top: 8 })
-        Text('\u5E94\u7528\u5DF2\u9501\u5B9A\uff0c\u8BF7\u8F93\u5165\u5BC6\u7801')
+        Text($r('app.string.lock_title'))
           .fontSize(12).fontColor('#ddd').margin({ top: 4 })
       }
       .margin({ top: 40 })
 
-      TextInput({ placeholder: '\u8BF7\u8F93\u5165\u5BC6\u7801', text: this.lockPin })
+      TextInput({ placeholder: $r('app.string.lock_placeholder'), text: this.lockPin })
         .fontSize(14).height(42).width('70%')
         .type(InputType.NUMBER_PASSWORD)
         .onChange((v: string) => {
@@ -4516,7 +4872,7 @@ struct Index {
         })
         .margin({ top: 30 })
 
-      Button('\u89E3\u9501')
+      Button($r('app.string.common_unlock'))
         .fontSize(14).height(40).width('70%').margin({ top: 16 })
         .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
         .onClick(() => {
@@ -4542,7 +4898,7 @@ struct Index {
     Column({ space: 8 }) {
       /* Search bar */
       Row({ space: 8 }) {
-        TextInput({ placeholder: '搜索书签...' })
+        TextInput({ placeholder: $r('app.string.bm_search_placeholder') })
           .fontSize(13)
           .height(34)
           .layoutWeight(1)
@@ -4556,7 +4912,7 @@ struct Index {
       Scroll() {
         Column({ space: 6 }) {
           if (this.getFilteredBookmarks().length === 0) {
-            Text(this.allBookmarks.length === 0 ? '还没有书签，在阅读器中点 🔖 添加' : '无匹配结果')
+            Text(this.allBookmarks.length === 0 ? $r('app.string.bm_empty_index') : $r('app.string.bm_no_match'))
               .fontSize(13).fontColor('#999')
               .margin({ top: 40 })
           } else {
@@ -4618,7 +4974,7 @@ struct Index {
             })
           Text(this.browseCurrentDir.length > 34 ? '\u2026' + this.browseCurrentDir.substring(this.browseCurrentDir.length - 34) : this.browseCurrentDir)
             .fontSize(10).fontColor('#666').maxLines(1).layoutWeight(1)
-          Button(this.browseViewMode === 0 ? '\u25A6 \u7F51\u683C' : '\u2261 \u5217\u8868')
+          Button(this.browseViewMode === 0 ? $r('app.string.browse_grid_btn') : $r('app.string.browse_list_btn'))
             .fontSize(10).height(32).backgroundColor('#e0e0e0').fontColor('#333')
             .onClick(() => {
               this.browseViewMode = this.browseViewMode === 0 ? 1 : 0;
@@ -4685,7 +5041,7 @@ struct Index {
             }
 
             if (this.browseDirs.length === 0 && this.browseFiles.length === 0) {
-              Text('\u7A7A\u76EE\u5F55').fontSize(12).fontColor('#999').margin({ top: 40 })
+              Text($r('app.string.browse_empty')).fontSize(12).fontColor('#999').margin({ top: 40 })
             }
           }
           .width('100%')
@@ -4695,13 +5051,13 @@ struct Index {
 
       /* bottom action row */
       Row({ space: 8 }) {
-        Button('\u65B0\u5EFA\u6587\u4EF6\u5939')
+        Button($r('app.string.browse_new_folder'))
           .fontSize(12).height(34).layoutWeight(1).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
           .onClick(() => {
             this.showNewFolder = true;
             this.activeOverlay = 4;
           })
-        Button('\u5BFC\u5165\u4E66\u7C4D')
+        Button($r('app.string.lib_import'))
           .fontSize(12).height(34).layoutWeight(1).backgroundColor('#2a7').fontColor(Color.White)
           .onClick(() => {
             this.openFilePicker();
@@ -4724,7 +5080,7 @@ struct Index {
       if (addKind > 0) {
         Row({ space: 2 }) {
           Text('+').fontSize(16).fontColor($r('app.color.brand_primary'))
-          Text('添加').fontSize(14).fontColor($r('app.color.brand_primary'))
+          Text($r('app.string.common_add')).fontSize(14).fontColor($r('app.color.brand_primary'))
         }
         .onClick(() => {
           if (addKind === 1) {
@@ -4759,7 +5115,7 @@ struct Index {
 
   private saveOpdsEdit(): void {
     if (this.opdsEditUrl.trim().length === 0) {
-      this.status = 'OPDS \u5730\u5740\u4E0D\u80FD\u4E3A\u7A7A';
+      this.status = this.L($r('app.string.opds_url_required'));
       return;
     }
     const original: string = this.opdsEditIdx >= 0 && this.opdsEditIdx < this.opdsServers.length
@@ -4771,7 +5127,7 @@ struct Index {
     saveOpdsServer(getContext(this), s, original).then(() => {
       this.showOpdsEdit = false;
       this.loadServers();
-      this.status = 'OPDS \u4E66\u5E93\u5DF2\u4FDD\u5B58';
+      this.status = this.L($r('app.string.opds_saved'));
     });
   }
 
@@ -4782,7 +5138,7 @@ struct Index {
     const url = this.opdsServers[idx].url;
     removeOpdsServer(getContext(this), url).then(() => {
       this.loadServers();
-      this.status = 'OPDS \u4E66\u5E93\u5DF2\u5220\u9664';
+      this.status = this.L($r('app.string.opds_deleted'));
     });
   }
 
@@ -4808,7 +5164,7 @@ struct Index {
 
   private saveDavEdit(): void {
     if (this.davEditUrl.trim().length === 0 || this.davEditUrl.trim() === 'http://') {
-      this.status = 'WebDAV \u5730\u5740\u4E0D\u80FD\u4E3A\u7A7A';
+      this.status = this.L($r('app.string.dav_url_required'));
       return;
     }
     const original: string = this.davEditIdx >= 0 && this.davEditIdx < this.davServers.length
@@ -4823,7 +5179,7 @@ struct Index {
     saveDavServer(getContext(this), s, original).then(() => {
       this.showDavEdit = false;
       this.loadServers();
-      this.status = 'WebDAV \u670D\u52A1\u5668\u5DF2\u4FDD\u5B58';
+      this.status = this.L($r('app.string.dav_saved'));
     });
   }
 
@@ -4837,7 +5193,7 @@ struct Index {
         this.davSelected = -1;
       }
       this.loadServers();
-      this.status = 'WebDAV \u670D\u52A1\u5668\u5DF2\u5220\u9664';
+      this.status = this.L($r('app.string.dav_deleted'));
     });
   }
 
@@ -4930,7 +5286,7 @@ struct Index {
           this.showOpdsEdit = false;
         })
       Column({ space: 12 }) {
-        Text(this.opdsEditIdx >= 0 ? '\u7F16\u8F91 OPDS \u4E66\u5E93' : '\u6DFB\u52A0 OPDS \u4E66\u5E93')
+        Text(this.opdsEditIdx >= 0 ? $r('app.string.opds_edit') : $r('app.string.opds_add'))
           .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
           .width('100%')
         TextInput({ text: this.opdsEditUrl, placeholder: 'https://.../opds/' })
@@ -4941,7 +5297,7 @@ struct Index {
           .onChange((v: string) => {
             this.opdsEditUrl = v;
           })
-        TextInput({ text: this.opdsEditName, placeholder: '\u540D\u79F0\uFF08\u5982\uFF1AProject Gutenberg\uFF09' })
+        TextInput({ text: this.opdsEditName, placeholder: $r('app.string.opds_name_hint') })
           .fontSize(13).height(38).width('100%')
           .backgroundColor(Color.White)
           .border({ width: 1, color: '#cccccc' })
@@ -4951,13 +5307,13 @@ struct Index {
           })
         Row({ space: 12 }) {
           Blank()
-          Button('\u5173\u95ED')
+          Button($r('app.string.common_close'))
             .fontSize(14).height(36)
             .backgroundColor('#e0e0e0').fontColor('#333')
             .onClick(() => {
               this.showOpdsEdit = false;
             })
-          Button(this.opdsEditIdx >= 0 ? '\u4FDD\u5B58' : '\u6DFB\u52A0')
+          Button(this.opdsEditIdx >= 0 ? $r('app.string.common_save') : $r('app.string.common_add'))
             .fontSize(14).height(36)
             .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
             .onClick(() => {
@@ -4985,7 +5341,7 @@ struct Index {
           this.showDavEdit = false;
         })
       Column({ space: 10 }) {
-        Text(this.davEditIdx >= 0 ? '\u7F16\u8F91 WebDAV \u670D\u52A1\u5668' : '\u6DFB\u52A0 WebDAV \u670D\u52A1\u5668')
+        Text(this.davEditIdx >= 0 ? $r('app.string.dav_edit') : $r('app.string.dav_add'))
           .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
           .width('100%')
         TextInput({ text: this.davEditUrl, placeholder: 'http://' })
@@ -4996,7 +5352,7 @@ struct Index {
           .onChange((v: string) => {
             this.davEditUrl = v;
           })
-        TextInput({ text: this.davEditName, placeholder: '\u540D\u79F0\uFF08\u5982\uFF1AMyNAS\uFF09' })
+        TextInput({ text: this.davEditName, placeholder: $r('app.string.dav_name_hint') })
           .fontSize(13).height(38).width('100%')
           .backgroundColor(Color.White)
           .border({ width: 1, color: '#cccccc' })
@@ -5004,7 +5360,7 @@ struct Index {
           .onChange((v: string) => {
             this.davEditName = v;
           })
-        TextInput({ text: this.davEditUser, placeholder: '\u8D26\u53F7' })
+        TextInput({ text: this.davEditUser, placeholder: $r('app.string.common_account') })
           .fontSize(13).height(38).width('100%')
           .backgroundColor(Color.White)
           .border({ width: 1, color: '#cccccc' })
@@ -5012,7 +5368,7 @@ struct Index {
           .onChange((v: string) => {
             this.davEditUser = v;
           })
-        TextInput({ text: this.davEditPass, placeholder: '\u5BC6\u7801' })
+        TextInput({ text: this.davEditPass, placeholder: $r('app.string.common_password') })
           .type(InputType.Password)
           .fontSize(13).height(38).width('100%')
           .backgroundColor(Color.White)
@@ -5029,18 +5385,18 @@ struct Index {
             .onChange((v: boolean) => {
               this.davEditTrusted = v;
             })
-          Text('\u4FE1\u4EFB\u81EA\u7B7E\u540D\u8BC1\u4E66').fontSize(13).fontColor('#333')
+          Text($r('app.string.sync_trust_selfsigned')).fontSize(13).fontColor('#333')
         }
         .width('100%')
         Row({ space: 12 }) {
           Blank()
-          Button('\u5173\u95ED')
+          Button($r('app.string.common_close'))
             .fontSize(14).height(36)
             .backgroundColor('#e0e0e0').fontColor('#333')
             .onClick(() => {
               this.showDavEdit = false;
             })
-          Button(this.davEditIdx >= 0 ? '\u4FDD\u5B58' : '\u6DFB\u52A0')
+          Button(this.davEditIdx >= 0 ? $r('app.string.common_save') : $r('app.string.common_add'))
             .fontSize(14).height(36)
             .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
             .onClick(() => {
@@ -5105,9 +5461,9 @@ struct Index {
     Scroll() {
       Column() {
         /* 网上书库（OPDS）: persisted server list (hr05) */
-        this.browseSectionHeader('\u7F51\u4E0A\u4E66\u5E93\uFF08OPDS\uFF09', 1)
+        this.browseSectionHeader(this.L($r('app.string.browse_opds')), 1)
         if (this.opdsServers.length === 0) {
-          Text('\u5C1A\u672A\u6DFB\u52A0\u4E66\u5E93')
+          Text($r('app.string.opds_none'))
             .fontSize(13).fontColor('#999')
             .width('94%').padding({ left: 12, bottom: 8 })
         }
@@ -5120,7 +5476,7 @@ struct Index {
         /* WebDAV: persisted server list (hr05/hr06) */
         this.browseSectionHeader('WebDAV', 2)
         if (this.davServers.length === 0) {
-          Text('\u5C1A\u672A\u6DFB\u52A0\u670D\u52A1\u5668')
+          Text($r('app.string.dav_none'))
             .fontSize(13).fontColor('#999')
             .width('94%').padding({ left: 12, bottom: 8 })
         }
@@ -5131,14 +5487,14 @@ struct Index {
         Divider().color('#e8e8e8').margin({ top: 8 })
 
         /* 书库文件夹 */
-        this.browseSectionHeader('\u4E66\u5E93\u6587\u4EF6\u5939', 3)
+        this.browseSectionHeader(this.L($r('app.string.browse_library_folder')), 3)
         ForEach(this.libFolders, (f: LibFolder) => {
           this.browseFolderRow(f)
         }, (f: LibFolder) => f.path)
         Row({ space: 14 }) {
           Image($r('app.media.ic_book_open'))
             .width(24).height(24).fillColor($r('app.color.brand_primary'))
-          Text('\u5DF2\u5BFC\u5165\u7684\u4E66 \uFF08\u4E66\u5E93\uFF09')
+          Text($r('app.string.browse_imported'))
             .fontSize(16).fontColor('#555')
             .layoutWeight(1)
         }
@@ -5151,11 +5507,11 @@ struct Index {
         Divider().color('#e8e8e8').margin({ top: 8 })
 
         /* 搜索 */
-        this.browseSectionHeader('\u641C\u7D22', 0)
+        this.browseSectionHeader(this.L($r('app.string.common_search')), 0)
         Row({ space: 14 }) {
           Image($r('app.media.ic_db_search'))
             .width(24).height(24).fillColor($r('app.color.brand_primary'))
-          Text('\u5728\u591A\u4E2A\u6587\u6863\u4E2D\u641C\u7D22')
+          Text($r('app.string.browse_search_docs'))
             .fontSize(16).fontColor($r('app.color.brand_primary'))
             .layoutWeight(1)
         }
@@ -5355,7 +5711,7 @@ struct Index {
       Column({ space: 8 }) {
         /* ===== 偏好 sub-bar + profile (Android hr07) ===== */
         Row() {
-          Text('\u504F\u597D')
+          Text($r('app.string.tab_prefs'))
             .fontSize(15).fontWeight(FontWeight.Medium).fontColor(Color.White)
             .onClick(() => {
               /* hidden diagnostics: tap the title 3 times to toggle the NAPI self-test */
@@ -5367,7 +5723,7 @@ struct Index {
               }
             })
           Blank()
-          Text('\u9000\u51FA\u7A0B\u5E8F')
+          Text($r('app.string.drawer_exit_app'))
             .fontSize(14).fontColor(Color.White)
             .decoration({ type: TextDecorationType.Underline, color: Color.White })
             .onClick(() => {
@@ -5382,7 +5738,7 @@ struct Index {
 
         /* 配置文件 row: avatar + name + gear */
         Row({ space: 12 }) {
-          Text('\u914D\u7F6E\u6587\u4EF6')
+          Text($r('app.string.drawer_config'))
             .fontSize(14).fontColor('#333')
           Blank()
           Column() {
@@ -5402,7 +5758,7 @@ struct Index {
         .width('100%')
         .padding({ left: 12, right: 12, top: 10, bottom: 2 })
 
-        Text('\u91CD\u7F6E')
+        Text($r('app.string.common_reset'))
           .fontSize(14).fontColor($r('app.color.brand_primary'))
           .decoration({ type: TextDecorationType.Underline, color: $r('app.color.brand_primary') })
           .width('100%')
@@ -5415,16 +5771,16 @@ struct Index {
           })
 
         /* ===== 常规设置: key-value rows ===== */
-        this.settingsSectionBar('\u5E38\u89C4\u8BBE\u7F6E')
-        this.settingsKvRow('\u5C4F\u5E55', '\u6B63\u5E38')
-        this.settingsKvRow('\u5C4F\u5E55\u65B9\u5411', '\u7CFB\u7EDF')
-        this.settingsKvRow('\u8BED\u8A00', '\u7CFB\u7EDF\u9ED8\u8BA4')
+        this.settingsSectionBar(this.L($r('app.string.set_general')))
+        this.settingsKvRow(this.L($r('app.string.set_screen')), this.L($r('app.string.set_screen_normal')))
+        this.settingsKvRow(this.L($r('app.string.set_orientation')), this.L($r('app.string.set_system')))
+        this.settingsKvRow(this.L($r('app.string.set_language')), this.L($r('app.string.set_lang_system')))
         Row() {
-          Text('WebDAV \u540C\u6B65')
+          Text($r('app.string.sync_title'))
             .fontSize(14).fontColor('#333').width(120)
           Text(this.syncCfg.enabled
-            ? (this.syncCfg.lastSyncTime.length > 0 ? '\u4E0A\u6B21\uFF1A' + this.syncCfg.lastSyncTime.substring(0, 16).replace('T', ' ') : '\u5DF2\u542F\u7528')
-            : '\u672A\u542F\u7528')
+            ? (this.syncCfg.lastSyncTime.length > 0 ? '\u4E0A\u6B21\uFF1A' + this.syncCfg.lastSyncTime.substring(0, 16).replace('T', ' ') : $r('app.string.set_enabled'))
+            : $r('app.string.set_disabled'))
             .fontSize(14).fontColor($r('app.color.brand_primary'))
             .decoration({ type: TextDecorationType.Underline, color: $r('app.color.brand_primary') })
             .maxLines(1)
@@ -5440,9 +5796,9 @@ struct Index {
           });
         })
         Row() {
-          Text('AI \u5927\u6A21\u578B')
+          Text($r('app.string.set_ai_model'))
             .fontSize(14).fontColor('#333').width(120)
-          Text(this.aiCfg.model.length > 0 ? this.aiCfg.provider + ' \u00B7 ' + this.aiCfg.model : '\u672A\u914D\u7F6E')
+          Text(this.aiCfg.model.length > 0 ? this.aiCfg.provider + ' \u00B7 ' + this.aiCfg.model : $r('app.string.set_not_configured'))
             .fontSize(14).fontColor($r('app.color.brand_primary'))
             .decoration({ type: TextDecorationType.Underline, color: $r('app.color.brand_primary') })
             .maxLines(1)
@@ -5461,11 +5817,11 @@ struct Index {
         })
 
         /* ===== Reader settings (sprint E) ===== */
-        this.settingsSectionBar('\u9605\u8BFB\u914D\u7F6E')
+        this.settingsSectionBar(this.L($r('app.string.set_reading')))
 
         // Theme
         Row({ space: 8 }) {
-          Text('主题:')
+          Text($r('app.string.set_theme'))
             .fontSize(13).fontColor('#555')
           ForEach(THEME_NAMES, (name: string, idx: number) => {
             Button(name)
@@ -5481,7 +5837,7 @@ struct Index {
 
         // Default zoom
         Row({ space: 8 }) {
-          Text('默认缩放:')
+          Text($r('app.string.set_default_zoom'))
             .fontSize(13).fontColor('#555')
           Slider({ value: this.settings.zoom, min: 0.5, max: 4, step: 0.25 })
             .layoutWeight(1)
@@ -5497,16 +5853,16 @@ struct Index {
 
         // Scroll mode & page mode
         Row({ space: 8 }) {
-          Text('翻页:')
+          Text($r('app.string.set_page_turn'))
             .fontSize(13).fontColor('#555')
-          Button(this.settings.scrollMode === 0 ? '水平翻页' : '垂直滚动')
+          Button(this.settings.scrollMode === 0 ? $r('app.string.mode_horizontal') : $r('app.string.mode_vertical'))
             .fontSize(12).height(32)
             .backgroundColor('#e0e0e0').fontColor('#333')
             .onClick(() => {
               this.settings.scrollMode = this.settings.scrollMode === 0 ? 1 : 0;
               this.saveNow();
             })
-          Button(this.settings.pageMode === 0 ? '单页' : (this.settings.pageMode === 1 ? '双页' : '乐谱'))
+          Button(this.settings.pageMode === 0 ? $r('app.string.page_single') : (this.settings.pageMode === 1 ? $r('app.string.page_double') : $r('app.string.page_music')))
             .fontSize(12).height(32)
             .backgroundColor('#e0e0e0').fontColor('#333')
             .onClick(() => {
@@ -5517,7 +5873,7 @@ struct Index {
 
         // Brightness
         Row({ space: 8 }) {
-          Text('亮度:')
+          Text($r('app.string.reader_brightness'))
             .fontSize(13).fontColor('#555')
           Slider({ value: this.settings.brightness, min: 1, max: 255, step: 4 })
             .layoutWeight(1)
@@ -5533,9 +5889,9 @@ struct Index {
 
         // Auto flip
         Row({ space: 8 }) {
-          Text('自动翻页:')
+          Text($r('app.string.reader_autoflip'))
             .fontSize(13).fontColor('#555')
-          Button(this.settings.autoFlip ? '开' : '关')
+          Button(this.settings.autoFlip ? $r('app.string.common_on') : $r('app.string.common_off'))
             .fontSize(12).height(32)
             .backgroundColor(this.settings.autoFlip ? '#2a7' : '#e0e0e0')
             .fontColor(this.settings.autoFlip ? Color.White : '#333')
@@ -5553,7 +5909,7 @@ struct Index {
 
         // TTS rate / pitch / RSVP speed
         Row({ space: 8 }) {
-          Text('TTS语速:')
+          Text($r('app.string.set_tts_rate'))
             .fontSize(13).fontColor('#555')
           Slider({ value: this.settings.ttsRate, min: 0.5, max: 2.0, step: 0.1 })
             .layoutWeight(1)
@@ -5568,7 +5924,7 @@ struct Index {
         }
 
         Row({ space: 8 }) {
-          Text('TTS音调:')
+          Text($r('app.string.set_tts_pitch'))
             .fontSize(13).fontColor('#555')
           Slider({ value: this.settings.ttsPitch, min: 0.5, max: 2.0, step: 0.1 })
             .layoutWeight(1)
@@ -5583,7 +5939,7 @@ struct Index {
         }
 
         Row({ space: 8 }) {
-          Text('速读:')
+          Text($r('app.string.set_rsvp'))
             .fontSize(13).fontColor('#555')
           Slider({ value: this.settings.rsvpWpm, min: 100, max: 800, step: 50 })
             .layoutWeight(1)
@@ -5598,12 +5954,12 @@ struct Index {
         }
 
         // Reflowable typography
-        Text('重排文档（EPUB/HTML）排版:')
+        Text($r('app.string.set_reflow_typography'))
           .fontSize(13).fontColor('#555')
           .margin({ top: 4 })
 
         Row({ space: 8 }) {
-          Text('字号:')
+          Text($r('app.string.set_font_size'))
             .fontSize(13).fontColor('#555')
           Slider({ value: this.settings.fontSize, min: 10, max: 28, step: 1 })
             .layoutWeight(1)
@@ -5618,7 +5974,7 @@ struct Index {
         }
 
         Row({ space: 8 }) {
-          Text('行距:')
+          Text($r('app.string.set_line_height'))
             .fontSize(13).fontColor('#555')
           Slider({ value: this.settings.lineHeight, min: 1.0, max: 2.5, step: 0.1 })
             .layoutWeight(1)
@@ -5633,7 +5989,7 @@ struct Index {
         }
 
         Row({ space: 8 }) {
-          Text('页边距:')
+          Text($r('app.string.set_margin'))
             .fontSize(13).fontColor('#555')
           Slider({ value: this.settings.margin, min: 0, max: 80, step: 4 })
             .layoutWeight(1)
@@ -5648,11 +6004,11 @@ struct Index {
         }
 
         /* ===== UI 配置 (Android hr07) ===== */
-        this.settingsSectionBar('UI\u914D\u7F6E')
+        this.settingsSectionBar(this.L($r('app.string.set_ui')))
         Row({ space: 12 }) {
           Image($r('app.media.ic_info'))
             .width(22).height(22).fillColor('#00897B')
-          Text('\u8F6F\u4EF6\u8BF4\u660E')
+          Text($r('app.string.drawer_about'))
             .fontSize(15).fontColor('#00897B')
             .decoration({ type: TextDecorationType.Underline, color: '#00897B' })
             .layoutWeight(1)
@@ -5664,13 +6020,13 @@ struct Index {
         })
 
         // ---- Sprint K: System integration settings ----
-        this.settingsSectionBar('\u7CFB\u7EDF\u96C6\u6210')
+        this.settingsSectionBar(this.L($r('app.string.set_integration')))
 
         /* K2: App lock */
         Row({ space: 8 }) {
-          Text('\u5E94\u7528\u9501:')
+          Text($r('app.string.set_app_lock'))
             .fontSize(13).fontColor('#555')
-          Button(this.settings.appLockEnabled ? '\u5F00' : '\u5173')
+          Button(this.settings.appLockEnabled ? $r('app.string.common_on') : $r('app.string.common_off'))
             .fontSize(12).height(32)
             .backgroundColor(this.settings.appLockEnabled ? '#e57373' : '#e0e0e0')
             .fontColor(this.settings.appLockEnabled ? Color.White : '#333')
@@ -5679,15 +6035,15 @@ struct Index {
               this.saveNow();
               console.info(`[Index] App lock: ${this.settings.appLockEnabled}`);
             })
-          Text('(\u6307\u7EB9/\u5BC6\u7801)')
+          Text($r('app.string.set_app_lock_hint'))
             .fontSize(10).fontColor('#999')
         }
 
         /* Phase 6: app lock passcode */
         Row({ space: 8 }) {
-          Text('\u9501\u5C4F\u5BC6\u7801:')
+          Text($r('app.string.set_lock_pass'))
             .fontSize(13).fontColor('#555')
-          TextInput({ placeholder: '\u9ED8\u8BA4 1234', text: this.settings.appLockPass })
+          TextInput({ placeholder: $r('app.string.set_lock_pass_hint'), text: this.settings.appLockPass })
             .fontSize(12).height(32).layoutWeight(1)
             .onChange((v: string) => {
               this.settings.appLockPass = v;
@@ -5699,7 +6055,7 @@ struct Index {
         Row({ space: 8 }) {
           Text($r('app.string.pref_biometric'))
             .fontSize(13).fontColor('#555')
-          Button(this.settings.appLockBiometric ? '\u5F00' : '\u5173')
+          Button(this.settings.appLockBiometric ? $r('app.string.common_on') : $r('app.string.common_off'))
             .fontSize(12).height(32)
             .backgroundColor(this.settings.appLockBiometric && biometricAvailable() ? '#2a7' : '#e0e0e0')
             .fontColor(this.settings.appLockBiometric && biometricAvailable() ? Color.White : '#333')
@@ -5712,15 +6068,104 @@ struct Index {
               this.saveNow();
               console.info(`[Index] Biometric unlock: ${this.settings.appLockBiometric}`);
             })
-          Text('(\u6307\u7EB9/\u4EBA\u8138\uFF0C\u5931\u8D25\u56DE\u9000\u5BC6\u7801)')
+          Text($r('app.string.set_biometric_hint'))
+            .fontSize(10).fontColor('#999')
+        }
+
+        /* Round 6: screen orientation */
+        Row({ space: 8 }) {
+          Text($r('app.string.set_orientation2'))
+            .fontSize(13).fontColor('#555')
+          Button(this.settings.screenOrientation === 0 ? $r('app.string.orient_auto') : (this.settings.screenOrientation === 1 ? $r('app.string.orient_portrait') : $r('app.string.orient_landscape')))
+            .fontSize(12).height(32)
+            .backgroundColor(this.settings.screenOrientation > 0 ? '#2a7' : '#e0e0e0')
+            .fontColor(this.settings.screenOrientation > 0 ? Color.White : '#333')
+            .onClick(() => {
+              this.settings.screenOrientation = (this.settings.screenOrientation + 1) % 3;
+              this.saveNow();
+              this.applyOrientation();
+              console.info(`[Index] Screen orientation: ${this.settings.screenOrientation}`);
+            })
+          Text($r('app.string.set_orientation_hint'))
+            .fontSize(10).fontColor('#999')
+        }
+
+        /* Round 6: auto scan on startup */
+        Row({ space: 8 }) {
+          Text($r('app.string.set_autoscan'))
+            .fontSize(13).fontColor('#555')
+          Button(this.settings.autoScanOnStart ? $r('app.string.common_on') : $r('app.string.common_off'))
+            .fontSize(12).height(32)
+            .backgroundColor(this.settings.autoScanOnStart ? '#2a7' : '#e0e0e0')
+            .fontColor(this.settings.autoScanOnStart ? Color.White : '#333')
+            .onClick(() => {
+              this.settings.autoScanOnStart = !this.settings.autoScanOnStart;
+              this.saveNow();
+              console.info(`[Index] Auto scan on start: ${this.settings.autoScanOnStart}`);
+            })
+          Text($r('app.string.set_autoscan_hint'))
+            .fontSize(10).fontColor('#999')
+        }
+
+        /* Round 6: cover grid columns */
+        Row({ space: 8 }) {
+          Text($r('app.string.set_cover_columns'))
+            .fontSize(13).fontColor('#555')
+          Button('' + this.settings.coverColumns)
+            .fontSize(12).height(32).width(52)
+            .backgroundColor('#e0e0e0').fontColor('#333')
+            .onClick(() => {
+              this.settings.coverColumns = this.settings.coverColumns >= 4 ? 2 : this.settings.coverColumns + 1;
+              this.saveNow();
+              console.info(`[Index] Cover columns: ${this.settings.coverColumns}`);
+            })
+          Text($r('app.string.set_cover_columns_hint'))
+            .fontSize(10).fontColor('#999')
+        }
+
+        /* Round 6: desktop card prefs */
+        Row({ space: 8 }) {
+          Text($r('app.string.set_card'))
+            .fontSize(13).fontColor('#555')
+          Button(this.settings.cardSource === 0 ? $r('app.string.sort_recent') : $r('app.string.card_starred'))
+            .fontSize(12).height(32)
+            .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+            .onClick(() => {
+              this.settings.cardSource = this.settings.cardSource === 0 ? 1 : 0;
+              this.saveNow();
+              console.info(`[Index] Card source: ${this.settings.cardSource}`);
+            })
+          Button('' + this.settings.cardCount + ' \u672C')
+            .fontSize(12).height(32)
+            .backgroundColor('#e0e0e0').fontColor('#333')
+            .onClick(() => {
+              this.settings.cardCount = this.settings.cardCount >= 3 ? 1 : this.settings.cardCount + 1;
+              this.saveNow();
+              console.info(`[Index] Card count: ${this.settings.cardCount}`);
+            })
+          Text($r('app.string.set_card_hint'))
+            .fontSize(10).fontColor('#999')
+        }
+
+        /* Round 6: profile management */
+        Row({ space: 8 }) {
+          Text($r('app.string.set_profile'))
+            .fontSize(13).fontColor('#555')
+          Button(getCurrentProfile())
+            .fontSize(12).height(32)
+            .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
+            .onClick(() => {
+              this.openProfilePanel();
+            })
+          Text($r('app.string.prof_hint2'))
             .fontSize(10).fontColor('#999')
         }
 
         /* Phase 6: reading reminder */
         Row({ space: 8 }) {
-          Text('\u9605\u8BFB\u63D0\u9192:')
+          Text($r('app.string.set_reminder'))
             .fontSize(13).fontColor('#555')
-          Button(this.settings.readReminderMinutes === 0 ? '\u5173' : this.settings.readReminderMinutes + ' \u5206\u949F')
+          Button(this.settings.readReminderMinutes === 0 ? $r('app.string.common_off') : this.settings.readReminderMinutes + ' \u5206\u949F')
             .fontSize(12).height(32)
             .backgroundColor(this.settings.readReminderMinutes > 0 ? '#2a7' : '#e0e0e0')
             .fontColor(this.settings.readReminderMinutes > 0 ? Color.White : '#333')
@@ -5728,7 +6173,7 @@ struct Index {
               this.settings.readReminderMinutes = this.settings.readReminderMinutes >= 120 ? 0 : (this.settings.readReminderMinutes === 0 ? 30 : this.settings.readReminderMinutes + 30);
               this.saveNow();
             })
-          Text('(\u8FDE\u7EED\u9605\u8BFB\u63D0\u9192)')
+          Text($r('app.string.set_reminder_hint'))
             .fontSize(10).fontColor('#999')
         }
 
@@ -5745,7 +6190,7 @@ struct Index {
               this.saveNow();
               console.info(`[Index] Tab position top: ${this.settings.tabPositionTop}`);
             })
-          Text('(\u5BF9\u9F50\u5B89\u5353 tapPositionTop)')
+          Text($r('app.string.set_tabpos_hint'))
             .fontSize(10).fontColor('#999')
         }
 
@@ -5753,7 +6198,7 @@ struct Index {
         Row({ space: 8 }) {
           Text($r('app.string.pref_topbar_info'))
             .fontSize(13).fontColor('#555')
-          Button(this.settings.showTopBarInfo ? '\u5F00' : '\u5173')
+          Button(this.settings.showTopBarInfo ? $r('app.string.common_on') : $r('app.string.common_off'))
             .fontSize(12).height(32)
             .backgroundColor(this.settings.showTopBarInfo ? '#2a7' : '#e0e0e0')
             .fontColor(this.settings.showTopBarInfo ? Color.White : '#333')
@@ -5762,15 +6207,15 @@ struct Index {
               this.saveNow();
               console.info(`[Index] Top bar info: ${this.settings.showTopBarInfo}`);
             })
-          Text('(\u9605\u8BFB\u5668\u6807\u9898\u680F\u663E\u793A\u65F6\u95F4/\u7535\u91CF)')
+          Text($r('app.string.set_topbar_hint'))
             .fontSize(10).fontColor('#999')
         }
 
         /* K3: Proxy settings */
         Row({ space: 8 }) {
-          Text('\u4EE3\u7406:')
+          Text($r('app.string.set_proxy'))
             .fontSize(13).fontColor('#555')
-          Button(this.settings.proxyType === 0 ? '\u5173' : (this.settings.proxyType === 1 ? 'HTTP' : 'SOCKS'))
+          Button(this.settings.proxyType === 0 ? $r('app.string.common_off') : (this.settings.proxyType === 1 ? 'HTTP' : 'SOCKS'))
             .fontSize(12).height(32)
             .backgroundColor(this.settings.proxyType > 0 ? '#2a7' : '#e0e0e0')
             .fontColor(this.settings.proxyType > 0 ? Color.White : '#333')
@@ -5787,9 +6232,9 @@ struct Index {
 
         /* K4: Render quality */
         Row({ space: 8 }) {
-          Text('\u6E32\u67D3\u8D28\u91CF:')
+          Text($r('app.string.set_quality'))
             .fontSize(13).fontColor('#555')
-          Button(this.settings.renderQuality === 0 ? '\u5FEB\u901F' : (this.settings.renderQuality === 1 ? '\u5E73\u8861' : '\u9AD8\u6E05'))
+          Button(this.settings.renderQuality === 0 ? $r('app.string.quality_fast') : (this.settings.renderQuality === 1 ? $r('app.string.quality_balanced') : $r('app.string.quality_high')))
             .fontSize(12).height(32)
             .backgroundColor('#e0e0e0').fontColor('#333')
             .onClick(() => {
@@ -5801,9 +6246,9 @@ struct Index {
 
         /* K6: Page flip animation */
         Row({ space: 8 }) {
-          Text('\u7FFB\u9875\u52A8\u753B:')
+          Text($r('app.string.set_flip_anim'))
             .fontSize(13).fontColor('#555')
-          Button(this.settings.flipAnimation === 0 ? '\u6ED1\u52A8' : (this.settings.flipAnimation === 1 ? '\u7FFB\u8F6C' : '\u6DE1\u5165'))
+          Button(this.settings.flipAnimation === 0 ? $r('app.string.anim_slide') : (this.settings.flipAnimation === 1 ? $r('app.string.anim_curl') : $r('app.string.anim_fade')))
             .fontSize(12).height(32)
             .backgroundColor('#e0e0e0').fontColor('#333')
             .onClick(() => {
@@ -5817,11 +6262,11 @@ struct Index {
 
         // Backup / restore
         Row({ space: 8 }) {
-          Button('导出备份')
+          Button($r('app.string.backup_export'))
             .fontSize(13).height(34).layoutWeight(1)
             .backgroundColor('#2a7').fontColor(Color.White)
             .onClick(() => this.doBackup())
-          Button('恢复备份')
+          Button($r('app.string.backup_restore'))
             .fontSize(13).height(34).layoutWeight(1)
             .backgroundColor('#ff9800').fontColor(Color.White)
             .onClick(() => this.doRestore())

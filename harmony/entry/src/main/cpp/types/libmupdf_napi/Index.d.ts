@@ -139,3 +139,6 @@ export function getTextRects(handle: ESObject, pageNumber: number): string;
 /** Load a custom font file for reflowable documents. Returns true if applied. */
 export function loadFont(handle: ESObject, fontPath: string): boolean;
 export function closeDocument(handle: ESObject): void;
+/* Round 6: encrypted-document support */
+export function needsPassword(handle: ESObject): boolean;
+export function authenticateDocument(handle: ESObject, password: string): number;

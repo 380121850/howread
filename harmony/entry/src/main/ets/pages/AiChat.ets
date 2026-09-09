@@ -22,6 +22,11 @@ struct AiChat {
     provider: '', url: '', key: '', model: '', maxTokens: 8192, thinking: false
   };
 
+  /* Round 6: resolve a string resource into a plain string */
+  private L(r: Resource): string {
+    return getContext(this).resourceManager.getStringSync(r);
+  }
+
   aboutToAppear(): void {
     const params = router.getParams() as Record<string, string>;
     if (params !== undefined && params !== null) {
@@ -57,11 +62,11 @@ struct AiChat {
     }
     if (!aiConfigReady(this.cfg)) {
       this.cfgNotReady = true;
-      promptAction.showToast({ message: '\u8BF7\u5148\u5728\u504F\u597D-\u5E38\u89C4\u8BBE\u7F6E\u4E2D\u914D\u7F6E AI \u5927\u6A21\u578B' });
+      promptAction.showToast({ message: $r('app.string.aichat_not_configured') });
       return;
     }
     if (this.selEditable.trim().length === 0) {
-      promptAction.showToast({ message: '\u8BF7\u5148\u8F93\u5165\u6216\u7C98\u8D34\u6587\u672C' });
+      promptAction.showToast({ message: $r('app.string.aichat_no_text') });
       return;
     }
     this.busy = true;
@@ -88,7 +93,7 @@ struct AiChat {
       text: (this.question.length > 0 ? '\u95EE\uFF1A' + this.question + '\n\n' : '') + this.answer
     };
     addNote(getContext(this), n).then((ok: boolean) => {
-      promptAction.showToast({ message: ok ? '\u5DF2\u4FDD\u5B58\u5230\u7B14\u8BB0' : '\u4FDD\u5B58\u5931\u8D25' });
+      promptAction.showToast({ message: ok ? $r('app.string.aichat_saved') : $r('app.string.common_save_failed') });
     });
   }
 
@@ -101,7 +106,7 @@ struct AiChat {
           .onClick(() => {
             router.back();
           })
-        Text('\u53D1\u9001\u7ED9AI')
+        Text($r('app.string.sel_send_ai'))
           .fontSize(16).fontWeight(FontWeight.Medium).fontColor(Color.White)
           .layoutWeight(1)
       }
@@ -112,15 +117,15 @@ struct AiChat {
       Scroll() {
         Column({ space: 10 }) {
           if (this.cfgNotReady) {
-            Text('\u5C1A\u672A\u914D\u7F6E AI \u5927\u6A21\u578B\uFF0C\u8BF7\u5148\u5728\u504F\u597D-\u5E38\u89C4\u8BBE\u7F6E\u4E2D\u586B\u5199 API \u4FE1\u606F')
+            Text($r('app.string.aichat_not_configured2'))
               .fontSize(13).fontColor('#d32f2f')
               .width('100%')
           }
 
-          Text('\u6240\u9009\u6587\u672C\uFF08\u53EF\u7F16\u8F91\uFF09')
+          Text($r('app.string.aichat_text_hint'))
             .fontSize(13).fontColor('#555')
             .width('100%')
-          TextArea({ text: this.selEditable, placeholder: '\u8F93\u5165\u6216\u7C98\u8D34\u6587\u672C\u2026' })
+          TextArea({ text: this.selEditable, placeholder: $r('app.string.aichat_text_placeholder') })
             .height(120)
             .fontSize(14)
             .backgroundColor(Color.White)
@@ -129,10 +134,10 @@ struct AiChat {
               this.selEditable = value;
             })
 
-          Text('\u4F60\u7684\u95EE\u9898\uFF08\u53EF\u9009\uFF0C\u7559\u7A7A\u9ED8\u8BA4\u89E3\u8BFB\u6587\u672C\uFF09')
+          Text($r('app.string.aichat_question_hint'))
             .fontSize(13).fontColor('#555')
             .width('100%')
-          TextInput({ placeholder: '\u4F8B\uFF1A\u8FD9\u6BB5\u8BDD\u7684\u542B\u4E49\u662F\u4EC0\u4E48\uFF1F', text: this.question })
+          TextInput({ placeholder: $r('app.string.aichat_question_example'), text: this.question })
             .height(40)
             .fontSize(14)
             .backgroundColor(Color.White)
@@ -142,14 +147,14 @@ struct AiChat {
             })
 
           Row({ space: 10 }) {
-            Button('\u53D1\u9001')
+            Button($r('app.string.aichat_send'))
               .fontSize(14).height(38)
               .backgroundColor(this.busy ? '#9fa8da' : $r('app.color.brand_primary')).fontColor(Color.White)
               .layoutWeight(1)
               .onClick(() => {
                 this.send();
               })
-            Button('\u4FDD\u5B58\u5230\u7B14\u8BB0')
+            Button($r('app.string.trans_save_note'))
               .fontSize(14).height(38)
               .backgroundColor('#00897B').fontColor(Color.White)
               .layoutWeight(1)
@@ -160,21 +165,21 @@ struct AiChat {
           }
           .width('100%')
 
-          Text('AI \u56DE\u7B54')
+          Text($r('app.string.aichat_answer'))
             .fontSize(13).fontColor('#555')
             .width('100%')
           Column() {
             if (this.busy) {
               Row({ space: 8 }) {
                 LoadingProgress().width(22).height(22).color($r('app.color.brand_primary'))
-                Text('\u6B63\u5728\u8BF7\u6C42\u6A21\u578B\u2026').fontSize(13).fontColor('#777')
+                Text($r('app.string.ai_requesting')).fontSize(13).fontColor('#777')
               }
             } else if (this.answer.length > 0) {
               Text(this.answer)
                 .fontSize(14).fontColor('#333')
                 .width('100%')
             } else {
-              Text('(\u70B9\u51FB\u201C\u53D1\u9001\u201D\u540E\uFF0C\u6A21\u578B\u56DE\u7B54\u5C06\u663E\u793A\u5728\u8FD9\u91CC)')
+              Text($r('app.string.aichat_answer_hint'))
                 .fontSize(13).fontColor(Color.Gray)
             }
           }

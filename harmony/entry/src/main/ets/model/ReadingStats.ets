@@ -1,4 +1,5 @@
 import preferences from '@ohos.data.preferences';
+import { storeName } from './Profiles';
 
 /**
  * Reading statistics (Phase 3): total / today / month reading time and pages.
@@ -45,10 +46,14 @@ const PREF_NAME = 'librera_stats';
 const KEY_STATS = 'reading_stats';
 
 let prefInstance: preferences.Preferences | undefined = undefined;
+let prefInstanceStore: string = '';
 
 async function getPrefs(ctx: Context): Promise<preferences.Preferences> {
-  if (prefInstance === undefined) {
-    prefInstance = await preferences.getPreferences(ctx, PREF_NAME);
+  /* Round 6: profile-aware store name; re-open when the profile switches */
+  const store: string = storeName(PREF_NAME);
+  if (prefInstance === undefined || prefInstanceStore !== store) {
+    prefInstanceStore = store;
+    prefInstance = await preferences.getPreferences(ctx, store);
   }
   return prefInstance;
 }

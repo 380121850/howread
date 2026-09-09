@@ -177,8 +177,1636 @@
       "value": "生物识别不可用"
     },
     {
+      "name": "form_tts_label",
+      "value": "TTS 播控"
+    },
+    {
+      "name": "form_tts_desc",
+      "value": "朗读播控卡片"
+    },
+    {
       "name": "biom_fail",
       "value": "验证失败"
+    },
+    {
+      "name": "about_based",
+      "value": "基于 Android V1.0.0 移植适配"
+    },
+    {
+      "name": "about_brand",
+      "value": "HowRead 好好读"
+    },
+    {
+      "name": "about_engine",
+      "value": "MuPDF 1.23.7 引擎 · 多格式阅读"
+    },
+    {
+      "name": "about_version",
+      "value": "鸿蒙移植版 1.0.0"
+    },
+    {
+      "name": "action_fullscreen",
+      "value": "全屏"
+    },
+    {
+      "name": "action_next_page",
+      "value": "下页"
+    },
+    {
+      "name": "action_prev_page",
+      "value": "上页"
+    },
+    {
+      "name": "ai_config_title",
+      "value": "AI 大模型接入"
+    },
+    {
+      "name": "ai_intro_book",
+      "value": "AI 简介书籍"
+    },
+    {
+      "name": "ai_intro_generating",
+      "value": "正在生成简介…"
+    },
+    {
+      "name": "ai_intro_saved",
+      "value": "AI 简介已保存到笔记"
+    },
+    {
+      "name": "ai_intro_title",
+      "value": "AI简介"
+    },
+    {
+      "name": "ai_key",
+      "value": "密钥"
+    },
+    {
+      "name": "ai_list_models",
+      "value": "获取模型"
+    },
+    {
+      "name": "ai_max_tokens",
+      "value": "输出上限"
+    },
+    {
+      "name": "ai_model",
+      "value": "模型名"
+    },
+    {
+      "name": "ai_models_failed",
+      "value": "获取模型失败"
+    },
+    {
+      "name": "ai_models_failed2",
+      "value": "获取模型失败："
+    },
+    {
+      "name": "ai_models_found",
+      "value": "获取到"
+    },
+    {
+      "name": "ai_not_configured",
+      "value": "请先在偏好中配置 AI 大模型"
+    },
+    {
+      "name": "ai_notes",
+      "value": "AI 笔记"
+    },
+    {
+      "name": "ai_notes_empty",
+      "value": "(暂无，选中文本发送给AI或使用AI翻译)"
+    },
+    {
+      "name": "ai_openai_compat",
+      "value": "OpenAI 兼容"
+    },
+    {
+      "name": "ai_protocol",
+      "value": "协议"
+    },
+    {
+      "name": "ai_provider",
+      "value": "模型厂商"
+    },
+    {
+      "name": "ai_request_failed",
+      "value": "请求失败："
+    },
+    {
+      "name": "ai_requesting",
+      "value": "正在请求模型…"
+    },
+    {
+      "name": "ai_saved",
+      "value": "AI 配置已保存"
+    },
+    {
+      "name": "ai_test_failed2",
+      "value": "测试失败："
+    },
+    {
+      "name": "ai_test_hint",
+      "value": "输入文字，测试模型是否有响应"
+    },
+    {
+      "name": "ai_thinking",
+      "value": "思考模式"
+    },
+    {
+      "name": "ai_url",
+      "value": "API 地址"
+    },
+    {
+      "name": "aichat_answer",
+      "value": "AI 回答"
+    },
+    {
+      "name": "aichat_answer_hint",
+      "value": "(点击“发送”后，模型回答将显示在这里)"
+    },
+    {
+      "name": "aichat_no_text",
+      "value": "请先输入或粘贴文本"
+    },
+    {
+      "name": "aichat_not_configured",
+      "value": "请先在偏好-常规设置中配置 AI 大模型"
+    },
+    {
+      "name": "aichat_not_configured2",
+      "value": "尚未配置 AI 大模型，请先在偏好-常规设置中填写 API 信息"
+    },
+    {
+      "name": "aichat_q",
+      "value": "问："
+    },
+    {
+      "name": "aichat_question_example",
+      "value": "例：这段话的含义是什么？"
+    },
+    {
+      "name": "aichat_question_hint",
+      "value": "你的问题（可选，留空默认解读文本）"
+    },
+    {
+      "name": "aichat_saved",
+      "value": "已保存到笔记"
+    },
+    {
+      "name": "aichat_send",
+      "value": "发送"
+    },
+    {
+      "name": "aichat_text_hint",
+      "value": "所选文本（可编辑）"
+    },
+    {
+      "name": "aichat_text_placeholder",
+      "value": "输入或粘贴文本…"
+    },
+    {
+      "name": "aichat_title",
+      "value": "AI 问答"
+    },
+    {
+      "name": "anim_curl",
+      "value": "翻转"
+    },
+    {
+      "name": "anim_fade",
+      "value": "淡入"
+    },
+    {
+      "name": "anim_slide",
+      "value": "滑动"
+    },
+    {
+      "name": "ann_highlight",
+      "value": "高亮"
+    },
+    {
+      "name": "ann_ink",
+      "value": "手绘"
+    },
+    {
+      "name": "backup_export",
+      "value": "导出备份"
+    },
+    {
+      "name": "backup_invalid",
+      "value": "备份文件无效"
+    },
+    {
+      "name": "backup_restore",
+      "value": "恢复备份"
+    },
+    {
+      "name": "backup_restore_failed",
+      "value": "恢复失败（请先导出）"
+    },
+    {
+      "name": "bm_empty_index",
+      "value": "还没有书签，在阅读器中点 🔖 添加"
+    },
+    {
+      "name": "bm_no_match",
+      "value": "无匹配结果"
+    },
+    {
+      "name": "bm_search_placeholder",
+      "value": "搜索书签..."
+    },
+    {
+      "name": "bookmarks_empty",
+      "value": "(暂无书签，点顶栏 🔖 添加)"
+    },
+    {
+      "name": "bookmarks_empty_alt",
+      "value": "还没有书签，在阅读器中点 \\u{1F516} 添加"
+    },
+    {
+      "name": "browse_books",
+      "value": "可阅读文件"
+    },
+    {
+      "name": "browse_delete",
+      "value": "✖ 删除"
+    },
+    {
+      "name": "browse_empty",
+      "value": "空目录"
+    },
+    {
+      "name": "browse_files",
+      "value": "文件/目录"
+    },
+    {
+      "name": "browse_folder_name",
+      "value": "文件夹名称"
+    },
+    {
+      "name": "browse_grid_btn",
+      "value": "▦ 网格"
+    },
+    {
+      "name": "browse_imported",
+      "value": "已导入的书 （书库）"
+    },
+    {
+      "name": "browse_library_folder",
+      "value": "书库文件夹"
+    },
+    {
+      "name": "browse_list_btn",
+      "value": "≡ 列表"
+    },
+    {
+      "name": "browse_new_folder",
+      "value": "新建文件夹"
+    },
+    {
+      "name": "browse_opds",
+      "value": "网上书库（OPDS）"
+    },
+    {
+      "name": "browse_open",
+      "value": "\\u{1F4C4} 打开"
+    },
+    {
+      "name": "browse_rename",
+      "value": "✏ 重命名"
+    },
+    {
+      "name": "browse_search_docs",
+      "value": "在多个文档中搜索"
+    },
+    {
+      "name": "browser_unavailable",
+      "value": "无法打开浏览器"
+    },
+    {
+      "name": "card_starred",
+      "value": "★收藏"
+    },
+    {
+      "name": "chip_all",
+      "value": "全部"
+    },
+    {
+      "name": "chip_finished",
+      "value": "已读"
+    },
+    {
+      "name": "chip_playlist",
+      "value": "▶ 播放列表"
+    },
+    {
+      "name": "chip_reading",
+      "value": "在读"
+    },
+    {
+      "name": "chip_star_off",
+      "value": "☆ 收藏"
+    },
+    {
+      "name": "chip_star_on",
+      "value": "★ 收藏"
+    },
+    {
+      "name": "chip_unread",
+      "value": "未读"
+    },
+    {
+      "name": "common_account",
+      "value": "账号"
+    },
+    {
+      "name": "common_add",
+      "value": "添加"
+    },
+    {
+      "name": "common_apply",
+      "value": "应用"
+    },
+    {
+      "name": "common_close",
+      "value": "关闭"
+    },
+    {
+      "name": "common_confirm",
+      "value": "确认"
+    },
+    {
+      "name": "common_create",
+      "value": "创建"
+    },
+    {
+      "name": "common_default",
+      "value": "默认"
+    },
+    {
+      "name": "common_done",
+      "value": "完成"
+    },
+    {
+      "name": "common_download",
+      "value": "下载"
+    },
+    {
+      "name": "common_empty",
+      "value": "无内容"
+    },
+    {
+      "name": "common_exit",
+      "value": "退出"
+    },
+    {
+      "name": "common_export_failed",
+      "value": "导出失败"
+    },
+    {
+      "name": "common_load_failed",
+      "value": "加载失败"
+    },
+    {
+      "name": "common_loading",
+      "value": "加载中..."
+    },
+    {
+      "name": "common_more",
+      "value": "更多"
+    },
+    {
+      "name": "common_name",
+      "value": "名称"
+    },
+    {
+      "name": "common_new",
+      "value": "新建"
+    },
+    {
+      "name": "common_new_name",
+      "value": "新名称"
+    },
+    {
+      "name": "common_off",
+      "value": "关"
+    },
+    {
+      "name": "common_on",
+      "value": "开"
+    },
+    {
+      "name": "common_open",
+      "value": "打开"
+    },
+    {
+      "name": "common_password",
+      "value": "密码"
+    },
+    {
+      "name": "common_refresh",
+      "value": "刷新"
+    },
+    {
+      "name": "common_rename",
+      "value": "重命名"
+    },
+    {
+      "name": "common_reset",
+      "value": "重置"
+    },
+    {
+      "name": "common_save_failed",
+      "value": "保存失败"
+    },
+    {
+      "name": "common_search",
+      "value": "搜索"
+    },
+    {
+      "name": "common_switch",
+      "value": "切换"
+    },
+    {
+      "name": "common_test_connection",
+      "value": "测试连接"
+    },
+    {
+      "name": "common_test_failed",
+      "value": "测试失败"
+    },
+    {
+      "name": "common_unknown",
+      "value": "未知"
+    },
+    {
+      "name": "common_unlock",
+      "value": "解锁"
+    },
+    {
+      "name": "dash_empty",
+      "value": "无内容或加载失败"
+    },
+    {
+      "name": "dash_no_bookmarks",
+      "value": "暂无书签笔记"
+    },
+    {
+      "name": "dav_add",
+      "value": "添加 WebDAV 服务器"
+    },
+    {
+      "name": "dav_cloud_title",
+      "value": "☁ WebDAV 云盘"
+    },
+    {
+      "name": "dav_deleted",
+      "value": "WebDAV 服务器已删除"
+    },
+    {
+      "name": "dav_download_error",
+      "value": "下载错误"
+    },
+    {
+      "name": "dav_download_failed",
+      "value": "下载失败:"
+    },
+    {
+      "name": "dav_downloaded",
+      "value": "已下载:"
+    },
+    {
+      "name": "dav_edit",
+      "value": "编辑 WebDAV 服务器"
+    },
+    {
+      "name": "dav_name_hint",
+      "value": "名称（如：MyNAS）"
+    },
+    {
+      "name": "dav_none",
+      "value": "尚未添加服务器"
+    },
+    {
+      "name": "dav_saved",
+      "value": "WebDAV 服务器已保存"
+    },
+    {
+      "name": "dav_up_dir",
+      "value": "⬆ 上级目录"
+    },
+    {
+      "name": "dav_url_required",
+      "value": "WebDAV 地址不能为空"
+    },
+    {
+      "name": "drawer_config",
+      "value": "配置文件"
+    },
+    {
+      "name": "drawer_exit_app",
+      "value": "退出程序"
+    },
+    {
+      "name": "drawer_tagline",
+      "value": "值得读，好好读"
+    },
+    {
+      "name": "export_hint",
+      "value": "包含书签与 AI 笔记，每条带位置与时间"
+    },
+    {
+      "name": "export_title",
+      "value": "导出笔记与书签"
+    },
+    {
+      "name": "font_mono",
+      "value": "等宽"
+    },
+    {
+      "name": "font_sans",
+      "value": "无衬"
+    },
+    {
+      "name": "font_serif",
+      "value": "衬线"
+    },
+    {
+      "name": "info_failed",
+      "value": "获取信息失败"
+    },
+    {
+      "name": "jump_go",
+      "value": "跳转"
+    },
+    {
+      "name": "jump_title",
+      "value": "跳转到页"
+    },
+    {
+      "name": "lang_auto",
+      "value": "自动检测"
+    },
+    {
+      "name": "lang_de",
+      "value": "德文"
+    },
+    {
+      "name": "lang_en",
+      "value": "英文"
+    },
+    {
+      "name": "lang_es",
+      "value": "西班牙文"
+    },
+    {
+      "name": "lang_fr",
+      "value": "法文"
+    },
+    {
+      "name": "lang_ja",
+      "value": "日文"
+    },
+    {
+      "name": "lang_ru",
+      "value": "俄文"
+    },
+    {
+      "name": "lang_zh",
+      "value": "中文"
+    },
+    {
+      "name": "lib_empty",
+      "value": "还没有阅读记录"
+    },
+    {
+      "name": "lib_empty_import",
+      "value": "还没有阅读记录，点右上角 ＋ 导入书籍"
+    },
+    {
+      "name": "lib_filter",
+      "value": "筛:"
+    },
+    {
+      "name": "lib_fulltext",
+      "value": "全文"
+    },
+    {
+      "name": "lib_import",
+      "value": "导入书籍"
+    },
+    {
+      "name": "lib_select_all",
+      "value": "全选"
+    },
+    {
+      "name": "lib_tags",
+      "value": "标签"
+    },
+    {
+      "name": "lock_placeholder",
+      "value": "请输入密码"
+    },
+    {
+      "name": "lock_title",
+      "value": "应用已锁定，请输入密码"
+    },
+    {
+      "name": "menu_mark_finished",
+      "value": "标记为已读"
+    },
+    {
+      "name": "menu_mark_reading",
+      "value": "标记为在读"
+    },
+    {
+      "name": "menu_mark_unread",
+      "value": "标记为未读（清空进度）"
+    },
+    {
+      "name": "menu_rsvp",
+      "value": "⚡ 速读"
+    },
+    {
+      "name": "menu_settings",
+      "value": "⚙ 设置"
+    },
+    {
+      "name": "menu_star",
+      "value": "收藏"
+    },
+    {
+      "name": "menu_tts",
+      "value": "🔊 TTS 朗读"
+    },
+    {
+      "name": "menu_unstar",
+      "value": "取消收藏"
+    },
+    {
+      "name": "mode_horizontal",
+      "value": "水平翻页"
+    },
+    {
+      "name": "mode_vertical",
+      "value": "垂直滚动"
+    },
+    {
+      "name": "opds_add",
+      "value": "添加 OPDS 书库"
+    },
+    {
+      "name": "opds_back",
+      "value": "← 返回"
+    },
+    {
+      "name": "opds_custom",
+      "value": "自定义 OPDS 地址"
+    },
+    {
+      "name": "opds_deleted",
+      "value": "OPDS 书库已删除"
+    },
+    {
+      "name": "opds_edit",
+      "value": "编辑 OPDS 书库"
+    },
+    {
+      "name": "opds_name_hint",
+      "value": "名称（如：Project Gutenberg）"
+    },
+    {
+      "name": "opds_none",
+      "value": "尚未添加书库"
+    },
+    {
+      "name": "opds_saved",
+      "value": "OPDS 书库已保存"
+    },
+    {
+      "name": "opds_star_title",
+      "value": "★ OPDS 目录"
+    },
+    {
+      "name": "opds_title",
+      "value": "OPDS 目录"
+    },
+    {
+      "name": "opds_url_required",
+      "value": "OPDS 地址不能为空"
+    },
+    {
+      "name": "orient_auto",
+      "value": "自动"
+    },
+    {
+      "name": "orient_landscape",
+      "value": "横屏"
+    },
+    {
+      "name": "orient_portrait",
+      "value": "竖屏"
+    },
+    {
+      "name": "page_double",
+      "value": "双页"
+    },
+    {
+      "name": "page_music",
+      "value": "乐谱"
+    },
+    {
+      "name": "page_single",
+      "value": "单页"
+    },
+    {
+      "name": "pl_add",
+      "value": "加入播放列表"
+    },
+    {
+      "name": "pl_already",
+      "value": "已在该播放列中"
+    },
+    {
+      "name": "pl_created_added",
+      "value": "已创建并加入"
+    },
+    {
+      "name": "pl_delete",
+      "value": "删除列表"
+    },
+    {
+      "name": "pl_empty",
+      "value": "暂无播放列表，下方新建"
+    },
+    {
+      "name": "pl_new_add",
+      "value": "新建并加入"
+    },
+    {
+      "name": "pl_new_name",
+      "value": "新建播放列名称"
+    },
+    {
+      "name": "pl_no_items",
+      "value": "暂无书目"
+    },
+    {
+      "name": "pl_not_in_library",
+      "value": "该书不在书库中"
+    },
+    {
+      "name": "pl_play_first",
+      "value": "播放第一本"
+    },
+    {
+      "name": "pl_title",
+      "value": "播放列表"
+    },
+    {
+      "name": "prof_created",
+      "value": "档案已创建，点击切换"
+    },
+    {
+      "name": "prof_hint",
+      "value": "每个档案拥有独立的书库、书签、笔记与阅读设置"
+    },
+    {
+      "name": "prof_hint2",
+      "value": "(多档案切换，对齐安卓 Profile)"
+    },
+    {
+      "name": "prof_invalid",
+      "value": "档案名无效或已存在"
+    },
+    {
+      "name": "prof_new_name",
+      "value": "新档案名称"
+    },
+    {
+      "name": "prof_nodelete",
+      "value": "默认档案不可删除"
+    },
+    {
+      "name": "prof_title",
+      "value": "档案管理"
+    },
+    {
+      "name": "pwd_dialog_hint",
+      "value": "请输入密码以阅读本文档"
+    },
+    {
+      "name": "pwd_dialog_title",
+      "value": "🔒 文档已加密"
+    },
+    {
+      "name": "pwd_unlock_failed",
+      "value": "解锁失败"
+    },
+    {
+      "name": "pwd_wrong",
+      "value": "密码错误，请重试"
+    },
+    {
+      "name": "quality_balanced",
+      "value": "平衡"
+    },
+    {
+      "name": "quality_fast",
+      "value": "快速"
+    },
+    {
+      "name": "quality_high",
+      "value": "高清"
+    },
+    {
+      "name": "quick_bookmark",
+      "value": "快速书签"
+    },
+    {
+      "name": "range_month",
+      "value": "近1月"
+    },
+    {
+      "name": "range_week",
+      "value": "近1周"
+    },
+    {
+      "name": "range_year",
+      "value": "近1年"
+    },
+    {
+      "name": "reader_autoflip",
+      "value": "自动翻页:"
+    },
+    {
+      "name": "reader_autoscroll",
+      "value": "自动滚动:"
+    },
+    {
+      "name": "reader_bgimage",
+      "value": "背景图"
+    },
+    {
+      "name": "reader_bgimage_on",
+      "value": "背景图 ✓"
+    },
+    {
+      "name": "reader_bluelight",
+      "value": "蓝光:"
+    },
+    {
+      "name": "reader_bookmark",
+      "value": "书签"
+    },
+    {
+      "name": "reader_brightness",
+      "value": "亮度:"
+    },
+    {
+      "name": "reader_brightness_n",
+      "value": "亮度"
+    },
+    {
+      "name": "reader_contents",
+      "value": "目录"
+    },
+    {
+      "name": "reader_crop",
+      "value": "裁剪:"
+    },
+    {
+      "name": "reader_del_first",
+      "value": "删除第1条"
+    },
+    {
+      "name": "reader_export",
+      "value": "导出"
+    },
+    {
+      "name": "reader_file_info",
+      "value": "📄 文件信息"
+    },
+    {
+      "name": "reader_fs_enter",
+      "value": "进入"
+    },
+    {
+      "name": "reader_fullscreen",
+      "value": "全屏:"
+    },
+    {
+      "name": "reader_gestures",
+      "value": "手势配置"
+    },
+    {
+      "name": "reader_menu",
+      "value": "菜单"
+    },
+    {
+      "name": "reader_mode",
+      "value": "模式:"
+    },
+    {
+      "name": "reader_night",
+      "value": "夜间:"
+    },
+    {
+      "name": "reader_page",
+      "value": "页面:"
+    },
+    {
+      "name": "reader_settings",
+      "value": "阅读设置"
+    },
+    {
+      "name": "reader_share",
+      "value": "分享"
+    },
+    {
+      "name": "reader_text_replace",
+      "value": "文本替换"
+    },
+    {
+      "name": "reader_toc",
+      "value": "目录 (TOC)"
+    },
+    {
+      "name": "reader_toc_empty",
+      "value": "(无目录)"
+    },
+    {
+      "name": "reader_typography",
+      "value": "排版"
+    },
+    {
+      "name": "reader_zone_center",
+      "value": "中区:"
+    },
+    {
+      "name": "reader_zone_left",
+      "value": "左区:"
+    },
+    {
+      "name": "reader_zone_right",
+      "value": "右区:"
+    },
+    {
+      "name": "reminder_prefix",
+      "value": "已连续阅读"
+    },
+    {
+      "name": "repl_export",
+      "value": "📥 导出文本"
+    },
+    {
+      "name": "repl_find_placeholder",
+      "value": "搜索文本..."
+    },
+    {
+      "name": "repl_hint",
+      "value": "注: 仅对 reflowable 文档 (EPUB/HTML) 生效"
+    },
+    {
+      "name": "repl_replace",
+      "value": "替换为..."
+    },
+    {
+      "name": "repl_title",
+      "value": "文本替换 (reflow)"
+    },
+    {
+      "name": "rsvp_hint",
+      "value": "读完当前页自动进入下一页 · 手动翻页会重置到新页"
+    },
+    {
+      "name": "rsvp_pause",
+      "value": "⏸ 暂停"
+    },
+    {
+      "name": "rsvp_resume",
+      "value": "▶ 继续"
+    },
+    {
+      "name": "rsvp_speed",
+      "value": "速度:"
+    },
+    {
+      "name": "rsvp_start",
+      "value": "▶ 开始"
+    },
+    {
+      "name": "rsvp_stop",
+      "value": "⏹ 停止"
+    },
+    {
+      "name": "rsvp_switch_tts",
+      "value": "🔊 转朗读"
+    },
+    {
+      "name": "rsvp_title",
+      "value": "速读 (RSVP)"
+    },
+    {
+      "name": "search_placeholder",
+      "value": "搜索..."
+    },
+    {
+      "name": "sec_bookmarks",
+      "value": "书签笔记"
+    },
+    {
+      "name": "sec_favorites",
+      "value": "我的珍藏"
+    },
+    {
+      "name": "sec_online",
+      "value": "网上书库"
+    },
+    {
+      "name": "sec_recent",
+      "value": "最近阅读"
+    },
+    {
+      "name": "sec_stats",
+      "value": "阅读统计"
+    },
+    {
+      "name": "sel_add_bookmark",
+      "value": "加入书签"
+    },
+    {
+      "name": "sel_ai_todo",
+      "value": "AI 功能将在后续版本提供"
+    },
+    {
+      "name": "sel_copied_fallback",
+      "value": "已复制到剪贴板（系统分享不可用）"
+    },
+    {
+      "name": "sel_copy",
+      "value": "复制"
+    },
+    {
+      "name": "sel_inbook_search",
+      "value": "文内搜索"
+    },
+    {
+      "name": "sel_none",
+      "value": "未选中文本"
+    },
+    {
+      "name": "sel_note",
+      "value": "笔记"
+    },
+    {
+      "name": "sel_note_hint",
+      "value": "笔记内容"
+    },
+    {
+      "name": "sel_pick",
+      "value": "选择文本"
+    },
+    {
+      "name": "sel_send_ai",
+      "value": "发送给AI"
+    },
+    {
+      "name": "sel_squiggly",
+      "value": "波浪"
+    },
+    {
+      "name": "sel_text",
+      "value": "文本"
+    },
+    {
+      "name": "sel_underline",
+      "value": "下划"
+    },
+    {
+      "name": "sel_web_dict",
+      "value": "网络词典(牛津词典等)"
+    },
+    {
+      "name": "sel_web_search",
+      "value": "网络搜索(谷歌等)"
+    },
+    {
+      "name": "set_ai_model",
+      "value": "AI 大模型"
+    },
+    {
+      "name": "set_app_lock",
+      "value": "应用锁:"
+    },
+    {
+      "name": "set_app_lock_hint",
+      "value": "(指纹/密码)"
+    },
+    {
+      "name": "set_autoscan",
+      "value": "启动扫描:"
+    },
+    {
+      "name": "set_autoscan_hint",
+      "value": "(启动时扫描设备目录找书)"
+    },
+    {
+      "name": "set_biometric_hint",
+      "value": "(指纹/人脸，失败回退密码)"
+    },
+    {
+      "name": "set_card",
+      "value": "桌面卡片:"
+    },
+    {
+      "name": "set_card_hint",
+      "value": "(最近或星标书籍，1-3 本)"
+    },
+    {
+      "name": "set_cover_columns",
+      "value": "封面列数:"
+    },
+    {
+      "name": "set_cover_columns_hint",
+      "value": "(2-4 列，网格/封面/书架视图)"
+    },
+    {
+      "name": "set_default_zoom",
+      "value": "默认缩放:"
+    },
+    {
+      "name": "set_disabled",
+      "value": "未启用"
+    },
+    {
+      "name": "set_enabled",
+      "value": "已启用"
+    },
+    {
+      "name": "set_flip_anim",
+      "value": "翻页动画:"
+    },
+    {
+      "name": "set_font_size",
+      "value": "字号:"
+    },
+    {
+      "name": "set_general",
+      "value": "常规设置"
+    },
+    {
+      "name": "set_integration",
+      "value": "系统集成"
+    },
+    {
+      "name": "set_lang_system",
+      "value": "系统默认"
+    },
+    {
+      "name": "set_language",
+      "value": "语言"
+    },
+    {
+      "name": "set_last_read",
+      "value": "上次:"
+    },
+    {
+      "name": "set_line_height",
+      "value": "行距:"
+    },
+    {
+      "name": "set_lock_pass",
+      "value": "锁屏密码:"
+    },
+    {
+      "name": "set_lock_pass_hint",
+      "value": "默认 1234"
+    },
+    {
+      "name": "set_margin",
+      "value": "页边距:"
+    },
+    {
+      "name": "set_not_configured",
+      "value": "未配置"
+    },
+    {
+      "name": "set_orientation",
+      "value": "屏幕方向"
+    },
+    {
+      "name": "set_orientation2",
+      "value": "屏幕方向:"
+    },
+    {
+      "name": "set_orientation_hint",
+      "value": "(自动/竖屏/横屏)"
+    },
+    {
+      "name": "set_page_turn",
+      "value": "翻页:"
+    },
+    {
+      "name": "set_pdf_fixed_hint",
+      "value": "PDF 为固定版面：字号/行距/页边距不可调，使用 A-/A+ 缩放"
+    },
+    {
+      "name": "set_profile",
+      "value": "档案:"
+    },
+    {
+      "name": "set_proxy",
+      "value": "代理:"
+    },
+    {
+      "name": "set_quality",
+      "value": "渲染质量:"
+    },
+    {
+      "name": "set_reading",
+      "value": "阅读配置"
+    },
+    {
+      "name": "set_reflow_typography",
+      "value": "重排文档（EPUB/HTML）排版:"
+    },
+    {
+      "name": "set_reminder",
+      "value": "阅读提醒:"
+    },
+    {
+      "name": "set_reminder_hint",
+      "value": "(连续阅读提醒)"
+    },
+    {
+      "name": "set_rsvp",
+      "value": "速读:"
+    },
+    {
+      "name": "set_screen",
+      "value": "屏幕"
+    },
+    {
+      "name": "set_screen_normal",
+      "value": "正常"
+    },
+    {
+      "name": "set_system",
+      "value": "系统"
+    },
+    {
+      "name": "set_tabpos_hint",
+      "value": "(对齐安卓 tapPositionTop)"
+    },
+    {
+      "name": "set_theme",
+      "value": "主题:"
+    },
+    {
+      "name": "set_theme_hint",
+      "value": "主题变更即时生效：深色/OLED 反色渲染，墨色为纸张暖色"
+    },
+    {
+      "name": "set_topbar_hint",
+      "value": "(阅读器标题栏显示时间/电量)"
+    },
+    {
+      "name": "set_tts_pitch",
+      "value": "TTS音调:"
+    },
+    {
+      "name": "set_tts_rate",
+      "value": "TTS语速:"
+    },
+    {
+      "name": "set_ui",
+      "value": "UI配置"
+    },
+    {
+      "name": "sort_author",
+      "value": "作者"
+    },
+    {
+      "name": "sort_date",
+      "value": "日期"
+    },
+    {
+      "name": "sort_recent",
+      "value": "最近"
+    },
+    {
+      "name": "sort_series",
+      "value": "系列"
+    },
+    {
+      "name": "star_empty",
+      "value": "还没有收藏，点列表右侧 ☆ 收藏书籍"
+    },
+    {
+      "name": "stat_books",
+      "value": "书籍总数"
+    },
+    {
+      "name": "stat_finished",
+      "value": "已读书籍"
+    },
+    {
+      "name": "stat_speed",
+      "value": "阅读速度（页/分）"
+    },
+    {
+      "name": "stat_time",
+      "value": "总阅读时间"
+    },
+    {
+      "name": "stat_today",
+      "value": "今日阅读"
+    },
+    {
+      "name": "sync_addr_hint",
+      "value": "地址 http://dav.example.com:5005"
+    },
+    {
+      "name": "sync_auto",
+      "value": "定时同步（应用运行期间）"
+    },
+    {
+      "name": "sync_conflict",
+      "value": "冲突策略"
+    },
+    {
+      "name": "sync_done",
+      "value": "WebDAV 同步完成"
+    },
+    {
+      "name": "sync_enable",
+      "value": "启用同步（阅读进度与书签）"
+    },
+    {
+      "name": "sync_failed",
+      "value": "同步失败："
+    },
+    {
+      "name": "sync_independent",
+      "value": "与“我的文件”中的 WebDAV 服务器相互独立"
+    },
+    {
+      "name": "sync_interval",
+      "value": "间隔（分钟）"
+    },
+    {
+      "name": "sync_log",
+      "value": "同步日志"
+    },
+    {
+      "name": "sync_log_empty",
+      "value": "(暂无同步记录，点“立即同步”生成)"
+    },
+    {
+      "name": "sync_now",
+      "value": "立即同步"
+    },
+    {
+      "name": "sync_path",
+      "value": "同步路径"
+    },
+    {
+      "name": "sync_running",
+      "value": "正在同步…"
+    },
+    {
+      "name": "sync_saved",
+      "value": "同步配置已保存"
+    },
+    {
+      "name": "sync_title",
+      "value": "WebDAV 同步"
+    },
+    {
+      "name": "sync_trust_selfsigned",
+      "value": "信任自签名证书"
+    },
+    {
+      "name": "tag_none",
+      "value": "未分类"
+    },
+    {
+      "name": "trans_bi_done",
+      "value": "双语版已生成，译文以蓝色显示"
+    },
+    {
+      "name": "trans_bi_failed",
+      "value": "双语版应用失败："
+    },
+    {
+      "name": "trans_bi_ok",
+      "value": "本书可用"
+    },
+    {
+      "name": "trans_bi_open_failed",
+      "value": "双语版打开失败，已保留原文"
+    },
+    {
+      "name": "trans_bilingual",
+      "value": "在页面内显示译文（双语对照）"
+    },
+    {
+      "name": "trans_dst",
+      "value": "目标语言"
+    },
+    {
+      "name": "trans_failed",
+      "value": "翻译失败"
+    },
+    {
+      "name": "trans_failed2",
+      "value": "翻译失败："
+    },
+    {
+      "name": "trans_no_text",
+      "value": "当前页无可提取文本"
+    },
+    {
+      "name": "trans_panel_mode",
+      "value": "面板模式"
+    },
+    {
+      "name": "trans_restored",
+      "value": "已恢复原文"
+    },
+    {
+      "name": "trans_restoring",
+      "value": "正在恢复原文…"
+    },
+    {
+      "name": "trans_result",
+      "value": "AI 翻译结果"
+    },
+    {
+      "name": "trans_result_save",
+      "value": "AI翻译结果保存"
+    },
+    {
+      "name": "trans_save_note",
+      "value": "保存到笔记"
+    },
+    {
+      "name": "trans_saved",
+      "value": "译文已保存到笔记"
+    },
+    {
+      "name": "trans_src",
+      "value": "源语言"
+    },
+    {
+      "name": "trans_start",
+      "value": "开始翻译"
+    },
+    {
+      "name": "trans_title",
+      "value": "AI翻译"
+    },
+    {
+      "name": "tts_engine_unavailable",
+      "value": "语音引擎不可用"
+    },
+    {
+      "name": "tts_finished",
+      "value": "朗读完成"
+    },
+    {
+      "name": "tts_next_sentence",
+      "value": "下一句"
+    },
+    {
+      "name": "tts_no_engine_hint",
+      "value": "当前设备未提供语音引擎，可改用速读模式。"
+    },
+    {
+      "name": "tts_no_text",
+      "value": "(本页无文本)"
+    },
+    {
+      "name": "tts_no_voice",
+      "value": "未检测到语音包"
+    },
+    {
+      "name": "tts_panel_title",
+      "value": "朗读 (TTS)"
+    },
+    {
+      "name": "tts_paused",
+      "value": "已暂停"
+    },
+    {
+      "name": "tts_pitch",
+      "value": "音调:"
+    },
+    {
+      "name": "tts_preparing",
+      "value": "准备中..."
+    },
+    {
+      "name": "tts_preparing2",
+      "value": "准备中…"
+    },
+    {
+      "name": "tts_prev_sentence",
+      "value": "上一句"
+    },
+    {
+      "name": "tts_rate",
+      "value": "语速:"
+    },
+    {
+      "name": "tts_ready",
+      "value": "就绪"
+    },
+    {
+      "name": "tts_speaking",
+      "value": "朗读中"
+    },
+    {
+      "name": "tts_stopped",
+      "value": "已停止"
+    },
+    {
+      "name": "tts_switch_rsvp",
+      "value": "⚡ 转速读"
+    },
+    {
+      "name": "tts_web_unavailable",
+      "value": "Web 引擎不可用"
+    },
+    {
+      "name": "typo_align",
+      "value": "对齐:"
+    },
+    {
+      "name": "typo_center",
+      "value": "中"
+    },
+    {
+      "name": "typo_dropcap",
+      "value": "首字下沉"
+    },
+    {
+      "name": "typo_font",
+      "value": "字体"
+    },
+    {
+      "name": "typo_hyphen",
+      "value": "连字符:"
+    },
+    {
+      "name": "typo_hyphen_en",
+      "value": "(英文)"
+    },
+    {
+      "name": "typo_indent",
+      "value": "段走:"
+    },
+    {
+      "name": "typo_indent_n",
+      "value": "缩进"
+    },
+    {
+      "name": "typo_justify",
+      "value": "两端"
+    },
+    {
+      "name": "typo_left",
+      "value": "左"
+    },
+    {
+      "name": "typo_right",
+      "value": "右"
+    },
+    {
+      "name": "typo_title",
+      "value": "排版设置 (EPUB/HTML)"
+    },
+    {
+      "name": "view_compact",
+      "value": "紧凑"
+    },
+    {
+      "name": "view_cover",
+      "value": "封面"
+    },
+    {
+      "name": "view_grid",
+      "value": "网格"
+    },
+    {
+      "name": "view_list",
+      "value": "列表"
+    },
+    {
+      "name": "view_shelf",
+      "value": "书架"
     }
   ]
 }

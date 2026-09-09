@@ -5,6 +5,58 @@
 
 ---
 
+## [2026-09-09] 鸿蒙版本号升级 0.8.5（versionCode 36）
+
+**改动**：`harmony/AppScope/app.json5` versionName 0.8.0 → **0.8.5**，versionCode 35 → **36**（保持单调递增，支持覆盖安装升级）。无其它代码改动，`build_hap_all.sh` default+pro 重建 8 个产物到 `harmony/dist/{debug,release}/HowRead[-Pro]-v0.8.5-{arm64,x86_64}-hmos.hap`。
+
+---
+
+## [2026-09-09] 鸿蒙移植第六轮：阅读器 UI 对齐 + 全库搜索/找书 + PDF 密码/格式验证 + TTS 播控卡片 + 偏好补齐 + 多档案 + i18n 第二批
+
+**背景**：继续对齐安卓版。用户确认本轮 7 块全做：阅读器 UI 布局对齐+图标补齐、全库全文搜索/找书导入/书库清理、PDF 密码+格式验证+字体、TTS 播控桌面卡片、偏好设置补齐、多 Profile 档案、i18n 第二批全量。版本 0.8.0 / versionCode 35。
+
+**改动**（`harmony/` 内）：
+
+**① 阅读器 UI 对齐 + 图标补齐**（对齐 document_title_bar/document_title_buttons/document_footer）：
+- 新增 32 个 Material 风格 SVG 图标（排版/缩放/双页/书库/云同步/导入等，media/ 共 96 个）。
+- 顶栏补 4 钮：跳页（ic_page_fit，弹页码输入对话框 doJump）、TTS 朗读（ic_headphones）、工具行开关（ic_sliders，高亮态）；原 目录/亮度/全屏/AI/设置/关闭 保留。
+- 顶栏下新增 2px 阅读进度条（ProgressDraw 对应）+ 可关闭二级按钮排：缩放±、亮度 Slider、对比度 Slider、页面分割开关。
+- 底部工具栏改横向滚动并补齐：返回上一位置（ic_rewind→popPageHistory）、页缩略图（ic_thumbnails→openThumbs）、TTS、模式切换（ic_exchange→toggleScrollMode）。
+- 垂直连续滚动模式新增右侧快速滚动条（PanGesture 拖动映射页码，FastScroller 对应，带页码气泡）。
+
+**② 全库全文搜索 + 找书导入 + 书库清理**（对齐 MultyDocSearchDialog/SearchCore/CheckDeletedBooksWorker）：
+- 新增 `model/LibrarySearch.ets`：searchLibraryText 逐本 openDocument→getText 逐页匹配（每本上限 300 页、进度回调可取消、坏书跳过）；scanDeviceBooks 尽力扫描 /storage/emulated/0/{Download,Documents,Books} + 应用沙箱目录（无权限目录静默跳过）；importPathToSandbox；findMissingBooks。
+- 书库搜索行新增「全文」按钮（再点取消）+ 扫描按钮（ic_import，单次导入上限 20 本）；结果面板列 书名·页码·片段，点击直达该书该页（Reader 新增 jumpPage 路由参数）；启动扫描偏好联动。
+- 书库顶部失效文件横幅：N 本丢失点击清理（replaceRecentBooks 移除，不静默）。
+
+**③ PDF 密码 + 格式验证**：
+- `mupdf_napi.cpp` 新增 needsPassword/authenticateDocument 导出（fz_needs_password/fz_authenticate_password，g_mu 串行）；Reader 打开加密文档弹密码对话框（doUnlockDoc 成功后 renderEpoch++ 强制重渲染，取消返回书库）。
+- 格式验证（模拟器实测）：PDF/EPUB/TXT/HTML/CBZ/FB2 ✅；**MD ✅（本轮新增：MuPDF txt handler 扩展名表加 md/markdown，html-doc.c，两 ABI 重编 libmupdf）**；RTF/DOCX/MOBI ❌（MuPDF 1.23.7 无对应 handler，0 页不崩溃，维持安卓侧由 EbookDroid 外部抽取器的差距，记待续）。
+- 已知项：txt/md 渲染顶部有一行 CSS 文本残留（txt reflow 路径固有，非本轮引入）。
+
+**④ TTS 播控桌面卡片**（对齐 TTSWidget）：
+- form_config.json 新增 TtsCard（2*4，isDefault=false）；新增 `form/TtsCard.ets`：书名+当前句+上一句/暂停继续/下一句，postCardAction router → EntryAbility `tts_cmd`（复用第五轮通知播控通路）。
+- `TtsService.ets` 新增 syncTtsCardState：TTS 状态写 preferences `librera_ttsstate` + 按 `librera_formmap` 推 formProvider.updateForm；`FormAbility.ets` 重写：按表单分支载荷（RecentCard 读 librera_settings 的 cardSource/cardCount 偏好；TtsCard 读 tts 状态），formId→表单名映射持久化，onRemoveForm 清理（getPreferencesSync/getSync，免 delete 操作符）。
+- Reader refreshTtsNotification/ttsStop 调用 syncTtsCardState 同步卡片。
+
+**⑤ 偏好设置补齐**（对齐 PrefFragment2）：Settings 新增 screenOrientation/autoScanOnStart/hideReadBooks/coverColumns/cardSource/cardCount（appLang 预留）；偏好页新增 5 行：屏幕方向（自动/竖/横，@ohos.window setPreferredOrientation 即时生效）、启动扫描、封面列数 2-4（网格/封面/书架视图 columnsTemplate 联动）、桌面卡片（最近/星标 + 1-3 本）、档案管理入口；书库支持隐藏已读（hideReadBooks 过滤 status=2）。应用内语言切换经查 SDK 23 无 setAppLanguage API，放弃并记录。
+
+**⑥ 多 Profile 档案**（对齐 AppProfile，最小侵入）：
+- 新增 `model/Profiles.ets`：default + 自定义档案；storeName(base) 为非默认档案追加 `_<名>` 后缀；default 沿用原存储名 → 现有数据零迁移。
+- Settings/ReadingProgress/Bookmarks/Notes/ReadingStats 的 getPrefs 改为 profile 感知（实例缓存按 store 名失效）；Playlists 目录按档案后缀。
+- 档案管理面板（偏好页入口）：列表/切换/新建（名称去特殊字符≤24）/删除（default 不可删）；切换后重载设置+书库+书签+统计。全局 `librera_profiles` 存 current+list。
+
+**⑦ i18n 第二批全量**：
+- Reader/Index/AiChat 共 **546 处**中文文案资源化：UI 直显位 → `$r('app.string.*')`；字符串状态赋值/返回值位 → `this.L($r(...))`（struct 内新增 L 助手，resourceManager.getStringSync）；拼接碎片与 AI 提示词保留原文（记录待续）。
+- base(en)+zh_CN 各新增 **405 个** key（合计 452+），按 common_/reader_/tts_/trans_/sel_/set_/lib_/ai_/sync_/pl_/prof_ 等域前缀命名。
+- AI 翻译语言名数组（TRANS_SRC/DST，模块级且送模型提示词）保留中文。
+
+**验证**（模拟器 hdc+uitest 实测）：FB2/MD 渲染 ✅；加密 PDF 密码框→错误密码不关→123456 解锁渲染 ✅；全文搜索 fox 跨 4 书 4 处命中、点击直达 ✅；WebDAV 面板列出 8 样本并全部下载入库 ✅；偏好新行/档案面板创建 work→切换→书库隔离→切回恢复 17 本 ✅；阅读器新顶栏/进度条/二级按钮排/footer 截图确认 ✅。TTS 卡片添加到桌面、生物识别、en 语言切换、真实 WebDAV PROPFIND 兼容性等记真机复验。
+
+**产物**：`build_hap_all.sh` default+pro → dist/{debug,release}/HowRead[-Pro]-v0.8.0-{arm64,x86_64}-hmos.hap（8 个）。
+
+---
+
 ## [2026-09-09] 鸿蒙移植第五轮：TTS 后台播控 + 桌面服务卡片 + UI 资源收敛/图标补齐 + WebDAV 目录浏览 + 批注管理/生物识别 + 小功能包 + i18n 第一批
 
 **背景**：对齐安卓版差距分析后，用户确认本轮 7 个功能块全做：A TTS 后台播控、B 桌面服务卡片、C UI 资源收敛+图标补齐、D WebDAV/OPDS 增强、F 批注管理+应用锁升级+分享接收、G 小功能包（页缩略图/位置历史/对比度/页面分割）、E i18n 第一步。版本升至 0.7.0 / versionCode 34。

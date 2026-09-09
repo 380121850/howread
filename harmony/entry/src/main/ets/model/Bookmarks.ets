@@ -1,4 +1,5 @@
 import preferences from '@ohos.data.preferences';
+import { storeName } from './Profiles';
 
 /**
  * Multi-bookmark manager persisted via @ohos.data.preferences.
@@ -21,10 +22,14 @@ const KEY_BOOKMARKS = 'bookmarks';
 const MAX_BOOKMARKS = 200;
 
 let prefInstance: preferences.Preferences | undefined = undefined;
+let prefInstanceStore: string = '';
 
 async function getPrefs(ctx: Context): Promise<preferences.Preferences> {
-  if (prefInstance === undefined) {
-    prefInstance = await preferences.getPreferences(ctx, PREF_NAME);
+  /* Round 6: profile-aware store name; re-open when the profile switches */
+  const store: string = storeName(PREF_NAME);
+  if (prefInstance === undefined || prefInstanceStore !== store) {
+    prefInstanceStore = store;
+    prefInstance = await preferences.getPreferences(ctx, store);
   }
   return prefInstance;
 }

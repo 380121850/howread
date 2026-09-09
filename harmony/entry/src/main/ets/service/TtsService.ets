@@ -1,6 +1,9 @@
 import backgroundTaskManager from '@ohos.resourceschedule.backgroundTaskManager';
 import notificationManager from '@ohos.notificationManager';
 import wantAgent, { WantAgent } from '@ohos.app.ability.wantAgent';
+import preferences from '@ohos.data.preferences';
+import formProvider from '@ohos.app.form.formProvider';
+import formBindingData from '@ohos.app.form.formBindingData';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 /**
@@ -90,5 +93,50 @@ export async function cancelTtsNotification(): Promise<void> {
     await notificationManager.cancel(NOTIF_ID);
   } catch (e) {
     /* ignore */
+  }
+}
+
+const PREF_TTS_STATE = 'librera_ttsstate';
+const PREF_FORM_MAP = 'librera_formmap';
+
+/**
+ * Round 6: publish the TTS state for the TtsCard desktop card. The state goes
+ * to preferences (readable by the FormAbility process on its refresh tick) and
+ * a push update is sent to every registered TtsCard form for near-real-time
+ * refresh while the Reader is running.
+ */
+export async function syncTtsCardState(ctx: Context, title: string, sentence: string, playing: boolean): Promise<void> {
+  try {
+    const trimmed: string = sentence.length > 60 ? sentence.substring(0, 60) + '\u2026' : sentence;
+    const state: Record<string, Object> = {
+      'title': title,
+      'sentence': trimmed,
+      'playing': playing,
+      'ts': Date.now()
+    };
+    const prefs = await preferences.getPreferences(ctx, PREF_TTS_STATE);
+    await prefs.put('state', JSON.stringify(state));
+    await prefs.flush();
+    /* push to live TtsCards via the form-id map kept by FormAbility */
+    const fmPrefs = await preferences.getPreferences(ctx, PREF_FORM_MAP);
+    const raw: string = await fmPrefs.get('map', '{}') as string;
+    const map: Record<string, string> = JSON.parse(raw) as Record<string, string>;
+    const payload: Record<string, Object> = {
+      'ttsTitle': title,
+      'ttsSentence': trimmed,
+      'playing': playing
+    };
+    const data = formBindingData.createFormBindingData(payload);
+    for (const id of Object.keys(map)) {
+      if (map[id] === 'TtsCard') {
+        try {
+          await formProvider.updateForm(id, data);
+        } catch (e) {
+          /* form may have been removed; ignore */
+        }
+      }
+    }
+  } catch (e) {
+    hilog.warn(0x0000, TAG, 'syncTtsCardState failed: %{public}s', String(e));
   }
 }
