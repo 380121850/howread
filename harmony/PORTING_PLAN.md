@@ -81,6 +81,14 @@
 8. ✅ 待续项已全部完成（2026-09-08 第二批，见下节）。
 
 
+### 阶段 14b（2026-09-09）：夜间/白天模式全 APP 生效修复（0.8.6 补丁）✅ 已完成
+
+1. ✅ **主界面明暗响应**（Index.ets）：新增 isDark()+11 个语义色助手（barColor/pageBg/cardBg/txtPri…inputBg）；顶栏/tabBar/分组条夜间切 #282b40；主界面硬编码浅色 sweep 348 行；抽屉 theme>0 分支统一 isDark（修正墨水主题误变暗）；夜切按钮按 isDark 取反（修 OLED 下点击无效）。
+2. ✅ **阅读器反色真根因**（mupdf_napi.cpp）：invert 后处理 XOR 连 alpha 一起翻转 → 整页位图全透明（夜间"不生效"真因）；改为只反转 RGB 保留 alpha。
+3. ✅ **重渲染触发**（Reader.ets）：PageRenderer/DoublePage/Musician 新增 @Prop @Watch nightInvert，invert 变化即重渲染该页（原 setInvert 只翻标志，已渲染页面永不刷新；ForEach key 含 nightMode 实测不触发重建）。
+4. ✅ **附带修复**：persistSettings settingsLoaded 竞态保护；zoom 回写去渲染质量倍率（跨启动滚雪球）。
+5. ✅ **验证**（模拟器实测）：首页/书库/偏好/OPDS 弹层明暗即时切换；墨水主题保持浅色；force-stop 重启主题保持；阅读器夜间黑底白字、冷启动首渲染即反色、切回白天正常。
+
 ### 阶段 14（2026-09-09）：第六批功能移植（偏好设置页 1:1 对齐安卓 PrefFragment2 + 软件说明页完整对齐 AboutSectionBinder）✅ 已完成（0.8.6 / versionCode 37）
 
 1. ✅ **设置页分组重构**：安卓式单页长滚动 + 可折叠分组（图标+箭头）：书库设置（格式设置/书库设置/书库显示配置/封面配置/阅读配置 子区）→ 常规设置 → 备份配置 → UI 配置（主题配置/标签栏配置）→ 关于；档案区对齐（首字母头像+档案名+面板）；原「系统集成」分组取消、散项归位。

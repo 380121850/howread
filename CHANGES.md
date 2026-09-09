@@ -5,6 +5,29 @@
 
 ---
 
+## [2026-09-09] 鸿蒙夜间/白天模式全 APP 生效修复（0.8.6 补丁，versionCode 37 不变）
+
+**背景**：用户反馈「夜间模式和白天模式不生效」。排查结论：数据链路（设置落盘/读取/阅读器 theme 应用）本身是通的，但 ①主界面除抽屉外全部硬编码浅色，切换主题后几乎无视觉变化；②阅读器正文反色从未真正生效——native `renderPageAsync` 的 invert 后处理把 **alpha 通道也一起 XOR**，整页位图变全透明，夜间下页面看似"白屏/黑屏"。
+
+**改动**：
+- `harmony/entry/src/main/ets/pages/Index.ets`：
+  - 新增明暗语义色助手 `isDark()`（theme 1深色/2OLED 为暗，3墨水保持浅色，与安卓一致）与 `barColor()/pageBg()/cardBg()/txtPri()/txtSec()/txtMid()/txtHint()/txtFaint()/chipBg()/divColor()/inputBg()`；
+  - 顶栏/tabBar/设置分组条夜间切 `#282b40` 深海军蓝（浅色保持主题色），Tabs 容器加 `pageBg()`；
+  - 主界面硬编码浅色 sweep 共 348 行（四 tab 内容区/卡片/对话框/选项弹层/列表文字），抽屉 6 处 `settings.theme > 0` 分支统一走 `isDark()`（修正墨水主题误变暗）；
+  - 抽屉「夜间模式」按钮改按 `isDark()` 取反（原 `theme===0?1:0` 在 OLED 下点击无反应）；
+  - 选项弹层选中行恢复品牌色底高亮（sweep 误并入 inputBg 后的手工修正）。
+- `harmony/entry/src/main/ets/components/Reader.ets`：
+  - `PageRenderer/DoublePageRenderer/MusicianPageRenderer` 新增 `@Prop @Watch nightInvert`，invert 变化即重渲染该页（此前 setInvert 只翻标志，已渲染页面不刷新）；
+  - `persistSettings` 增加 `settingsLoaded` 竞态保护（设置未加载完成前不回写，防止初始值覆盖已存主题）；
+  - 回写 `zoom` 去掉渲染质量倍率（原样回写已乘倍率的 zoomLevel 会导致缩放跨启动滚雪球）。
+- `harmony/entry/src/main/cpp/mupdf_napi.cpp`：invert 后处理改为**只反转 RGB、保留 alpha**（XOR alpha 会把整页变全透明，这是阅读器夜间"不生效"的真正根因）。
+
+**验证**（Pura 90 模拟器实测）：抽屉夜切/偏好页主题按钮切换 → 首页/书库/我的文件/偏好设置/网上书库弹层整体明暗即时切换；夜间/OLED 深色、墨水保持暖纸浅色；force-stop 重启后主题保持（theme=1）；阅读器夜间正文黑底白字（冷启动首渲染即反色）、切回白天恢复正常；白天模式渲染回归无异常。
+
+**备注**：AiChat 页未做明暗适配（待续）；构建产物随本补丁重出 8 件套（版本仍为 0.8.6/37）。
+
+---
+
 ## [2026-09-09] 鸿蒙移植第七轮：偏好设置页 1:1 对齐安卓 + 软件说明页完整对齐（0.8.6 / versionCode 37）
 
 **背景**：用户指出 ①软件说明页与安卓版不一致、②偏好设置页与安卓界面差距大，要求对齐安卓并给出适配方案。经三方探索（安卓 About/PrefFragment2 全量结构 + 鸿蒙现状）后按「设置页尽量 1:1、About 完整对齐」实施，版本 0.8.5 → **0.8.6**（versionCode 37）。

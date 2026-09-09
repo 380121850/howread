@@ -1008,9 +1008,9 @@ struct Index {
   buildProfileOverlay() {
     Column({ space: 10 }) {
       Text($r('app.string.prof_title'))
-        .fontSize(16).fontWeight(FontWeight.Medium).fontColor('#212121')
+        .fontSize(16).fontWeight(FontWeight.Medium).fontColor(this.txtPri())
       Text($r('app.string.prof_hint'))
-        .fontSize(11).fontColor('#888')
+        .fontSize(11).fontColor(this.txtHint())
       Text(`\u5F53\u524D\uFF1A${getCurrentProfile()}`)
         .fontSize(12).fontColor(this.thm())
       List() {
@@ -1018,7 +1018,7 @@ struct Index {
           ListItem() {
             Row({ space: 8 }) {
               Text(name === DEFAULT_PROFILE ? $r('app.string.common_default') : name)
-                .fontSize(13).fontColor('#333').layoutWeight(1)
+                .fontSize(13).fontColor(this.txtPri()).layoutWeight(1)
               if (name !== getCurrentProfile()) {
                 Text($r('app.string.common_switch')).fontSize(12).fontColor(this.thm())
                   .onClick(() => {
@@ -1037,7 +1037,7 @@ struct Index {
         }, (name: string) => name)
       }
       .height(140)
-      .divider({ strokeWidth: 1, color: '#f0f0f0', startMargin: 8, endMargin: 8 })
+      .divider({ strokeWidth: 1, color: this.inputBg(), startMargin: 8, endMargin: 8 })
 
       Row({ space: 8 }) {
         TextInput({ placeholder: $r('app.string.prof_new_name'), text: this.profileInput })
@@ -1056,7 +1056,7 @@ struct Index {
 
       Button($r('app.string.common_close'))
         .fontSize(13).height(34).width('100%')
-        .backgroundColor('#e0e0e0').fontColor('#333')
+        .backgroundColor(this.chipBg()).fontColor(this.txtPri())
         .onClick(() => {
           this.showProfile = false;
         })
@@ -1064,7 +1064,7 @@ struct Index {
     .width('78%')
     .padding(14)
     .borderRadius(12)
-    .backgroundColor(Color.White)
+    .backgroundColor(this.cardBg())
   }
 
   /**
@@ -1267,7 +1267,7 @@ struct Index {
           .height(this.settings.coverListSize > 0 ? Math.round(this.settings.coverListSize * 1.35) : 70)
           .objectFit(this.settings.cropCovers ? ImageFit.Cover : ImageFit.Contain)
           .borderRadius(4)
-          .backgroundColor('#eee')
+          .backgroundColor(this.divColor())
       } else {
         Column() {
           Text('📄')
@@ -1275,19 +1275,19 @@ struct Index {
         }
         .width(52).height(70)
         .justifyContent(FlexAlign.Center)
-        .backgroundColor('#f0f0f0')
+        .backgroundColor(this.inputBg())
         .borderRadius(4)
       }
 
       Column({ space: 2 }) {
         Text(book.title.length > 22 ? book.title.substring(0, 22) + '…' : book.title)
           .fontSize(13)
-          .fontColor('#333')
+          .fontColor(this.txtPri())
           .maxLines(1)
         if (book.author.length > 0) {
           Text(book.author)
             .fontSize(11)
-            .fontColor('#888')
+            .fontColor(this.txtHint())
             .maxLines(1)
         }
         Text(book.totalPages > 0 ? `p${book.page + 1}/${book.totalPages}` : '')
@@ -1301,7 +1301,7 @@ struct Index {
       /* star toggle */
       Text(book.star ? '★' : '☆')
         .fontSize(22)
-        .fontColor(book.star ? '#f5a623' : '#bbb')
+        .fontColor(book.star ? '#f5a623' : this.txtFaint())
         .margin({ right: 6 })
         .onClick(() => {
           this.onToggleStar(book);
@@ -1341,7 +1341,7 @@ struct Index {
             })
         }
         .width('100%').height(48)
-        .backgroundColor(this.thm())
+        .backgroundColor(this.barColor())
 
         // 4 tabs, bottom by default; top position optional (Android tapPositionTop).
         // Round 7: tabsOrder drives the display order (content dispatcher) + icon-only labels.
@@ -1369,7 +1369,8 @@ struct Index {
         .width('100%')
         .layoutWeight(1)
         .barMode(BarMode.Fixed)
-        .barBackgroundColor(this.thm())
+        .barBackgroundColor(this.barColor())
+        .backgroundColor(this.pageBg())
         .onChange((pos: number) => {
           this.onTabPos(pos);
         })
@@ -1685,7 +1686,7 @@ struct Index {
 
         if (this.getFilteredRecent().length === 0) {
           Text($r('app.string.lib_empty'))
-            .fontSize(13).fontColor('#999')
+            .fontSize(13).fontColor(this.txtFaint())
             .margin({ top: 40 })
         } else if (this.recentViewMode > 0) {
           /* Sprint N: grouped view */
@@ -1697,7 +1698,7 @@ struct Index {
               ForEach(group[1], (book: RecentBook) => {
                 Column() {
                   this.BookRow(book)
-                  Divider().color('#eee')
+                  Divider().color(this.divColor())
                 }
               }, (item: RecentBook) => item.path)
             }
@@ -1706,7 +1707,7 @@ struct Index {
           ForEach(this.getFilteredRecent(), (book: RecentBook) => {
             Column() {
               this.BookRow(book)
-              Divider().color('#eee')
+              Divider().color(this.divColor())
             }
           }, (item: RecentBook) => item.path)
         }
@@ -1724,13 +1725,13 @@ struct Index {
       Column({ space: 8 }) {
         if (this.starredBooks.length === 0) {
           Text($r('app.string.star_empty'))
-            .fontSize(13).fontColor('#999')
+            .fontSize(13).fontColor(this.txtFaint())
             .margin({ top: 40 })
         } else {
           ForEach(this.starredBooks, (book: RecentBook) => {
             Column() {
               this.BookRow(book)
-              Divider().color('#eee')
+              Divider().color(this.divColor())
             }
           }, (item: RecentBook) => item.path)
         }
@@ -2123,7 +2124,7 @@ struct Index {
         .onClick(() => { this.webdavConnect(); })
 
       Text(this.webdavStatus)
-        .fontSize(12).fontColor('#666')
+        .fontSize(12).fontColor(this.txtMid())
         .width('90%').margin({ top: 8 }).textAlign(TextAlign.Center)
 
       if (this.webdavProgress >= 0) {
@@ -2136,7 +2137,7 @@ struct Index {
       if (this.webdavPath.length > 0) {
         Row() {
           Text($r('app.string.dav_up_dir')).fontSize(13).fontColor('#3949AB')
-          Text(this.webdavPath).fontSize(11).fontColor('#888').margin({ left: 10 }).layoutWeight(1).maxLines(1)
+          Text(this.webdavPath).fontSize(11).fontColor(this.txtHint()).margin({ left: 10 }).layoutWeight(1).maxLines(1)
         }
         .width('90%').padding({ top: 6, bottom: 6 })
         .onClick(() => { this.davUp(); })
@@ -2284,9 +2285,9 @@ struct Index {
     this.drawerQuote = this.quotePool[idx];
   }
 
-  /** Drawer "night mode" toggle: switch light <-> dark theme. */
+  /** Drawer "night mode" toggle: switch light <-> dark theme (from any theme, incl. OLED/ink). */
   toggleNightMode(): void {
-    this.settings.theme = this.settings.theme === 0 ? 1 : 0;
+    this.settings.theme = this.isDark() ? 0 : 1;
     this.saveNow();
     console.info(`[Index] Night mode -> theme ${this.settings.theme}`);
   }
@@ -2305,14 +2306,14 @@ struct Index {
     }
   }
 
-  /** Theme-aware drawer background. */
+  /** Theme-aware drawer background (ink theme stays light like Android). */
   drawerBg(): string {
-    return this.settings.theme > 0 ? '#1e1e1e' : '#ffffff';
+    return this.isDark() ? '#1e1e1e' : '#ffffff';
   }
 
   /** Theme-aware drawer foreground text. */
   drawerFg(): string {
-    return this.settings.theme > 0 ? '#ddd' : '#333';
+    return this.isDark() ? '#dddddd' : '#333';
   }
 
   // ---- Phase 3: reading stats ----
@@ -2426,7 +2427,7 @@ struct Index {
             .backgroundColor(this.thm())
             .borderRadius(2)
           Text(this.chartLabels[idx].length > 5 ? this.chartLabels[idx].substring(5) : this.chartLabels[idx])
-            .fontSize(7).fontColor('#999')
+            .fontSize(7).fontColor(this.txtFaint())
         }
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Center)
@@ -2443,7 +2444,7 @@ struct Index {
   sectionHeader(title: string, moreAction: number) {
     Row() {
       Text(title)
-        .fontSize(17).fontWeight(FontWeight.Medium).fontColor('#333')
+        .fontSize(17).fontWeight(FontWeight.Medium).fontColor(this.txtPri())
       Blank()
       if (moreAction >= 0) {
         Text($r('app.string.common_more'))
@@ -2474,7 +2475,7 @@ struct Index {
         .width(92).height(126)
         .borderRadius(3)
         .objectFit(ImageFit.Cover)
-        .backgroundColor('#ddd')
+        .backgroundColor(this.divColor())
         .onClick(() => {
           this.openBook(book);
         })
@@ -2503,12 +2504,12 @@ struct Index {
       Text(this.statValue(kind))
         .fontSize(24).fontWeight(FontWeight.Bold).fontColor(this.thm()).maxLines(1)
       Text(this.statLabel(kind))
-        .fontSize(13).fontColor('#666').maxLines(1)
+        .fontSize(13).fontColor(this.txtMid()).maxLines(1)
     }
     .layoutWeight(1)
     .height(96)
     .justifyContent(FlexAlign.Center)
-    .backgroundColor(Color.White)
+    .backgroundColor(this.cardBg())
     .borderRadius(4)
     .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
   }
@@ -2557,7 +2558,7 @@ struct Index {
       .backgroundColor(color)
       .borderRadius(32)
       Text(label)
-        .fontSize(13).fontColor('#666').maxLines(1)
+        .fontSize(13).fontColor(this.txtMid()).maxLines(1)
     }
     .onClick(() => {
       this.switchTab(target);
@@ -2621,7 +2622,7 @@ struct Index {
         this.sectionHeader(this.L($r('app.string.sec_bookmarks')), 9)
         if (this.bookmarkCards().length === 0) {
           Text($r('app.string.dash_no_bookmarks'))
-            .fontSize(12).fontColor('#999')
+            .fontSize(12).fontColor(this.txtFaint())
             .width('94%').padding({ left: 12, top: 2, bottom: 6 })
         } else {
           Scroll() {
@@ -2629,7 +2630,7 @@ struct Index {
               ForEach(this.bookmarkCards(), (card: BookmarkCard) => {
                 Row({ space: 10 }) {
                   if (card.cover.length > 0) {
-                    Image(card.cover).width(48).height(64).borderRadius(2).objectFit(ImageFit.Cover).backgroundColor('#eee')
+                    Image(card.cover).width(48).height(64).borderRadius(2).objectFit(ImageFit.Cover).backgroundColor(this.divColor())
                   } else {
                     Column() {
                       Text(card.title.length > 4 ? card.title.substring(0, 4) : card.title)
@@ -2639,16 +2640,16 @@ struct Index {
                   }
                   Column({ space: 4 }) {
                     Text(card.title.length > 16 ? card.title.substring(0, 16) + '\u2026' : card.title)
-                      .fontSize(14).fontWeight(FontWeight.Medium).fontColor('#333').maxLines(1)
-                    Text($r('app.string.quick_bookmark')).fontSize(12).fontColor('#888')
-                    Text(card.percent).fontSize(12).fontColor('#999')
+                      .fontSize(14).fontWeight(FontWeight.Medium).fontColor(this.txtPri()).maxLines(1)
+                    Text($r('app.string.quick_bookmark')).fontSize(12).fontColor(this.txtHint())
+                    Text(card.percent).fontSize(12).fontColor(this.txtFaint())
                   }
                   .alignItems(HorizontalAlign.Start)
                   .layoutWeight(1)
                 }
                 .width(250)
                 .padding(10)
-                .backgroundColor(Color.White)
+                .backgroundColor(this.cardBg())
                 .borderRadius(4)
                 .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
                 .onClick(() => {
@@ -2717,7 +2718,7 @@ struct Index {
               .backgroundColor(this.thm())
               .borderRadius(32)
               Text(s.name.length > 8 ? s.name.substring(0, 8) + '\u2026' : s.name)
-                .fontSize(12).fontColor('#666').maxLines(1)
+                .fontSize(12).fontColor(this.txtMid()).maxLines(1)
             }
             .onClick(() => {
               this.activeOverlay = 2;
@@ -2731,7 +2732,7 @@ struct Index {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#f0f2f5')
+    .backgroundColor(this.inputBg())
     .scrollBar(BarState.Off)
   }
 
@@ -2751,7 +2752,7 @@ struct Index {
             Column({ space: 4 }) {
               Text(label)
                 .fontSize(15)
-                .fontColor(this.chartRange === idx ? this.thm() : '#666')
+                .fontColor(this.chartRange === idx ? this.thm() : this.txtMid())
               Divider()
                 .width(label.length * 15 + 8)
                 .strokeWidth(2)
@@ -2778,7 +2779,7 @@ struct Index {
       }
       .width('86%')
       .padding(16)
-      .backgroundColor(Color.White)
+      .backgroundColor(this.cardBg())
       .borderRadius(8)
     }
     .width('100%').height('100%')
@@ -2790,17 +2791,17 @@ struct Index {
     Column({ space: 4 }) {
       if (book.coverPath.length > 0) {
         Image(book.coverPath)
-          .width(72).height(96).borderRadius(4).objectFit(ImageFit.Cover).backgroundColor('#eee')
+          .width(72).height(96).borderRadius(4).objectFit(ImageFit.Cover).backgroundColor(this.divColor())
       } else {
         Column() {
           Text('\u{1F4C4}').fontSize(30)
         }
         .width(72).height(96)
         .justifyContent(FlexAlign.Center)
-        .backgroundColor('#f0f0f0').borderRadius(4)
+        .backgroundColor(this.inputBg()).borderRadius(4)
       }
       Text(book.title.length > 8 ? book.title.substring(0, 8) + '\u2026' : book.title)
-        .fontSize(10).fontColor('#555').maxLines(1)
+        .fontSize(10).fontColor(this.txtSec()).maxLines(1)
     }
     .onClick(() => {
       this.openBook(book);
@@ -2816,7 +2817,7 @@ struct Index {
         Row({ space: 8 }) {
           Row({ space: 6 }) {
             Image($r('app.media.ic_search'))
-              .width(18).height(18).fillColor('#999')
+              .width(18).height(18).fillColor(this.txtFaint())
             TextInput({ placeholder: $r('app.string.common_search'), text: this.libQuery })
               .fontSize(14).height(38).layoutWeight(1)
               .backgroundColor(Color.Transparent)
@@ -2835,7 +2836,7 @@ struct Index {
             }
           }
           .layoutWeight(1).height(38)
-          .backgroundColor(Color.White)
+          .backgroundColor(this.cardBg())
           .borderRadius(3)
           .padding({ left: 8, right: 8 })
 
@@ -2903,7 +2904,7 @@ struct Index {
               .height(28)
               .padding({ left: 14, right: 14 })
               .borderRadius(3)
-              .backgroundColor(this.libStatusFilter === idx - 1 ? this.thm() : Color.White)
+              .backgroundColor(this.libStatusFilter === idx - 1 ? this.thm() : this.chipBg())
               .border({ width: 1, color: this.libStatusFilter === idx - 1 ? this.thm() : '#9FA8DA' })
               .onClick(() => {
                 this.libStatusFilter = this.libStatusFilter === idx - 1 ? -1 : idx - 1;
@@ -2915,7 +2916,7 @@ struct Index {
             .height(28)
             .padding({ left: 14, right: 14 })
             .borderRadius(3)
-            .backgroundColor(this.libStarFilter ? this.thm() : Color.White)
+            .backgroundColor(this.libStarFilter ? this.thm() : this.chipBg())
             .border({ width: 1, color: this.libStarFilter ? this.thm() : '#9FA8DA' })
             .onClick(() => {
               this.libStarFilter = !this.libStarFilter;
@@ -2927,7 +2928,7 @@ struct Index {
             .height(28)
             .padding({ left: 14, right: 14 })
             .borderRadius(3)
-            .backgroundColor(Color.White)
+            .backgroundColor(this.cardBg())
             .border({ width: 1, color: '#9FA8DA' })
             .onClick(() => {
               this.openPlManage();
@@ -2953,14 +2954,14 @@ struct Index {
         Column({ space: 4 }) {
           Row({ space: 8 }) {
             Text(this.libSearchBusy ? `\u5168\u6587\u641C\u7D22\u4E2D ${this.libSearchProgress}` : `\u5168\u6587\u641C\u7D22\u7ED3\u679C\uFF1A${this.libSearchHits.length} \u5904`)
-              .fontSize(12).fontColor('#555').layoutWeight(1)
+              .fontSize(12).fontColor(this.txtSec()).layoutWeight(1)
             if (this.libSearchBusy) {
               Text($r('app.string.common_cancel')).fontSize(12).fontColor(this.thm())
                 .onClick(() => {
                   this.cancelLibSearch();
                 })
             } else {
-              Text($r('app.string.common_close')).fontSize(12).fontColor('#999')
+              Text($r('app.string.common_close')).fontSize(12).fontColor(this.txtFaint())
                 .onClick(() => {
                   this.libSearchHits = [];
                 })
@@ -2972,8 +2973,8 @@ struct Index {
             ForEach(this.libSearchHits, (hit: LibSearchHit) => {
               ListItem() {
                 Column({ space: 2 }) {
-                  Text(`${hit.title} \u00B7 \u7B2C ${hit.page + 1} \u9875`).fontSize(12).fontColor('#333')
-                  Text(hit.excerpt).fontSize(11).fontColor('#888').maxLines(2)
+                  Text(`${hit.title} \u00B7 \u7B2C ${hit.page + 1} \u9875`).fontSize(12).fontColor(this.txtPri())
+                  Text(hit.excerpt).fontSize(11).fontColor(this.txtHint()).maxLines(2)
                 }
                 .alignItems(HorizontalAlign.Start)
                 .width('100%').padding({ top: 6, bottom: 6, left: 8, right: 8 })
@@ -2984,10 +2985,10 @@ struct Index {
             }, (hit: LibSearchHit) => hit.path + '_' + hit.page)
           }
           .height(180)
-          .divider({ strokeWidth: 1, color: '#f0f0f0', startMargin: 8, endMargin: 8 })
+          .divider({ strokeWidth: 1, color: this.inputBg(), startMargin: 8, endMargin: 8 })
         }
         .width('94%').margin({ top: 6 }).padding(8)
-        .backgroundColor(Color.White).borderRadius(6)
+        .backgroundColor(this.cardBg()).borderRadius(6)
       }
 
       /* batch selection bar */
@@ -2998,15 +2999,15 @@ struct Index {
             .onClick(() => {
               this.selectAll();
             })
-          Button($r('app.string.chip_finished')).fontSize(11).height(26).backgroundColor('#e0e0e0').fontColor('#333')
+          Button($r('app.string.chip_finished')).fontSize(11).height(26).backgroundColor(this.chipBg()).fontColor(this.txtPri())
             .onClick(() => {
               this.batchMarkStatus(2);
             })
-          Button($r('app.string.chip_unread')).fontSize(11).height(26).backgroundColor('#e0e0e0').fontColor('#333')
+          Button($r('app.string.chip_unread')).fontSize(11).height(26).backgroundColor(this.chipBg()).fontColor(this.txtPri())
             .onClick(() => {
               this.batchMarkStatus(0);
             })
-          Button($r('app.string.chip_reading')).fontSize(11).height(26).backgroundColor('#e0e0e0').fontColor('#333')
+          Button($r('app.string.chip_reading')).fontSize(11).height(26).backgroundColor(this.chipBg()).fontColor(this.txtPri())
             .onClick(() => {
               this.batchMarkStatus(1);
             })
@@ -3017,14 +3018,14 @@ struct Index {
       /* content by view mode */
       if (this.getLibraryBooks().length === 0) {
         Text($r('app.string.lib_empty_import'))
-          .fontSize(13).fontColor('#999').margin({ top: 60 })
+          .fontSize(13).fontColor(this.txtFaint()).margin({ top: 60 })
       } else if (this.libViewMode <= 1) {
         /* list / compact */
         Scroll() {
           Column({ space: 0 }) {
             ForEach(this.getLibraryBooks(), (book: RecentBook) => {
               this.LibRow(book, this.libViewMode === 1)
-              Divider().color('#f0f0f0')
+              Divider().color(this.inputBg())
             }, (item: RecentBook) => `${item.path}_${item.page}_${item.status}_${item.star}`)
           }
           .width('100%').padding({ left: 8, right: 8, top: 4 })
@@ -3138,7 +3139,7 @@ struct Index {
   }
 
   statusColor(s: number): string {
-    return s === 0 ? '#999' : s === 1 ? '#2a7' : '#3949AB';
+    return s === 0 ? this.txtFaint() : s === 1 ? '#2a7' : '#3949AB';
   }
 
   toggleSelect(path: string): void {
@@ -3185,19 +3186,19 @@ struct Index {
       if (book.coverPath.length > 0) {
         Image(book.coverPath)
           .width(compact ? 40 : 52).height(compact ? 54 : 70)
-          .objectFit(ImageFit.Cover).borderRadius(4).backgroundColor('#eee')
+          .objectFit(ImageFit.Cover).borderRadius(4).backgroundColor(this.divColor())
       } else {
         Column() {
           Text('\u{1F4C4}').fontSize(compact ? 20 : 26)
         }
         .width(compact ? 40 : 52).height(compact ? 54 : 70)
-        .justifyContent(FlexAlign.Center).backgroundColor('#f0f0f0').borderRadius(4)
+        .justifyContent(FlexAlign.Center).backgroundColor(this.inputBg()).borderRadius(4)
       }
       Column({ space: 2 }) {
         Text(book.title.length > 24 ? book.title.substring(0, 24) + '\u2026' : book.title)
-          .fontSize(compact ? 12 : 13).fontColor('#333').maxLines(1)
+          .fontSize(compact ? 12 : 13).fontColor(this.txtPri()).maxLines(1)
         if (!compact && book.author.length > 0) {
-          Text(book.author).fontSize(11).fontColor('#888').maxLines(1)
+          Text(book.author).fontSize(11).fontColor(this.txtHint()).maxLines(1)
         }
         Row({ space: 8 }) {
           Text(this.statusLabel(book.status)).fontSize(10).fontColor(this.statusColor(book.status))
@@ -3206,7 +3207,7 @@ struct Index {
         }
         if (book.totalPages > 0) {
           Progress({ value: Math.min(book.page + 1, book.totalPages), total: book.totalPages, type: ProgressType.Linear })
-            .width('100%').height(3).color(this.thm()).backgroundColor('#e0e0e0')
+            .width('100%').height(3).color(this.thm()).backgroundColor(this.chipBg())
         }
       }
       .layoutWeight(1)
@@ -3215,7 +3216,7 @@ struct Index {
 
       if (!this.selMode) {
         Text(book.star ? '\u2605' : '\u2606')
-          .fontSize(22).fontColor(book.star ? '#f5a623' : '#bbb')
+          .fontSize(22).fontColor(book.star ? '#f5a623' : this.txtFaint())
           .onClick(() => {
             this.onToggleStar(book);
           })
@@ -3255,7 +3256,7 @@ struct Index {
             .width(this.settings.coverGridSize > 0 ? this.settings.coverGridSize : '100%')
             .aspectRatio(0.72)
             .objectFit(this.settings.cropCovers ? ImageFit.Cover : ImageFit.Contain)
-            .backgroundColor('#eee')
+            .backgroundColor(this.divColor())
             .border({ width: this.settings.coverBorderShadow ? 1 : 0, color: '#00000022' })
             .shadow(this.settings.coverEffect || this.settings.coverBorderShadow
               ? { radius: 6, color: '#66000000', offsetX: 0, offsetY: 3 }
@@ -3322,7 +3323,7 @@ struct Index {
       }))
       if (this.libViewMode === 2) {
         Text(book.title.length > 10 ? book.title.substring(0, 10) + '\u2026' : book.title)
-          .fontSize(11).fontColor('#333').maxLines(1)
+          .fontSize(11).fontColor(this.txtPri()).maxLines(1)
       }
     }
   }
@@ -3391,10 +3392,10 @@ struct Index {
       Column({ space: 10 }) {
         Row() {
           Text($r('app.string.ai_config_title'))
-            .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
+            .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
             .layoutWeight(1)
           Image($r('app.media.ic_close'))
-            .width(20).height(20).fillColor('#888')
+            .width(20).height(20).fillColor(this.txtHint())
             .onClick(() => {
               this.showAiDialog = false;
             })
@@ -3402,14 +3403,14 @@ struct Index {
         .width('100%')
 
         Row({ space: 8 }) {
-          Text($r('app.string.ai_protocol')).fontSize(14).fontColor('#333').width(70)
+          Text($r('app.string.ai_protocol')).fontSize(14).fontColor(this.txtPri()).width(70)
           Text($r('app.string.ai_openai_compat'))
             .fontSize(14).fontColor(this.thm())
         }
         .width('100%')
 
         Row({ space: 8 }) {
-          Text($r('app.string.ai_provider')).fontSize(14).fontColor('#333').width(70)
+          Text($r('app.string.ai_provider')).fontSize(14).fontColor(this.txtPri()).width(70)
           ForEach(AI_PROVIDERS, (p: string, idx: number) => {
             Text(p)
               .fontSize(12)
@@ -3426,11 +3427,11 @@ struct Index {
         .width('100%')
 
         Row({ space: 8 }) {
-          Text($r('app.string.ai_url')).fontSize(14).fontColor('#333').width(70)
+          Text($r('app.string.ai_url')).fontSize(14).fontColor(this.txtPri()).width(70)
           TextInput({ text: this.aiCfg.url, placeholder: 'https://...' })
             .fontSize(13).height(38).layoutWeight(1)
-            .backgroundColor(Color.White)
-            .border({ width: 1, color: '#cccccc' })
+            .backgroundColor(this.cardBg())
+            .border({ width: 1, color: this.divColor() })
             .borderRadius(4)
             .onChange((v: string) => {
               this.aiCfg.url = v;
@@ -3439,12 +3440,12 @@ struct Index {
         .width('100%')
 
         Row({ space: 8 }) {
-          Text($r('app.string.ai_key')).fontSize(14).fontColor('#333').width(70)
+          Text($r('app.string.ai_key')).fontSize(14).fontColor(this.txtPri()).width(70)
           TextInput({ text: this.aiCfg.key, placeholder: 'sk-...' })
             .type(InputType.Password)
             .fontSize(13).height(38).layoutWeight(1)
-            .backgroundColor(Color.White)
-            .border({ width: 1, color: '#cccccc' })
+            .backgroundColor(this.cardBg())
+            .border({ width: 1, color: this.divColor() })
             .borderRadius(4)
             .onChange((v: string) => {
               this.aiCfg.key = v;
@@ -3453,11 +3454,11 @@ struct Index {
         .width('100%')
 
         Row({ space: 8 }) {
-          Text($r('app.string.ai_model')).fontSize(14).fontColor('#333').width(70)
+          Text($r('app.string.ai_model')).fontSize(14).fontColor(this.txtPri()).width(70)
           TextInput({ text: this.aiCfg.model, placeholder: 'glm-4.5-air' })
             .fontSize(13).height(38).layoutWeight(1)
-            .backgroundColor(Color.White)
-            .border({ width: 1, color: '#cccccc' })
+            .backgroundColor(this.cardBg())
+            .border({ width: 1, color: this.divColor() })
             .borderRadius(4)
             .onChange((v: string) => {
               this.aiCfg.model = v;
@@ -3475,7 +3476,7 @@ struct Index {
             Column() {
               ForEach(this.aiModels, (m: string) => {
                 Text(m)
-                  .fontSize(13).fontColor('#333')
+                  .fontSize(13).fontColor(this.txtPri())
                   .width('100%')
                   .padding({ top: 6, bottom: 6 })
                   .onClick(() => {
@@ -3488,24 +3489,24 @@ struct Index {
           }
           .width('100%')
           .height(110)
-          .backgroundColor('#f5f5f5')
+          .backgroundColor(this.inputBg())
           .borderRadius(4)
         }
 
         Row({ space: 8 }) {
-          Text($r('app.string.ai_max_tokens')).fontSize(14).fontColor('#333').width(70)
+          Text($r('app.string.ai_max_tokens')).fontSize(14).fontColor(this.txtPri()).width(70)
           TextInput({ text: this.aiCfg.maxTokens + '' })
             .type(InputType.Number)
             .fontSize(13).height(38).width(120)
-            .backgroundColor(Color.White)
-            .border({ width: 1, color: '#cccccc' })
+            .backgroundColor(this.cardBg())
+            .border({ width: 1, color: this.divColor() })
             .borderRadius(4)
             .onChange((v: string) => {
               this.aiCfg.maxTokens = parseInt(v.length > 0 ? v : '0');
             })
           Blank()
           Row({ space: 6 }) {
-            Text($r('app.string.ai_thinking')).fontSize(13).fontColor('#333')
+            Text($r('app.string.ai_thinking')).fontSize(13).fontColor(this.txtPri())
             Checkbox({ name: 'thinking' })
               .select(this.aiCfg.thinking)
               .selectedColor(this.thm())
@@ -3526,8 +3527,8 @@ struct Index {
 
         TextInput({ text: this.aiTestIn, placeholder: $r('app.string.ai_test_hint') })
           .fontSize(13).height(38).width('100%')
-          .backgroundColor(Color.White)
-          .border({ width: 1, color: '#cccccc' })
+          .backgroundColor(this.cardBg())
+          .border({ width: 1, color: this.divColor() })
           .borderRadius(4)
           .onChange((v: string) => {
             this.aiTestIn = v;
@@ -3535,11 +3536,11 @@ struct Index {
 
         if (this.aiTestOut.length > 0 || this.aiBusy) {
           Text(this.aiBusy ? $r('app.string.ai_requesting') : this.aiTestOut)
-            .fontSize(12).fontColor(this.aiTestOut.startsWith(this.L($r('app.string.common_test_failed'))) || this.aiTestOut.startsWith(this.L($r('app.string.ai_models_failed'))) ? '#d32f2f' : '#333')
+            .fontSize(12).fontColor(this.aiTestOut.startsWith(this.L($r('app.string.common_test_failed'))) || this.aiTestOut.startsWith(this.L($r('app.string.ai_models_failed'))) ? '#d32f2f' : this.txtPri())
             .width('100%')
             .maxLines(6)
             .padding(8)
-            .backgroundColor('#f5f5f5')
+            .backgroundColor(this.inputBg())
             .borderRadius(4)
         }
 
@@ -3547,7 +3548,7 @@ struct Index {
           Blank()
           Button($r('app.string.common_close'))
             .fontSize(14).height(36)
-            .backgroundColor('#e0e0e0').fontColor('#333')
+            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
             .onClick(() => {
               this.showAiDialog = false;
             })
@@ -3562,7 +3563,7 @@ struct Index {
       }
       .width('86%')
       .padding(14)
-      .backgroundColor(Color.White)
+      .backgroundColor(this.cardBg())
       .borderRadius(8)
     }
     .width('100%').height('100%')
@@ -3648,10 +3649,10 @@ struct Index {
           Image($r('app.media.ic_sparkle'))
             .width(20).height(20).fillColor(this.thm())
           Text($r('app.string.ai_intro_book'))
-            .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
+            .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
             .layoutWeight(1)
           Image($r('app.media.ic_close'))
-            .width(20).height(20).fillColor('#888')
+            .width(20).height(20).fillColor(this.txtHint())
             .onClick(() => {
               this.showAiIntro = false;
             })
@@ -3659,7 +3660,7 @@ struct Index {
         .width('100%')
 
         Text(this.aiIntroTitle)
-          .fontSize(14).fontColor('#666').maxLines(1)
+          .fontSize(14).fontColor(this.txtMid()).maxLines(1)
           .width('100%')
 
         Scroll() {
@@ -3667,11 +3668,11 @@ struct Index {
             if (this.aiIntroBusy) {
               Row({ space: 8 }) {
                 LoadingProgress().width(20).height(20).color(this.thm())
-                Text($r('app.string.ai_intro_generating')).fontSize(13).fontColor('#777')
+                Text($r('app.string.ai_intro_generating')).fontSize(13).fontColor(this.txtHint())
               }
             } else {
               Text(this.aiIntroText)
-                .fontSize(14).fontColor('#333')
+                .fontSize(14).fontColor(this.txtPri())
                 .width('100%')
             }
           }
@@ -3679,7 +3680,7 @@ struct Index {
         }
         .width('100%')
         .height(220)
-        .backgroundColor('#f5f5f5')
+        .backgroundColor(this.inputBg())
         .borderRadius(4)
         .padding(8)
 
@@ -3687,7 +3688,7 @@ struct Index {
           Blank()
           Button($r('app.string.common_close'))
             .fontSize(14).height(36)
-            .backgroundColor('#e0e0e0').fontColor('#333')
+            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
             .onClick(() => {
               this.showAiIntro = false;
             })
@@ -3703,7 +3704,7 @@ struct Index {
       }
       .width('82%')
       .padding(14)
-      .backgroundColor(Color.White)
+      .backgroundColor(this.cardBg())
       .borderRadius(8)
     }
     .width('100%').height('100%')
@@ -3796,10 +3797,10 @@ struct Index {
         Column({ space: 10 }) {
           Row() {
             Text($r('app.string.sync_title'))
-              .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
+              .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
               .layoutWeight(1)
             Image($r('app.media.ic_close'))
-              .width(20).height(20).fillColor('#888')
+              .width(20).height(20).fillColor(this.txtHint())
               .onClick(() => {
                 this.showSyncDialog = false;
               })
@@ -3814,22 +3815,22 @@ struct Index {
               .onChange((v: boolean) => {
                 this.syncCfg.enabled = v;
               })
-            Text($r('app.string.sync_enable')).fontSize(13).fontColor('#333')
+            Text($r('app.string.sync_enable')).fontSize(13).fontColor(this.txtPri())
           }
           .width('100%')
 
           TextInput({ text: this.syncCfg.url, placeholder: $r('app.string.sync_addr_hint') })
             .fontSize(13).height(38).width('100%')
-            .backgroundColor(Color.White)
-            .border({ width: 1, color: '#cccccc' })
+            .backgroundColor(this.cardBg())
+            .border({ width: 1, color: this.divColor() })
             .borderRadius(4)
             .onChange((v: string) => {
               this.syncCfg.url = v;
             })
           TextInput({ text: this.syncCfg.user, placeholder: $r('app.string.common_account') })
             .fontSize(13).height(38).width('100%')
-            .backgroundColor(Color.White)
-            .border({ width: 1, color: '#cccccc' })
+            .backgroundColor(this.cardBg())
+            .border({ width: 1, color: this.divColor() })
             .borderRadius(4)
             .onChange((v: string) => {
               this.syncCfg.user = v;
@@ -3837,8 +3838,8 @@ struct Index {
           TextInput({ text: this.syncCfg.password, placeholder: $r('app.string.common_password') })
             .type(InputType.Password)
             .fontSize(13).height(38).width('100%')
-            .backgroundColor(Color.White)
-            .border({ width: 1, color: '#cccccc' })
+            .backgroundColor(this.cardBg())
+            .border({ width: 1, color: this.divColor() })
             .borderRadius(4)
             .onChange((v: string) => {
               this.syncCfg.password = v;
@@ -3852,16 +3853,16 @@ struct Index {
               .onChange((v: boolean) => {
                 this.syncCfg.trusted = v;
               })
-            Text($r('app.string.sync_trust_selfsigned')).fontSize(13).fontColor('#333')
+            Text($r('app.string.sync_trust_selfsigned')).fontSize(13).fontColor(this.txtPri())
           }
           .width('100%')
 
           Row({ space: 8 }) {
-            Text($r('app.string.sync_path')).fontSize(14).fontColor('#333').width(70)
+            Text($r('app.string.sync_path')).fontSize(14).fontColor(this.txtPri()).width(70)
             TextInput({ text: this.syncCfg.remotePath })
               .fontSize(13).height(38).layoutWeight(1)
-              .backgroundColor(Color.White)
-              .border({ width: 1, color: '#cccccc' })
+              .backgroundColor(this.cardBg())
+              .border({ width: 1, color: this.divColor() })
               .borderRadius(4)
               .onChange((v: string) => {
                 this.syncCfg.remotePath = v;
@@ -3870,7 +3871,7 @@ struct Index {
           .width('100%')
 
           Row({ space: 8 }) {
-            Text($r('app.string.sync_conflict')).fontSize(14).fontColor('#333').width(70)
+            Text($r('app.string.sync_conflict')).fontSize(14).fontColor(this.txtPri()).width(70)
             Select(SYNC_CONFLICTS.map((v: string) => {
               const o: SelectOption = { value: v };
               return o;
@@ -3893,17 +3894,17 @@ struct Index {
               .onChange((v: boolean) => {
                 this.syncCfg.autoSync = v;
               })
-            Text($r('app.string.sync_auto')).fontSize(13).fontColor('#333')
+            Text($r('app.string.sync_auto')).fontSize(13).fontColor(this.txtPri())
           }
           .width('100%')
 
           if (this.syncCfg.autoSync) {
             Row({ space: 8 }) {
-              Text($r('app.string.sync_interval')).fontSize(14).fontColor('#333').width(70)
+              Text($r('app.string.sync_interval')).fontSize(14).fontColor(this.txtPri()).width(70)
               TextInput({ text: '' + this.syncCfg.autoSyncMin })
                 .fontSize(13).height(38).layoutWeight(1)
-                .backgroundColor(Color.White)
-                .border({ width: 1, color: '#cccccc' })
+                .backgroundColor(this.cardBg())
+                .border({ width: 1, color: this.divColor() })
                 .borderRadius(4)
                 .type(InputType.Number)
                 .onChange((v: string) => {
@@ -3935,20 +3936,20 @@ struct Index {
 
           if (this.syncTestOut.length > 0) {
             Text(this.syncTestOut)
-              .fontSize(12).fontColor('#333')
+              .fontSize(12).fontColor(this.txtPri())
               .width('100%')
               .maxLines(4)
               .padding(8)
-              .backgroundColor('#f5f5f5')
+              .backgroundColor(this.inputBg())
               .borderRadius(4)
           }
 
           if (this.syncCfg.lastSyncTime.length > 0) {
             Text(`\u4E0A\u6B21\u540C\u6B65\uFF1A${this.fmtLogTime(this.syncCfg.lastSyncTime)} \u00B7 \u2191${this.syncCfg.lastUp}\u672C \u00B7 \u5173\u8054${this.syncCfg.lastLinked} \u00B7 ${this.syncCfg.lastMs}ms`)
-              .fontSize(12).fontColor('#666')
+              .fontSize(12).fontColor(this.txtMid())
               .width('100%')
             Text($r('app.string.sync_independent'))
-              .fontSize(11).fontColor('#999')
+              .fontSize(11).fontColor(this.txtFaint())
               .width('100%')
           }
 
@@ -3956,7 +3957,7 @@ struct Index {
             Blank()
             Button($r('app.string.common_close'))
               .fontSize(14).height(36)
-              .backgroundColor('#e0e0e0').fontColor('#333')
+              .backgroundColor(this.chipBg()).fontColor(this.txtPri())
               .onClick(() => {
                 this.showSyncDialog = false;
               })
@@ -3971,7 +3972,7 @@ struct Index {
         }
         .width('86%')
         .padding(14)
-        .backgroundColor(Color.White)
+        .backgroundColor(this.cardBg())
         .borderRadius(8)
       }
       .width('100%').height('100%')
@@ -3992,10 +3993,10 @@ struct Index {
       Column({ space: 10 }) {
         Row() {
           Text($r('app.string.sync_log'))
-            .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
+            .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
             .layoutWeight(1)
           Image($r('app.media.ic_close'))
-            .width(20).height(20).fillColor('#888')
+            .width(20).height(20).fillColor(this.txtHint())
             .onClick(() => {
               this.showSyncLog = false;
             })
@@ -4004,7 +4005,7 @@ struct Index {
 
         if (this.syncLogs.length === 0) {
           Text($r('app.string.sync_log_empty'))
-            .fontSize(13).fontColor('#999')
+            .fontSize(13).fontColor(this.txtFaint())
             .width('100%')
             .textAlign(TextAlign.Center)
             .padding({ top: 30, bottom: 30 })
@@ -4017,14 +4018,14 @@ struct Index {
                     .fontSize(12).fontColor(this.thm())
                   ForEach(e.details, (d: string, di: number) => {
                     Text(d)
-                      .fontSize(11).fontColor('#555')
+                      .fontSize(11).fontColor(this.txtSec())
                       .width('100%')
                   }, (d: string, di: number) => `${e.time}_${di}`)
                 }
                 .alignItems(HorizontalAlign.Start)
                 .width('100%')
                 .padding(8)
-                .backgroundColor('#f7f7f7')
+                .backgroundColor(this.inputBg())
                 .borderRadius(4)
               }
             }, (e: SyncLogEntry) => e.time)
@@ -4043,7 +4044,7 @@ struct Index {
       .width('86%')
       .height('70%')
       .padding(14)
-      .backgroundColor(Color.White)
+      .backgroundColor(this.cardBg())
       .borderRadius(8)
     }
     .width('100%').height('100%')
@@ -4071,20 +4072,20 @@ struct Index {
         })
       Column() {
         this.libMenuAiItem()
-        Divider().color('#eeeeee')
+        Divider().color(this.divColor())
         this.libMenuPlItem()
-        Divider().color('#eeeeee')
+        Divider().color(this.divColor())
         this.libMenuItem($r('app.media.ic_check'), this.L($r('app.string.menu_mark_finished')), 2)
         this.libMenuItem($r('app.media.ic_circle_half'), this.L($r('app.string.menu_mark_reading')), 1)
         this.libMenuItem($r('app.media.ic_circle_empty'), this.L($r('app.string.menu_mark_unread')), 0)
-        Divider().color('#eeeeee')
+        Divider().color(this.divColor())
         this.libMenuStarItem()
-        Divider().color('#eeeeee')
+        Divider().color(this.divColor())
         this.libMenuDeleteItem()
       }
       .width('78%')
       .padding({ top: 8, bottom: 8 })
-      .backgroundColor(Color.White)
+      .backgroundColor(this.cardBg())
       .borderRadius(6)
     }
     .width('100%').height('100%')
@@ -4094,7 +4095,7 @@ struct Index {
   libMenuAiItem() {
     Row({ space: 14 }) {
       Image($r('app.media.ic_sparkle')).width(20).height(20).fillColor(this.thm())
-      Text($r('app.string.ai_intro_book')).fontSize(15).fontColor('#333')
+      Text($r('app.string.ai_intro_book')).fontSize(15).fontColor(this.txtPri())
     }
     .width('100%')
     .padding({ left: 18, right: 18, top: 13, bottom: 13 })
@@ -4107,7 +4108,7 @@ struct Index {
   libMenuPlItem() {
     Row({ space: 14 }) {
       Image($r('app.media.ic_list')).width(20).height(20).fillColor(this.thm())
-      Text($r('app.string.pl_add')).fontSize(15).fontColor('#333')
+      Text($r('app.string.pl_add')).fontSize(15).fontColor(this.txtPri())
     }
     .width('100%')
     .padding({ left: 18, right: 18, top: 13, bottom: 13 })
@@ -4123,7 +4124,7 @@ struct Index {
   libMenuItem(icon: Resource, label: string, status: number) {
     Row({ space: 14 }) {
       Image(icon).width(20).height(20).fillColor(this.thm())
-      Text(label).fontSize(15).fontColor('#333')
+      Text(label).fontSize(15).fontColor(this.txtPri())
     }
     .width('100%')
     .padding({ left: 18, right: 18, top: 13, bottom: 13 })
@@ -4142,7 +4143,7 @@ struct Index {
       Image(this.libMenuBook()?.star ? $r('app.media.ic_star_border') : $r('app.media.ic_star'))
         .width(20).height(20).fillColor(this.thm())
       Text(this.libMenuBook()?.star ? $r('app.string.menu_unstar') : $r('app.string.menu_star'))
-        .fontSize(15).fontColor('#333')
+        .fontSize(15).fontColor(this.txtPri())
     }
     .width('100%')
     .padding({ left: 18, right: 18, top: 13, bottom: 13 })
@@ -4253,7 +4254,7 @@ struct Index {
           .fontSize(16).fontWeight(FontWeight.Bold)
         if (this.plList.length === 0) {
           Text($r('app.string.pl_empty'))
-            .fontSize(12).fontColor('#999')
+            .fontSize(12).fontColor(this.txtFaint())
         }
         Scroll() {
           Column() {
@@ -4261,7 +4262,7 @@ struct Index {
               Row() {
                 Text('\u25B6').fontSize(14).fontColor(this.thm())
                 Text(p.name)
-                  .fontSize(14).fontColor('#333').layoutWeight(1)
+                  .fontSize(14).fontColor(this.txtPri()).layoutWeight(1)
                   .margin({ left: 10 }).maxLines(1)
               }
               .width('100%')
@@ -4303,14 +4304,14 @@ struct Index {
 
         Button($r('app.string.common_cancel'))
           .fontSize(13).height(34).width('60%')
-          .backgroundColor('#e0e0e0').fontColor('#333')
+          .backgroundColor(this.chipBg()).fontColor(this.txtPri())
           .onClick(() => {
             this.showPlPick = false;
           })
       }
       .width('80%')
       .padding(14)
-      .backgroundColor(Color.White)
+      .backgroundColor(this.cardBg())
       .borderRadius(10)
     }
     .width('100%').height('100%')
@@ -4331,7 +4332,7 @@ struct Index {
           .fontSize(16).fontWeight(FontWeight.Bold)
         if (this.plList.length === 0) {
           Text($r('app.string.pl_empty'))
-            .fontSize(12).fontColor('#999')
+            .fontSize(12).fontColor(this.txtFaint())
         }
         Scroll() {
           Column() {
@@ -4339,9 +4340,9 @@ struct Index {
               Row() {
                 Text('\u25B6').fontSize(14).fontColor(this.thm())
                 Text(p.name)
-                  .fontSize(14).fontColor('#333').layoutWeight(1)
+                  .fontSize(14).fontColor(this.txtPri()).layoutWeight(1)
                   .margin({ left: 10 }).maxLines(1)
-                Text('\u203A').fontSize(16).fontColor('#bbb')
+                Text('\u203A').fontSize(16).fontColor(this.txtFaint())
               }
               .width('100%')
               .padding({ top: 10, bottom: 10 })
@@ -4378,14 +4379,14 @@ struct Index {
 
         Button($r('app.string.common_close'))
           .fontSize(13).height(34).width('60%')
-          .backgroundColor('#e0e0e0').fontColor('#333')
+          .backgroundColor(this.chipBg()).fontColor(this.txtPri())
           .onClick(() => {
             this.showPlManage = false;
           })
       }
       .width('80%')
       .padding(14)
-      .backgroundColor(Color.White)
+      .backgroundColor(this.cardBg())
       .borderRadius(10)
     }
     .width('100%').height('100%')
@@ -4407,14 +4408,14 @@ struct Index {
           .maxLines(1)
         if (this.plItems.length === 0) {
           Text($r('app.string.pl_no_items'))
-            .fontSize(12).fontColor('#999')
+            .fontSize(12).fontColor(this.txtFaint())
         }
         Scroll() {
           Column() {
             ForEach(this.plItems, (path: string, idx: number) => {
               Row({ space: 6 }) {
                 Text((idx + 1) + '. ' + this.plBookTitle(path))
-                  .fontSize(13).fontColor('#333')
+                  .fontSize(13).fontColor(this.txtPri())
                   .layoutWeight(1)
                   .maxLines(1)
                   .onClick(() => {
@@ -4467,14 +4468,14 @@ struct Index {
 
         Button($r('app.string.common_close'))
           .fontSize(13).height(34).width('60%')
-          .backgroundColor('#e0e0e0').fontColor('#333')
+          .backgroundColor(this.chipBg()).fontColor(this.txtPri())
           .onClick(() => {
             this.showPlItems = false;
           })
       }
       .width('84%')
       .padding(14)
-      .backgroundColor(Color.White)
+      .backgroundColor(this.cardBg())
       .borderRadius(10)
     }
     .width('100%').height('100%')
@@ -4507,7 +4508,7 @@ struct Index {
       /* random reading quote, refreshed every drawer open */
       Text(this.drawerQuote)
         .fontSize(15)
-        .fontColor(this.settings.theme > 0 ? '#bbb' : '#555')
+        .fontColor(this.isDark() ? '#bbbbbb' : '#555')
         .lineHeight(22)
         .padding({ left: 12, right: 12, top: 8, bottom: 8 })
         .width('100%')
@@ -4515,7 +4516,7 @@ struct Index {
 
       Blank()
 
-      Divider().color(this.settings.theme > 0 ? '#333' : '#e0e0e0')
+      Divider().color(this.isDark() ? '#3a3a3a' : '#e0e0e0')
 
       /* bottom bar: 设置选项 / 软件说明 / 晚上模式 / 退出 (Round 7: prefs entry optional) */
       Row() {
@@ -4537,7 +4538,7 @@ struct Index {
   @Builder
   drawerNavItem(icon: Resource, label: string, target: number) {
     Row({ space: 10 }) {
-      Image(icon).width(20).height(20).fillColor(this.settings.theme > 0 ? '#ddd' : this.thm())
+      Image(icon).width(20).height(20).fillColor(this.isDark() ? '#dddddd' : this.thm())
       Text(label).fontSize(14).fontColor(this.drawerFg())
     }
     .width('100%').height(48)
@@ -4561,8 +4562,8 @@ struct Index {
   @Builder
   drawerBottomButton(icon: Resource, label: string, kind: number) {
     Column({ space: 2 }) {
-      Image(icon).width(18).height(18).fillColor(this.settings.theme > 0 ? '#ddd' : this.thm())
-      Text(label).fontSize(10).fontColor(this.settings.theme > 0 ? '#999' : '#666')
+      Image(icon).width(18).height(18).fillColor(this.isDark() ? '#dddddd' : this.thm())
+      Text(label).fontSize(10).fontColor(this.isDark() ? '#999999' : '#666')
     }
     .layoutWeight(1)
     .height(52)
@@ -4588,15 +4589,15 @@ struct Index {
     Column() {
       Row() {
         Text($r('app.string.sec_bookmarks'))
-          .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333').layoutWeight(1)
+          .fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.txtPri()).layoutWeight(1)
         Text('\u2716')
-          .fontSize(18).fontColor('#888').width(36).height(36).textAlign(TextAlign.Center)
+          .fontSize(18).fontColor(this.txtHint()).width(36).height(36).textAlign(TextAlign.Center)
           .onClick(() => {
             this.activeOverlay = 0;
           })
       }
       .width('100%').padding({ left: 12, right: 6, top: 8 })
-      Divider().color('#eee')
+      Divider().color(this.divColor())
       Row({ space: 8 }) {
         TextInput({ placeholder: $r('app.string.bm_search_placeholder') })
           .fontSize(13).height(34).layoutWeight(1)
@@ -4609,28 +4610,28 @@ struct Index {
         Column({ space: 6 }) {
           if (this.getFilteredBookmarks().length === 0) {
             Text(this.allBookmarks.length === 0 ? $r('app.string.bookmarks_empty_alt') : $r('app.string.bm_no_match'))
-              .fontSize(13).fontColor('#999').margin({ top: 40 })
+              .fontSize(13).fontColor(this.txtFaint()).margin({ top: 40 })
           } else {
             ForEach(this.getFilteredBookmarks(), (bm: Bookmark) => {
               Row() {
                 Column({ space: 2 }) {
                   Text(bm.label.length > 0 ? bm.label : `\u7B2C ${bm.page + 1} \u9875`)
-                    .fontSize(13).fontColor('#333').maxLines(1)
+                    .fontSize(13).fontColor(this.txtPri()).maxLines(1)
                   Text(bm.path.substring(bm.path.lastIndexOf('/') + 1))
-                    .fontSize(11).fontColor('#888').maxLines(1)
+                    .fontSize(11).fontColor(this.txtHint()).maxLines(1)
                 }
                 .layoutWeight(1)
                 .alignItems(HorizontalAlign.Start)
 
                 Text('\u2716')
-                  .fontSize(14).fontColor('#ccc').margin({ right: 8 })
+                  .fontSize(14).fontColor(this.txtFaint()).margin({ right: 8 })
                   .onClick(() => {
                     this.deleteBookmarkEntry(bm);
                   })
               }
               .width('100%')
               .padding({ left: 8, right: 8, top: 8, bottom: 8 })
-              .backgroundColor('#fafafa')
+              .backgroundColor(this.inputBg())
               .borderRadius(6)
               .onClick(() => {
                 this.openBookmarkBook(bm);
@@ -4645,7 +4646,7 @@ struct Index {
       .width('100%')
     }
     .width('92%').height('86%')
-    .backgroundColor('#ffffff')
+    .backgroundColor(this.cardBg())
     .borderRadius(12)
     .align(Alignment.Center)
   }
@@ -4656,29 +4657,29 @@ struct Index {
     Column() {
       Row() {
         Text($r('app.string.sec_online'))
-          .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333').layoutWeight(1)
+          .fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.txtPri()).layoutWeight(1)
         Text('\u2716')
-          .fontSize(18).fontColor('#888').width(36).height(36).textAlign(TextAlign.Center)
+          .fontSize(18).fontColor(this.txtHint()).width(36).height(36).textAlign(TextAlign.Center)
           .onClick(() => {
             this.activeOverlay = 0;
           })
       }
       .width('100%').padding({ left: 12, right: 6, top: 8 })
-      Divider().color('#eee')
+      Divider().color(this.divColor())
 
       /* section toggle: OPDS 目录 / WebDAV 云盘 */
       Row({ space: 8 }) {
         Button(this.netSection === 0 ? $r('app.string.opds_star_title') : $r('app.string.opds_title'))
           .fontSize(12).height(30).layoutWeight(1)
-          .backgroundColor(this.netSection === 0 ? this.thm() : '#e0e0e0')
-          .fontColor(this.netSection === 0 ? Color.White : '#333')
+          .backgroundColor(this.netSection === 0 ? this.thm() : this.chipBg())
+          .fontColor(this.netSection === 0 ? Color.White : this.txtPri())
           .onClick(() => {
             this.netSection = 0;
           })
         Button(this.netSection === 1 ? '\u2605 WebDAV' : 'WebDAV')
           .fontSize(12).height(30).layoutWeight(1)
-          .backgroundColor(this.netSection === 1 ? this.thm() : '#e0e0e0')
-          .fontColor(this.netSection === 1 ? Color.White : '#333')
+          .backgroundColor(this.netSection === 1 ? this.thm() : this.chipBg())
+          .fontColor(this.netSection === 1 ? Color.White : this.txtPri())
           .onClick(() => {
             this.netSection = 1;
           })
@@ -4692,7 +4693,7 @@ struct Index {
       }
     }
     .width('92%').height('86%')
-    .backgroundColor('#ffffff')
+    .backgroundColor(this.cardBg())
     .borderRadius(12)
     .align(Alignment.Center)
   }
@@ -4709,13 +4710,13 @@ struct Index {
               Row() {
                 Text('\u{1F4D6}').fontSize(18)
                 Column({ space: 2 }) {
-                  Text(s.name).fontSize(13).fontColor('#333').maxLines(1)
-                  Text(s.url).fontSize(9).fontColor('#999').maxLines(1)
+                  Text(s.name).fontSize(13).fontColor(this.txtPri()).maxLines(1)
+                  Text(s.url).fontSize(9).fontColor(this.txtFaint()).maxLines(1)
                 }
                 .layoutWeight(1).alignItems(HorizontalAlign.Start).margin({ left: 10 })
-                Text('\u203A').fontSize(16).fontColor('#bbb')
+                Text('\u203A').fontSize(16).fontColor(this.txtFaint())
               }
-              .width('94%').padding(10).backgroundColor('#f5f5f5').borderRadius(8)
+              .width('94%').padding(10).backgroundColor(this.inputBg()).borderRadius(8)
               .onClick(() => {
                 this.opdsOpen(s.url);
               })
@@ -4741,12 +4742,12 @@ struct Index {
         /* feed drill-down */
         Row({ space: 6 }) {
           Button($r('app.string.opds_back'))
-            .fontSize(12).height(30).backgroundColor('#e0e0e0').fontColor('#333')
+            .fontSize(12).height(30).backgroundColor(this.chipBg()).fontColor(this.txtPri())
             .onClick(() => {
               this.opdsBack();
             })
           Text(this.opdsStatus)
-            .fontSize(11).fontColor('#888').layoutWeight(1).maxLines(1)
+            .fontSize(11).fontColor(this.txtHint()).layoutWeight(1).maxLines(1)
         }
         .width('94%').margin({ top: 8 })
 
@@ -4757,10 +4758,10 @@ struct Index {
                 Text(e.isSub ? '\u{1F4C1}' : '\u{1F4C4}').fontSize(16)
                 Column({ space: 2 }) {
                   Text(e.title.length > 26 ? e.title.substring(0, 26) + '\u2026' : e.title)
-                    .fontSize(13).fontColor('#333').maxLines(1)
+                    .fontSize(13).fontColor(this.txtPri()).maxLines(1)
                   if (e.summary.length > 0) {
                     Text(e.summary.length > 40 ? e.summary.substring(0, 40) + '\u2026' : e.summary)
-                      .fontSize(9).fontColor('#999').maxLines(1)
+                      .fontSize(9).fontColor(this.txtFaint()).maxLines(1)
                   }
                 }
                 .layoutWeight(1).alignItems(HorizontalAlign.Start).margin({ left: 8 })
@@ -4771,7 +4772,7 @@ struct Index {
                     })
                 }
               }
-              .width('94%').padding(8).backgroundColor('#fafafa').borderRadius(6)
+              .width('94%').padding(8).backgroundColor(this.inputBg()).borderRadius(6)
               .onClick(() => {
                 this.opdsOpenEntry(e);
               })
@@ -4790,7 +4791,7 @@ struct Index {
   buildWebdavPanel() {
     Column() {
       Text($r('app.string.dav_cloud_title'))
-        .fontSize(13).fontWeight(FontWeight.Bold).fontColor('#333')
+        .fontSize(13).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
         .margin({ top: 10, bottom: 6 })
 
       TextInput({ placeholder: 'https://example.com/webdav/', text: this.webdavUrl })
@@ -4807,7 +4808,7 @@ struct Index {
         })
 
       Text(this.webdavStatus)
-        .fontSize(12).fontColor('#666')
+        .fontSize(12).fontColor(this.txtMid())
         .width('90%').margin({ top: 6 }).textAlign(TextAlign.Center)
 
       if (this.webdavProgress >= 0) {
@@ -4820,7 +4821,7 @@ struct Index {
       if (this.webdavPath.length > 0) {
         Row() {
           Text($r('app.string.dav_up')).fontSize(13).fontColor('#3949AB')
-          Text(this.webdavPath).fontSize(11).fontColor('#888').margin({ left: 10 }).layoutWeight(1).maxLines(1)
+          Text(this.webdavPath).fontSize(11).fontColor(this.txtHint()).margin({ left: 10 }).layoutWeight(1).maxLines(1)
         }
         .width('90%').padding({ top: 6, bottom: 6 })
         .onClick(() => {
@@ -4869,7 +4870,7 @@ struct Index {
   buildNewFolderOverlay() {
     Column() {
       Text($r('app.string.browse_new_folder'))
-        .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333')
+        .fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
         .margin({ top: 16, bottom: 12 })
       TextInput({ placeholder: $r('app.string.browse_folder_name'), text: this.newFolderName })
         .fontSize(13).height(38).width('86%')
@@ -4878,7 +4879,7 @@ struct Index {
         })
       Row({ space: 12 }) {
         Button($r('app.string.common_cancel'))
-          .fontSize(13).height(36).layoutWeight(1).backgroundColor('#e0e0e0').fontColor('#333')
+          .fontSize(13).height(36).layoutWeight(1).backgroundColor(this.chipBg()).fontColor(this.txtPri())
           .onClick(() => {
             this.showNewFolder = false;
             this.activeOverlay = 0;
@@ -4893,7 +4894,7 @@ struct Index {
       .width('86%').margin({ top: 14, bottom: 14 })
     }
     .width('80%')
-    .backgroundColor('#ffffff')
+    .backgroundColor(this.cardBg())
     .borderRadius(12)
     .align(Alignment.Center)
   }
@@ -4903,15 +4904,15 @@ struct Index {
   buildFileOpsOverlay() {
     Column() {
       Text(this.opsFile)
-        .fontSize(13).fontColor('#333').maxLines(1)
+        .fontSize(13).fontColor(this.txtPri()).maxLines(1)
         .margin({ top: 16, bottom: 6 })
         .padding({ left: 12, right: 12 })
       Text(this.isBookFile(this.opsFile) ? $r('app.string.browse_books') : $r('app.string.browse_files'))
-        .fontSize(10).fontColor('#999').margin({ bottom: 8 })
-      Divider().color('#eee')
+        .fontSize(10).fontColor(this.txtFaint()).margin({ bottom: 8 })
+      Divider().color(this.divColor())
       Row() {
-        Text($r('app.string.browse_open')).fontSize(14).fontColor('#333').layoutWeight(1).padding({ left: 12 })
-        Text('\u203A').fontSize(16).fontColor('#ccc').margin({ right: 12 })
+        Text($r('app.string.browse_open')).fontSize(14).fontColor(this.txtPri()).layoutWeight(1).padding({ left: 12 })
+        Text('\u203A').fontSize(16).fontColor(this.txtFaint()).margin({ right: 12 })
       }
       .width('100%').height(46)
       .onClick(() => {
@@ -4920,8 +4921,8 @@ struct Index {
         this.openBrowseEntry(this.opsFile);
       })
       Row() {
-        Text($r('app.string.browse_rename')).fontSize(14).fontColor('#333').layoutWeight(1).padding({ left: 12 })
-        Text('\u203A').fontSize(16).fontColor('#ccc').margin({ right: 12 })
+        Text($r('app.string.browse_rename')).fontSize(14).fontColor(this.txtPri()).layoutWeight(1).padding({ left: 12 })
+        Text('\u203A').fontSize(16).fontColor(this.txtFaint()).margin({ right: 12 })
       }
       .width('100%').height(46)
       .onClick(() => {
@@ -4930,24 +4931,24 @@ struct Index {
       })
       Row() {
         Text($r('app.string.browse_delete')).fontSize(14).fontColor('#d32f2f').layoutWeight(1).padding({ left: 12 })
-        Text('\u203A').fontSize(16).fontColor('#ccc').margin({ right: 12 })
+        Text('\u203A').fontSize(16).fontColor(this.txtFaint()).margin({ right: 12 })
       }
       .width('100%').height(46)
       .onClick(() => {
         this.deleteEntry();
         this.activeOverlay = 0;
       })
-      Divider().color('#eee')
+      Divider().color(this.divColor())
       Button($r('app.string.common_close'))
         .fontSize(13).height(40).width('90%').margin({ top: 8, bottom: 12 })
-        .backgroundColor('#e0e0e0').fontColor('#333')
+        .backgroundColor(this.chipBg()).fontColor(this.txtPri())
         .onClick(() => {
           this.showFileOps = false;
           this.activeOverlay = 0;
         })
     }
     .width('80%')
-    .backgroundColor('#ffffff')
+    .backgroundColor(this.cardBg())
     .borderRadius(12)
     .align(Alignment.Center)
   }
@@ -4957,7 +4958,7 @@ struct Index {
   buildRenameOverlay() {
     Column() {
       Text($r('app.string.common_rename'))
-        .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333')
+        .fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
         .margin({ top: 16, bottom: 12 })
       TextInput({ placeholder: $r('app.string.common_new_name'), text: this.renameInput })
         .fontSize(13).height(38).width('86%')
@@ -4966,7 +4967,7 @@ struct Index {
         })
       Row({ space: 12 }) {
         Button($r('app.string.common_cancel'))
-          .fontSize(13).height(36).layoutWeight(1).backgroundColor('#e0e0e0').fontColor('#333')
+          .fontSize(13).height(36).layoutWeight(1).backgroundColor(this.chipBg()).fontColor(this.txtPri())
           .onClick(() => {
             this.showRename = false;
             this.activeOverlay = 0;
@@ -4981,7 +4982,7 @@ struct Index {
       .width('86%').margin({ top: 14, bottom: 14 })
     }
     .width('80%')
-    .backgroundColor('#ffffff')
+    .backgroundColor(this.cardBg())
     .borderRadius(12)
     .align(Alignment.Center)
   }
@@ -4995,7 +4996,7 @@ struct Index {
         Text($r('app.string.about_brand'))
           .fontSize(18).fontWeight(FontWeight.Bold).fontColor(Color.White).margin({ top: 8 })
         Text($r('app.string.lock_title'))
-          .fontSize(12).fontColor('#ddd').margin({ top: 4 })
+          .fontSize(12).fontColor('#dddddd').margin({ top: 4 })
       }
       .margin({ top: 40 })
 
@@ -5048,22 +5049,22 @@ struct Index {
         Column({ space: 6 }) {
           if (this.getFilteredBookmarks().length === 0) {
             Text(this.allBookmarks.length === 0 ? $r('app.string.bm_empty_index') : $r('app.string.bm_no_match'))
-              .fontSize(13).fontColor('#999')
+              .fontSize(13).fontColor(this.txtFaint())
               .margin({ top: 40 })
           } else {
             ForEach(this.getFilteredBookmarks(), (bm: Bookmark) => {
               Row() {
                 Column({ space: 2 }) {
                   Text(bm.label.length > 0 ? bm.label : `第 ${bm.page + 1} 页`)
-                    .fontSize(13).fontColor('#333').maxLines(1)
+                    .fontSize(13).fontColor(this.txtPri()).maxLines(1)
                   Text(bm.path.substring(bm.path.lastIndexOf('/') + 1))
-                    .fontSize(11).fontColor('#888').maxLines(1)
+                    .fontSize(11).fontColor(this.txtHint()).maxLines(1)
                 }
                 .layoutWeight(1)
                 .alignItems(HorizontalAlign.Start)
 
                 Text('✖')
-                  .fontSize(14).fontColor('#ccc')
+                  .fontSize(14).fontColor(this.txtFaint())
                   .margin({ right: 8 })
                   .onClick(() => {
                     this.deleteBookmarkEntry(bm);
@@ -5071,7 +5072,7 @@ struct Index {
               }
               .width('100%')
               .padding({ left: 8, right: 8, top: 8, bottom: 8 })
-              .backgroundColor('#fafafa')
+              .backgroundColor(this.inputBg())
               .borderRadius(6)
               .onClick(() => {
                 this.openBookmarkBook(bm);
@@ -5103,14 +5104,14 @@ struct Index {
             .onClick(() => {
               this.browseHome();
             })
-          Button('\u2191').fontSize(14).width(40).height(32).backgroundColor('#e0e0e0').fontColor('#333')
+          Button('\u2191').fontSize(14).width(40).height(32).backgroundColor(this.chipBg()).fontColor(this.txtPri())
             .onClick(() => {
               this.browseUp();
             })
           Text(this.browseCurrentDir.length > 34 ? '\u2026' + this.browseCurrentDir.substring(this.browseCurrentDir.length - 34) : this.browseCurrentDir)
-            .fontSize(10).fontColor('#666').maxLines(1).layoutWeight(1)
+            .fontSize(10).fontColor(this.txtMid()).maxLines(1).layoutWeight(1)
           Button(this.browseViewMode === 0 ? $r('app.string.browse_grid_btn') : $r('app.string.browse_list_btn'))
-            .fontSize(10).height(32).backgroundColor('#e0e0e0').fontColor('#333')
+            .fontSize(10).height(32).backgroundColor(this.chipBg()).fontColor(this.txtPri())
             .onClick(() => {
               this.browseViewMode = this.browseViewMode === 0 ? 1 : 0;
             })
@@ -5122,8 +5123,8 @@ struct Index {
             ForEach(this.browseDirs, (name: string) => {
               Row() {
                 Text('\u{1F4C1}').fontSize(16)
-                Text(name).fontSize(13).fontColor('#333').margin({ left: 8 }).maxLines(1).layoutWeight(1)
-                Text('\u203A').fontSize(16).fontColor('#bbb')
+                Text(name).fontSize(13).fontColor(this.txtPri()).margin({ left: 8 }).maxLines(1).layoutWeight(1)
+                Text('\u203A').fontSize(16).fontColor(this.txtFaint())
               }
               .width('100%').padding({ left: 8, right: 8, top: 6, bottom: 6 })
               .onClick(() => {
@@ -5132,7 +5133,7 @@ struct Index {
               .gesture(LongPressGesture({ repeat: false, duration: 500 }).onAction(() => {
                 this.openOps(name);
               }))
-              Divider().color('#f0f0f0')
+              Divider().color(this.inputBg())
             }, (name: string) => 'd_' + name)
 
             if (this.browseViewMode === 1) {
@@ -5140,7 +5141,7 @@ struct Index {
               ForEach(this.browseFiles, (name: string) => {
                 Row() {
                   Text('\u{1F4C4}').fontSize(16)
-                  Text(name).fontSize(13).fontColor('#333').margin({ left: 8 }).maxLines(1).layoutWeight(1)
+                  Text(name).fontSize(13).fontColor(this.txtPri()).margin({ left: 8 }).maxLines(1).layoutWeight(1)
                 }
                 .width('100%').padding({ left: 8, right: 8, top: 6, bottom: 6 })
                 .onClick(() => {
@@ -5149,7 +5150,7 @@ struct Index {
                 .gesture(LongPressGesture({ repeat: false, duration: 500 }).onAction(() => {
                   this.openOps(name);
                 }))
-                Divider().color('#f0f0f0')
+                Divider().color(this.inputBg())
               }, (name: string) => 'f_' + name)
             } else {
               /* grid view */
@@ -5159,9 +5160,9 @@ struct Index {
                     Column({ space: 4 }) {
                       Text('\u{1F4C4}').fontSize(32)
                       Text(name.length > 10 ? name.substring(0, 10) + '\u2026' : name)
-                        .fontSize(10).fontColor('#555').maxLines(1)
+                        .fontSize(10).fontColor(this.txtSec()).maxLines(1)
                     }
-                    .width('100%').padding(8).backgroundColor('#f5f5f5').borderRadius(6)
+                    .width('100%').padding(8).backgroundColor(this.inputBg()).borderRadius(6)
                     .onClick(() => {
                       this.openBrowseEntry(name);
                     })
@@ -5176,7 +5177,7 @@ struct Index {
             }
 
             if (this.browseDirs.length === 0 && this.browseFiles.length === 0) {
-              Text($r('app.string.browse_empty')).fontSize(12).fontColor('#999').margin({ top: 40 })
+              Text($r('app.string.browse_empty')).fontSize(12).fontColor(this.txtFaint()).margin({ top: 40 })
             }
           }
           .width('100%')
@@ -5340,9 +5341,9 @@ struct Index {
         .width(24).height(24).fillColor(this.thm())
       Column({ space: 2 }) {
         Text(s.name)
-          .fontSize(15).fontColor('#555').maxLines(1)
+          .fontSize(15).fontColor(this.txtSec()).maxLines(1)
         Text(s.url)
-          .fontSize(11).fontColor('#999').maxLines(1)
+          .fontSize(11).fontColor(this.txtFaint()).maxLines(1)
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
@@ -5352,14 +5353,14 @@ struct Index {
           this.openOpdsEdit(this.opdsServers.indexOf(s));
         })
       Image($r('app.media.ic_close'))
-        .width(20).height(20).fillColor('#999999')
+        .width(20).height(20).fillColor(this.txtFaint())
         .onClick(() => {
           this.deleteOpdsServerAt(this.opdsServers.indexOf(s));
         })
     }
     .width('94%')
     .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-    .backgroundColor(Color.White)
+    .backgroundColor(this.cardBg())
     .borderRadius(3)
     .margin({ bottom: 8 })
     .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
@@ -5378,9 +5379,9 @@ struct Index {
         .width(24).height(24).fillColor(this.thm())
       Column({ space: 2 }) {
         Text(s.name)
-          .fontSize(15).fontColor('#555').maxLines(1)
+          .fontSize(15).fontColor(this.txtSec()).maxLines(1)
         Text(s.url)
-          .fontSize(11).fontColor('#999').maxLines(1)
+          .fontSize(11).fontColor(this.txtFaint()).maxLines(1)
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
@@ -5390,14 +5391,14 @@ struct Index {
           this.openDavEdit(idx);
         })
       Image($r('app.media.ic_close'))
-        .width(20).height(20).fillColor('#999999')
+        .width(20).height(20).fillColor(this.txtFaint())
         .onClick(() => {
           this.deleteDavServerAt(idx);
         })
     }
     .width('94%')
     .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-    .backgroundColor(Color.White)
+    .backgroundColor(this.cardBg())
     .borderRadius(3)
     .margin({ bottom: 8 })
     .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
@@ -5422,20 +5423,20 @@ struct Index {
         })
       Column({ space: 12 }) {
         Text(this.opdsEditIdx >= 0 ? $r('app.string.opds_edit') : $r('app.string.opds_add'))
-          .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
+          .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
           .width('100%')
         TextInput({ text: this.opdsEditUrl, placeholder: 'https://.../opds/' })
           .fontSize(13).height(38).width('100%')
-          .backgroundColor(Color.White)
-          .border({ width: 1, color: '#cccccc' })
+          .backgroundColor(this.cardBg())
+          .border({ width: 1, color: this.divColor() })
           .borderRadius(4)
           .onChange((v: string) => {
             this.opdsEditUrl = v;
           })
         TextInput({ text: this.opdsEditName, placeholder: $r('app.string.opds_name_hint') })
           .fontSize(13).height(38).width('100%')
-          .backgroundColor(Color.White)
-          .border({ width: 1, color: '#cccccc' })
+          .backgroundColor(this.cardBg())
+          .border({ width: 1, color: this.divColor() })
           .borderRadius(4)
           .onChange((v: string) => {
             this.opdsEditName = v;
@@ -5444,7 +5445,7 @@ struct Index {
           Blank()
           Button($r('app.string.common_close'))
             .fontSize(14).height(36)
-            .backgroundColor('#e0e0e0').fontColor('#333')
+            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
             .onClick(() => {
               this.showOpdsEdit = false;
             })
@@ -5459,7 +5460,7 @@ struct Index {
       }
       .width('82%')
       .padding(14)
-      .backgroundColor(Color.White)
+      .backgroundColor(this.cardBg())
       .borderRadius(8)
     }
     .width('100%').height('100%')
@@ -5477,28 +5478,28 @@ struct Index {
         })
       Column({ space: 10 }) {
         Text(this.davEditIdx >= 0 ? $r('app.string.dav_edit') : $r('app.string.dav_add'))
-          .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
+          .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
           .width('100%')
         TextInput({ text: this.davEditUrl, placeholder: 'http://' })
           .fontSize(13).height(38).width('100%')
-          .backgroundColor(Color.White)
-          .border({ width: 1, color: '#cccccc' })
+          .backgroundColor(this.cardBg())
+          .border({ width: 1, color: this.divColor() })
           .borderRadius(4)
           .onChange((v: string) => {
             this.davEditUrl = v;
           })
         TextInput({ text: this.davEditName, placeholder: $r('app.string.dav_name_hint') })
           .fontSize(13).height(38).width('100%')
-          .backgroundColor(Color.White)
-          .border({ width: 1, color: '#cccccc' })
+          .backgroundColor(this.cardBg())
+          .border({ width: 1, color: this.divColor() })
           .borderRadius(4)
           .onChange((v: string) => {
             this.davEditName = v;
           })
         TextInput({ text: this.davEditUser, placeholder: $r('app.string.common_account') })
           .fontSize(13).height(38).width('100%')
-          .backgroundColor(Color.White)
-          .border({ width: 1, color: '#cccccc' })
+          .backgroundColor(this.cardBg())
+          .border({ width: 1, color: this.divColor() })
           .borderRadius(4)
           .onChange((v: string) => {
             this.davEditUser = v;
@@ -5506,8 +5507,8 @@ struct Index {
         TextInput({ text: this.davEditPass, placeholder: $r('app.string.common_password') })
           .type(InputType.Password)
           .fontSize(13).height(38).width('100%')
-          .backgroundColor(Color.White)
-          .border({ width: 1, color: '#cccccc' })
+          .backgroundColor(this.cardBg())
+          .border({ width: 1, color: this.divColor() })
           .borderRadius(4)
           .onChange((v: string) => {
             this.davEditPass = v;
@@ -5520,14 +5521,14 @@ struct Index {
             .onChange((v: boolean) => {
               this.davEditTrusted = v;
             })
-          Text($r('app.string.sync_trust_selfsigned')).fontSize(13).fontColor('#333')
+          Text($r('app.string.sync_trust_selfsigned')).fontSize(13).fontColor(this.txtPri())
         }
         .width('100%')
         Row({ space: 12 }) {
           Blank()
           Button($r('app.string.common_close'))
             .fontSize(14).height(36)
-            .backgroundColor('#e0e0e0').fontColor('#333')
+            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
             .onClick(() => {
               this.showDavEdit = false;
             })
@@ -5542,7 +5543,7 @@ struct Index {
       }
       .width('82%')
       .padding(14)
-      .backgroundColor(Color.White)
+      .backgroundColor(this.cardBg())
       .borderRadius(8)
     }
     .width('100%').height('100%')
@@ -5574,7 +5575,7 @@ struct Index {
       Image($r('app.media.ic_folder'))
         .width(26).height(26).fillColor(this.thm())
       Text(f.name)
-        .fontSize(16).fontColor('#555')
+        .fontSize(16).fontColor(this.txtSec())
         .maxLines(1)
         .layoutWeight(1)
       Image($r('app.media.ic_star_border'))
@@ -5582,7 +5583,7 @@ struct Index {
     }
     .width('94%')
     .padding({ left: 12, right: 12, top: 12, bottom: 12 })
-    .backgroundColor(Color.White)
+    .backgroundColor(this.cardBg())
     .borderRadius(3)
     .margin({ bottom: 8 })
     .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
@@ -5599,27 +5600,27 @@ struct Index {
         this.browseSectionHeader(this.L($r('app.string.browse_opds')), 1)
         if (this.opdsServers.length === 0) {
           Text($r('app.string.opds_none'))
-            .fontSize(13).fontColor('#999')
+            .fontSize(13).fontColor(this.txtFaint())
             .width('94%').padding({ left: 12, bottom: 8 })
         }
         ForEach(this.opdsServers, (s: OpdsServer) => {
           this.browseOpdsRow(s)
         }, (s: OpdsServer) => s.url)
 
-        Divider().color('#e8e8e8').margin({ top: 8 })
+        Divider().color(this.divColor()).margin({ top: 8 })
 
         /* WebDAV: persisted server list (hr05/hr06) */
         this.browseSectionHeader('WebDAV', 2)
         if (this.davServers.length === 0) {
           Text($r('app.string.dav_none'))
-            .fontSize(13).fontColor('#999')
+            .fontSize(13).fontColor(this.txtFaint())
             .width('94%').padding({ left: 12, bottom: 8 })
         }
         ForEach(this.davServers, (s: DavServer, idx: number) => {
           this.browseDavRow(s, idx)
         }, (s: DavServer) => s.url)
 
-        Divider().color('#e8e8e8').margin({ top: 8 })
+        Divider().color(this.divColor()).margin({ top: 8 })
 
         /* 书库文件夹 */
         this.browseSectionHeader(this.L($r('app.string.browse_library_folder')), 3)
@@ -5630,7 +5631,7 @@ struct Index {
           Image($r('app.media.ic_book_open'))
             .width(24).height(24).fillColor(this.thm())
           Text($r('app.string.browse_imported'))
-            .fontSize(16).fontColor('#555')
+            .fontSize(16).fontColor(this.txtSec())
             .layoutWeight(1)
         }
         .width('94%')
@@ -5639,7 +5640,7 @@ struct Index {
           this.enterBrowseAbs(this.libFolders.length > 0 ? this.libFolders[0].path : '');
         })
 
-        Divider().color('#e8e8e8').margin({ top: 8 })
+        Divider().color(this.divColor()).margin({ top: 8 })
 
         /* 搜索 */
         this.browseSectionHeader(this.L($r('app.string.common_search')), 0)
@@ -5830,7 +5831,7 @@ struct Index {
     }
     .width('100%')
     .padding({ left: 12, right: 12, top: 9, bottom: 9 })
-    .backgroundColor(this.thm())
+    .backgroundColor(this.barColor())
     .borderRadius(2)
     .onClick(() => {
       this.toggleGroup(key);
@@ -5849,7 +5850,7 @@ struct Index {
     }
     .width('100%')
     .padding({ left: 10, right: 10, top: 7, bottom: 7 })
-    .backgroundColor('#7986CB')
+    .backgroundColor(this.isDark() ? '#3a4160' : '#7986CB')
     .borderRadius(2)
     .margin({ left: 10 })
     .onClick(() => {
@@ -5862,7 +5863,7 @@ struct Index {
   settingsKvRow(label: string, value: string) {
     Row() {
       Text(label)
-        .fontSize(14).fontColor(this.accentTextColor() ? this.acc() : '#333').width(120)
+        .fontSize(14).fontColor(this.accentTextColor() ? this.acc() : this.txtPri()).width(120)
       Text(value)
         .fontSize(14).fontColor(this.thm())
         .decoration({ type: TextDecorationType.Underline, color: this.thm() })
@@ -5878,7 +5879,7 @@ struct Index {
   settingsKvSheet(label: string, target: string) {
     Row() {
       Text(label)
-        .fontSize(14).fontColor(this.accentTextColor() ? this.acc() : '#333').width(120)
+        .fontSize(14).fontColor(this.accentTextColor() ? this.acc() : this.txtPri()).width(120)
       Text(this.kvValue(target))
         .fontSize(14).fontColor(this.thm())
         .decoration({ type: TextDecorationType.Underline, color: this.thm() })
@@ -5897,10 +5898,10 @@ struct Index {
   settingsToggleRow(label: string, prefKey: string, hint: string) {
     Row({ space: 8 }) {
       Text(label)
-        .fontSize(this.fsp(14)).fontColor(this.accentTextColor() ? this.acc() : '#333')
+        .fontSize(this.fsp(14)).fontColor(this.accentTextColor() ? this.acc() : this.txtPri())
         .layoutWeight(1)
       if (hint.length > 0) {
-        Text(hint).fontSize(10).fontColor('#999')
+        Text(hint).fontSize(10).fontColor(this.txtFaint())
       }
       Toggle({ type: ToggleType.Switch, isOn: this.boolPref(prefKey) })
         .selectedColor(this.thm())
@@ -5919,12 +5920,12 @@ struct Index {
     Column({ space: 6 }) {
       Row({ space: 8 }) {
         Text(label)
-          .fontSize(this.fsp(14)).fontColor(this.accentTextColor() ? this.acc() : '#333')
+          .fontSize(this.fsp(14)).fontColor(this.accentTextColor() ? this.acc() : this.txtPri())
           .layoutWeight(1)
         Text(target === 0
           ? (this.settings.themeColor.length > 0 ? this.settings.themeColor : '#3949AB')
           : (this.settings.accentColor.length > 0 ? this.settings.accentColor : '#03A9F4'))
-          .fontSize(11).fontColor('#999')
+          .fontSize(11).fontColor(this.txtFaint())
         Text(this.L($r('app.string.set_color_reset')))
           .fontSize(11).fontColor(this.thm())
           .decoration({ type: TextDecorationType.Underline, color: this.thm() })
@@ -5992,7 +5993,7 @@ struct Index {
         /* 配置文件 row: avatar letter + profile name + gear (Android profile section) */
         Row({ space: 12 }) {
           Text($r('app.string.drawer_config'))
-            .fontSize(this.fsp(14)).fontColor('#333')
+            .fontSize(this.fsp(14)).fontColor(this.txtPri())
           Blank()
           Column() {
             Text(getCurrentProfile().length > 0 ? getCurrentProfile().charAt(0).toUpperCase() : 'H')
@@ -6040,7 +6041,7 @@ struct Index {
               ForEach(FORMAT_ROWS, (row: string[]) => {
                 Row({ space: 8 }) {
                   Text(row[1])
-                    .fontSize(this.fsp(13)).fontColor('#333').layoutWeight(1)
+                    .fontSize(this.fsp(13)).fontColor(this.txtPri()).layoutWeight(1)
                   Toggle({ type: ToggleType.Switch, isOn: this.fmtIsOn(row[0]) })
                     .selectedColor(this.thm())
                     .onChange((v: boolean) => {
@@ -6053,7 +6054,7 @@ struct Index {
             }
             .width('100%')
             Text($r('app.string.set_formats_hint'))
-              .fontSize(10).fontColor('#999').width('100%').padding({ left: 22, bottom: 6 })
+              .fontSize(10).fontColor(this.txtFaint()).width('100%').padding({ left: 22, bottom: 6 })
           }
 
           /* --- 书库设置 (Android populateLibrarySettings) --- */
@@ -6072,7 +6073,7 @@ struct Index {
             this.settingsKvSheet(this.L($r('app.string.set_cover_columns')), 'cols')
             Row({ space: 8 }) {
               Text(this.L($r('app.string.set_list_cover_size')))
-                .fontSize(this.fsp(13)).fontColor('#555')
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
               Slider({ value: this.settings.coverListSize, min: 0, max: 120, step: 4 })
                 .layoutWeight(1)
                 .onChange((value: number, mode: SliderChangeMode) => {
@@ -6082,13 +6083,13 @@ struct Index {
                   }
                 })
               Text(this.settings.coverListSize === 0 ? this.L($r('app.string.set_auto')) : '' + this.settings.coverListSize + 'dp')
-                .fontSize(11).fontColor('#777').width(52)
+                .fontSize(11).fontColor(this.txtHint()).width(52)
             }
             .width('100%')
             .padding({ left: 12, right: 12, top: 6, bottom: 6 })
             Row({ space: 8 }) {
               Text(this.L($r('app.string.set_grid_cover_size')))
-                .fontSize(this.fsp(13)).fontColor('#555')
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
               Slider({ value: this.settings.coverGridSize, min: 0, max: 200, step: 4 })
                 .layoutWeight(1)
                 .onChange((value: number, mode: SliderChangeMode) => {
@@ -6098,7 +6099,7 @@ struct Index {
                   }
                 })
               Text(this.settings.coverGridSize === 0 ? this.L($r('app.string.set_auto')) : '' + this.settings.coverGridSize + 'dp')
-                .fontSize(11).fontColor('#777').width(52)
+                .fontSize(11).fontColor(this.txtHint()).width(52)
             }
             .width('100%')
             .padding({ left: 12, right: 12, top: 6, bottom: 6 })
@@ -6106,7 +6107,7 @@ struct Index {
             /* desktop card prefs (Round 6, Android widget rows) */
             Row({ space: 8 }) {
               Text($r('app.string.set_card'))
-                .fontSize(this.fsp(13)).fontColor('#555')
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
               Button(this.settings.cardSource === 0 ? $r('app.string.sort_recent') : $r('app.string.card_starred'))
                 .fontSize(12).height(32)
                 .backgroundColor(this.thm()).fontColor(Color.White)
@@ -6116,13 +6117,13 @@ struct Index {
                 })
               Button('' + this.settings.cardCount + ' \u672C')
                 .fontSize(12).height(32)
-                .backgroundColor('#e0e0e0').fontColor('#333')
+                .backgroundColor(this.chipBg()).fontColor(this.txtPri())
                 .onClick(() => {
                   this.settings.cardCount = this.settings.cardCount >= 3 ? 1 : this.settings.cardCount + 1;
                   this.saveNow();
                 })
               Text($r('app.string.set_card_hint'))
-                .fontSize(10).fontColor('#999')
+                .fontSize(10).fontColor(this.txtFaint())
             }
             .width('100%')
             .padding({ left: 12, right: 12, top: 6, bottom: 6 })
@@ -6144,7 +6145,7 @@ struct Index {
             this.settingsToggleRow(this.L($r('app.string.set_app_lock')), 'appLockEnabled', this.L($r('app.string.set_app_lock_hint')))
             Row({ space: 8 }) {
               Text($r('app.string.set_lock_pass'))
-                .fontSize(this.fsp(13)).fontColor('#555')
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
               TextInput({ placeholder: $r('app.string.set_lock_pass_hint'), text: this.settings.appLockPass })
                 .fontSize(12).height(32).layoutWeight(1)
                 .onChange((v: string) => {
@@ -6160,10 +6161,10 @@ struct Index {
             this.settingsToggleRow(this.L($r('app.string.set_exit_confirm')), 'showExitDialog', '')
 
             Text($r('app.string.set_reader_params'))
-              .fontSize(12).fontColor('#999').width('100%').padding({ left: 22, top: 6 })
+              .fontSize(12).fontColor(this.txtFaint()).width('100%').padding({ left: 22, top: 6 })
             Row({ space: 8 }) {
               Text($r('app.string.set_default_zoom'))
-                .fontSize(this.fsp(13)).fontColor('#555')
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
               Slider({ value: this.settings.zoom, min: 0.5, max: 4, step: 0.25 })
                 .layoutWeight(1)
                 .onChange((value: number, mode: SliderChangeMode) => {
@@ -6173,23 +6174,23 @@ struct Index {
                   }
                 })
               Text(`${Math.round(this.settings.zoom * 100)}%`)
-                .fontSize(11).fontColor('#777').width(40)
+                .fontSize(11).fontColor(this.txtHint()).width(40)
             }
             .width('100%')
             .padding({ left: 12, right: 12 })
             Row({ space: 8 }) {
               Text($r('app.string.set_page_turn'))
-                .fontSize(this.fsp(13)).fontColor('#555')
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
               Button(this.settings.scrollMode === 0 ? $r('app.string.mode_horizontal') : $r('app.string.mode_vertical'))
                 .fontSize(12).height(32)
-                .backgroundColor('#e0e0e0').fontColor('#333')
+                .backgroundColor(this.chipBg()).fontColor(this.txtPri())
                 .onClick(() => {
                   this.settings.scrollMode = this.settings.scrollMode === 0 ? 1 : 0;
                   this.saveNow();
                 })
               Button(this.settings.pageMode === 0 ? $r('app.string.page_single') : (this.settings.pageMode === 1 ? $r('app.string.page_double') : $r('app.string.page_music')))
                 .fontSize(12).height(32)
-                .backgroundColor('#e0e0e0').fontColor('#333')
+                .backgroundColor(this.chipBg()).fontColor(this.txtPri())
                 .onClick(() => {
                   this.settings.pageMode = (this.settings.pageMode + 1) % 3;
                   this.saveNow();
@@ -6199,7 +6200,7 @@ struct Index {
             .padding({ left: 12, right: 12 })
             Row({ space: 8 }) {
               Text($r('app.string.reader_brightness'))
-                .fontSize(this.fsp(13)).fontColor('#555')
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
               Slider({ value: this.settings.brightness, min: 1, max: 255, step: 4 })
                 .layoutWeight(1)
                 .onChange((value: number, mode: SliderChangeMode) => {
@@ -6209,23 +6210,23 @@ struct Index {
                   }
                 })
               Text(`${Math.round(this.settings.brightness / 2.55)}%`)
-                .fontSize(11).fontColor('#777').width(36)
+                .fontSize(11).fontColor(this.txtHint()).width(36)
             }
             .width('100%')
             .padding({ left: 12, right: 12 })
             Row({ space: 8 }) {
               Text($r('app.string.reader_autoflip'))
-                .fontSize(this.fsp(13)).fontColor('#555')
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
               Button(this.settings.autoFlip ? $r('app.string.common_on') : $r('app.string.common_off'))
                 .fontSize(12).height(32)
-                .backgroundColor(this.settings.autoFlip ? '#2a7' : '#e0e0e0')
-                .fontColor(this.settings.autoFlip ? Color.White : '#333')
+                .backgroundColor(this.settings.autoFlip ? '#2a7' : this.chipBg())
+                .fontColor(this.settings.autoFlip ? Color.White : this.txtPri())
                 .onClick(() => {
                   this.settings.autoFlip = !this.settings.autoFlip;
                   this.saveNow();
                 })
               Text(`${this.settings.autoFlipInterval}s`)
-                .fontSize(11).fontColor('#777')
+                .fontSize(11).fontColor(this.txtHint())
                 .onClick(() => {
                   this.settings.autoFlipInterval = this.settings.autoFlipInterval >= 5 ? 1 : this.settings.autoFlipInterval + 1;
                   this.saveNow();
@@ -6235,7 +6236,7 @@ struct Index {
             .padding({ left: 12, right: 12 })
             Row({ space: 8 }) {
               Text($r('app.string.set_tts_rate'))
-                .fontSize(this.fsp(13)).fontColor('#555')
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
               Slider({ value: this.settings.ttsRate, min: 0.5, max: 2.0, step: 0.1 })
                 .layoutWeight(1)
                 .onChange((value: number, mode: SliderChangeMode) => {
@@ -6245,13 +6246,13 @@ struct Index {
                   }
                 })
               Text(`${this.settings.ttsRate.toFixed(1)}x`)
-                .fontSize(11).fontColor('#777').width(36)
+                .fontSize(11).fontColor(this.txtHint()).width(36)
             }
             .width('100%')
             .padding({ left: 12, right: 12 })
             Row({ space: 8 }) {
               Text($r('app.string.set_tts_pitch'))
-                .fontSize(this.fsp(13)).fontColor('#555')
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
               Slider({ value: this.settings.ttsPitch, min: 0.5, max: 2.0, step: 0.1 })
                 .layoutWeight(1)
                 .onChange((value: number, mode: SliderChangeMode) => {
@@ -6261,13 +6262,13 @@ struct Index {
                   }
                 })
               Text(`${this.settings.ttsPitch.toFixed(1)}x`)
-                .fontSize(11).fontColor('#777').width(36)
+                .fontSize(11).fontColor(this.txtHint()).width(36)
             }
             .width('100%')
             .padding({ left: 12, right: 12 })
             Row({ space: 8 }) {
               Text($r('app.string.set_rsvp'))
-                .fontSize(this.fsp(13)).fontColor('#555')
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
               Slider({ value: this.settings.rsvpWpm, min: 100, max: 800, step: 50 })
                 .layoutWeight(1)
                 .onChange((value: number, mode: SliderChangeMode) => {
@@ -6277,15 +6278,15 @@ struct Index {
                   }
                 })
               Text(`${this.settings.rsvpWpm}`)
-                .fontSize(11).fontColor('#777').width(36)
+                .fontSize(11).fontColor(this.txtHint()).width(36)
             }
             .width('100%')
             .padding({ left: 12, right: 12 })
             Text($r('app.string.set_reflow_typography'))
-              .fontSize(12).fontColor('#999').width('100%').padding({ left: 22, top: 6 })
+              .fontSize(12).fontColor(this.txtFaint()).width('100%').padding({ left: 22, top: 6 })
             Row({ space: 8 }) {
               Text($r('app.string.set_font_size'))
-                .fontSize(this.fsp(13)).fontColor('#555')
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
               Slider({ value: this.settings.fontSize, min: 10, max: 28, step: 1 })
                 .layoutWeight(1)
                 .onChange((value: number, mode: SliderChangeMode) => {
@@ -6295,13 +6296,13 @@ struct Index {
                   }
                 })
               Text(`${this.settings.fontSize}`)
-                .fontSize(11).fontColor('#777').width(30)
+                .fontSize(11).fontColor(this.txtHint()).width(30)
             }
             .width('100%')
             .padding({ left: 12, right: 12 })
             Row({ space: 8 }) {
               Text($r('app.string.set_line_height'))
-                .fontSize(this.fsp(13)).fontColor('#555')
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
               Slider({ value: this.settings.lineHeight, min: 1.0, max: 2.5, step: 0.1 })
                 .layoutWeight(1)
                 .onChange((value: number, mode: SliderChangeMode) => {
@@ -6311,13 +6312,13 @@ struct Index {
                   }
                 })
               Text(`${this.settings.lineHeight.toFixed(1)}`)
-                .fontSize(11).fontColor('#777').width(30)
+                .fontSize(11).fontColor(this.txtHint()).width(30)
             }
             .width('100%')
             .padding({ left: 12, right: 12 })
             Row({ space: 8 }) {
               Text($r('app.string.set_margin'))
-                .fontSize(this.fsp(13)).fontColor('#555')
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
               Slider({ value: this.settings.margin, min: 0, max: 80, step: 4 })
                 .layoutWeight(1)
                 .onChange((value: number, mode: SliderChangeMode) => {
@@ -6327,7 +6328,7 @@ struct Index {
                   }
                 })
               Text(`${this.settings.margin}pt`)
-                .fontSize(11).fontColor('#777').width(36)
+                .fontSize(11).fontColor(this.txtHint()).width(36)
             }
             .width('100%')
             .padding({ left: 12, right: 12, bottom: 6 })
@@ -6342,7 +6343,7 @@ struct Index {
           this.settingsKvSheet(this.L($r('app.string.set_language')), 'lang')
           Row() {
             Text($r('app.string.sync_title'))
-              .fontSize(this.fsp(14)).fontColor('#333').width(120)
+              .fontSize(this.fsp(14)).fontColor(this.txtPri()).width(120)
             Text(this.syncCfg.enabled
               ? (this.syncCfg.lastSyncTime.length > 0 ? '\u4E0A\u6B21\uFF1A' + this.syncCfg.lastSyncTime.substring(0, 16).replace('T', ' ') : $r('app.string.set_enabled'))
               : $r('app.string.set_disabled'))
@@ -6362,7 +6363,7 @@ struct Index {
           })
           Row() {
             Text($r('app.string.set_ai_model'))
-              .fontSize(this.fsp(14)).fontColor('#333').width(120)
+              .fontSize(this.fsp(14)).fontColor(this.txtPri()).width(120)
             Text(this.aiCfg.model.length > 0 ? this.aiCfg.provider + ' \u00B7 ' + this.aiCfg.model : $r('app.string.set_not_configured'))
               .fontSize(14).fontColor(this.thm())
               .decoration({ type: TextDecorationType.Underline, color: this.thm() })
@@ -6382,44 +6383,44 @@ struct Index {
           })
           Row({ space: 8 }) {
             Text($r('app.string.set_reminder'))
-              .fontSize(this.fsp(13)).fontColor('#555')
+              .fontSize(this.fsp(13)).fontColor(this.txtSec())
             Button(this.settings.readReminderMinutes === 0 ? $r('app.string.common_off') : this.settings.readReminderMinutes + ' \u5206\u949F')
               .fontSize(12).height(32)
-              .backgroundColor(this.settings.readReminderMinutes > 0 ? '#2a7' : '#e0e0e0')
-              .fontColor(this.settings.readReminderMinutes > 0 ? Color.White : '#333')
+              .backgroundColor(this.settings.readReminderMinutes > 0 ? '#2a7' : this.chipBg())
+              .fontColor(this.settings.readReminderMinutes > 0 ? Color.White : this.txtPri())
               .onClick(() => {
                 this.settings.readReminderMinutes = this.settings.readReminderMinutes >= 120 ? 0 : (this.settings.readReminderMinutes === 0 ? 30 : this.settings.readReminderMinutes + 30);
                 this.saveNow();
               })
             Text($r('app.string.set_reminder_hint'))
-              .fontSize(10).fontColor('#999')
+              .fontSize(10).fontColor(this.txtFaint())
           }
           .width('100%')
           .padding({ left: 12, right: 12, top: 6, bottom: 6 })
           Row({ space: 8 }) {
             Text($r('app.string.set_proxy'))
-              .fontSize(this.fsp(13)).fontColor('#555')
+              .fontSize(this.fsp(13)).fontColor(this.txtSec())
             Button(this.settings.proxyType === 0 ? $r('app.string.common_off') : (this.settings.proxyType === 1 ? 'HTTP' : 'SOCKS'))
               .fontSize(12).height(32)
-              .backgroundColor(this.settings.proxyType > 0 ? '#2a7' : '#e0e0e0')
-              .fontColor(this.settings.proxyType > 0 ? Color.White : '#333')
+              .backgroundColor(this.settings.proxyType > 0 ? '#2a7' : this.chipBg())
+              .fontColor(this.settings.proxyType > 0 ? Color.White : this.txtPri())
               .onClick(() => {
                 this.settings.proxyType = (this.settings.proxyType + 1) % 3;
                 this.saveNow();
               })
             if (this.settings.proxyType > 0) {
               Text(`${this.settings.proxyHost}:${this.settings.proxyPort}`)
-                .fontSize(11).fontColor('#777')
+                .fontSize(11).fontColor(this.txtHint())
             }
           }
           .width('100%')
           .padding({ left: 12, right: 12, top: 6, bottom: 6 })
           Row({ space: 8 }) {
             Text($r('app.string.set_quality'))
-              .fontSize(this.fsp(13)).fontColor('#555')
+              .fontSize(this.fsp(13)).fontColor(this.txtSec())
             Button(this.settings.renderQuality === 0 ? $r('app.string.quality_fast') : (this.settings.renderQuality === 1 ? $r('app.string.quality_balanced') : $r('app.string.quality_high')))
               .fontSize(12).height(32)
-              .backgroundColor('#e0e0e0').fontColor('#333')
+              .backgroundColor(this.chipBg()).fontColor(this.txtPri())
               .onClick(() => {
                 this.settings.renderQuality = (this.settings.renderQuality + 1) % 3;
                 this.saveNow();
@@ -6429,10 +6430,10 @@ struct Index {
           .padding({ left: 12, right: 12, top: 6, bottom: 6 })
           Row({ space: 8 }) {
             Text($r('app.string.set_flip_anim'))
-              .fontSize(this.fsp(13)).fontColor('#555')
+              .fontSize(this.fsp(13)).fontColor(this.txtSec())
             Button(this.settings.flipAnimation === 0 ? $r('app.string.anim_slide') : (this.settings.flipAnimation === 1 ? $r('app.string.anim_curl') : $r('app.string.anim_fade')))
               .fontSize(12).height(32)
-              .backgroundColor('#e0e0e0').fontColor('#333')
+              .backgroundColor(this.chipBg()).fontColor(this.txtPri())
               .onClick(() => {
                 this.settings.flipAnimation = (this.settings.flipAnimation + 1) % 3;
                 this.saveNow();
@@ -6460,11 +6461,11 @@ struct Index {
           .padding({ left: 12, right: 12, top: 6, bottom: 6 })
           if (this.backupText.length > 0) {
             Text(this.backupText)
-              .fontSize(11).fontColor('#888').textAlign(TextAlign.Center).width('100%')
+              .fontSize(11).fontColor(this.txtHint()).textAlign(TextAlign.Center).width('100%')
           }
           Column({ space: 4 }) {
             Text($r('app.string.set_root_folder'))
-              .fontSize(this.fsp(13)).fontColor('#555')
+              .fontSize(this.fsp(13)).fontColor(this.txtSec())
             TextInput({ placeholder: $r('app.string.set_folder_hint'), text: this.settings.rootFolder })
               .fontSize(12).height(32)
               .onChange((v: string) => {
@@ -6472,7 +6473,7 @@ struct Index {
                 this.saveNow();
               })
             Text($r('app.string.set_fonts_folder'))
-              .fontSize(this.fsp(13)).fontColor('#555')
+              .fontSize(this.fsp(13)).fontColor(this.txtSec())
             TextInput({ placeholder: $r('app.string.set_folder_hint'), text: this.settings.fontsFolder })
               .fontSize(12).height(32)
               .onChange((v: string) => {
@@ -6480,7 +6481,7 @@ struct Index {
                 this.saveNow();
               })
             Text($r('app.string.set_dl_folder'))
-              .fontSize(this.fsp(13)).fontColor('#555')
+              .fontSize(this.fsp(13)).fontColor(this.txtSec())
             TextInput({ placeholder: $r('app.string.set_folder_hint'), text: this.settings.downloadsFolder })
               .fontSize(12).height(32)
               .onChange((v: string) => {
@@ -6501,12 +6502,12 @@ struct Index {
           if (this.groupExp['theme'] === true) {
             Row({ space: 8 }) {
               Text($r('app.string.set_theme'))
-                .fontSize(this.fsp(13)).fontColor('#555')
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
               ForEach(THEME_LABELS, (name: Resource, idx: number) => {
                 Button(name)
                   .fontSize(12).height(32)
-                  .backgroundColor(this.settings.theme === idx ? '#2a7' : '#e0e0e0')
-                  .fontColor(this.settings.theme === idx ? Color.White : '#333')
+                  .backgroundColor(this.settings.theme === idx ? '#2a7' : this.chipBg())
+                  .fontColor(this.settings.theme === idx ? Color.White : this.txtPri())
                   .onClick(() => {
                     this.settings.theme = idx;
                     this.saveNow();
@@ -6536,7 +6537,7 @@ struct Index {
                 })
               Button($r('app.string.set_tabs_reset'))
                 .fontSize(12).height(32).layoutWeight(1)
-                .backgroundColor('#e0e0e0').fontColor('#333')
+                .backgroundColor(this.chipBg()).fontColor(this.txtPri())
                 .onClick(() => {
                   this.settings.tabsOrder = '';
                   this.saveNow();
@@ -6585,13 +6586,13 @@ struct Index {
           Column() {
             Text(this.textResult)
               .fontSize(10)
-              .fontColor('#666')
+              .fontColor(this.txtMid())
               .maxLines(3)
               .textOverflow({ overflow: TextOverflow.Clip })
               .width('92%')
           }
           .padding(8)
-          .backgroundColor(Color.White)
+          .backgroundColor(this.cardBg())
           .borderRadius(8)
           .width('94%')
 
@@ -6600,8 +6601,8 @@ struct Index {
             .fontColor(Color.Green)
 
           Column({ space: 4 }) {
-            Text(this.tocText).fontSize(11).fontColor('#555')
-            Text(this.pageSizeText).fontSize(11).fontColor('#555')
+            Text(this.tocText).fontSize(11).fontColor(this.txtSec())
+            Text(this.pageSizeText).fontSize(11).fontColor(this.txtSec())
             Text(this.asyncRenderText).fontSize(11).fontColor('#2a7')
             Text(this.rotatedText).fontSize(11).fontColor('#2a7')
             Text(this.invertedText).fontSize(11).fontColor('#2a7')
@@ -6612,7 +6613,7 @@ struct Index {
           }
           .width('94%')
           .padding(8)
-          .backgroundColor('#f0f4ff')
+          .backgroundColor(this.inputBg())
           .borderRadius(8)
         }
       }
@@ -6644,6 +6645,68 @@ struct Index {
   private fsp(n: number): number {
     const k: number = this.stFontScale > 0 ? this.stFontScale : 1.0;
     return Math.round(n * k);
+  }
+
+  /* ===================== night/day theme (Android night mode parity) ===================== */
+
+  /** Dark UI active for theme=深色(1)/OLED(2); ink(3) stays light like Android. */
+  private isDark(): boolean {
+    return this.settings.theme === 1 || this.settings.theme === 2;
+  }
+
+  /** Bar surfaces (top bar / tabBar / group bars): dark navy at night, brand color by day. */
+  private barColor(): string {
+    return this.isDark() ? '#282b40' : this.thm();
+  }
+
+  /** Page/content area background. */
+  private pageBg(): string {
+    return this.isDark() ? '#1e1e1e' : '#f5f5f5';
+  }
+
+  /** Card / dialog surface background. */
+  private cardBg(): string {
+    return this.isDark() ? '#2a2a2a' : '#ffffff';
+  }
+
+  /** Primary text (was #333). */
+  private txtPri(): string {
+    return this.isDark() ? '#e0e0e0' : '#333';
+  }
+
+  /** Secondary text (was #555). */
+  private txtSec(): string {
+    return this.isDark() ? '#aaaaaa' : '#555';
+  }
+
+  /** Muted text (was #666). */
+  private txtMid(): string {
+    return this.isDark() ? '#999999' : '#666';
+  }
+
+  /** Hint text (was #777/#888). */
+  private txtHint(): string {
+    return this.isDark() ? '#8a8a8a' : '#777';
+  }
+
+  /** Faint text (was #999/#999999). */
+  private txtFaint(): string {
+    return this.isDark() ? '#777777' : '#999';
+  }
+
+  /** Chip / secondary button background (was #e0e0e0). */
+  private chipBg(): string {
+    return this.isDark() ? '#3a3a3a' : '#e0e0e0';
+  }
+
+  /** Divider / border color (was #ddd/#eee/#ccc). */
+  private divColor(): string {
+    return this.isDark() ? '#3a3a3a' : '#e0e0e0';
+  }
+
+  /** Input field / subtle inset background (was #f0f0f0/#f5f5f5/#fafafa). */
+  private inputBg(): string {
+    return this.isDark() ? '#333333' : '#f0f0f0';
   }
 
   /** Collapse/expand a pref group (reassign the Record so @State notices). */
@@ -6949,14 +7012,14 @@ struct Index {
   buildOptSheet() {
     Column({ space: 8 }) {
       Text(this.optTitle)
-        .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333')
+        .fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
         .width('100%')
       List({ space: 2 }) {
         ForEach(this.optLabels, (label: string, idx: number) => {
           ListItem() {
             Row({ space: 8 }) {
               Text(label)
-                .fontSize(14).fontColor(this.optSel === idx ? this.thm() : '#333')
+                .fontSize(14).fontColor(this.optSel === idx ? this.thm() : this.txtPri())
                 .layoutWeight(1)
               if (this.optSel === idx) {
                 Image($r('app.media.ic_check'))
@@ -6966,7 +7029,7 @@ struct Index {
             .width('100%')
             .padding({ left: 10, right: 10, top: 10, bottom: 10 })
             .borderRadius(6)
-            .backgroundColor(this.optSel === idx ? '#f0f2ff' : '#fafafa')
+            .backgroundColor(this.optSel === idx ? (this.isDark() ? '#3a4160' : '#e8eaf6') : this.inputBg())
             .onClick(() => {
               this.applyOptSel(idx);
             })
@@ -6977,14 +7040,14 @@ struct Index {
       .height(Math.min(320, this.optLabels.length * 46 + 8))
       Button($r('app.string.common_cancel'))
         .fontSize(13).height(36).width('100%')
-        .backgroundColor('#e0e0e0').fontColor('#333')
+        .backgroundColor(this.chipBg()).fontColor(this.txtPri())
         .onClick(() => {
           this.showOptSheet = false;
         })
     }
     .width('72%')
     .padding(14)
-    .backgroundColor('#ffffff')
+    .backgroundColor(this.cardBg())
     .borderRadius(12)
   }
 
@@ -7028,7 +7091,7 @@ struct Index {
   buildColorPick() {
     Column({ space: 10 }) {
       Text(this.colorTarget === 0 ? this.L($r('app.string.set_theme_color')) : this.L($r('app.string.set_accent_color')))
-        .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333')
+        .fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
         .width('100%')
       TextInput({ placeholder: $r('app.string.set_color_hex_hint'), text: this.colorHexIn })
         .fontSize(13).height(36).width('100%')
@@ -7038,7 +7101,7 @@ struct Index {
       Row({ space: 12 }) {
         Button($r('app.string.common_cancel'))
           .fontSize(13).height(36).layoutWeight(1)
-          .backgroundColor('#e0e0e0').fontColor('#333')
+          .backgroundColor(this.chipBg()).fontColor(this.txtPri())
           .onClick(() => {
             this.showColorPick = false;
           })
@@ -7053,7 +7116,7 @@ struct Index {
     }
     .width('72%')
     .padding(14)
-    .backgroundColor('#ffffff')
+    .backgroundColor(this.cardBg())
     .borderRadius(12)
   }
 
@@ -7148,33 +7211,33 @@ struct Index {
   buildTabsEdit() {
     Column({ space: 10 }) {
       Text($r('app.string.set_tabs_edit'))
-        .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333')
+        .fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
         .width('100%')
       List({ space: 6 }) {
         ForEach(this.tabsDraft, (id: number, idx: number) => {
           ListItem() {
             Row({ space: 10 }) {
               Image($r('app.media.ic_drag'))
-                .width(18).height(18).fillColor('#999')
+                .width(18).height(18).fillColor(this.txtFaint())
               Image(TAB_ICONS[id])
                 .width(20).height(20).fillColor(this.thm())
               Text(TAB_NAMES[id])
-                .fontSize(14).fontColor('#333')
+                .fontSize(14).fontColor(this.txtPri())
                 .layoutWeight(1)
               Image($r('app.media.ic_chevron_up'))
-                .width(20).height(20).fillColor('#888')
+                .width(20).height(20).fillColor(this.txtHint())
                 .onClick(() => {
                   this.tabArrow(idx, -1);
                 })
               Image($r('app.media.ic_chevron_down'))
-                .width(20).height(20).fillColor('#888')
+                .width(20).height(20).fillColor(this.txtHint())
                 .onClick(() => {
                   this.tabArrow(idx, 1);
                 })
             }
             .width('100%')
             .padding(10)
-            .backgroundColor('#fafafa')
+            .backgroundColor(this.inputBg())
             .borderRadius(6)
           }
         }, (id: number) => `tab_${id}`)
@@ -7188,7 +7251,7 @@ struct Index {
       Row({ space: 12 }) {
         Button($r('app.string.common_cancel'))
           .fontSize(13).height(36).layoutWeight(1)
-          .backgroundColor('#e0e0e0').fontColor('#333')
+          .backgroundColor(this.chipBg()).fontColor(this.txtPri())
           .onClick(() => {
             this.showTabsEdit = false;
           })
@@ -7203,7 +7266,7 @@ struct Index {
     }
     .width('78%')
     .padding(14)
-    .backgroundColor('#ffffff')
+    .backgroundColor(this.cardBg())
     .borderRadius(12)
   }
 
@@ -7213,13 +7276,13 @@ struct Index {
   buildExitConfirm() {
     Column({ space: 12 }) {
       Text($r('app.string.exit_confirm_title'))
-        .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333')
+        .fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
       Text($r('app.string.exit_confirm_msg'))
-        .fontSize(13).fontColor('#555')
+        .fontSize(13).fontColor(this.txtSec())
       Row({ space: 12 }) {
         Button($r('app.string.common_cancel'))
           .fontSize(13).height(36).layoutWeight(1)
-          .backgroundColor('#e0e0e0').fontColor('#333')
+          .backgroundColor(this.chipBg()).fontColor(this.txtPri())
           .onClick(() => {
             this.showExitConfirm = false;
           })
@@ -7239,7 +7302,7 @@ struct Index {
     }
     .width('72%')
     .padding(14)
-    .backgroundColor('#ffffff')
+    .backgroundColor(this.cardBg())
     .borderRadius(12)
   }
 
@@ -7250,9 +7313,9 @@ struct Index {
     Column({ space: 8 }) {
       Row() {
         Text($r('app.string.about_licenses'))
-          .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333').layoutWeight(1)
+          .fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.txtPri()).layoutWeight(1)
         Text('\u2716')
-          .fontSize(18).fontColor('#888').width(36).height(36).textAlign(TextAlign.Center)
+          .fontSize(18).fontColor(this.txtHint()).width(36).height(36).textAlign(TextAlign.Center)
           .onClick(() => {
             this.showLicenses = false;
           })
@@ -7265,7 +7328,7 @@ struct Index {
     .width('90%')
     .height('82%')
     .padding(10)
-    .backgroundColor('#ffffff')
+    .backgroundColor(this.cardBg())
     .borderRadius(12)
   }
 
@@ -7280,15 +7343,15 @@ struct Index {
     Column() {
       Row() {
         Text($r('app.string.drawer_about'))
-          .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333').layoutWeight(1)
+          .fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.txtPri()).layoutWeight(1)
         Text('\u2716')
-          .fontSize(18).fontColor('#888').width(36).height(36).textAlign(TextAlign.Center)
+          .fontSize(18).fontColor(this.txtHint()).width(36).height(36).textAlign(TextAlign.Center)
           .onClick(() => {
             this.activeOverlay = 0;
           })
       }
       .width('100%').padding({ left: 12, right: 6, top: 8 })
-      Divider().color('#eee')
+      Divider().color(this.divColor())
       Scroll() {
         Column({ space: 10 }) {
           /* version pill */
@@ -7299,12 +7362,12 @@ struct Index {
             .borderRadius(16)
           /* app description */
           Text($r('app.string.app_description'))
-            .fontSize(13).fontColor('#555')
+            .fontSize(13).fontColor(this.txtSec())
             .textAlign(TextAlign.Center)
             .padding({ left: 8, right: 8 })
           /* version row */
           Text('v' + this.appVersion)
-            .fontSize(12).fontColor('#888')
+            .fontSize(12).fontColor(this.txtHint())
           /* what's new link */
           Text($r('app.string.about_whatnew'))
             .fontSize(14).fontColor(this.thm())
@@ -7312,11 +7375,11 @@ struct Index {
             .onClick(() => {
               this.openExternal(WHATSNEW_URL);
             })
-          Divider().color('#eee')
+          Divider().color(this.divColor())
           /* GPL + licenses */
           Row({ space: 8 }) {
             Text($r('app.string.about_gpl'))
-              .fontSize(12).fontColor('#555')
+              .fontSize(12).fontColor(this.txtSec())
             Text($r('app.string.about_licenses'))
               .fontSize(12).fontColor(this.thm())
               .decoration({ type: TextDecorationType.Underline, color: this.thm() })
@@ -7329,7 +7392,7 @@ struct Index {
           /* support email */
           Row({ space: 8 }) {
             Text($r('app.string.about_support'))
-              .fontSize(12).fontColor('#555')
+              .fontSize(12).fontColor(this.txtSec())
             Text(SUPPORT_MAIL)
               .fontSize(12).fontColor(this.thm())
               .decoration({ type: TextDecorationType.Underline, color: this.thm() })
@@ -7342,7 +7405,7 @@ struct Index {
           /* home page */
           Row({ space: 8 }) {
             Text($r('app.string.about_homepage'))
-              .fontSize(12).fontColor('#555')
+              .fontSize(12).fontColor(this.txtSec())
             Text('HowRead \u597D\u597D\u8BFB')
               .fontSize(12).fontColor(this.thm())
               .decoration({ type: TextDecorationType.Underline, color: this.thm() })
@@ -7354,7 +7417,7 @@ struct Index {
           .width('100%')
           /* fork footnote + tagline */
           Text($r('app.string.fork_of_librera'))
-            .fontSize(11).fontColor('#999')
+            .fontSize(11).fontColor(this.txtFaint())
             .textAlign(TextAlign.Center)
           Text($r('app.string.drawer_tagline'))
             .fontSize(15).fontColor(this.thm())
@@ -7368,7 +7431,7 @@ struct Index {
       .align(Alignment.Top)
     }
     .width('86%')
-    .backgroundColor('#ffffff')
+    .backgroundColor(this.cardBg())
     .borderRadius(12)
     .align(Alignment.Center)
   }

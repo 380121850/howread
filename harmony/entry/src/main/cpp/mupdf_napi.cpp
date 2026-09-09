@@ -419,8 +419,12 @@ static void RenderJobExecute(napi_env /*env*/, void *data)
         }
 
         if (job->invert) {
-            for (size_t i = 0; i < outSize; i++) {
+            /* invert RGB only — XORing alpha too would make the whole page
+             * bitmap fully transparent (night mode showed as a blank page) */
+            for (size_t i = 0; i + 3 < outSize; i += 4) {
                 out[i] = static_cast<uint8_t>(out[i] ^ 0xFF);
+                out[i + 1] = static_cast<uint8_t>(out[i + 1] ^ 0xFF);
+                out[i + 2] = static_cast<uint8_t>(out[i + 2] ^ 0xFF);
             }
         }
 

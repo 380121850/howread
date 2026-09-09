@@ -199,8 +199,16 @@ struct PageRenderer {
   @State renderH: number = 1;
   /* Round 5: contrast 0..100, 50 = neutral (colorFilter on the page image) */
   contrastLevel: number = 50;
+  /* Night/day fix: invert is pushed from the parent so a theme change re-renders.
+   * (the flag alone only affects future renders — this page was rendered before
+   *  async initSettings applied the stored theme on cold open) */
+  @Prop @Watch('onInvertChanged') nightInvert: boolean = false;
 
   aboutToAppear(): void {
+    this.loadData();
+  }
+
+  onInvertChanged(): void {
     this.loadData();
   }
 
@@ -401,6 +409,7 @@ struct TocPanel {
 struct DoublePageRenderer {
   pageIndex: number = 0; /* the pair index */
   dataSource: PageDataSource = new PageDataSource();
+  @Prop nightInvert: boolean = false;
   @State leftPage: number = 0;
   @State rightPage: number = 0;
 
@@ -411,10 +420,10 @@ struct DoublePageRenderer {
 
   build() {
     Row({ space: 2 }) {
-      PageRenderer({ pageIndex: this.leftPage, dataSource: this.dataSource })
+      PageRenderer({ pageIndex: this.leftPage, dataSource: this.dataSource, nightInvert: this.nightInvert })
         .layoutWeight(1)
       if (this.rightPage < this.dataSource.getPageCount()) {
-        PageRenderer({ pageIndex: this.rightPage, dataSource: this.dataSource })
+        PageRenderer({ pageIndex: this.rightPage, dataSource: this.dataSource, nightInvert: this.nightInvert })
           .layoutWeight(1)
       } else {
         Column()
@@ -439,17 +448,18 @@ const MUSICIAN_BOTTOM: CropRect = { x0: 0, y0: 0.5, x1: 1, y1: 1 };
 struct MusicianPageRenderer {
   pageIndex: number = 0;
   dataSource: PageDataSource = new PageDataSource();
+  @Prop nightInvert: boolean = false;
   @State half: number = 0; /* 0=top half, 1=bottom half */
   onHalfChange: (page: number, half: number) => void = () => {};
 
   build() {
     Column() {
       if (this.half === 0) {
-        PageRenderer({ pageIndex: this.pageIndex, dataSource: this.dataSource, cropRect: MUSICIAN_TOP })
+        PageRenderer({ pageIndex: this.pageIndex, dataSource: this.dataSource, cropRect: MUSICIAN_TOP, nightInvert: this.nightInvert })
           .width('100%')
           .height('100%')
       } else {
-        PageRenderer({ pageIndex: this.pageIndex, dataSource: this.dataSource, cropRect: MUSICIAN_BOTTOM })
+        PageRenderer({ pageIndex: this.pageIndex, dataSource: this.dataSource, cropRect: MUSICIAN_BOTTOM, nightInvert: this.nightInvert })
           .width('100%')
           .height('100%')
       }
@@ -719,6 +729,7 @@ struct Reader {
   private async initSettings(ctx: Context): Promise<void> {
     const s: ReaderSettings = await loadSettings(ctx);
     this.applySettings(s);
+    this.settingsLoaded = true;
     /* I8: E-ink device auto-detection (heuristic: theme=3 means ink/OLED) */
       this.einkDetected = (this.theme === 3);
       if (this.einkDetected) {
@@ -781,15 +792,26 @@ struct Reader {
     }
   }
 
+  /** guard: true once initSettings has applied stored settings (prevents a
+   *  too-early persist from overwriting stored values with initial defaults). */
+  private settingsLoaded: boolean = false;
+
   /** Persist the current runtime settings (called on exit and panel changes).
    *  Round 7: merge over the stored settings so Index-managed fields
    *  (lock, proxy, library, tabs, colors, …) survive reader-side saves. */
   private async persistSettings(): Promise<void> {
+    if (!this.settingsLoaded) {
+      return;
+    }
     const ctx = getContext(this);
     const cur: ReaderSettings = await loadSettings(ctx);
+    /* store the user zoom without the render-quality multiplier
+     * (applySettings multiplies it back on load, else it snowballs) */
+    const qualityMults: number[] = [0.75, 1.0, 1.5];
+    const qm: number = qualityMults[this.renderQualityLevel] !== undefined ? qualityMults[this.renderQualityLevel] : 1.0;
     const s: ReaderSettings = {
       theme: this.theme,
-      zoom: this.zoomLevel,
+      zoom: qm > 0 ? this.zoomLevel / qm : this.zoomLevel,
       scrollMode: this.scrollMode,
       pageMode: this.pageMode,
       nightMode: this.nightMode,
@@ -3259,7 +3281,7 @@ struct Reader {
               ForEach(this.pageList, (pageIdx: number) => {
                 if (this.pageMode === 1) {
                   /* double-page: each swiper page shows a pair */
-                  DoublePageRenderer({ pageIndex: pageIdx, dataSource: this.dataSource })
+                  DoublePageRenderer({ pageIndex: pageIdx, dataSource: this.dataSource, nightInvert: this.nightMode })
                 } else if (this.pageSplit) {
                   /* Round 5: page split — one wide page shown as two halves side by side */
                   Row() {
@@ -3267,13 +3289,15 @@ struct Reader {
                       pageIndex: pageIdx,
                       dataSource: this.dataSource,
                       cropRect: SPLIT_LEFT,
-                      contrastLevel: this.contrastLevel
+                      contrastLevel: this.contrastLevel,
+                      nightInvert: this.nightMode
                     }).layoutWeight(1)
                     PageRenderer({
                       pageIndex: pageIdx,
                       dataSource: this.dataSource,
                       cropRect: SPLIT_RIGHT,
-                      contrastLevel: this.contrastLevel
+                      contrastLevel: this.contrastLevel,
+                      nightInvert: this.nightMode
                     }).layoutWeight(1)
                   }
                   .width('100%').height('100%')
@@ -3284,7 +3308,8 @@ struct Reader {
                     searchHits: pageIdx === this.searchHitPage ? this.searchHits : [],
                     annotations: pageIdx === this.currentPage ? this.annotations : [],
                     selPreview: pageIdx === this.currentPage ? this.selPreview : [],
-                    contrastLevel: this.contrastLevel
+                    contrastLevel: this.contrastLevel,
+                    nightInvert: this.nightMode
                   })
                 }
               }, (item: number) => `${item}_${this.zoomLevel}_${this.nightMode}_${this.pageMode}_${this.reflowVersion}_${this.pageSplit}_${this.contrastLevel}_${this.renderEpoch}`)
@@ -3406,7 +3431,7 @@ struct Reader {
             List({ scroller: this.vScroller }) {
               ForEach(this.pageList, (pageIdx: number) => {
                 ListItem() {
-                  PageRenderer({ pageIndex: pageIdx, dataSource: this.dataSource, contrastLevel: this.contrastLevel })
+                  PageRenderer({ pageIndex: pageIdx, dataSource: this.dataSource, contrastLevel: this.contrastLevel, nightInvert: this.nightMode })
                 }
                 .width('100%')
                 .height('100vh')
