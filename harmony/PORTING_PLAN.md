@@ -80,6 +80,20 @@
 7. ✅ **验证**：default/debug 构建 + 模拟器逐屏截图比对 hr01/04/05/07/10/12 通过；统计卡响应式（修复 @Builder 值传参不追踪）。
 8. ✅ 待续项已全部完成（2026-09-08 第二批，见下节）。
 
+
+### 阶段 12（2026-09-09）：第四批功能移植（TTS 后台播控 / 桌面卡片 / WebDAV 目录浏览 / 批注管理 / 生物识别 / 小功能包 / i18n 第一批）✅ 已完成（部分待真机）
+
+1. ✅ **UI 资源收敛 + 图标补齐**：101 处硬编码品牌色 → `$r('app.color.*')`；补 26 个 Material SVG（TTS 播控/云盘/版式/手势类）；Tab 顶底切换（tapPositionTop 对齐）；阅读器顶栏时钟+电量。
+2. ✅ **TTS 后台播控**：backgroundTaskManager AUDIO_PLAYBACK 长时任务 + 常驻通知三播控按钮（wantAgent → EntryAbility → AppStorage → Reader 消费）；启停/暂停状态刷新、退出全清理。⏸ 真机复验（模拟器无语音包）。
+3. ✅ **桌面服务卡片**：FormAbility（最近 3 本：封面/书名/进度）+ RecentCard 2×2（postCardAction 打开书）+ form_config；⏸ 真机复验添加到桌面（模拟器无 start-extension）。
+4. ✅ **WebDAV 目录浏览 + 流式下载**：真实 PROPFIND（207 实测通过，模拟器 HTTP 栈接受非枚举方法）→ GET HTML 回退；解析兼容 D: 命名空间与 HTML 列表；目录下钻/上级面包屑；requestInStream 进度条下载入库；HTTP 代理全链路接入（HttpUtil → Sync/Opds/AiClient）；NAPI 自测区默认隐藏（点偏好标题 3 次）。
+5. ✅ **批注管理**：全书标注列表面板（扫描/类型徽标/跳页/单条删除/刷新）。
+6. ✅ **应用锁生物识别**：userAuth FINGERPRINT/FACE 探测 + 系统弹窗校验 + 失败回退密码；偏好开关 + 锁定层按钮。⏸ 真机复验（模拟器无指纹硬件）。
+7. ✅ **分享接收**：plain-text sendData skill + EntryAbility 暂存 + 自动存 TXT 入库。⏸ 真机复验（需真实分享源）。
+8. ✅ **小功能包**：页缩略图 3×3 宫格（跳页验证）、位置历史（跳页压栈/返回上一位置验证）、页面分割（crop 左右半页并排验证）、对比度 colorFilter 矩阵。
+9. ✅ **i18n 第一批**：string.json 44 键（base en + zh_CN），本轮全部新 UI + Tab 标签走 $r 资源；全量铺开仍待续。
+10. ⏸ **仍待续**：i18n 全量（880 条 × 43 语）；TTS 录音导出（平台无 synthesizeToFile）；双语后台预翻译窗口；AI/WebDAV 真实凭据端到端；PROPFIND 在真机 WebDAV 服务器（群晖/Apache/Nginx）上的兼容性抽验；桌面卡片与生物识别真机验证。
+
 ### 阶段 10（2026-09-08）：第二批功能移植（AI 全套 / 服务器管理 / 同步基础版 / 木质书架 / 分享查词）✅ 已完成
 
 1. ✅ **AI 大模型接入全套**：`model/AiClient.ets`（OpenAI 兼容 /chat/completions + /models + 测试，AiConfig 持久化 `librera_ai`）+ `model/Notes.ets`（AI 笔记 `librera_notes`）；hr08 偏好设置对话框（厂商 chips 智谱/OpenAI/DeepSeek/自定义、密钥掩码、获取模型、输出上限、思考模式、测试连接）；hr13 发送给AI 独立页 `pages/AiChat.ets`（可编辑选中文本+问题+回答+保存到笔记，已注册 main_pages.json）；AI 简介书籍（书库长按菜单→结果对话框→保存笔记）；hr18 AI 翻译对话框（源/目标语言、双语对照置灰=面板模式、结果底部面板+保存）；hr17 书签面板「AI 笔记」分组（徽章/页码/删除）。

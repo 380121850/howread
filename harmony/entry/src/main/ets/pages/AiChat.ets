@@ -144,7 +144,7 @@ struct AiChat {
           Row({ space: 10 }) {
             Button('\u53D1\u9001')
               .fontSize(14).height(38)
-              .backgroundColor(this.busy ? '#9fa8da' : '#3949AB').fontColor(Color.White)
+              .backgroundColor(this.busy ? '#9fa8da' : $r('app.color.brand_primary')).fontColor(Color.White)
               .layoutWeight(1)
               .onClick(() => {
                 this.send();
@@ -166,7 +166,7 @@ struct AiChat {
           Column() {
             if (this.busy) {
               Row({ space: 8 }) {
-                LoadingProgress().width(22).height(22).color('#3949AB')
+                LoadingProgress().width(22).height(22).color($r('app.color.brand_primary'))
                 Text('\u6B63\u5728\u8BF7\u6C42\u6A21\u578B\u2026').fontSize(13).fontColor('#777')
               }
             } else if (this.answer.length > 0) {

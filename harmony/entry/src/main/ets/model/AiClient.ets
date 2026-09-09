@@ -1,5 +1,6 @@
 import http from '@ohos.net.http';
 import preferences from '@ohos.data.preferences';
+import { loadProxy, proxyOpt } from './HttpUtil';
 
 /**
  * OpenAI-compatible AI client (Android parity 2026-09: AI 大模型接入).
@@ -128,7 +129,7 @@ function parseErrorBody(body: string): string {
 }
 
 /** Single chat completion (non-stream). Resolves with the assistant text. */
-export async function chatCompletion(cfg: AiConfig, messages: AiMessage[], maxTokens: number): Promise<string> {
+export async function chatCompletion(cfg: AiConfig, messages: AiMessage[], maxTokens: number, ctx?: Context): Promise<string> {
   if (!aiConfigReady(cfg)) {
     return Promise.reject(new Error('\u8BF7\u5148\u5728\u504F\u597D\u4E2D\u914D\u7F6E AI \u5927\u6A21\u578B'));
   }
@@ -142,6 +143,7 @@ export async function chatCompletion(cfg: AiConfig, messages: AiMessage[], maxTo
     const t: Record<string, string> = { 'type': cfg.thinking ? 'enabled' : 'disabled' };
     bodyObj['thinking'] = t;
   }
+  const proxy = proxyOpt(await loadProxy(ctx));
   const client = http.createHttp();
   try {
     const resp = await client.request(joinUrl(cfg.url, '/chat/completions'), {
@@ -149,7 +151,8 @@ export async function chatCompletion(cfg: AiConfig, messages: AiMessage[], maxTo
       header: aiHeaders(cfg),
       extraData: JSON.stringify(bodyObj),
       connectTimeout: 15000,
-      readTimeout: 60000
+      readTimeout: 60000,
+      usingProxy: proxy
     });
     const text = resp.result as string;
     if (resp.responseCode < 200 || resp.responseCode >= 300) {
@@ -172,17 +175,19 @@ export async function chatCompletion(cfg: AiConfig, messages: AiMessage[], maxTo
 }
 
 /** List model ids available for the key (GET /models). */
-export async function listModels(cfg: AiConfig): Promise<string[]> {
+export async function listModels(cfg: AiConfig, ctx?: Context): Promise<string[]> {
   if (cfg.url.length === 0 || cfg.key.length === 0) {
     return Promise.reject(new Error('\u8BF7\u5148\u586B\u5199 API \u5730\u5740\u4E0E\u5BC6\u94A5'));
   }
+  const proxy = proxyOpt(await loadProxy(ctx));
   const client = http.createHttp();
   try {
     const resp = await client.request(joinUrl(cfg.url, '/models'), {
       method: http.RequestMethod.GET,
       header: aiHeaders(cfg),
       connectTimeout: 15000,
-      readTimeout: 20000
+      readTimeout: 20000,
+      usingProxy: proxy
     });
     const text = resp.result as string;
     if (resp.responseCode < 200 || resp.responseCode >= 300) {
@@ -206,7 +211,7 @@ export async function listModels(cfg: AiConfig): Promise<string[]> {
 }
 
 /** Quick connectivity test with a tiny prompt. */
-export async function testChat(cfg: AiConfig, text: string): Promise<string> {
+export async function testChat(cfg: AiConfig, text: string, ctx?: Context): Promise<string> {
   const msgs: AiMessage[] = [{ role: 'user', content: text.length > 0 ? text : '\u4F60\u597D' }];
-  return chatCompletion(cfg, msgs, 256);
+  return chatCompletion(cfg, msgs, 256, ctx);
 }

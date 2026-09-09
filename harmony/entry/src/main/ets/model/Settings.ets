@@ -79,6 +79,12 @@ export interface ReaderSettings {
   renderQuality: number;
   /** Page flip animation: 0=slide, 1=curl, 2=fade */
   flipAnimation: number;
+  /** Main Tab bar at top instead of bottom (round 5, Android tapPositionTop) */
+  tabPositionTop: boolean;
+  /** Reader top bar clock+battery indicators (round 5) */
+  showTopBarInfo: boolean;
+  /** Try biometric unlock (fingerprint/face) before the passcode (round 5) */
+  appLockBiometric: boolean;
 }
 
 const PREF_NAME = 'librera_settings';
@@ -125,7 +131,10 @@ export function defaultSettings(): ReaderSettings {
     proxyPort: 8080,
     proxyType: 0,
     renderQuality: 1,
-    flipAnimation: 0
+    flipAnimation: 0,
+    tabPositionTop: false,
+    showTopBarInfo: false,
+    appLockBiometric: false
   };
 }
 
@@ -171,7 +180,10 @@ export async function loadSettings(ctx: Context): Promise<ReaderSettings> {
       proxyPort: typeof r.proxyPort === 'number' ? r.proxyPort : d.proxyPort,
       proxyType: typeof r.proxyType === 'number' ? r.proxyType : d.proxyType,
       renderQuality: typeof r.renderQuality === 'number' ? r.renderQuality : d.renderQuality,
-      flipAnimation: typeof r.flipAnimation === 'number' ? r.flipAnimation : d.flipAnimation
+      flipAnimation: typeof r.flipAnimation === 'number' ? r.flipAnimation : d.flipAnimation,
+      tabPositionTop: r.tabPositionTop === true,
+      showTopBarInfo: r.showTopBarInfo === true,
+      appLockBiometric: r.appLockBiometric === true
     };
     return s;
   } catch (e) {

@@ -11,6 +11,29 @@ export function stashWantUri(want: Want): void {
     AppStorage.setOrCreate(KEY_PENDING_URI, uri);
     hilog.info(0x0000, TAG, 'File association open: %{public}s', uri);
   }
+  /* Round 5: TTS notification control buttons carry a `tts_cmd` parameter;
+   * the Reader consumes it on its poll tick via AppStorage (key `ttsCmd`). */
+  const params = want.parameters as Record<string, Object> | undefined;
+  const cmd: string | undefined = params !== undefined && params !== null
+    ? params['tts_cmd'] as string : undefined;
+  if (cmd !== undefined && cmd.length > 0) {
+    AppStorage.setOrCreate('ttsCmd', cmd + '#' + Date.now().toString());
+    hilog.info(0x0000, TAG, 'TTS cmd from notification: %{public}s', cmd);
+  }
+  /* Round 5: service card tap → open the book (consumed by Index.onPageShow) */
+  const cardOpen: string | undefined = params !== undefined && params !== null
+    ? params['cardOpen'] as string : undefined;
+  if (cardOpen !== undefined && cardOpen.length > 0) {
+    AppStorage.setOrCreate('cardOpenPath', cardOpen);
+    hilog.info(0x0000, TAG, 'Card open request: %{public}s', cardOpen);
+  }
+  /* Round 5: share-receive of plain text (Android SendReceive parity) */
+  const text: string | undefined = params !== undefined && params !== null
+    ? params['text'] as string : undefined;
+  if (text !== undefined && text !== null && text.length > 0) {
+    AppStorage.setOrCreate('sharedText', text);
+    hilog.info(0x0000, TAG, 'Shared text received (%{public}d chars)', text.length);
+  }
 }
 
 export default class EntryAbility extends UIAbility {

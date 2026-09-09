@@ -1,0 +1,24 @@
+{
+  "forms": [
+    {
+      "name": "RecentCard",
+      "isDefault": true,
+      "uiSyntax": "arkts",
+      "displayName": "$string:form_recent_label",
+      "description": "$string:form_recent_desc",
+      "src": "./ets/form/RecentCard.ets",
+      "window": {
+        "designWidth": 720,
+        "autoDesignWidth": true
+      },
+      "colorMode": "auto",
+      "updateEnabled": true,
+      "scheduledUpdateTime": "07:30",
+      "updateDuration": 2,
+      "defaultDimension": "2*2",
+      "supportDimensions": [
+        "2*2"
+      ]
+    }
+  ]
+}

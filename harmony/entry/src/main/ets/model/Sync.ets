@@ -3,6 +3,7 @@ import preferences from '@ohos.data.preferences';
 import util from '@ohos.util';
 import { RecentBook, exportRecentBooks, saveRecentBook } from './ReadingProgress';
 import { exportBookmarks, replaceBookmarks, Bookmark } from './Bookmarks';
+import { loadProxy, proxyOpt } from './HttpUtil';
 
 /**
  * WebDAV sync (Android syncThreeWayFile parity, round 4 C):
@@ -222,14 +223,16 @@ interface SyncPayload {
   bookmarks: Bookmark[];
 }
 
-async function davGet(c: SyncConfig, fileName: string): Promise<string | undefined> {
+async function davGet(c: SyncConfig, fileName: string, ctx?: Context): Promise<string | undefined> {
   const client = http.createHttp();
   try {
+    const proxy = proxyOpt(await loadProxy(ctx));
     const resp = await client.request(joinUrl(c, fileName), {
       method: http.RequestMethod.GET,
       header: davHeaders(c, false),
       connectTimeout: 10000,
-      readTimeout: 20000
+      readTimeout: 20000,
+      usingProxy: proxy
     });
     if (resp.responseCode === 200) {
       return resp.result as string;
@@ -242,15 +245,17 @@ async function davGet(c: SyncConfig, fileName: string): Promise<string | undefin
   }
 }
 
-async function davPut(c: SyncConfig, fileName: string, body: string): Promise<boolean> {
+async function davPut(c: SyncConfig, fileName: string, body: string, ctx?: Context): Promise<boolean> {
   const client = http.createHttp();
   try {
+    const proxy = proxyOpt(await loadProxy(ctx));
     const resp = await client.request(joinUrl(c, fileName), {
       method: http.RequestMethod.PUT,
       header: davHeaders(c, true),
       extraData: body,
       connectTimeout: 10000,
-      readTimeout: 30000
+      readTimeout: 30000,
+      usingProxy: proxy
     });
     return resp.responseCode >= 200 && resp.responseCode < 300;
   } catch (e) {
@@ -336,7 +341,8 @@ function samePayload(a: SyncPayload, b: SyncPayload, bmsB: Bookmark[]): boolean 
   return a.page === b.page && a.updatedAt === b.updatedAt && sameBms(a.bookmarks, bmsB);
 }
 
-/** Probe the server: GET the remote dir (a WebDAV dir answers 200/207 or a redirect). */export async function testSyncConnection(c: SyncConfig): Promise<string> {
+/** Probe the server: GET the remote dir (a WebDAV dir answers 200/207 or a redirect). */
+export async function testSyncConnection(c: SyncConfig, ctx?: Context): Promise<string> {
   if (c.url.length === 0) {
     return '\u8BF7\u5148\u586B\u5199\u670D\u52A1\u5668\u5730\u5740';
   }
@@ -345,13 +351,15 @@ function samePayload(a: SyncPayload, b: SyncPayload, bmsB: Bookmark[]): boolean 
   if (dir.length > 0) {
     base = base + '/' + dir;
   }
+  const proxy = proxyOpt(await loadProxy(ctx));
   const client = http.createHttp();
   try {
     const resp = await client.request(base, {
       method: http.RequestMethod.GET,
       header: davHeaders(c, false),
       connectTimeout: 10000,
-      readTimeout: 15000
+      readTimeout: 15000,
+      usingProxy: proxy
     });
     return '\u8FDE\u63A5\u6210\u529F\uFF0CHTTP ' + resp.responseCode;
   } catch (e) {
@@ -399,7 +407,7 @@ export async function runSync(ctx: Context, cfg: SyncConfig): Promise<SyncLogEnt
     const fileName = safeName(book);
     let remote: SyncPayload | undefined;
     try {
-      const raw = await davGet(cfg, fileName);
+      const raw = await davGet(cfg, fileName, ctx);
       if (raw !== undefined && raw.length > 0) {
         remote = JSON.parse(raw) as SyncPayload;
       }
@@ -407,7 +415,7 @@ export async function runSync(ctx: Context, cfg: SyncConfig): Promise<SyncLogEnt
       remote = undefined;
     }
     if (remote === undefined) {
-      const ok = await davPut(cfg, fileName, JSON.stringify(local));
+      const ok = await davPut(cfg, fileName, JSON.stringify(local), ctx);
       if (ok) {
         entry.up++;
         entry.details.push('\u3010\u4E0A\u4F20\u3011' + book.title + ' \uFF08\u7B2C ' + (book.page + 1) + ' \u9875\uFF09');
@@ -496,7 +504,7 @@ export async function runSync(ctx: Context, cfg: SyncConfig): Promise<SyncLogEnt
     }
     /* write merged state back to the server when it differs */
     if (!sameAsRemote) {
-      const ok = await davPut(cfg, fileName, JSON.stringify(merged));
+      const ok = await davPut(cfg, fileName, JSON.stringify(merged), ctx);
       if (ok) {
         entry.up++;
         entry.details.push('\u3010\u4E0A\u4F20\u3011' + book.title + ' \u5408\u5E76\u7ED3\u679C\u5DF2\u56DE\u5199');

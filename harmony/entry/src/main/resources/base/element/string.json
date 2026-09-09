@@ -27,6 +27,166 @@
     {
       "name": "tab_prefs",
       "value": "Preferences"
+    },
+    {
+      "name": "form_recent_label",
+      "value": "Recent Books"
+    },
+    {
+      "name": "form_recent_desc",
+      "value": "Continue reading from the home screen"
+    },
+    {
+      "name": "drawer_recent",
+      "value": "Recent"
+    },
+    {
+      "name": "drawer_opds",
+      "value": "Online Books"
+    },
+    {
+      "name": "drawer_bookmarks",
+      "value": "Bookmarks & Notes"
+    },
+    {
+      "name": "drawer_settings",
+      "value": "Settings"
+    },
+    {
+      "name": "drawer_about",
+      "value": "About"
+    },
+    {
+      "name": "drawer_night",
+      "value": "Night Mode"
+    },
+    {
+      "name": "drawer_exit",
+      "value": "Exit"
+    },
+    {
+      "name": "common_cancel",
+      "value": "Cancel"
+    },
+    {
+      "name": "common_ok",
+      "value": "OK"
+    },
+    {
+      "name": "common_save",
+      "value": "Save"
+    },
+    {
+      "name": "common_delete",
+      "value": "Delete"
+    },
+    {
+      "name": "ann_panel_title",
+      "value": "Annotations"
+    },
+    {
+      "name": "ann_empty",
+      "value": "(No annotations in this book; select text to add highlights/notes)"
+    },
+    {
+      "name": "ann_scan",
+      "value": "Scanning annotations..."
+    },
+    {
+      "name": "menu_annotations",
+      "value": "Annotation List"
+    },
+    {
+      "name": "menu_thumbs",
+      "value": "Page Thumbnails"
+    },
+    {
+      "name": "menu_history",
+      "value": "Back to Last Position"
+    },
+    {
+      "name": "menu_history_empty",
+      "value": "No earlier reading position"
+    },
+    {
+      "name": "menu_split_on",
+      "value": "Page Split: On"
+    },
+    {
+      "name": "menu_split_off",
+      "value": "Page Split: Off"
+    },
+    {
+      "name": "menu_contrast",
+      "value": "Contrast:"
+    },
+    {
+      "name": "thumb_title",
+      "value": "Page Thumbnails"
+    },
+    {
+      "name": "thumb_rendering",
+      "value": "Rendering thumbnails..."
+    },
+    {
+      "name": "thumb_empty",
+      "value": "(No thumbnails)"
+    },
+    {
+      "name": "thumb_prev",
+      "value": "◀ Prev Group"
+    },
+    {
+      "name": "thumb_next",
+      "value": "Next Group ▶"
+    },
+    {
+      "name": "lock_biometric",
+      "value": "Unlock with Biometrics"
+    },
+    {
+      "name": "pref_tab_pos",
+      "value": "Tab Bar Position:"
+    },
+    {
+      "name": "pref_tab_top",
+      "value": "Top"
+    },
+    {
+      "name": "pref_tab_bottom",
+      "value": "Bottom"
+    },
+    {
+      "name": "pref_topbar_info",
+      "value": "Top Bar Clock/Battery:"
+    },
+    {
+      "name": "pref_biometric",
+      "value": "Biometric Unlock:"
+    },
+    {
+      "name": "pref_biometric_na",
+      "value": "(Not supported or not enrolled)"
+    },
+    {
+      "name": "dav_up",
+      "value": "⬆ Parent Directory"
+    },
+    {
+      "name": "shared_saved",
+      "value": "Shared text saved as a book"
+    },
+    {
+      "name": "biom_title",
+      "value": "Unlock HowRead"
+    },
+    {
+      "name": "biom_na",
+      "value": "Biometrics unavailable"
+    },
+    {
+      "name": "biom_fail",
+      "value": "Verification failed"
     }
   ]
 }

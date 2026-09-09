@@ -19,6 +19,166 @@
     {
       "name": "tab_prefs",
       "value": "偏好"
+    },
+    {
+      "name": "form_recent_label",
+      "value": "最近阅读"
+    },
+    {
+      "name": "form_recent_desc",
+      "value": "在桌面继续上次阅读"
+    },
+    {
+      "name": "drawer_recent",
+      "value": "最近阅读"
+    },
+    {
+      "name": "drawer_opds",
+      "value": "网上书库"
+    },
+    {
+      "name": "drawer_bookmarks",
+      "value": "书签笔记"
+    },
+    {
+      "name": "drawer_settings",
+      "value": "设置选项"
+    },
+    {
+      "name": "drawer_about",
+      "value": "软件说明"
+    },
+    {
+      "name": "drawer_night",
+      "value": "夜间模式"
+    },
+    {
+      "name": "drawer_exit",
+      "value": "退出"
+    },
+    {
+      "name": "common_cancel",
+      "value": "取消"
+    },
+    {
+      "name": "common_ok",
+      "value": "确定"
+    },
+    {
+      "name": "common_save",
+      "value": "保存"
+    },
+    {
+      "name": "common_delete",
+      "value": "删除"
+    },
+    {
+      "name": "ann_panel_title",
+      "value": "标注列表"
+    },
+    {
+      "name": "ann_empty",
+      "value": "(全书暂无标注，选中文字可添加高亮/笔记)"
+    },
+    {
+      "name": "ann_scan",
+      "value": "正在扫描全书标注..."
+    },
+    {
+      "name": "menu_annotations",
+      "value": "标注列表"
+    },
+    {
+      "name": "menu_thumbs",
+      "value": "页缩略图"
+    },
+    {
+      "name": "menu_history",
+      "value": "返回上一位置"
+    },
+    {
+      "name": "menu_history_empty",
+      "value": "没有更早的阅读位置"
+    },
+    {
+      "name": "menu_split_on",
+      "value": "页面分割:开"
+    },
+    {
+      "name": "menu_split_off",
+      "value": "页面分割:关"
+    },
+    {
+      "name": "menu_contrast",
+      "value": "对比度:"
+    },
+    {
+      "name": "thumb_title",
+      "value": "页缩略图"
+    },
+    {
+      "name": "thumb_rendering",
+      "value": "正在渲染缩略图..."
+    },
+    {
+      "name": "thumb_empty",
+      "value": "(无缩略图)"
+    },
+    {
+      "name": "thumb_prev",
+      "value": "◀ 上一组"
+    },
+    {
+      "name": "thumb_next",
+      "value": "下一组 ▶"
+    },
+    {
+      "name": "lock_biometric",
+      "value": "👤 使用生物识别解锁"
+    },
+    {
+      "name": "pref_tab_pos",
+      "value": "Tab 栏位置:"
+    },
+    {
+      "name": "pref_tab_top",
+      "value": "顶部"
+    },
+    {
+      "name": "pref_tab_bottom",
+      "value": "底部"
+    },
+    {
+      "name": "pref_topbar_info",
+      "value": "顶栏时钟电量:"
+    },
+    {
+      "name": "pref_biometric",
+      "value": "生物识别解锁:"
+    },
+    {
+      "name": "pref_biometric_na",
+      "value": "(本机不支持或未录入指纹/人脸)"
+    },
+    {
+      "name": "dav_up",
+      "value": "⬆ 上级目录"
+    },
+    {
+      "name": "shared_saved",
+      "value": "分享文本已保存为书籍"
+    },
+    {
+      "name": "biom_title",
+      "value": "解锁 HowRead"
+    },
+    {
+      "name": "biom_na",
+      "value": "生物识别不可用"
+    },
+    {
+      "name": "biom_fail",
+      "value": "验证失败"
     }
   ]
 }

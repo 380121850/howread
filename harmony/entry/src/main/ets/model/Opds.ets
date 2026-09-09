@@ -1,4 +1,5 @@
 import http from '@ohos.net.http';
+import { loadProxy, proxyOpt } from './HttpUtil';
 
 /**
  * Minimal OPDS catalog client (Phase 5): fetch an Atom/OPDS feed and extract
@@ -72,9 +73,10 @@ function resolveHref(base: string, href: string): string {
 }
 
 /** Fetch + parse an OPDS feed; returns entries (subs first). */
-export async function fetchOpds(url: string, timeoutMs: number): Promise<OpdsEntry[]> {
+export async function fetchOpds(url: string, timeoutMs: number, ctx?: Context): Promise<OpdsEntry[]> {
   const req = http.createHttp();
   try {
+    const proxy = proxyOpt(await loadProxy(ctx));
     const resp = await req.request(url, {
       method: http.RequestMethod.GET,
       header: {
@@ -82,7 +84,8 @@ export async function fetchOpds(url: string, timeoutMs: number): Promise<OpdsEnt
         'Accept': 'application/atom+xml, application/xml, text/xml, */*'
       },
       connectTimeout: timeoutMs,
-      readTimeout: timeoutMs
+      readTimeout: timeoutMs,
+      usingProxy: proxy
     });
     if (resp.responseCode !== 200) {
       console.warn(`[Opds] fetch ${url} -> ${resp.responseCode}`);

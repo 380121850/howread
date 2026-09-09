@@ -14,6 +14,12 @@
     "requestPermissions": [
       {
         "name": "ohos.permission.INTERNET"
+      },
+      {
+        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING"
+      },
+      {
+        "name": "ohos.permission.ACCESS_BIOMETRIC"
       }
     ],
     "abilities": [
@@ -25,6 +31,9 @@
         "label": "$string:EntryAbility_label",
         "startWindowIcon": "$media:icon",
         "startWindowBackground": "$color:start_window_background",
+        "backgroundModes": [
+          "audioPlayback"
+        ],
         "exported": true,
         "skills": [
           {
@@ -77,8 +86,30 @@
                 "scheme": "file",
                 "utd": "general.tiff",
                 "maxFileSupported": 1
+              },
+              {
+                "scheme": "file",
+                "utd": "general.plain-text",
+                "maxFileSupported": 1
               }
             ]
+          }
+        ]
+      }
+    ],
+    "extensionAbilities": [
+      {
+        "name": "FormAbility",
+        "srcEntry": "./ets/entryformability/FormAbility.ets",
+        "description": "$string:form_recent_desc",
+        "icon": "$media:icon",
+        "label": "$string:form_recent_label",
+        "type": "form",
+        "exported": false,
+        "metadata": [
+          {
+            "name": "ohos.extension.form",
+            "resource": "$profile:form_config"
           }
         ]
       }

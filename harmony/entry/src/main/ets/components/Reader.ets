@@ -18,6 +18,7 @@ import fs from '@ohos.file.fs';
 import image from '@ohos.multimedia.image';
 import router from '@ohos.router';
 import brightness from '@system.brightness';
+import batteryInfo from '@ohos.batteryInfo';
 import webview from '@ohos.web.webview';
 import promptAction from '@ohos.promptAction';
 import picker from '@ohos.file.picker';
@@ -51,6 +52,26 @@ const ZOOM_STEP: number = 0.25;
 /** Layout page size (points) used for reflowable documents */
 const REFLOW_W: number = 595;
 const REFLOW_H: number = 842;
+/** Round 5: page-split halves (normalized crop rects) */
+const SPLIT_LEFT: CropRect = { x0: 0, y0: 0, x1: 0.5, y1: 1 };
+const SPLIT_RIGHT: CropRect = { x0: 0.5, y0: 0, x1: 1, y1: 1 };
+/** Round 5: thumbnails per grid window */
+const THUMB_WINDOW: number = 9;
+/** Round 5: max page-jump history entries */
+const PAGE_HISTORY_MAX: number = 32;
+
+/** Round 5: 4x5 color matrix that adjusts contrast (c = 0..100, 50 = neutral). */
+function contrastMatrix(c: number): number[] {
+  const s: number = Math.max(0.1, c / 50);
+  const off: number = 0.5 * (1 - s);
+  const m: number[] = [
+    s, 0, 0, 0, off,
+    0, s, 0, 0, off,
+    0, 0, s, 0, off,
+    0, 0, 0, 1, 0
+  ];
+  return m;
+}
 
 /**
  * Data source for page list (shared by Swiper and List modes).
@@ -175,6 +196,8 @@ struct PageRenderer {
   @State errorText: string = '';
   @State renderW: number = 1;
   @State renderH: number = 1;
+  /* Round 5: contrast 0..100, 50 = neutral (colorFilter on the page image) */
+  contrastLevel: number = 50;
 
   aboutToAppear(): void {
     this.loadData();
@@ -224,6 +247,7 @@ struct PageRenderer {
             .objectFit(ImageFit.Contain)
             .width('100%')
             .borderRadius(2)
+            .colorFilter(new ColorFilter(contrastMatrix(this.contrastLevel)))
           /* search hit highlights (yellow) */
           ForEach(this.searchHits, (hit: TextRect) => {
             Column()
@@ -482,6 +506,29 @@ struct Reader {
   @State showExportDialog: boolean = false; /* notes/bookmarks export format picker (A) */
   @State transInPage: boolean = false;      /* in-page bilingual toggle (D, EPUB/TXT only) */
   private biOriginalPath: string = '';      /* set while reading the rebuilt bilingual file */
+  /* Round 5: top bar clock + battery (Android document_title_bar parity) */
+  @State topClock: string = '';
+  @State topBattery: string = '';
+  @State showTopBarInfo: boolean = false;
+  private topInfoTimerId: number = -1;
+  /* Round 5: TTS notification remote control */
+  private ttsLastCmdKey: string = '';
+  /* Round 5: whole-book annotation list panel */
+  @State showAnnPanel: boolean = false;
+  @State annAll: AnnotationInfo[] = [];   /* flattened across pages (page encoded below) */
+  @State annPages: number[] = [];          /* parallel page index for each annAll entry */
+  @State annScanning: boolean = false;
+  /* Round 5: page split (wide pages shown as two halves) */
+  @State pageSplit: boolean = false;
+  /* Round 5: contrast 0..100 (50 = neutral) */
+  @State contrastLevel: number = 50;
+  /* Round 5: page thumbnail grid */
+  @State showThumbs: boolean = false;
+  @State thumbMaps: image.PixelMap[] = [];
+  @State thumbStart: number = 0;
+  @State thumbBusy: boolean = false;
+  /* Round 5: page-jump history (返回上一位置) */
+  private pageHistory: number[] = [];
   private aiCfg: AiConfig = { provider: '', url: '', key: '', model: '', maxTokens: 8192, thinking: false };
   @State annotations: AnnotationInfo[] = []; /* current page annotations */
   @State drawMode: boolean = false;         /* freehand drawing mode */
@@ -593,6 +640,11 @@ struct Reader {
       this.readTimerId = setInterval(() => {
         this.tickReadTime();
       }, 30000);
+      /* Round 5: clock+battery in the top bar, refresh every 30s */
+      this.refreshTopInfo();
+      this.topInfoTimerId = setInterval(() => {
+        this.refreshTopInfo();
+      }, 30000);
       this.initSettings(ctx).then(() => {
         const params = router.getParams() as Record<string, string>;
         if (params !== null && params !== undefined && params['docPath'] !== undefined) {
@@ -623,6 +675,20 @@ struct Reader {
     }
   }
 
+  /** Round 5: refresh clock + battery shown in the top bar. */
+  private refreshTopInfo(): void {
+    try {
+      const d = new Date();
+      const hh = d.getHours().toString().padStart(2, '0');
+      const mm = d.getMinutes().toString().padStart(2, '0');
+      this.topClock = hh + ':' + mm;
+      const soc: number = batteryInfo.batterySOC;
+      this.topBattery = (soc >= 0 ? soc : 0) + '%';
+    } catch (e) {
+      console.warn('[Reader] top info refresh failed');
+    }
+  }
+
   /** Load persisted settings and apply them to the runtime state. */
   private async initSettings(ctx: Context): Promise<void> {
     const s: ReaderSettings = await loadSettings(ctx);
@@ -649,6 +715,7 @@ struct Reader {
 
   private applySettings(s: ReaderSettings): void {
     this.theme = s.theme;
+    this.showTopBarInfo = s.showTopBarInfo;
     /* K4: Apply render quality multiplier */
       const qualityMults: number[] = [0.75, 1.0, 1.5];
       this.renderQualityLevel = s.renderQuality;
@@ -713,7 +780,10 @@ struct Reader {
       textIndent: this.textIndent,
       dropCapEnabled: this.dropCapEnabled,
       fontFamily: ['default', 'serif', 'sans-serif', 'monospace'][this.fontFamilyIdx],
-      flipAnimation: 0
+      flipAnimation: 0,
+      tabPositionTop: false, /* managed on the Index side */
+      showTopBarInfo: this.showTopBarInfo,
+      appLockBiometric: false /* managed on the Index side */
     };
     await saveSettings(getContext(this), s);
   }
@@ -867,9 +937,15 @@ struct Reader {
       clearTimeout(this.reminderTimerId);
       this.reminderTimerId = -1;
     }
+    if (this.topInfoTimerId >= 0) {
+      clearInterval(this.topInfoTimerId);
+      this.topInfoTimerId = -1;
+    }
     this.stopAutoFlip();
     this.ttsStopped = true;
     this.stopTtsPoll();
+    stopTtsBackgroundTask(getContext(this));
+    cancelTtsNotification();
     this.webController.runJavaScript('ttsStop()').then((r: string) => {
     }).catch(() => {
     });
@@ -1146,6 +1222,7 @@ struct Reader {
   }
 
   private jumpToBookmark(page: number): void {
+    this.pushPageHistory();
     this.currentPage = Math.max(0, Math.min(page, this.totalPages - 1));
     this.onPageChanged(this.currentPage);
     this.showBookmarks = false;
@@ -1214,6 +1291,128 @@ struct Reader {
     } catch (e) {
       console.error('[Reader] saveDocument failed');
     }
+  }
+
+  /* ---- Round 5: whole-book annotation list panel ---- */
+
+  /** Open the panel and scan annotations across all pages (capped). */
+  private async openAnnPanel(): Promise<void> {
+    this.showAnnPanel = true;
+    this.annScanning = true;
+    this.annAll = [];
+    this.annPages = [];
+    const handle: ESObject | undefined = this.dataSource.getDocHandle();
+    if (handle === undefined) {
+      this.annScanning = false;
+      return;
+    }
+    try {
+      const maxScan: number = Math.min(this.totalPages, 500);
+      for (let p = 0; p < maxScan; p++) {
+        const list: AnnotationInfo[] = getAnnotations(handle, p);
+        for (let i = 0; i < list.length; i++) {
+          this.annAll.push(list[i]);
+          this.annPages.push(p);
+        }
+      }
+      console.info(`[Reader] Annotation scan: ${this.annAll.length} items in ${maxScan} pages`);
+    } catch (e) {
+      console.error('[Reader] Annotation scan failed');
+    }
+    this.annScanning = false;
+  }
+
+  /** Delete one entry from the whole-book list (page-local index needed). */
+  private async deleteAnnEntry(idx: number): Promise<void> {
+    const handle: ESObject | undefined = this.dataSource.getDocHandle();
+    if (handle === undefined) {
+      return;
+    }
+    try {
+      deleteAnnotation(handle, this.annPages[idx], this.annAll[idx].index);
+      await this.openAnnPanel();
+      await this.refreshAnnotations();
+    } catch (e) {
+      console.error('[Reader] ann entry delete failed');
+    }
+  }
+
+  /** Jump to the page holding an annotation. */
+  private jumpAnnPage(idx: number): void {
+    const p: number = this.annPages[idx];
+    if (p >= 0 && p < this.totalPages) {
+      this.currentPage = p;
+      this.showAnnPanel = false;
+      this.onPageChanged(p);
+      console.info(`[Reader] Jump to annotation page ${p + 1}`);
+    }
+  }
+
+  /* ---- Round 5: page-jump history (返回上一位置) ---- */
+
+  private pushPageHistory(): void {
+    if (this.currentPage >= 0) {
+      this.pageHistory.push(this.currentPage);
+      if (this.pageHistory.length > PAGE_HISTORY_MAX) {
+        this.pageHistory.shift();
+      }
+    }
+  }
+
+  /** Pop back to the last jumped-from page. */
+  private popPageHistory(): void {
+    if (this.pageHistory.length === 0) {
+      promptAction.showToast({ message: $r('app.string.menu_history_empty') });
+      return;
+    }
+    const p: number = this.pageHistory.pop() as number;
+    this.currentPage = Math.min(p, this.totalPages - 1);
+    this.onPageChanged(this.currentPage);
+    console.info(`[Reader] Back to page ${this.currentPage + 1} (history)`);
+  }
+
+  /* ---- Round 5: page thumbnail grid (Android page thumbnails parity) ---- */
+
+  private openThumbs(): void {
+    this.showThumbs = true;
+    this.renderThumbWindow(this.currentPage);
+  }
+
+  /** Render a window of THUMB_WINDOW pages starting at `start`. */
+  private async renderThumbWindow(start: number): Promise<void> {
+    const handle: ESObject | undefined = this.dataSource.getDocHandle();
+    if (handle === undefined || this.thumbBusy) {
+      return;
+    }
+    const first: number = Math.max(0, Math.min(start, this.totalPages - 1));
+    this.thumbStart = first;
+    this.thumbBusy = true;
+    this.thumbMaps = [];
+    try {
+      const count: number = Math.min(THUMB_WINDOW, this.totalPages - first);
+      for (let i = 0; i < count; i++) {
+        const p: number = first + i;
+        const res: RenderResult = await renderPageAsync(handle, p, { zoom: 0.12 });
+        const opts: image.InitializationOptions = {
+          size: { width: res.width, height: res.height },
+          pixelFormat: image.PixelMapFormat.RGBA_8888
+        };
+        const pm: image.PixelMap = await image.createPixelMap(res.data, opts);
+        this.thumbMaps.push(pm);
+      }
+      console.info(`[Reader] Thumbnails rendered: ${this.thumbMaps.length} from page ${first + 1}`);
+    } catch (e) {
+      console.error('[Reader] Thumbnail render failed');
+    }
+    this.thumbBusy = false;
+  }
+
+  private shiftThumbs(delta: number): void {
+    const next: number = this.thumbStart + delta * THUMB_WINDOW;
+    if (next < 0 || next >= this.totalPages) {
+      return;
+    }
+    this.renderThumbWindow(next);
   }
 
   // ---- Freehand drawing (C3) ----
@@ -1365,6 +1564,8 @@ struct Reader {
     this.webController.runJavaScript('ttsStop()').then((r: string) => {
     }).catch(() => {
     });
+    stopTtsBackgroundTask(getContext(this));
+    cancelTtsNotification();
     this.showTts = false;
     console.info('[Reader] TTS panel closed');
   }
@@ -1433,6 +1634,9 @@ struct Reader {
       this.ttsStatus = '朗读中';
       this.ttsPaused = false;
       this.startTtsPoll();
+      /* Round 5: keep app alive + ongoing notification while reading aloud */
+      startTtsBackgroundTask(getContext(this));
+      this.refreshTtsNotification();
       console.info(`[Reader] TTS speaking ${this.ttsIndex + 1}/${this.ttsSentences.length} (page ${this.currentPage + 1})`);
     } catch (e) {
       this.ttsEngineOk = false;
@@ -1450,6 +1654,32 @@ struct Reader {
     }, 400);
   }
 
+  /** Round 5: apply a command received from the notification control buttons. */
+  private consumeTtsRemoteCmd(): void {
+    const v = AppStorage.get<string>('ttsCmd');
+    if (v === undefined || v.length === 0 || v === this.ttsLastCmdKey) {
+      return;
+    }
+    this.ttsLastCmdKey = v;
+    const cmd: string = v.substring(0, v.indexOf('#') >= 0 ? v.indexOf('#') : v.length);
+    console.info(`[Reader] TTS remote cmd: ${cmd}`);
+    if (cmd === 'prev') {
+      this.ttsPrevSentence();
+    } else if (cmd === 'next') {
+      this.ttsNextSentence();
+    } else if (cmd === 'toggle') {
+      this.ttsTogglePause();
+      this.refreshTtsNotification();
+    }
+  }
+
+  /** Round 5: update the ongoing notification to the current sentence/state. */
+  private refreshTtsNotification(): void {
+    const sent: string = this.ttsIndex >= 0 && this.ttsIndex < this.ttsSentences.length
+      ? this.ttsSentences[this.ttsIndex] : '';
+    showTtsNotification(getContext(this), this.docTitle, sent, this.ttsPaused);
+  }
+
   private stopTtsPoll(): void {
     if (this.ttsPollId >= 0) {
       clearInterval(this.ttsPollId);
@@ -1463,6 +1693,7 @@ struct Reader {
     }
     this.ttsPollBusy = true;
     try {
+      this.consumeTtsRemoteCmd();
       if (this.ttsStopped || !this.showTts) {
         this.stopTtsPoll();
         return;
@@ -1497,6 +1728,7 @@ struct Reader {
       this.webController.runJavaScript('ttsResume()').then((r: string) => {
         this.ttsPaused = false;
         this.ttsStatus = '朗读中';
+        this.refreshTtsNotification();
         console.info('[Reader] TTS resumed');
       }).catch(() => {
       });
@@ -1504,6 +1736,7 @@ struct Reader {
       this.webController.runJavaScript('ttsPause()').then((r: string) => {
         this.ttsPaused = true;
         this.ttsStatus = '已暂停';
+        this.refreshTtsNotification();
         console.info('[Reader] TTS paused');
       }).catch(() => {
       });
@@ -1517,6 +1750,8 @@ struct Reader {
     this.webController.runJavaScript('ttsStop()').then((r: string) => {
     }).catch(() => {
     });
+    stopTtsBackgroundTask(getContext(this));
+    cancelTtsNotification();
     this.ttsStatus = '已停止';
     console.info('[Reader] TTS stopped');
   }
@@ -2327,6 +2562,97 @@ struct Reader {
     return arr;
   }
 
+  /** Round 5: page thumbnail grid (3x3 window, tap to jump). */
+  @Builder
+  buildThumbDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showThumbs = false;
+        })
+
+      Column({ space: 10 }) {
+        Row() {
+          Text($r('app.string.thumb_title'))
+            .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333')
+            .layoutWeight(1)
+          Image($r('app.media.ic_close'))
+            .width(20).height(20).fillColor('#888')
+            .onClick(() => {
+              this.showThumbs = false;
+            })
+        }
+        .width('100%')
+
+        if (this.thumbBusy && this.thumbMaps.length === 0) {
+          Row({ space: 8 }) {
+            Progress({ value: 40, total: 100 }).width(28).height(28)
+            Text($r('app.string.thumb_rendering')).fontSize(13).fontColor('#666')
+          }
+          .justifyContent(FlexAlign.Center)
+          .width('100%').height(200)
+        } else if (this.thumbMaps.length === 0) {
+          Text($r('app.string.thumb_empty')).fontSize(13).fontColor(Color.Gray)
+            .width('100%').height(120).textAlign(TextAlign.Center)
+        } else {
+          Grid() {
+            ForEach(this.thumbMaps, (pm: image.PixelMap, idx: number) => {
+              GridItem() {
+                Column({ space: 3 }) {
+                  Image(pm)
+                    .width('100%').height(110)
+                    .objectFit(ImageFit.Contain)
+                    .backgroundColor('#f5f5f5')
+                    .borderRadius(4)
+                  Text(`${this.thumbStart + idx + 1}`)
+                    .fontSize(11).fontColor('#555')
+                }
+                .onClick(() => {
+                  const target: number = this.thumbStart + idx;
+                  this.pushPageHistory();
+                  this.currentPage = target;
+                  this.onPageChanged(target);
+                  this.showThumbs = false;
+                  console.info(`[Reader] Thumbnail jump to page ${target + 1}`);
+                })
+              }
+            }, (pm: image.PixelMap, idx: number) => `th_${this.thumbStart}_${idx}`)
+          }
+          .columnsTemplate('1fr 1fr 1fr')
+          .rowsGap(8)
+          .columnsGap(8)
+          .width('100%')
+          .height(360)
+        }
+
+        Row({ space: 12 }) {
+          Button($r('app.string.thumb_prev'))
+            .fontSize(12).height(32).layoutWeight(1)
+            .backgroundColor('#e0e0e0').fontColor('#333')
+            .onClick(() => {
+              this.shiftThumbs(-1);
+            })
+          Button($r('app.string.thumb_next'))
+            .fontSize(12).height(32).layoutWeight(1)
+            .backgroundColor('#e0e0e0').fontColor('#333')
+            .onClick(() => {
+              this.shiftThumbs(1);
+            })
+        }
+        .width('100%')
+      }
+      .width('86%')
+      .padding(14)
+      .backgroundColor(Color.White)
+      .borderRadius(10)
+    }
+    .width('100%').height('100%')
+  }
+
+  /** Round 5: page thumbnail grid dialog end. */
+
   /** hr18: AI 翻译 dialog (panel-mode bilingual note + save checkbox). */
   @Builder
   buildTransDialog() {
@@ -2379,7 +2705,7 @@ struct Reader {
         Row({ space: 6 }) {
           Checkbox({ name: 'transBilingual' })
             .width(18).height(18)
-            .selectedColor('#3949AB')
+            .selectedColor($r('app.color.brand_primary'))
             .select(this.transInPage && this.biSupported())
             .enabled(this.biSupported())
             .onChange((v: boolean) => {
@@ -2395,8 +2721,8 @@ struct Reader {
               .padding({ left: 6, right: 6, top: 1, bottom: 1 })
           } else {
             Text('\u9762\u677F\u6A21\u5F0F')
-              .fontSize(11).fontColor('#3949AB')
-              .border({ width: 1, color: '#3949AB' })
+              .fontSize(11).fontColor($r('app.color.brand_primary'))
+              .border({ width: 1, color: $r('app.color.brand_primary') })
               .borderRadius(8)
               .padding({ left: 6, right: 6, top: 1, bottom: 1 })
           }
@@ -2406,7 +2732,7 @@ struct Reader {
         Row({ space: 6 }) {
           Checkbox({ name: 'transSave' })
             .width(18).height(18)
-            .selectedColor('#3949AB')
+            .selectedColor($r('app.color.brand_primary'))
             .select(this.transSave)
             .onChange((v: boolean) => {
               this.transSave = v;
@@ -2417,7 +2743,7 @@ struct Reader {
 
         if (this.transBusy && this.transResult.length > 0) {
           Text(this.transResult)
-            .fontSize(12).fontColor('#3949AB')
+            .fontSize(12).fontColor($r('app.color.brand_primary'))
             .width('100%').maxLines(2)
         }
 
@@ -2431,7 +2757,7 @@ struct Reader {
             })
           Button('\u5F00\u59CB\u7FFB\u8BD1')
             .fontSize(14).height(36)
-            .backgroundColor('#3949AB').fontColor(Color.White)
+            .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
             .onClick(() => {
               this.startTranslate();
             })
@@ -2626,6 +2952,20 @@ struct Reader {
           .alignItems(HorizontalAlign.Start)
           .layoutWeight(1)
 
+          if (this.showTopBarInfo) {
+            Row({ space: 4 }) {
+              Image($r('app.media.ic_clock'))
+                .width(14).height(14).fillColor('#c5cae9')
+              Text(this.topClock)
+                .fontSize(11).fontColor('#c5cae9')
+              Image($r('app.media.ic_battery'))
+                .width(14).height(14).fillColor('#c5cae9').margin({ left: 8 })
+              Text(this.topBattery)
+                .fontSize(11).fontColor('#c5cae9')
+            }
+            .margin({ right: 12 })
+          }
+
           Image($r('app.media.ic_toc'))
             .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
             .onClick(() => {
@@ -2706,18 +3046,34 @@ struct Reader {
                 if (this.pageMode === 1) {
                   /* double-page: each swiper page shows a pair */
                   DoublePageRenderer({ pageIndex: pageIdx, dataSource: this.dataSource })
-                } else if (this.pageMode === 2) {
-                  MusicianPageRenderer({ pageIndex: pageIdx, dataSource: this.dataSource })
+                } else if (this.pageSplit) {
+                  /* Round 5: page split — one wide page shown as two halves side by side */
+                  Row() {
+                    PageRenderer({
+                      pageIndex: pageIdx,
+                      dataSource: this.dataSource,
+                      cropRect: SPLIT_LEFT,
+                      contrastLevel: this.contrastLevel
+                    }).layoutWeight(1)
+                    PageRenderer({
+                      pageIndex: pageIdx,
+                      dataSource: this.dataSource,
+                      cropRect: SPLIT_RIGHT,
+                      contrastLevel: this.contrastLevel
+                    }).layoutWeight(1)
+                  }
+                  .width('100%').height('100%')
                 } else {
                   PageRenderer({
                     pageIndex: pageIdx,
                     dataSource: this.dataSource,
                     searchHits: pageIdx === this.searchHitPage ? this.searchHits : [],
                     annotations: pageIdx === this.currentPage ? this.annotations : [],
-                    selPreview: pageIdx === this.currentPage ? this.selPreview : []
+                    selPreview: pageIdx === this.currentPage ? this.selPreview : [],
+                    contrastLevel: this.contrastLevel
                   })
                 }
-              }, (item: number) => `${item}_${this.zoomLevel}_${this.nightMode}_${this.pageMode}_${this.reflowVersion}`)
+              }, (item: number) => `${item}_${this.zoomLevel}_${this.nightMode}_${this.pageMode}_${this.reflowVersion}_${this.pageSplit}_${this.contrastLevel}`)
             }
             .index(this.rtlEnabled ? (this.totalPages - 1 - this.currentPage) : this.currentPage)
             .width('100%').height('100%')
@@ -2823,11 +3179,11 @@ struct Reader {
           List({ scroller: this.vScroller }) {
             ForEach(this.pageList, (pageIdx: number) => {
               ListItem() {
-                PageRenderer({ pageIndex: pageIdx, dataSource: this.dataSource })
+                PageRenderer({ pageIndex: pageIdx, dataSource: this.dataSource, contrastLevel: this.contrastLevel })
               }
               .width('100%')
               .height('100vh')
-            }, (item: number) => `v_${item}_${this.zoomLevel}_${this.nightMode}_${this.reflowVersion}`)
+            }, (item: number) => `v_${item}_${this.zoomLevel}_${this.nightMode}_${this.reflowVersion}_${this.contrastLevel}`)
           }
           .width('100%').layoutWeight(1)
           .cachedCount(1)
@@ -2916,6 +3272,7 @@ struct Reader {
               if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
                 const target: number = Math.max(0, Math.min(Math.round(value), this.totalPages - 1));
                 if (target !== this.currentPage) {
+                  this.pushPageHistory();
                   this.currentPage = target;
                   this.onPageChanged(target);
                   console.info(`[Reader] Seek to page ${target + 1}`);
@@ -2988,7 +3345,7 @@ struct Reader {
             .width('100%')
             .height(42)
             .padding({ left: 14, right: 14 })
-            .backgroundColor('#3949AB')
+            .backgroundColor($r('app.color.brand_primary'))
 
             /* selected text + TTS entries */
             Row({ space: 10 }) {
@@ -3328,6 +3685,58 @@ struct Reader {
                 .backgroundColor('#e57373').fontColor(Color.White)
                 .onClick(() => this.deleteAnnotationAt(0))
             }
+          }
+
+          /* Round 5: whole-book annotation list (Android annotation manager parity) */
+          Row({ space: 8 }) {
+            Button($r('app.string.menu_annotations'))
+              .fontSize(12).height(32)
+              .backgroundColor('#00897B').fontColor(Color.White)
+              .onClick(() => {
+                this.showMenu = false;
+                this.openAnnPanel();
+              })
+          }
+
+          /* Round 5: thumbnails + page history + split + contrast */
+          Row({ space: 8 }) {
+            Button($r('app.string.menu_thumbs'))
+              .fontSize(12).height(32)
+              .backgroundColor('#5c6bc0').fontColor(Color.White)
+              .onClick(() => {
+                this.showMenu = false;
+                this.openThumbs();
+              })
+            Button($r('app.string.menu_history'))
+              .fontSize(12).height(32)
+              .backgroundColor(this.pageHistory.length > 0 ? '#5c6bc0' : '#b0bec5')
+              .fontColor(Color.White)
+              .onClick(() => {
+                this.popPageHistory();
+              })
+          }
+
+          Row({ space: 8 }) {
+            Button(this.pageSplit ? $r('app.string.menu_split_on') : $r('app.string.menu_split_off'))
+              .fontSize(12).height(32)
+              .backgroundColor(this.pageSplit ? '#2a7' : '#e0e0e0')
+              .fontColor(this.pageSplit ? Color.White : '#333')
+              .onClick(() => {
+                this.pageSplit = !this.pageSplit;
+                console.info(`[Reader] Page split: ${this.pageSplit}`);
+              })
+            Text($r('app.string.menu_contrast'))
+              .fontSize(12).fontColor('#555')
+            Slider({ value: this.contrastLevel, min: 0, max: 100, step: 5 })
+              .layoutWeight(1).height(24)
+              .onChange((value: number, mode: SliderChangeMode) => {
+                if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                  this.contrastLevel = Math.round(value);
+                  console.info(`[Reader] Contrast: ${this.contrastLevel}`);
+                }
+              })
+            Text(`${this.contrastLevel}`)
+              .fontSize(11).fontColor('#777').width(24)
           }
 
           // TTS & RSVP entries (sprint D)
@@ -3762,6 +4171,7 @@ struct Reader {
 
           TocPanel({
             onJumpPage: (page: number) => {
+              this.pushPageHistory();
               this.currentPage = page;
               this.onPageChanged(page);
               this.showToc = false;
@@ -3790,7 +4200,7 @@ struct Reader {
                 .fontSize(16).fontWeight(FontWeight.Bold)
               Blank()
               Text('\u5BFC\u51FA')
-                .fontSize(13).fontColor('#3949AB')
+                .fontSize(13).fontColor($r('app.color.brand_primary'))
                 .onClick(() => {
                   this.showExportDialog = true;
                 })
@@ -3848,7 +4258,7 @@ struct Reader {
                     Row({ space: 8 }) {
                       Text(n.kind)
                         .fontSize(10).fontColor(Color.White)
-                        .backgroundColor('#3949AB')
+                        .backgroundColor($r('app.color.brand_primary'))
                         .borderRadius(4)
                         .padding({ left: 5, right: 5, top: 2, bottom: 2 })
                       Column({ space: 2 }) {
@@ -3887,6 +4297,91 @@ struct Reader {
         .justifyContent(FlexAlign.End)
       }
 
+      /* Round 5: whole-book annotation list panel (slides in from right) */
+      if (this.showAnnPanel) {
+        Row() {
+          Column()
+            .layoutWeight(1)
+            .height('100%')
+            .backgroundColor('#40000000')
+            .onClick(() => {
+              this.showAnnPanel = false;
+            })
+
+          Column() {
+            Row({ space: 8 }) {
+              Text($r('app.string.ann_panel_title'))
+                .fontSize(16).fontWeight(FontWeight.Bold)
+              Text(`(${this.annAll.length})`)
+                .fontSize(12).fontColor('#999')
+              Blank()
+              Text('刷新')
+                .fontSize(13).fontColor($r('app.color.brand_primary'))
+                .onClick(() => {
+                  this.openAnnPanel();
+                })
+            }
+            .width('100%')
+            .margin({ bottom: 8 })
+
+            if (this.annScanning) {
+              Text($r('app.string.ann_scan'))
+                .fontSize(12).fontColor(Color.Gray)
+            } else if (this.annAll.length === 0) {
+              Text($r('app.string.ann_empty'))
+                .fontSize(13).fontColor(Color.Gray)
+            } else {
+              List() {
+                ForEach(this.annAll, (ann: AnnotationInfo, idx: number) => {
+                  ListItem() {
+                    Row({ space: 8 }) {
+                      Text(ann.type)
+                        .fontSize(10).fontColor(Color.White)
+                        .backgroundColor('#00897B')
+                        .borderRadius(4)
+                        .padding({ left: 5, right: 5, top: 2, bottom: 2 })
+                      Column({ space: 2 }) {
+                        Text(`第 ${this.annPages[idx] + 1} 页`)
+                          .fontSize(10).fontColor('#999')
+                        Text(ann.contents.length > 0 ? ann.contents : ann.type)
+                          .fontSize(12).fontColor('#333')
+                          .maxLines(2)
+                          .textOverflow({ overflow: TextOverflow.Ellipsis })
+                      }
+                      .alignItems(HorizontalAlign.Start)
+                      .layoutWeight(1)
+                      .onClick(() => {
+                        this.jumpAnnPage(idx);
+                      })
+                      Text('✕')
+                        .fontSize(15).fontColor('#e57373')
+                        .onClick(() => {
+                          this.deleteAnnEntry(idx);
+                        })
+                    }
+                    .width('100%')
+                    .padding({ top: 6, bottom: 6 })
+                  }
+                }, (ann: AnnotationInfo, idx: number) => `ann_${idx}_${ann.type}_${ann.x0}`)
+              }
+              .layoutWeight(1)
+            }
+          }
+          .width('70%')
+          .height('100%')
+          .backgroundColor('#fff')
+          .padding(12)
+          .shadow({ radius: 8, color: '#40000000', offsetX: -2, offsetY: 0 })
+        }
+        .width('100%').height('100%')
+        .justifyContent(FlexAlign.End)
+      }
+
+      /* Round 5: page thumbnail grid dialog */
+      if (this.showThumbs) {
+        this.buildThumbDialog()
+      }
+
       /* AI 翻译 dialog (Android hr18, panel mode) */
       if (this.showTrans) {
         this.buildTransDialog()
@@ -3914,7 +4409,7 @@ struct Reader {
               .fontSize(11).fontColor('#999')
             Button('TXT')
               .width('80%').height(38).fontSize(13)
-              .backgroundColor('#3949AB').fontColor(Color.White)
+              .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
               .onClick(() => {
                 this.doExportNotes(false);
               })

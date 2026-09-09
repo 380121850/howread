@@ -5,6 +5,54 @@
 
 ---
 
+## [2026-09-09] 鸿蒙移植第五轮：TTS 后台播控 + 桌面服务卡片 + UI 资源收敛/图标补齐 + WebDAV 目录浏览 + 批注管理/生物识别 + 小功能包 + i18n 第一批
+
+**背景**：对齐安卓版差距分析后，用户确认本轮 7 个功能块全做：A TTS 后台播控、B 桌面服务卡片、C UI 资源收敛+图标补齐、D WebDAV/OPDS 增强、F 批注管理+应用锁升级+分享接收、G 小功能包（页缩略图/位置历史/对比度/页面分割）、E i18n 第一步。版本升至 0.7.0 / versionCode 34。
+
+**改动**（`harmony/` 内）：
+
+**① UI 资源收敛 + 图标补齐（块C）**：
+- 颜色收敛：ets 中 101 处硬编码 `#3949AB`/`#03A9F4` 替换为 `$r('app.color.brand_primary'/'brand_accent')`（豁免 2 处字符串返回函数与注释）；`base/element/color.json` 已有品牌色定义。
+- 图标补齐 26 个 Material 风格 SVG（base/media/）：TTS/播控（ic_play/ic_pause/ic_stop/ic_skip_next/ic_skip_prev/ic_rewind/ic_forward/ic_volume/ic_headphones）、云盘（ic_cloud_upload/ic_cloud_download/ic_cloud_off）、版式（ic_page_split/ic_full_page/ic_half_page/ic_text_height/ic_crop）、手势/操作（ic_scissors/ic_paste/ic_bin/ic_pin/ic_tag/ic_exchange/ic_link/ic_battery/ic_clock）。
+- Tab 栏顶/底切换（对齐安卓 tapPositionTop）：`Settings.tabPositionTop` + 偏好页开关行 + Index Tabs 条件 barPosition + FAB 边距自适应。
+- 阅读器顶栏时钟+电量（对齐安卓 document_title_bar）：`Settings.showTopBarInfo` + Reader 顶栏 30s 刷新（@ohos.batteryInfo + systemDateTime）。
+
+**② TTS 后台播控（块A，重写 TtsService stub）**：
+- `module.json5`：`backgroundModes: ["audioPlayback"]` + `ohos.permission.KEEP_BACKGROUND_RUNNING`。
+- `service/TtsService.ets` 重写：`backgroundTaskManager.startBackgroundRunning(AUDIO_PLAYBACK, wantAgent)` 后台长时任务；常驻 MULTILINE 通知带 3 个播控按钮（上一句/暂停继续/下一句，NotificationActionButton + wantAgent 携 `tts_cmd` 参数）；`stopBackgroundRunning` 停止。
+- EntryAbility `stashWantUri` 解析 `tts_cmd`/`cardOpen`/`text` 参数写入 AppStorage；Reader ttsPollTick 消费远端命令（prev/next/toggle），开始朗读即启后台任务+通知、暂停刷新按钮态、停止/退出/页面销毁全部清理。
+- ⚠️ 模拟器无 TTS 语音包（朗读无法启动），通知播控与后台保活待真机端到端复验。
+
+**③ 桌面服务卡片（块B，对齐安卓 RecentBooksWidget）**：
+- 新增 `ets/entryformability/FormAbility.ets`（FormExtensionAbility）：卡片数据 = 最近阅读前 3 本（书名/进度百分比/封面 file:// 路径），onUpdateForm 周期刷新。
+- 新增卡片页 `ets/form/RecentCard.ets`（2×2，LocalStorageProp 绑定，行点击 `postCardAction` router 回 EntryAbility 带 `cardOpen` 参数）+ `resources/base/profile/form_config.json`（uiSyntax arkts，updateDuration 2，scheduledUpdateTime 07:30）+ `module.json5` extensionAbilities 注册 + string.json 卡片名/描述（en/zh）。
+- Index `onPageShow → consumeCardOpen`：读 AppStorage `cardOpenPath` 构造 RecentBook 打开对应书。
+- ⚠️ 模拟器 launcher 不支持添加卡片（aa 无 start-extension），添加到桌面效果待真机复验。
+
+**④ WebDAV 目录浏览 + 流式下载进度（块D）**：
+- `Index.webdavConnect` 重写：真实 PROPFIND 优先（RequestMethod 字符串枚举直传，实测模拟器 HTTP 栈接受，207 验证通过）→ GET 目录 HTML 回退；解析器兼容 `<D:href>`/`<href>` 任意命名空间前缀与 `<a href>` 列表，路径归一（前导斜杠/URL 前缀剥离/decodeURIComponent 显示）。
+- 目录导航：`webdavPath` 相对路径栈 + 📁 目录行下钻（davOpenDir/davUp）+ ⬆ 上级目录面包屑行；两个面板（网络浮层 + 我的文件区）同步升级。
+- `webdavDownload` 改 `requestInStream` 流式下载：`headersReceive` 取 content-length、`dataReceive` 聚合分块、`dataReceiveProgress` 实时百分比进度条（Progress 组件 + 文案），完成后落盘 `<cacheDir>` 并 saveRecentBook 入库。
+- HTTP 代理接入：新增 `model/HttpUtil.ets`（读 `librera_settings` 代理字段 → `connection.HttpProxy` → `usingProxy` 选项）；Sync davGet/davPut/testSyncConnection、Opds.fetchOpds、AiClient chatCompletion/listModels/testChat 全部增加可选 ctx 参数接代理（Index/Reader 调用点已传 ctx）。
+- 偏好页 NAPI 自测区默认隐藏（点「偏好」标题 3 次开关注入诊断模式）。
+
+**⑤ 批注管理 + 应用锁生物识别 + 分享接收（块F）**：
+- 全书标注列表面板：Reader 菜单新增「标注列表」→ 右滑面板扫描全书标注（getAnnotations 逐页，≤500 页），类型徽标/页码/摘要，点击跳页（pushPageHistory）、✕ 单条删除（deleteAnnotation + 重扫描）、刷新按钮。
+- 生物识别解锁：新增 `model/Biometric.ets`（@ohos.userIAM.userAuth：getAvailableStatus 探测 FINGERPRINT/FACE，getUserAuthInstance + IAuthCallback.start 系统弹窗校验）；`Settings.appLockBiometric` + 偏好页开关行（不支持时 toast 提示）+ 锁定层「使用生物识别解锁」按钮 + checkAppLock 自动触发，失败/不可用回退数字密码。`module.json5` 加 `ohos.permission.ACCESS_BIOMETRIC`。
+- 分享接收：module.json5 skill 补 general.plain-text（file scheme）；EntryAbility 暂存 `text` 参数 → Index `consumeSharedText` 存 `<filesDir>/shared/shared_<ts>.txt` 并入库 toast。
+
+**⑥ 小功能包（块G）**：
+- 页缩略图：菜单「页缩略图」→ 3×3 宫格对话框（renderPageAsync zoom 0.12 逐页渲染 PixelMap），页码标注、点格跳页（记入位置历史）、◀▶ 翻组；验证：Alice 9 格缩略图渲染、点第 4 格跳到第 4 页。
+- 位置历史（对齐安卓链接历史 885_step_back 泛化）：`pageHistory`（≤32），目录/书签/缩略图/滑条/标注跳页前压栈，菜单「返回上一位置」弹回；验证：缩略图跳第 4 页 → 返回上一位置回第 1 页。
+- 页面分割（对齐安卓 page_split）：`RenderOptions.crop` 归一化左右半页（SPLIT_LEFT/RIGHT 0..0.5/0.5..1），Swiper 单页模式双 PageRenderer 并排；验证：EPUB 页左右两半并排渲染正常。
+- 对比度调节：菜单 Slider（0..100，50 中性）→ PageRenderer `Image.colorFilter(4×5 矩阵)`（contrastMatrix，对比度缩放+归一化偏移），改值进 ForEach key 触发重渲染。
+
+**⑦ i18n 第一批（块E）**：
+- `base/element/string.json` 扩到 44 键（新增抽屉 7 项、通用按钮 4 项、块 F/G/D 全部新 UI 文案、卡片文案等），`zh_CN` 同步补齐中文；Tab 标签、本轮新增对话框/菜单/提示全部改 `$r('app.string.*')` 引用（buildTabLabel 签名改 ResourceStr）；Biometric 模块内部消息仍为字面量（biom_* 键已预留）。
+- 全量 880 条 × 43 语铺开仍记待续（两步走）。
+
+**验证**：Ubuntu hvigorw debug 构建通过；x86_64 HAP 装模拟器（Pura 90）uitest 验证——品牌色资源化生效、偏好页 3 个新行 + Tab 顶置/底部切换、阅读器顶栏时钟电量、菜单新行（标注列表/页缩略图/返回上一位置/页面分割/对比度）、缩略图宫格+跳页+位置历史回退、页面分割渲染、标注列表面板、WebDAV 真实 PROPFIND 207（Ubuntu mock:8765→5005）目录浏览/子目录导航/流式下载 6000 字节入库。模拟器不支持项（真机复验）：TTS 通知播控端到端（无语音包）、桌面卡片添加（无 start-extension）、生物识别（无指纹硬件）、en 语言切换。
+
 ## [2026-09-08] 鸿蒙移植第四轮：笔记/书签导出 + 自动滚动 + 播放列表 + WebDAV 同步三方合并 + 页内双语对照
 
 **背景**：继续对齐安卓版功能。用户确认本轮范围：A 小功能包（笔记导出/自动滚动/OPDS 预置对齐）+ B 播放列表 + C WebDAV 同步增强（三方合并/冲突策略/定时同步）+ D 页内双语对照（真实注入）。跳过项：TTS 录音导出（鸿蒙 ArkWeb speechSynthesis 无 synthesizeToFile 能力）、i18n 铺开（单独一轮）。蓝光滤镜鸿蒙已有，无需移植。

@@ -27,6 +27,7 @@ import { OpdsServer, DavServer, getOpdsServers, saveOpdsServer, removeOpdsServer
 import { SyncConfig, SyncLogEntry, SYNC_CONFLICTS, defaultSyncConfig, loadSyncConfig, saveSyncConfig, getSyncLog, runSync, testSyncConnection } from '../model/Sync';
 import { AiConfig, AiMessage, loadAiConfig, saveAiConfig, chatCompletion, listModels, testChat, aiConfigReady, AI_PROVIDERS, AI_PROVIDER_URLS } from '../model/AiClient';
 import { addNote, AiNote } from '../model/Notes';
+import { biometricAvailable, startBiometricAuth } from '../model/Biometric';
 import { PlaylistMeta, getAllPlaylists, createPlaylist, deletePlaylist, getPlaylistItems, updatePlaylist, addToPlaylist } from '../model/Playlists';
 import http from '@ohos.net.http';
 import promptAction from '@ohos.promptAction';
@@ -81,7 +82,9 @@ struct Index {
   @State settings: ReaderSettings = defaultSettings();
   @State backupText: string = '';
 
-  // ---- NAPI self-test states (Settings tab) ----
+  // ---- NAPI self-test states (Settings tab, hidden by default; toggle = tap title 3x) ----
+  @State showApiTest: boolean = false;
+  private apiTestTaps: number = 0;
   @State pixelMap: image.PixelMap | undefined = undefined;
   @State pageInfo: string = '';
   @State textResult: string = '';
@@ -101,6 +104,11 @@ struct Index {
   @State webdavFiles: string[] = [];
   @State webdavStatus: string = 'Enter server URL and tap Connect';
   @State webdavConnecting: boolean = false;
+  /* Round 5: WebDAV directory browsing + download progress */
+  @State webdavPath: string = '';        /* relative dir path, '' = root */
+  @State webdavDirs: string[] = [];      /* subdirectories of the current dir */
+  @State webdavProgress: number = -1;    /* 0..100 while downloading, -1 = idle */
+  @State webdavDownloading: string = ''; /* file name being downloaded */
   /* Sprint N: tags + author browsing */
   @State allTags: string[] = [];
   @State activeTagFilter: string = '';
@@ -178,6 +186,8 @@ struct Index {
   // ---- Phase 6: app lock ----
   /** true once the passcode has been accepted this session */
   @State appUnlocked: boolean = false;
+  /* Round 5: biometric unlock in progress */
+  private biometricBusy: boolean = false;
   /** passcode input for the lock overlay */
   @State lockPin: string = '';
   /** cached cover images for the dashboard carousel */
@@ -301,6 +311,76 @@ struct Index {
     if (this.settings.appLockEnabled && !this.appUnlocked) {
       this.checkAppLock();
     }
+    this.consumeCardOpen();
+    this.consumeSharedText();
+  }
+
+  /** Round 5: save text received via system share as a TXT book. */
+  private consumeSharedText(): void {
+    const t = AppStorage.get<string>('sharedText');
+    if (t === undefined || t.length === 0) {
+      return;
+    }
+    AppStorage.setOrCreate('sharedText', '');
+    try {
+      const ctx = getContext(this);
+      const dir = ctx.filesDir + '/shared';
+      if (!fs.accessSync(dir)) {
+        fs.mkdirSync(dir, true);
+      }
+      const path = dir + '/shared_' + Date.now() + '.txt';
+      const f = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      fs.writeSync(f.fd, t);
+      fs.closeSync(f);
+      const name = path.substring(path.lastIndexOf('/') + 1);
+      const book: RecentBook = {
+        path: path,
+        title: name,
+        page: 0,
+        totalPages: 0,
+        lastRead: new Date().toISOString(),
+        star: false,
+        coverPath: '',
+        author: '',
+        tags: [],
+        series: '',
+        genre: '',
+        status: 0
+      };
+      saveRecentBook(ctx, book).then(() => {
+        this.loadLibrary();
+        promptAction.showToast({ message: $r('app.string.shared_saved') });
+      });
+      console.info(`[Index] Shared text saved: ${name}`);
+    } catch (e) {
+      console.error('[Index] Shared text save failed');
+    }
+  }
+
+  /** Round 5: open a book requested from the desktop service card. */
+  private consumeCardOpen(): void {
+    const p = AppStorage.get<string>('cardOpenPath');
+    if (p === undefined || p.length === 0) {
+      return;
+    }
+    AppStorage.setOrCreate('cardOpenPath', '');
+    const name = p.substring(p.lastIndexOf('/') + 1);
+    const book: RecentBook = {
+      path: p,
+      title: name,
+      page: 0,
+      totalPages: 0,
+      lastRead: new Date().toISOString(),
+      star: false,
+      coverPath: '',
+      author: '',
+      tags: [],
+      series: '',
+      genre: '',
+      status: 0
+    };
+    this.openBook(book);
+    console.info(`[Index] Card requested book open: ${name}`);
   }
 
   private async initSettings(): Promise<void> {
@@ -316,7 +396,28 @@ struct Index {
       this.lockPin = '';
       this.activeOverlay = 7;
       console.info('[Index] App lock requested');
+      /* Round 5: auto-trigger biometric unlock when enabled + available */
+      if (this.settings.appLockBiometric && biometricAvailable()) {
+        this.tryBiometric();
+      }
     }
+  }
+
+  /** Round 5: biometric unlock (fingerprint/face) with passcode fallback. */
+  private tryBiometric(): void {
+    if (this.biometricBusy) {
+      return;
+    }
+    this.biometricBusy = true;
+    startBiometricAuth(() => {
+      this.biometricBusy = false;
+      this.appUnlocked = true;
+      this.activeOverlay = 0;
+      console.info('[Index] Biometric unlock success');
+    }, (msg: string) => {
+      this.biometricBusy = false;
+      console.warn(`[Index] Biometric unlock failed: ${msg}`);
+    });
   }
 
   /** Verify the entered passcode; unlock on match. */
@@ -927,34 +1028,34 @@ struct Index {
             })
         }
         .width('100%').height(48)
-        .backgroundColor('#3949AB')
+        .backgroundColor($r('app.color.brand_primary'))
 
-        // 4 bottom tabs (Android: 首页 / 书库 / 我的文件 / 偏好)
-        Tabs({ barPosition: BarPosition.End, index: this.currentTab }) {
+        // 4 tabs, bottom by default; top position optional (Android tapPositionTop)
+        Tabs({ barPosition: this.settings.tabPositionTop ? BarPosition.Start : BarPosition.End, index: this.currentTab }) {
           TabContent() {
             this.buildDashboardTab()
           }
-          .tabBar(this.buildTabLabel($r('app.media.ic_home'), '\u9996\u9875', 0))
+          .tabBar(this.buildTabLabel($r('app.media.ic_home'), $r('app.string.tab_home'), 0))
 
           TabContent() {
             this.buildLibraryTab()
           }
-          .tabBar(this.buildTabLabel($r('app.media.ic_book_open'), '\u4E66\u5E93', 1))
+          .tabBar(this.buildTabLabel($r('app.media.ic_book_open'), $r('app.string.tab_library'), 1))
 
           TabContent() {
             this.buildBrowseTab()
           }
-          .tabBar(this.buildTabLabel($r('app.media.ic_folder'), '\u6211\u7684\u6587\u4EF6', 2))
+          .tabBar(this.buildTabLabel($r('app.media.ic_folder'), $r('app.string.tab_my_files'), 2))
 
           TabContent() {
             this.buildSettingsTab()
           }
-          .tabBar(this.buildTabLabel($r('app.media.ic_wrench'), '\u504F\u597D', 3))
+          .tabBar(this.buildTabLabel($r('app.media.ic_wrench'), $r('app.string.tab_prefs'), 3))
         }
         .width('100%')
         .layoutWeight(1)
         .barMode(BarMode.Fixed)
-        .barBackgroundColor('#3949AB')
+        .barBackgroundColor($r('app.color.brand_primary'))
         .onChange((index: number) => {
           this.switchTab(index);
         })
@@ -969,10 +1070,10 @@ struct Index {
             .width(24).height(24).fillColor(Color.White)
         }
         .width(52).height(52)
-        .backgroundColor('#3949AB')
+        .backgroundColor($r('app.color.brand_primary'))
         .borderRadius(26)
         .shadow({ radius: 8, color: '#44000000', offsetX: 0, offsetY: 2 })
-        .margin({ right: 16, bottom: 62 })
+        .margin({ right: 16, bottom: this.settings.tabPositionTop ? 24 : 62 })
         .onClick(() => {
           this.openLastBook();
         })
@@ -1270,6 +1371,38 @@ struct Index {
   }
 
   /* ── Sprint J6: WebDAV cloud drive ─────────────────────────────── */
+  /** Full URL of the current WebDAV directory (root + webdavPath). */
+  private webdavDirUrl(): string {
+    let u = this.webdavUrl.replace(/\/+$/, '');
+    if (this.webdavPath.length > 0) {
+      u = u + '/' + this.webdavPath;
+    }
+    return u.endsWith('/') ? u : u + '/';
+  }
+
+  /** Navigate into a subdirectory (relative to the current dir). */
+  private davOpenDir(dir: string): void {
+    this.webdavPath = this.webdavPath + dir;
+    this.webdavConnect();
+  }
+
+  /** Go up one directory level. */
+  private davUp(): void {
+    const p = this.webdavPath.replace(/\/+$/, '');
+    const cut = p.lastIndexOf('/');
+    this.webdavPath = cut >= 0 ? p.substring(0, cut + 1) : '';
+    this.webdavConnect();
+  }
+
+  /** Decode %XX escapes for display; falls back to the raw name. */
+  private davDecodeName(s: string): string {
+    try {
+      return decodeURIComponent(s);
+    } catch (e) {
+      return s;
+    }
+  }
+
   private async webdavConnect(): Promise<void> {
     if (this.webdavUrl.length === 0) {
       this.webdavStatus = 'Please enter a WebDAV URL';
@@ -1278,74 +1411,198 @@ struct Index {
     this.webdavConnecting = true;
     this.webdavStatus = 'Connecting...';
     try {
-      const url: string = this.webdavUrl.endsWith('/') ? this.webdavUrl : this.webdavUrl + '/';
-      /* WebDAV PROPFIND (using GET as fallback since RequestMethod lacks PROPFIND) */
+      const url: string = this.webdavDirUrl();
       const hdr: Record<string, string> = { 'Depth': '1' };
       const auth: string = this.davAuthHeader();
       if (auth.length > 0) {
         hdr['Authorization'] = auth;
       }
-      let req = http.createHttp();
-      let resp = await req.request(url, {
-        method: http.RequestMethod.GET,
-        header: hdr,
-        connectTimeout: 10000,
-        readTimeout: 15000
-      });
-      if (resp.responseCode === 207 || resp.responseCode === 200) {
-        /* Parse multistatus XML response - extract hrefs */
-        const xml: string = String(resp.result);
-        this.webdavFiles = [];
-        let pos: number = 0;
-        while (true) {
-          const start: number = xml.indexOf('<href>', pos);
-          if (start < 0) break;
-          const close: number = xml.indexOf('</href>', start);
-          if (close < 0) break;
-          let href: string = xml.substring(start + 6, close);
-          /* Skip the root URL itself */
-          if (href !== url && href !== '/' && !href.endsWith('/')) {
-            const name: number = href.lastIndexOf('/');
-            this.webdavFiles.push(href.substring(name + 1));
-          }
-          pos = close + 6;
+      let xml = '';
+      /* Round 5: real PROPFIND first (RequestMethod is a string enum); GET fallback */
+      try {
+        const req1 = http.createHttp();
+        const r1 = await req1.request(url, {
+          method: 'PROPFIND' as ESObject as http.RequestMethod,
+          header: hdr,
+          connectTimeout: 10000,
+          readTimeout: 15000
+        });
+        xml = String(r1.result);
+        req1.destroy();
+        if (r1.responseCode !== 207 && r1.responseCode !== 200) {
+          xml = '';
         }
-        this.webdavStatus = `Connected! ${this.webdavFiles.length} files found`;
-      } else {
-        this.webdavStatus = `Server responded: ${resp.responseCode}`;
+      } catch (_e) {
+        xml = '';
       }
-      req.destroy();
+      if (xml.length === 0) {
+        let req = http.createHttp();
+        let resp = await req.request(url, {
+          method: http.RequestMethod.GET,
+          header: hdr,
+          connectTimeout: 10000,
+          readTimeout: 15000
+        });
+        if (resp.responseCode === 207 || resp.responseCode === 200) {
+          xml = String(resp.result);
+        } else {
+          this.webdavStatus = `Server responded: ${resp.responseCode}`;
+          this.webdavConnecting = false;
+          req.destroy();
+          return;
+        }
+        req.destroy();
+      }
+      /* Parse entries: multistatus <href> tags (PROPFIND 207, any namespace
+       * prefix like <D:href>) or HTML directory listing <a href="..."> links. */
+      const dirs: string[] = [];
+      const files: string[] = [];
+      let pos: number = 0;
+      while (true) {
+        const a1: number = xml.indexOf('<D:href>', pos);
+        const a2: number = xml.indexOf('<href>', pos);
+        let start: number = -1;
+        let tagLen: number = 6;
+        if (a1 >= 0 && a2 >= 0) {
+          start = Math.min(a1, a2);
+          tagLen = start === a1 ? 8 : 6;
+        } else if (a1 >= 0) {
+          start = a1;
+          tagLen = 8;
+        } else if (a2 >= 0) {
+          start = a2;
+          tagLen = 6;
+        } else {
+          break;
+        }
+        const close: number = xml.indexOf('</', start + tagLen);
+        if (close < 0) {
+          break;
+        }
+        const gt: number = xml.indexOf('>', close);
+        const href: string = xml.substring(start + tagLen, close).trim();
+        this.davClassifyEntry(href, dirs, files);
+        pos = gt >= 0 ? gt + 1 : close + 2;
+      }
+      if (dirs.length === 0 && files.length === 0) {
+        pos = 0;
+        while (true) {
+          const hStart: number = xml.indexOf('href="', pos);
+          if (hStart < 0) {
+            break;
+          }
+          const hEnd: number = xml.indexOf('"', hStart + 6);
+          if (hEnd < 0) {
+            break;
+          }
+          const href: string = xml.substring(hStart + 6, hEnd).trim();
+          this.davClassifyEntry(href, dirs, files);
+          pos = hEnd + 1;
+        }
+      }
+      this.webdavDirs = dirs;
+      this.webdavFiles = files;
+      this.webdavStatus = `Connected! ${dirs.length} dirs, ${files.length} files`;
     } catch (e) {
       this.webdavStatus = 'Connection failed: ' + String(e);
     }
     this.webdavConnecting = false;
   }
 
+  /** Classify one entry href (multistatus or HTML listing) into dirs/files. */
+  private davClassifyEntry(rawHref: string, dirs: string[], files: string[]): void {
+    if (rawHref.length === 0 || rawHref.startsWith('http') && rawHref.indexOf('://') < 0) {
+      return;
+    }
+    let href = rawHref;
+    /* strip query string; strip URL prefix up to the path */
+    const q: number = href.indexOf('?');
+    if (q >= 0) {
+      href = href.substring(0, q);
+    }
+    const schemeEnd: number = href.indexOf('://');
+    if (schemeEnd > 0) {
+      const pathStart: number = href.indexOf('/', schemeEnd + 3);
+      href = pathStart >= 0 ? href.substring(pathStart) : href;
+    }
+    /* normalize both sides to absolute paths (leading slash) */
+    if (!href.startsWith('/') && href.indexOf('://') < 0) {
+      href = '/' + href;
+    }
+    const baseRel: string = this.webdavPath.length === 0 ? '/'
+      : (this.webdavPath.startsWith('/') ? this.webdavPath : '/' + this.webdavPath);
+    if (!href.startsWith(baseRel) || href.length <= baseRel.length) {
+      return;
+    }
+    let rel: string = href.substring(baseRel.length).replace(/^\/+|\/+$/g, '');
+    if (rel.length === 0 || rel.indexOf('/') >= 0) {
+      return; /* only single segments inside the current dir */
+    }
+    const isDir: boolean = href.length > href.replace(/\/+$/, '').length;
+    if (isDir) {
+      dirs.push(this.davDecodeName(rel));
+    } else {
+      files.push(this.davDecodeName(rel));
+    }
+  }
+
+  /** Round 5: stream-download a file with a progress callback (requestInStream). */
   private async webdavDownload(fileName: string): Promise<void> {
     if (this.webdavUrl.length === 0 || fileName.length === 0) return;
+    const url: string = this.webdavDirUrl() + encodeURIComponent(fileName);
+    const hdr: Record<string, string> = {};
+    const auth: string = this.davAuthHeader();
+    if (auth.length > 0) {
+      hdr['Authorization'] = auth;
+    }
+    this.webdavDownloading = fileName;
+    this.webdavProgress = 0;
     try {
-      const url: string = this.webdavUrl.endsWith('/') ? this.webdavUrl + fileName : this.webdavUrl + '/' + fileName;
-      const hdr: Record<string, string> = {};
-      const auth: string = this.davAuthHeader();
-      if (auth.length > 0) {
-        hdr['Authorization'] = auth;
-      }
+      let total = 0;
+      const chunks: ArrayBuffer[] = [];
       let req = http.createHttp();
-      let resp = await req.request(url, {
+      req.on('headersReceive', (h: Object) => {
+        try {
+          const head = h as Record<string, string>;
+          const cl: string = head['content-length'] !== undefined ? head['content-length']
+            : head['Content-Length'] !== undefined ? head['Content-Length'] : '';
+          if (cl.length > 0) {
+            total = parseInt(cl, 10);
+          }
+        } catch (_e) { /* ignore */ }
+      });
+      req.on('dataReceive', (chunk: ArrayBuffer) => {
+        chunks.push(chunk);
+      });
+      req.on('dataReceiveProgress', (info: http.DataReceiveProgressInfo) => {
+        this.webdavProgress = total > 0 ? Math.min(100, Math.round(info.receiveSize * 100 / total))
+          : Math.min(99, Math.round(info.receiveSize / 10240));
+      });
+      const code: number = await req.requestInStream(url, {
         method: http.RequestMethod.GET,
         header: hdr,
         connectTimeout: 10000,
-        readTimeout: 30000
+        readTimeout: 60000
       });
-      if (resp.responseCode === 200) {
-        const data: ArrayBuffer = resp.result as ArrayBuffer;
+      req.destroy();
+      if (code === 200) {
+        let size = 0;
+        for (let i = 0; i < chunks.length; i++) {
+          size += chunks[i].byteLength;
+        }
+        const merged = new Uint8Array(size);
+        let off = 0;
+        for (let i = 0; i < chunks.length; i++) {
+          merged.set(new Uint8Array(chunks[i]), off);
+          off += chunks[i].byteLength;
+        }
         /* Save to sandbox cache */
         const ctx = getContext(this);
         const path: string = ctx.cacheDir + '/' + fileName;
         let f = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
-        fs.writeSync(f.fd, new Uint8Array(data).buffer);
+        fs.writeSync(f.fd, merged.buffer);
         fs.closeSync(f);
-        this.webdavStatus = `Downloaded: ${fileName} (${data.byteLength} bytes)`;
+        this.webdavStatus = `Downloaded: ${fileName} (${size} bytes)`;
         /* Add to library */
         const book: RecentBook = {
           path: path,
@@ -1364,12 +1621,13 @@ struct Index {
         await saveRecentBook(ctx, book);
         await this.loadLibrary();
       } else {
-        this.webdavStatus = `Download failed: ${resp.responseCode}`;
+        this.webdavStatus = `Download failed: ${code}`;
       }
-      req.destroy();
     } catch (e) {
       this.webdavStatus = 'Download error: ' + String(e);
     }
+    this.webdavProgress = -1;
+    this.webdavDownloading = '';
   }
 
   // ---- Phase 5: OPDS 网上书库 ----
@@ -1382,7 +1640,7 @@ struct Index {
     this.opdsLoading = true;
     this.opdsStatus = '\u52A0\u8F7D\u4E2D...';
     try {
-      const entries: OpdsEntry[] = await fetchOpds(url, 15000);
+      const entries: OpdsEntry[] = await fetchOpds(url, 15000, getContext(this));
       this.opdsEntries = entries;
       this.opdsStatus = entries.length > 0 ? '\u5171 ' + entries.length + ' \u9879' : '\u65E0\u5185\u5BB9\u6216\u52A0\u8F7D\u5931\u8D25';
       this.opdsStack.push(url);
@@ -1405,7 +1663,7 @@ struct Index {
     const prev: string = this.opdsStack[this.opdsStack.length - 1];
     this.opdsLoading = true;
     this.opdsStatus = '\u52A0\u8F7D\u4E2D...';
-    fetchOpds(prev, 15000).then((entries: OpdsEntry[]) => {
+    fetchOpds(prev, 15000, getContext(this)).then((entries: OpdsEntry[]) => {
       this.opdsEntries = entries;
       this.opdsStatus = entries.length > 0 ? '\u5171 ' + entries.length + ' \u9879' : '\u65E0\u5185\u5BB9';
       this.opdsLoading = false;
@@ -1496,8 +1754,34 @@ struct Index {
         .fontSize(12).fontColor('#666')
         .width('90%').margin({ top: 8 }).textAlign(TextAlign.Center)
 
-      if (this.webdavFiles.length > 0) {
+      if (this.webdavProgress >= 0) {
+        Text(`Downloading ${this.webdavDownloading} ${this.webdavProgress}%`)
+          .fontSize(11).fontColor('#3949AB').width('90%')
+        Progress({ value: this.webdavProgress, total: 100 })
+          .width('90%').height(6).margin({ top: 4 })
+      }
+
+      if (this.webdavPath.length > 0) {
+        Row() {
+          Text('⬆ 上级目录').fontSize(13).fontColor('#3949AB')
+          Text(this.webdavPath).fontSize(11).fontColor('#888').margin({ left: 10 }).layoutWeight(1).maxLines(1)
+        }
+        .width('90%').padding({ top: 6, bottom: 6 })
+        .onClick(() => { this.davUp(); })
+      }
+
+      if (this.webdavDirs.length > 0 || this.webdavFiles.length > 0) {
         List() {
+          ForEach(this.webdavDirs, (dir: string) => {
+            ListItem() {
+              Row() {
+                Text('📁').fontSize(14).margin({ right: 8 })
+                Text(dir).fontSize(13).layoutWeight(1).fontColor('#3949AB')
+              }
+              .width('90%').padding({ top: 6, bottom: 6 })
+              .onClick(() => { this.davOpenDir(dir + '/'); })
+            }
+          }, (dir: string) => 'd_' + dir)
           ForEach(this.webdavFiles, (file: string) => {
             ListItem() {
               Row() {
@@ -1520,7 +1804,7 @@ struct Index {
 
   /** Tab bar label with icon + text (Android: selected white / unselected #ddffffff). */
   @Builder
-  buildTabLabel(icon: Resource, text: string, idx: number) {
+  buildTabLabel(icon: Resource, text: ResourceStr, idx: number) {
     Column({ space: 2 }) {
       Image(icon)
         .width(22).height(22)
@@ -1726,7 +2010,7 @@ struct Index {
           Column() {}
             .width(16)
             .height(v > 0 ? Math.max(4, Math.round(v / this.chartMax(this.chartValues) * 88)) : 3)
-            .backgroundColor('#3949AB')
+            .backgroundColor($r('app.color.brand_primary'))
             .borderRadius(2)
           Text(this.chartLabels[idx].length > 5 ? this.chartLabels[idx].substring(5) : this.chartLabels[idx])
             .fontSize(7).fontColor('#999')
@@ -1750,7 +2034,7 @@ struct Index {
       Blank()
       if (moreAction >= 0) {
         Text('更多')
-          .fontSize(14).fontColor('#3949AB')
+          .fontSize(14).fontColor($r('app.color.brand_primary'))
           .onClick(() => {
             if (moreAction === 7) {
               this.updateChartData();
@@ -1804,7 +2088,7 @@ struct Index {
   statCard(kind: number) {
     Column({ space: 6 }) {
       Text(this.statValue(kind))
-        .fontSize(24).fontWeight(FontWeight.Bold).fontColor('#3949AB').maxLines(1)
+        .fontSize(24).fontWeight(FontWeight.Bold).fontColor($r('app.color.brand_primary')).maxLines(1)
       Text(this.statLabel(kind))
         .fontSize(13).fontColor('#666').maxLines(1)
     }
@@ -2017,7 +2301,7 @@ struct Index {
               }
               .width(64).height(64)
               .justifyContent(FlexAlign.Center)
-              .backgroundColor('#3949AB')
+              .backgroundColor($r('app.color.brand_primary'))
               .borderRadius(32)
               Text(s.name.length > 8 ? s.name.substring(0, 8) + '\u2026' : s.name)
                 .fontSize(12).fontColor('#666').maxLines(1)
@@ -2054,11 +2338,11 @@ struct Index {
             Column({ space: 4 }) {
               Text(label)
                 .fontSize(15)
-                .fontColor(this.chartRange === idx ? '#3949AB' : '#666')
+                .fontColor(this.chartRange === idx ? $r('app.color.brand_primary') : '#666')
               Divider()
                 .width(label.length * 15 + 8)
                 .strokeWidth(2)
-                .color(this.chartRange === idx ? '#3949AB' : Color.Transparent)
+                .color(this.chartRange === idx ? $r('app.color.brand_primary') : Color.Transparent)
             }
             .onClick(() => {
               this.chartRange = idx;
@@ -2128,13 +2412,13 @@ struct Index {
                 this.libQuery = v;
               })
             if (this.selMode) {
-              Button('\u53D6\u6D88').fontSize(12).height(28).backgroundColor('#3949AB').fontColor(Color.White)
+              Button('\u53D6\u6D88').fontSize(12).height(28).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
                 .onClick(() => {
                   this.exitSel();
                 })
             } else {
               Text('' + this.getLibraryBooks().length)
-                .fontSize(14).fontColor('#3949AB')
+                .fontSize(14).fontColor($r('app.color.brand_primary'))
             }
           }
           .layoutWeight(1).height(38)
@@ -2171,7 +2455,7 @@ struct Index {
       }
       .width('100%')
       .padding({ left: 8, right: 8, top: 6, bottom: 8 })
-      .backgroundColor('#3949AB')
+      .backgroundColor($r('app.color.brand_primary'))
 
       /* status chips: 全部 / 未读 / 在读 / 已读 (white chip + blue border, selected = blue bg) */
       Scroll() {
@@ -2179,31 +2463,31 @@ struct Index {
           ForEach(['\u5168\u90E8', '\u672A\u8BFB', '\u5728\u8BFB', '\u5DF2\u8BFB'], (label: string, idx: number) => {
             Text(label)
               .fontSize(13)
-              .fontColor(this.libStatusFilter === idx - 1 ? Color.White : '#3949AB')
+              .fontColor(this.libStatusFilter === idx - 1 ? Color.White : $r('app.color.brand_primary'))
               .height(28)
               .padding({ left: 14, right: 14 })
               .borderRadius(3)
-              .backgroundColor(this.libStatusFilter === idx - 1 ? '#3949AB' : Color.White)
-              .border({ width: 1, color: this.libStatusFilter === idx - 1 ? '#3949AB' : '#9FA8DA' })
+              .backgroundColor(this.libStatusFilter === idx - 1 ? $r('app.color.brand_primary') : Color.White)
+              .border({ width: 1, color: this.libStatusFilter === idx - 1 ? $r('app.color.brand_primary') : '#9FA8DA' })
               .onClick(() => {
                 this.libStatusFilter = this.libStatusFilter === idx - 1 ? -1 : idx - 1;
               })
           }, (label: string, idx: number) => `chip_${idx}`)
           Text(this.libStarFilter ? '\u2605 \u6536\u85CF' : '\u2606 \u6536\u85CF')
             .fontSize(13)
-            .fontColor(this.libStarFilter ? Color.White : '#3949AB')
+            .fontColor(this.libStarFilter ? Color.White : $r('app.color.brand_primary'))
             .height(28)
             .padding({ left: 14, right: 14 })
             .borderRadius(3)
-            .backgroundColor(this.libStarFilter ? '#3949AB' : Color.White)
-            .border({ width: 1, color: this.libStarFilter ? '#3949AB' : '#9FA8DA' })
+            .backgroundColor(this.libStarFilter ? $r('app.color.brand_primary') : Color.White)
+            .border({ width: 1, color: this.libStarFilter ? $r('app.color.brand_primary') : '#9FA8DA' })
             .onClick(() => {
               this.libStarFilter = !this.libStarFilter;
               console.info(`[Index] Library star filter: ${this.libStarFilter}`);
             })
           Text('\u25B6 \u64AD\u653E\u5217\u8868')
             .fontSize(13)
-            .fontColor('#3949AB')
+            .fontColor($r('app.color.brand_primary'))
             .height(28)
             .padding({ left: 14, right: 14 })
             .borderRadius(3)
@@ -2220,8 +2504,8 @@ struct Index {
       /* batch selection bar */
       if (this.selMode) {
         Row({ space: 6 }) {
-          Text(this.selSet.length + ' \u9879\u5DF2\u9009').fontSize(12).fontColor('#3949AB')
-          Button('\u5168\u9009').fontSize(11).height(26).backgroundColor('#3949AB').fontColor(Color.White)
+          Text(this.selSet.length + ' \u9879\u5DF2\u9009').fontSize(12).fontColor($r('app.color.brand_primary'))
+          Button('\u5168\u9009').fontSize(11).height(26).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
             .onClick(() => {
               this.selectAll();
             })
@@ -2376,7 +2660,7 @@ struct Index {
     Row() {
       if (this.selMode) {
         Text(this.selSet.indexOf(book.path) >= 0 ? '\u2611' : '\u2610')
-          .fontSize(20).fontColor('#3949AB').width(28).textAlign(TextAlign.Center)
+          .fontSize(20).fontColor($r('app.color.brand_primary')).width(28).textAlign(TextAlign.Center)
       }
       if (book.coverPath.length > 0) {
         Image(book.coverPath)
@@ -2402,7 +2686,7 @@ struct Index {
         }
         if (book.totalPages > 0) {
           Progress({ value: Math.min(book.page + 1, book.totalPages), total: book.totalPages, type: ProgressType.Linear })
-            .width('100%').height(3).color('#3949AB').backgroundColor('#e0e0e0')
+            .width('100%').height(3).color($r('app.color.brand_primary')).backgroundColor('#e0e0e0')
         }
       }
       .layoutWeight(1)
@@ -2542,7 +2826,7 @@ struct Index {
     }
     this.aiBusy = true;
     this.aiModels = [];
-    listModels(this.aiCfg).then((ids: string[]) => {
+    listModels(this.aiCfg, getContext(this)).then((ids: string[]) => {
       this.aiModels = ids;
       this.aiBusy = false;
       this.status = '\u83B7\u53D6\u5230 ' + ids.length + ' \u4E2A\u6A21\u578B';
@@ -2559,7 +2843,7 @@ struct Index {
     this.aiBusy = true;
     this.aiTestOut = '';
     saveAiConfig(getContext(this), this.aiCfg);
-    testChat(this.aiCfg, this.aiTestIn).then((out: string) => {
+    testChat(this.aiCfg, this.aiTestIn, getContext(this)).then((out: string) => {
       this.aiTestOut = out;
       this.aiBusy = false;
     }).catch((e: Object) => {
@@ -2594,7 +2878,7 @@ struct Index {
         Row({ space: 8 }) {
           Text('\u534F\u8BAE').fontSize(14).fontColor('#333').width(70)
           Text('OpenAI \u517C\u5BB9')
-            .fontSize(14).fontColor('#3949AB')
+            .fontSize(14).fontColor($r('app.color.brand_primary'))
         }
         .width('100%')
 
@@ -2603,9 +2887,9 @@ struct Index {
           ForEach(AI_PROVIDERS, (p: string, idx: number) => {
             Text(p)
               .fontSize(12)
-              .fontColor(this.aiCfg.provider === p ? Color.White : '#3949AB')
-              .backgroundColor(this.aiCfg.provider === p ? '#3949AB' : Color.Transparent)
-              .border({ width: 1, color: '#3949AB' })
+              .fontColor(this.aiCfg.provider === p ? Color.White : $r('app.color.brand_primary'))
+              .backgroundColor(this.aiCfg.provider === p ? $r('app.color.brand_primary') : Color.Transparent)
+              .border({ width: 1, color: $r('app.color.brand_primary') })
               .borderRadius(10)
               .padding({ left: 8, right: 8, top: 3, bottom: 3 })
               .onClick(() => {
@@ -2698,7 +2982,7 @@ struct Index {
             Text('\u601D\u8003\u6A21\u5F0F').fontSize(13).fontColor('#333')
             Checkbox({ name: 'thinking' })
               .select(this.aiCfg.thinking)
-              .selectedColor('#3949AB')
+              .selectedColor($r('app.color.brand_primary'))
               .width(18).height(18)
               .onChange((v: boolean) => {
                 this.aiCfg.thinking = v;
@@ -2743,7 +3027,7 @@ struct Index {
             })
           Button('\u4FDD\u5B58')
             .fontSize(14).height(36)
-            .backgroundColor('#3949AB').fontColor(Color.White)
+            .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
             .onClick(() => {
               this.saveAiDialog();
             })
@@ -2795,7 +3079,7 @@ struct Index {
         content: '\u8BF7\u7528\u7B80\u4F53\u4E2D\u6587\u4E3A\u8FD9\u672C\u4E66\u5199\u4E00\u6BB5 150 \u5B57\u5DE6\u53F3\u7684\u7B80\u4ECB\uFF0C\u5E76\u7B80\u8981\u70B9\u8BC4\u3002\u4E66\u540D\uFF1A' + book.title + '\uFF0C\u4F5C\u8005\uFF1A' + author
       }
     ];
-    chatCompletion(this.aiCfg, msgs, 1024).then((out: string) => {
+    chatCompletion(this.aiCfg, msgs, 1024, getContext(this)).then((out: string) => {
       this.aiIntroText = out;
       this.aiIntroBusy = false;
     }).catch((e: Object) => {
@@ -2836,7 +3120,7 @@ struct Index {
       Column({ space: 10 }) {
         Row({ space: 8 }) {
           Image($r('app.media.ic_sparkle'))
-            .width(20).height(20).fillColor('#3949AB')
+            .width(20).height(20).fillColor($r('app.color.brand_primary'))
           Text('AI \u7B80\u4ECB\u4E66\u7C4D')
             .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
             .layoutWeight(1)
@@ -2856,7 +3140,7 @@ struct Index {
           Column() {
             if (this.aiIntroBusy) {
               Row({ space: 8 }) {
-                LoadingProgress().width(20).height(20).color('#3949AB')
+                LoadingProgress().width(20).height(20).color($r('app.color.brand_primary'))
                 Text('\u6B63\u5728\u751F\u6210\u7B80\u4ECB\u2026').fontSize(13).fontColor('#777')
               }
             } else {
@@ -2934,7 +3218,7 @@ struct Index {
     this.syncBusy = true;
     this.syncTestOut = '';
     saveSyncConfig(getContext(this), this.syncCfg);
-    testSyncConnection(this.syncCfg).then((out: string) => {
+    testSyncConnection(this.syncCfg, getContext(this)).then((out: string) => {
       this.syncTestOut = out;
       this.syncBusy = false;
     });
@@ -2999,7 +3283,7 @@ struct Index {
           Row({ space: 6 }) {
             Checkbox({ name: 'syncEnabled' })
               .width(18).height(18)
-              .selectedColor('#3949AB')
+              .selectedColor($r('app.color.brand_primary'))
               .select(this.syncCfg.enabled)
               .onChange((v: boolean) => {
                 this.syncCfg.enabled = v;
@@ -3037,7 +3321,7 @@ struct Index {
           Row({ space: 6 }) {
             Checkbox({ name: 'syncTrust' })
               .width(18).height(18)
-              .selectedColor('#3949AB')
+              .selectedColor($r('app.color.brand_primary'))
               .select(this.syncCfg.trusted)
               .onChange((v: boolean) => {
                 this.syncCfg.trusted = v;
@@ -3078,7 +3362,7 @@ struct Index {
           Row({ space: 6 }) {
             Checkbox({ name: 'syncAuto' })
               .width(18).height(18)
-              .selectedColor('#3949AB')
+              .selectedColor($r('app.color.brand_primary'))
               .select(this.syncCfg.autoSync)
               .onChange((v: boolean) => {
                 this.syncCfg.autoSync = v;
@@ -3152,7 +3436,7 @@ struct Index {
               })
             Button('\u4FDD\u5B58')
               .fontSize(14).height(36)
-              .backgroundColor('#3949AB').fontColor(Color.White)
+              .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
               .onClick(() => {
                 this.saveSyncDialog();
               })
@@ -3204,7 +3488,7 @@ struct Index {
               ListItem() {
                 Column({ space: 4 }) {
                   Text(`${this.fmtLogTime(e.time)} \u00B7 \u2191${e.up}\u672C \u00B7 \u5173\u8054${e.linked} \u00B7 ${e.ms}ms`)
-                    .fontSize(12).fontColor('#3949AB')
+                    .fontSize(12).fontColor($r('app.color.brand_primary'))
                   ForEach(e.details, (d: string, di: number) => {
                     Text(d)
                       .fontSize(11).fontColor('#555')
@@ -3225,7 +3509,7 @@ struct Index {
 
         Button('\u5173\u95ED')
           .fontSize(14).height(36).width('40%')
-          .backgroundColor('#3949AB').fontColor(Color.White)
+          .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
           .onClick(() => {
             this.showSyncLog = false;
           })
@@ -3283,7 +3567,7 @@ struct Index {
   @Builder
   libMenuAiItem() {
     Row({ space: 14 }) {
-      Image($r('app.media.ic_sparkle')).width(20).height(20).fillColor('#3949AB')
+      Image($r('app.media.ic_sparkle')).width(20).height(20).fillColor($r('app.color.brand_primary'))
       Text('AI \u7B80\u4ECB\u4E66\u7C4D').fontSize(15).fontColor('#333')
     }
     .width('100%')
@@ -3296,7 +3580,7 @@ struct Index {
   @Builder
   libMenuPlItem() {
     Row({ space: 14 }) {
-      Image($r('app.media.ic_list')).width(20).height(20).fillColor('#3949AB')
+      Image($r('app.media.ic_list')).width(20).height(20).fillColor($r('app.color.brand_primary'))
       Text('\u52A0\u5165\u64AD\u653E\u5217\u8868').fontSize(15).fontColor('#333')
     }
     .width('100%')
@@ -3312,7 +3596,7 @@ struct Index {
   @Builder
   libMenuItem(icon: Resource, label: string, status: number) {
     Row({ space: 14 }) {
-      Image(icon).width(20).height(20).fillColor('#3949AB')
+      Image(icon).width(20).height(20).fillColor($r('app.color.brand_primary'))
       Text(label).fontSize(15).fontColor('#333')
     }
     .width('100%')
@@ -3330,7 +3614,7 @@ struct Index {
   libMenuStarItem() {
     Row({ space: 14 }) {
       Image(this.libMenuBook()?.star ? $r('app.media.ic_star_border') : $r('app.media.ic_star'))
-        .width(20).height(20).fillColor('#3949AB')
+        .width(20).height(20).fillColor($r('app.color.brand_primary'))
       Text(this.libMenuBook()?.star ? '\u53D6\u6D88\u6536\u85CF' : '\u6536\u85CF')
         .fontSize(15).fontColor('#333')
     }
@@ -3449,7 +3733,7 @@ struct Index {
           Column() {
             ForEach(this.plList, (p: PlaylistMeta) => {
               Row() {
-                Text('\u25B6').fontSize(14).fontColor('#3949AB')
+                Text('\u25B6').fontSize(14).fontColor($r('app.color.brand_primary'))
                 Text(p.name)
                   .fontSize(14).fontColor('#333').layoutWeight(1)
                   .margin({ left: 10 }).maxLines(1)
@@ -3477,7 +3761,7 @@ struct Index {
             })
           Button('\u65B0\u5EFA\u5E76\u52A0\u5165')
             .fontSize(12).height(36)
-            .backgroundColor('#3949AB').fontColor(Color.White)
+            .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
             .onClick(() => {
               const err = createPlaylist(getContext(this), this.plPickName);
               if (err.length > 0) {
@@ -3527,7 +3811,7 @@ struct Index {
           Column() {
             ForEach(this.plList, (p: PlaylistMeta) => {
               Row() {
-                Text('\u25B6').fontSize(14).fontColor('#3949AB')
+                Text('\u25B6').fontSize(14).fontColor($r('app.color.brand_primary'))
                 Text(p.name)
                   .fontSize(14).fontColor('#333').layoutWeight(1)
                   .margin({ left: 10 }).maxLines(1)
@@ -3553,7 +3837,7 @@ struct Index {
             })
           Button('\u521B\u5EFA')
             .fontSize(12).height(36)
-            .backgroundColor('#3949AB').fontColor(Color.White)
+            .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
             .onClick(() => {
               const err = createPlaylist(getContext(this), this.plNewName);
               if (err.length > 0) {
@@ -3611,12 +3895,12 @@ struct Index {
                     this.plOpenPath(path);
                   })
                 Text('\u2191')
-                  .fontSize(14).fontColor('#3949AB').padding(6)
+                  .fontSize(14).fontColor($r('app.color.brand_primary')).padding(6)
                   .onClick(() => {
                     this.plMoveItem(idx, -1);
                   })
                 Text('\u2193')
-                  .fontSize(14).fontColor('#3949AB').padding(6)
+                  .fontSize(14).fontColor($r('app.color.brand_primary')).padding(6)
                   .onClick(() => {
                     this.plMoveItem(idx, 1);
                   })
@@ -3682,7 +3966,7 @@ struct Index {
       }
       .width('100%').height(170)
       .justifyContent(FlexAlign.Center)
-      .linearGradient({ angle: 135, colors: [['#3949AB', 0.0], ['#5C6BC0', 1.0]] })
+      .linearGradient({ angle: 135, colors: [[$r('app.color.brand_primary'), 0.0], ['#5C6BC0', 1.0]] })
 
       /* nav items: 最近阅读 / 书库 / 我的文件 / 网上书库 / 书签笔记 */
       Column({ space: 0 }) {
@@ -3725,7 +4009,7 @@ struct Index {
   @Builder
   drawerNavItem(icon: Resource, label: string, target: number) {
     Row({ space: 10 }) {
-      Image(icon).width(20).height(20).fillColor(this.settings.theme > 0 ? '#ddd' : '#3949AB')
+      Image(icon).width(20).height(20).fillColor(this.settings.theme > 0 ? '#ddd' : $r('app.color.brand_primary'))
       Text(label).fontSize(14).fontColor(this.drawerFg())
     }
     .width('100%').height(48)
@@ -3749,7 +4033,7 @@ struct Index {
   @Builder
   drawerBottomButton(icon: Resource, label: string, kind: number) {
     Column({ space: 2 }) {
-      Image(icon).width(18).height(18).fillColor(this.settings.theme > 0 ? '#ddd' : '#3949AB')
+      Image(icon).width(18).height(18).fillColor(this.settings.theme > 0 ? '#ddd' : $r('app.color.brand_primary'))
       Text(label).fontSize(10).fontColor(this.settings.theme > 0 ? '#999' : '#666')
     }
     .layoutWeight(1)
@@ -3858,14 +4142,14 @@ struct Index {
       Row({ space: 8 }) {
         Button(this.netSection === 0 ? '\u2605 OPDS \u76EE\u5F55' : 'OPDS \u76EE\u5F55')
           .fontSize(12).height(30).layoutWeight(1)
-          .backgroundColor(this.netSection === 0 ? '#3949AB' : '#e0e0e0')
+          .backgroundColor(this.netSection === 0 ? $r('app.color.brand_primary') : '#e0e0e0')
           .fontColor(this.netSection === 0 ? Color.White : '#333')
           .onClick(() => {
             this.netSection = 0;
           })
         Button(this.netSection === 1 ? '\u2605 WebDAV' : 'WebDAV')
           .fontSize(12).height(30).layoutWeight(1)
-          .backgroundColor(this.netSection === 1 ? '#3949AB' : '#e0e0e0')
+          .backgroundColor(this.netSection === 1 ? $r('app.color.brand_primary') : '#e0e0e0')
           .fontColor(this.netSection === 1 ? Color.White : '#333')
           .onClick(() => {
             this.netSection = 1;
@@ -3915,7 +4199,7 @@ struct Index {
                   this.opdsUrl = v;
                 })
               Button('\u6253\u5F00')
-                .fontSize(12).height(34).backgroundColor('#3949AB').fontColor(Color.White)
+                .fontSize(12).height(34).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
                 .onClick(() => {
                   this.opdsOpen(this.opdsUrl);
                 })
@@ -3989,7 +4273,7 @@ struct Index {
 
       Button(this.webdavConnecting ? 'Connecting...' : 'Connect')
         .width('90%').height(34).margin({ top: 8 })
-        .backgroundColor('#3949AB').fontColor(Color.White)
+        .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
         .onClick(() => {
           this.webdavConnect();
         })
@@ -3998,8 +4282,38 @@ struct Index {
         .fontSize(12).fontColor('#666')
         .width('90%').margin({ top: 6 }).textAlign(TextAlign.Center)
 
-      if (this.webdavFiles.length > 0) {
+      if (this.webdavProgress >= 0) {
+        Text(`Downloading ${this.webdavDownloading} ${this.webdavProgress}%`)
+          .fontSize(11).fontColor('#3949AB').width('90%')
+        Progress({ value: this.webdavProgress, total: 100 })
+          .width('90%').height(6).margin({ top: 4 })
+      }
+
+      if (this.webdavPath.length > 0) {
+        Row() {
+          Text($r('app.string.dav_up')).fontSize(13).fontColor('#3949AB')
+          Text(this.webdavPath).fontSize(11).fontColor('#888').margin({ left: 10 }).layoutWeight(1).maxLines(1)
+        }
+        .width('90%').padding({ top: 6, bottom: 6 })
+        .onClick(() => {
+          this.davUp();
+        })
+      }
+
+      if (this.webdavDirs.length > 0 || this.webdavFiles.length > 0) {
         List() {
+          ForEach(this.webdavDirs, (dir: string) => {
+            ListItem() {
+              Row() {
+                Text('\u{1F4C1}').fontSize(14).margin({ right: 8 })
+                Text(dir).fontSize(13).layoutWeight(1).fontColor('#3949AB')
+              }
+              .width('90%').padding({ top: 6, bottom: 6 })
+              .onClick(() => {
+                this.davOpenDir(dir + '/');
+              })
+            }
+          }, (dir: string) => 'd_' + dir)
           ForEach(this.webdavFiles, (file: string) => {
             ListItem() {
               Row() {
@@ -4047,7 +4361,7 @@ struct Index {
         Text('MuPDF 1.23.7 \u5F15\u64CE \u00B7 \u591A\u683C\u5F0F\u9605\u8BFB')
           .fontSize(12).fontColor('#999')
         Text('\u503C\u5F97\u8BFB\uff0c\u597D\u597D\u8BFB')
-          .fontSize(15).fontColor('#3949AB').margin({ top: 10 })
+          .fontSize(15).fontColor($r('app.color.brand_primary')).margin({ top: 10 })
       }
       .width('100%')
       .padding(20)
@@ -4079,7 +4393,7 @@ struct Index {
             this.activeOverlay = 0;
           })
         Button('\u521B\u5EFA')
-          .fontSize(13).height(36).layoutWeight(1).backgroundColor('#3949AB').fontColor(Color.White)
+          .fontSize(13).height(36).layoutWeight(1).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
           .onClick(() => {
             this.confirmNewFolder();
             this.activeOverlay = 0;
@@ -4167,7 +4481,7 @@ struct Index {
             this.activeOverlay = 0;
           })
         Button('\u786E\u5B9A')
-          .fontSize(13).height(36).layoutWeight(1).backgroundColor('#3949AB').fontColor(Color.White)
+          .fontSize(13).height(36).layoutWeight(1).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
           .onClick(() => {
             this.confirmRename();
             this.activeOverlay = 0;
@@ -4204,10 +4518,19 @@ struct Index {
 
       Button('\u89E3\u9501')
         .fontSize(14).height(40).width('70%').margin({ top: 16 })
-        .backgroundColor('#3949AB').fontColor(Color.White)
+        .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
         .onClick(() => {
           this.tryUnlock();
         })
+
+      if (this.settings.appLockBiometric && biometricAvailable()) {
+        Button($r('app.string.lock_biometric'))
+          .fontSize(13).height(38).width('70%').margin({ top: 12 })
+          .backgroundColor('#54FFFFFF').fontColor(Color.White)
+          .onClick(() => {
+            this.tryBiometric();
+          })
+      }
     }
     .width('100%').height('100%')
     .backgroundColor('#30344d')
@@ -4285,7 +4608,7 @@ struct Index {
       } else {
         /* folder browser: breadcrumb bar (home / up / path / view) */
         Row({ space: 6 }) {
-          Button('\u2302').fontSize(14).width(40).height(32).backgroundColor('#3949AB').fontColor(Color.White)
+          Button('\u2302').fontSize(14).width(40).height(32).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
             .onClick(() => {
               this.browseHome();
             })
@@ -4373,7 +4696,7 @@ struct Index {
       /* bottom action row */
       Row({ space: 8 }) {
         Button('\u65B0\u5EFA\u6587\u4EF6\u5939')
-          .fontSize(12).height(34).layoutWeight(1).backgroundColor('#3949AB').fontColor(Color.White)
+          .fontSize(12).height(34).layoutWeight(1).backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
           .onClick(() => {
             this.showNewFolder = true;
             this.activeOverlay = 4;
@@ -4396,12 +4719,12 @@ struct Index {
   browseSectionHeader(title: string, addKind: number) {
     Row() {
       Text(title)
-        .fontSize(16).fontWeight(FontWeight.Medium).fontColor('#3949AB')
+        .fontSize(16).fontWeight(FontWeight.Medium).fontColor($r('app.color.brand_primary'))
       Blank()
       if (addKind > 0) {
         Row({ space: 2 }) {
-          Text('+').fontSize(16).fontColor('#3949AB')
-          Text('添加').fontSize(14).fontColor('#3949AB')
+          Text('+').fontSize(16).fontColor($r('app.color.brand_primary'))
+          Text('添加').fontSize(14).fontColor($r('app.color.brand_primary'))
         }
         .onClick(() => {
           if (addKind === 1) {
@@ -4523,7 +4846,7 @@ struct Index {
   browseOpdsRow(s: OpdsServer) {
     Row({ space: 12 }) {
       Image($r('app.media.ic_globe'))
-        .width(24).height(24).fillColor('#3949AB')
+        .width(24).height(24).fillColor($r('app.color.brand_primary'))
       Column({ space: 2 }) {
         Text(s.name)
           .fontSize(15).fontColor('#555').maxLines(1)
@@ -4533,7 +4856,7 @@ struct Index {
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
       Image($r('app.media.ic_pencil'))
-        .width(20).height(20).fillColor('#3949AB')
+        .width(20).height(20).fillColor($r('app.color.brand_primary'))
         .onClick(() => {
           this.openOpdsEdit(this.opdsServers.indexOf(s));
         })
@@ -4561,7 +4884,7 @@ struct Index {
   browseDavRow(s: DavServer, idx: number) {
     Row({ space: 12 }) {
       Image($r('app.media.ic_cloud'))
-        .width(24).height(24).fillColor('#3949AB')
+        .width(24).height(24).fillColor($r('app.color.brand_primary'))
       Column({ space: 2 }) {
         Text(s.name)
           .fontSize(15).fontColor('#555').maxLines(1)
@@ -4571,7 +4894,7 @@ struct Index {
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
       Image($r('app.media.ic_pencil'))
-        .width(20).height(20).fillColor('#3949AB')
+        .width(20).height(20).fillColor($r('app.color.brand_primary'))
         .onClick(() => {
           this.openDavEdit(idx);
         })
@@ -4636,7 +4959,7 @@ struct Index {
             })
           Button(this.opdsEditIdx >= 0 ? '\u4FDD\u5B58' : '\u6DFB\u52A0')
             .fontSize(14).height(36)
-            .backgroundColor('#3949AB').fontColor(Color.White)
+            .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
             .onClick(() => {
               this.saveOpdsEdit();
             })
@@ -4701,7 +5024,7 @@ struct Index {
         Row({ space: 6 }) {
           Checkbox({ name: 'davTrust' })
             .width(18).height(18)
-            .selectedColor('#3949AB')
+            .selectedColor($r('app.color.brand_primary'))
             .select(this.davEditTrusted)
             .onChange((v: boolean) => {
               this.davEditTrusted = v;
@@ -4719,7 +5042,7 @@ struct Index {
             })
           Button(this.davEditIdx >= 0 ? '\u4FDD\u5B58' : '\u6DFB\u52A0')
             .fontSize(14).height(36)
-            .backgroundColor('#3949AB').fontColor(Color.White)
+            .backgroundColor($r('app.color.brand_primary')).fontColor(Color.White)
             .onClick(() => {
               this.saveDavEdit();
             })
@@ -4739,9 +5062,9 @@ struct Index {
   browseEntryRow(icon: Resource, label: string) {
     Row({ space: 14 }) {
       Image(icon)
-        .width(24).height(24).fillColor('#3949AB')
+        .width(24).height(24).fillColor($r('app.color.brand_primary'))
       Text(label)
-        .fontSize(16).fontColor('#3949AB')
+        .fontSize(16).fontColor($r('app.color.brand_primary'))
         .maxLines(1)
         .layoutWeight(1)
     }
@@ -4758,13 +5081,13 @@ struct Index {
   browseFolderRow(f: LibFolder) {
     Row({ space: 14 }) {
       Image($r('app.media.ic_folder'))
-        .width(26).height(26).fillColor('#3949AB')
+        .width(26).height(26).fillColor($r('app.color.brand_primary'))
       Text(f.name)
         .fontSize(16).fontColor('#555')
         .maxLines(1)
         .layoutWeight(1)
       Image($r('app.media.ic_star_border'))
-        .width(20).height(20).fillColor('#3949AB')
+        .width(20).height(20).fillColor($r('app.color.brand_primary'))
     }
     .width('94%')
     .padding({ left: 12, right: 12, top: 12, bottom: 12 })
@@ -4814,7 +5137,7 @@ struct Index {
         }, (f: LibFolder) => f.path)
         Row({ space: 14 }) {
           Image($r('app.media.ic_book_open'))
-            .width(24).height(24).fillColor('#3949AB')
+            .width(24).height(24).fillColor($r('app.color.brand_primary'))
           Text('\u5DF2\u5BFC\u5165\u7684\u4E66 \uFF08\u4E66\u5E93\uFF09')
             .fontSize(16).fontColor('#555')
             .layoutWeight(1)
@@ -4831,9 +5154,9 @@ struct Index {
         this.browseSectionHeader('\u641C\u7D22', 0)
         Row({ space: 14 }) {
           Image($r('app.media.ic_db_search'))
-            .width(24).height(24).fillColor('#3949AB')
+            .width(24).height(24).fillColor($r('app.color.brand_primary'))
           Text('\u5728\u591A\u4E2A\u6587\u6863\u4E2D\u641C\u7D22')
-            .fontSize(16).fontColor('#3949AB')
+            .fontSize(16).fontColor($r('app.color.brand_primary'))
             .layoutWeight(1)
         }
         .width('94%')
@@ -5007,7 +5330,7 @@ struct Index {
       .fontSize(15).fontWeight(FontWeight.Medium).fontColor(Color.White)
       .width('100%')
       .padding({ left: 12, top: 9, bottom: 9 })
-      .backgroundColor('#3949AB')
+      .backgroundColor($r('app.color.brand_primary'))
       .borderRadius(2)
   }
 
@@ -5018,8 +5341,8 @@ struct Index {
       Text(label)
         .fontSize(14).fontColor('#333').width(120)
       Text(value)
-        .fontSize(14).fontColor('#3949AB')
-        .decoration({ type: TextDecorationType.Underline, color: '#3949AB' })
+        .fontSize(14).fontColor($r('app.color.brand_primary'))
+        .decoration({ type: TextDecorationType.Underline, color: $r('app.color.brand_primary') })
         .maxLines(1)
     }
     .width('100%')
@@ -5034,6 +5357,15 @@ struct Index {
         Row() {
           Text('\u504F\u597D')
             .fontSize(15).fontWeight(FontWeight.Medium).fontColor(Color.White)
+            .onClick(() => {
+              /* hidden diagnostics: tap the title 3 times to toggle the NAPI self-test */
+              this.apiTestTaps++;
+              if (this.apiTestTaps >= 3) {
+                this.showApiTest = !this.showApiTest;
+                this.apiTestTaps = 0;
+                console.info(`[Index] API test panel: ${this.showApiTest}`);
+              }
+            })
           Blank()
           Text('\u9000\u51FA\u7A0B\u5E8F')
             .fontSize(14).fontColor(Color.White)
@@ -5059,11 +5391,11 @@ struct Index {
           }
           .width(42).height(42)
           .justifyContent(FlexAlign.Center)
-          .backgroundColor('#3949AB')
+          .backgroundColor($r('app.color.brand_primary'))
           .borderRadius(21)
           Text('HowRead')
-            .fontSize(15).fontColor('#3949AB')
-            .decoration({ type: TextDecorationType.Underline, color: '#3949AB' })
+            .fontSize(15).fontColor($r('app.color.brand_primary'))
+            .decoration({ type: TextDecorationType.Underline, color: $r('app.color.brand_primary') })
           Image($r('app.media.ic_settings'))
             .width(22).height(22).fillColor('#00897B')
         }
@@ -5071,8 +5403,8 @@ struct Index {
         .padding({ left: 12, right: 12, top: 10, bottom: 2 })
 
         Text('\u91CD\u7F6E')
-          .fontSize(14).fontColor('#3949AB')
-          .decoration({ type: TextDecorationType.Underline, color: '#3949AB' })
+          .fontSize(14).fontColor($r('app.color.brand_primary'))
+          .decoration({ type: TextDecorationType.Underline, color: $r('app.color.brand_primary') })
           .width('100%')
           .padding({ left: 12, bottom: 4 })
           .onClick(() => {
@@ -5093,8 +5425,8 @@ struct Index {
           Text(this.syncCfg.enabled
             ? (this.syncCfg.lastSyncTime.length > 0 ? '\u4E0A\u6B21\uFF1A' + this.syncCfg.lastSyncTime.substring(0, 16).replace('T', ' ') : '\u5DF2\u542F\u7528')
             : '\u672A\u542F\u7528')
-            .fontSize(14).fontColor('#3949AB')
-            .decoration({ type: TextDecorationType.Underline, color: '#3949AB' })
+            .fontSize(14).fontColor($r('app.color.brand_primary'))
+            .decoration({ type: TextDecorationType.Underline, color: $r('app.color.brand_primary') })
             .maxLines(1)
             .layoutWeight(1)
         }
@@ -5111,8 +5443,8 @@ struct Index {
           Text('AI \u5927\u6A21\u578B')
             .fontSize(14).fontColor('#333').width(120)
           Text(this.aiCfg.model.length > 0 ? this.aiCfg.provider + ' \u00B7 ' + this.aiCfg.model : '\u672A\u914D\u7F6E')
-            .fontSize(14).fontColor('#3949AB')
-            .decoration({ type: TextDecorationType.Underline, color: '#3949AB' })
+            .fontSize(14).fontColor($r('app.color.brand_primary'))
+            .decoration({ type: TextDecorationType.Underline, color: $r('app.color.brand_primary') })
             .maxLines(1)
             .layoutWeight(1)
         }
@@ -5363,6 +5695,27 @@ struct Index {
             })
         }
 
+        /* Round 5: biometric unlock toggle */
+        Row({ space: 8 }) {
+          Text($r('app.string.pref_biometric'))
+            .fontSize(13).fontColor('#555')
+          Button(this.settings.appLockBiometric ? '\u5F00' : '\u5173')
+            .fontSize(12).height(32)
+            .backgroundColor(this.settings.appLockBiometric && biometricAvailable() ? '#2a7' : '#e0e0e0')
+            .fontColor(this.settings.appLockBiometric && biometricAvailable() ? Color.White : '#333')
+            .onClick(() => {
+              if (!biometricAvailable()) {
+                promptAction.showToast({ message: $r('app.string.pref_biometric_na') });
+                return;
+              }
+              this.settings.appLockBiometric = !this.settings.appLockBiometric;
+              this.saveNow();
+              console.info(`[Index] Biometric unlock: ${this.settings.appLockBiometric}`);
+            })
+          Text('(\u6307\u7EB9/\u4EBA\u8138\uFF0C\u5931\u8D25\u56DE\u9000\u5BC6\u7801)')
+            .fontSize(10).fontColor('#999')
+        }
+
         /* Phase 6: reading reminder */
         Row({ space: 8 }) {
           Text('\u9605\u8BFB\u63D0\u9192:')
@@ -5376,6 +5729,40 @@ struct Index {
               this.saveNow();
             })
           Text('(\u8FDE\u7EED\u9605\u8BFB\u63D0\u9192)')
+            .fontSize(10).fontColor('#999')
+        }
+
+        /* Round 5: tab bar top/bottom */
+        Row({ space: 8 }) {
+          Text($r('app.string.pref_tab_pos'))
+            .fontSize(13).fontColor('#555')
+          Button(this.settings.tabPositionTop ? $r('app.string.pref_tab_top') : $r('app.string.pref_tab_bottom'))
+            .fontSize(12).height(32)
+            .backgroundColor(this.settings.tabPositionTop ? $r('app.color.brand_primary') : '#e0e0e0')
+            .fontColor(this.settings.tabPositionTop ? Color.White : '#333')
+            .onClick(() => {
+              this.settings.tabPositionTop = !this.settings.tabPositionTop;
+              this.saveNow();
+              console.info(`[Index] Tab position top: ${this.settings.tabPositionTop}`);
+            })
+          Text('(\u5BF9\u9F50\u5B89\u5353 tapPositionTop)')
+            .fontSize(10).fontColor('#999')
+        }
+
+        /* Round 5: reader top bar clock+battery */
+        Row({ space: 8 }) {
+          Text($r('app.string.pref_topbar_info'))
+            .fontSize(13).fontColor('#555')
+          Button(this.settings.showTopBarInfo ? '\u5F00' : '\u5173')
+            .fontSize(12).height(32)
+            .backgroundColor(this.settings.showTopBarInfo ? '#2a7' : '#e0e0e0')
+            .fontColor(this.settings.showTopBarInfo ? Color.White : '#333')
+            .onClick(() => {
+              this.settings.showTopBarInfo = !this.settings.showTopBarInfo;
+              this.saveNow();
+              console.info(`[Index] Top bar info: ${this.settings.showTopBarInfo}`);
+            })
+          Text('(\u9605\u8BFB\u5668\u6807\u9898\u680F\u663E\u793A\u65F6\u95F4/\u7535\u91CF)')
             .fontSize(10).fontColor('#999')
         }
 
@@ -5447,56 +5834,58 @@ struct Index {
 
         Divider().color('#ddd')
 
-        /* ===== NAPI self-test (kept for diagnostics) ===== */
-        Text(this.status)
-          .fontSize(12)
-          .fontColor(Color.Gray)
-          .textAlign(TextAlign.Center)
+        /* ===== NAPI self-test (diagnostics, hidden by default; tap 3x on title) ===== */
+        if (this.showApiTest) {
+          Text(this.status)
+            .fontSize(12)
+            .fontColor(Color.Gray)
+            .textAlign(TextAlign.Center)
+            .width('94%')
+
+          Text(this.pageInfo)
+            .fontSize(12)
+            .fontColor(Color.Blue)
+
+          if (this.pixelMap) {
+            Image(this.pixelMap)
+              .objectFit(ImageFit.Contain)
+              .width('70%')
+              .borderRadius(6)
+          }
+
+          Column() {
+            Text(this.textResult)
+              .fontSize(10)
+              .fontColor('#666')
+              .maxLines(3)
+              .textOverflow({ overflow: TextOverflow.Clip })
+              .width('92%')
+          }
+          .padding(8)
+          .backgroundColor(Color.White)
+          .borderRadius(8)
           .width('94%')
 
-        Text(this.pageInfo)
-          .fontSize(12)
-          .fontColor(Color.Blue)
-
-        if (this.pixelMap) {
-          Image(this.pixelMap)
-            .objectFit(ImageFit.Contain)
-            .width('70%')
-            .borderRadius(6)
-        }
-
-        Column() {
-          Text(this.textResult)
+          Text(this.docInfo)
             .fontSize(10)
-            .fontColor('#666')
-            .maxLines(3)
-            .textOverflow({ overflow: TextOverflow.Clip })
-            .width('92%')
-        }
-        .padding(8)
-        .backgroundColor(Color.White)
-        .borderRadius(8)
-        .width('94%')
+            .fontColor(Color.Green)
 
-        Text(this.docInfo)
-          .fontSize(10)
-          .fontColor(Color.Green)
-
-        Column({ space: 4 }) {
-          Text(this.tocText).fontSize(11).fontColor('#555')
-          Text(this.pageSizeText).fontSize(11).fontColor('#555')
-          Text(this.asyncRenderText).fontSize(11).fontColor('#2a7')
-          Text(this.rotatedText).fontSize(11).fontColor('#2a7')
-          Text(this.invertedText).fontSize(11).fontColor('#2a7')
-          Text(this.epubText).fontSize(11).fontColor('#b60')
-          Text(this.cropText).fontSize(11).fontColor('#2a7')
-          Text(this.layoutText).fontSize(11).fontColor('#2a7')
-          Text(this.fmtText).fontSize(11).fontColor('#b60')
+          Column({ space: 4 }) {
+            Text(this.tocText).fontSize(11).fontColor('#555')
+            Text(this.pageSizeText).fontSize(11).fontColor('#555')
+            Text(this.asyncRenderText).fontSize(11).fontColor('#2a7')
+            Text(this.rotatedText).fontSize(11).fontColor('#2a7')
+            Text(this.invertedText).fontSize(11).fontColor('#2a7')
+            Text(this.epubText).fontSize(11).fontColor('#b60')
+            Text(this.cropText).fontSize(11).fontColor('#2a7')
+            Text(this.layoutText).fontSize(11).fontColor('#2a7')
+            Text(this.fmtText).fontSize(11).fontColor('#b60')
+          }
+          .width('94%')
+          .padding(8)
+          .backgroundColor('#f0f4ff')
+          .borderRadius(8)
         }
-        .width('94%')
-        .padding(8)
-        .backgroundColor('#f0f4ff')
-        .borderRadius(8)
       }
       .width('100%')
       .padding({ top: 8, bottom: 16 })
