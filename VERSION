@@ -3,9 +3,9 @@
 # 版本规则：versionCode 始终单调递增，永不回退；versionName 遵循 SemVer 语义化格式 <major>.<minor>.<patch>
 
 [Platform.Android]
-versionName = 1.0.0
-versionCode = 7200
-releaseDate = 2026.09.08
+versionName = 1.0.1
+versionCode = 7204
+releaseDate = 2026.09.09
 
 [Platform.HarmonyOS]
 versionName = 0.5.1

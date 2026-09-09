@@ -3,7 +3,8 @@
 现状：安卓与鸿蒙都在 Ubuntu server 上手工 SSH 构建（AGENTS.md 有命令）。
 本目录将来存放可重复执行的脚本与流水线模板，包括：
 
-- `build_android.sh`：封装 gradle 三变体构建（librera / fdroid / pro debug+release）；
+- `build_android.sh`：封装 gradle 双变体构建（pro / fdroid debug+release；2026-09-09
+  flavor 缩减为 2 个，原主渠道 howread flavor 已删除）；
 - `build_hap.sh` 引用：鸿蒙构建脚本在 `harmony/build_hap.sh`；
 - `check_fdroid_no_ads.sh`：**F-Droid 合规闸门** —— 对 fdroid APK 运行
   `Z:\opt\librera\bench\scan_apk_ads.py`（dex/清单字节扫描），

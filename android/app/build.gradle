@@ -136,24 +136,24 @@ android {
         }
     }
 
-    // Google's official sample AdMob IDs
-    // (https://developers.google.com/admob/android/test-ads). Used as defaults
-    // so ad-enabled flavors can launch without a real AdMob account; override
-    // with real IDs via ~/.gradle/gradle.properties (e.g. google_admobAppId=...).
-    // Without a valid APPLICATION_ID the AdMob MobileAdsInitProvider (a
-    // ContentProvider that runs before Application.onCreate) throws a fatal
-    // IllegalStateException and the app cannot start.
+    // Google's official SAMPLE AdMob APPLICATION_ID
+    // (https://developers.google.com/admob/android/test-ads). Linking
+    // play-services-ads (libDepFree) puts MobileAdsInitProvider into the
+    // merged manifest, and a missing/invalid APPLICATION_ID meta-data is a
+    // fatal crash at app start — so the ad-capable flavor needs a VALID app
+    // id even while ads stay dormant. The sample id only lets the SDK pass
+    // validation; the ad-unit placeholders (banner/full/reward) default to
+    // EMPTY and the empty-ID guards in AdMobAdsProvider keep every
+    // load/show call a no-op, so no ad is ever requested. Real activation =
+    // set pro_admobAppId/pro_admobBannerId/... in ~/.gradle/gradle.properties.
     def sampleAdmobAppId = 'ca-app-pub-3940256099942544~3347511713'
-    def sampleAdmobBanner = 'ca-app-pub-3940256099942544/6300978111'
-    def sampleAdmobFull = 'ca-app-pub-3940256099942544/1033173712'
-    def sampleAdmobReward = 'ca-app-pub-3940256099942544/5224354917'
 
     // Ad-provider property lookup: new keys are prefixed with the flavor name
-    // (howread_admobAppId etc.); the legacy google_* keys on the build server's
-    // ~/.gradle/gradle.properties still win as a fallback so nothing breaks
-    // until they are renamed.
+    // (pro_admobAppId etc.); the howread_* keys (2026-09-07..09 naming) and the
+    // legacy google_* keys on the build server's ~/.gradle/gradle.properties
+    // still win as a fallback so nothing breaks until they are renamed.
     def flavorProp = { String base ->
-        project.findProperty("howread_${base}") ?: project.findProperty("google_${base}")
+        project.findProperty("pro_${base}") ?: project.findProperty("howread_${base}") ?: project.findProperty("google_${base}")
     }
 
     flavorDimensions.add("version")
@@ -174,22 +174,17 @@ android {
                     appSafeMode  : "true"
             ]
         }
-        howread {
-            dimension = "version"
-            applicationId = "com.leestudio.howread.reader"
-            manifestPlaceholders = [
-                    appName      : "HowRead",
-                    appIcon      : "@mipmap/icon_pdf_reader",
-                    appRoundIcon : "@mipmap/icon_pdf_reader",
-                    appGdriveKey : flavorProp('appGdriveKey') ?: '',
-                    admobAppId   : flavorProp('admobAppId') ?: sampleAdmobAppId,
-                    admobBannerId: flavorProp('admobBannerId') ?: sampleAdmobBanner,
-                    admobFullId  : flavorProp('admobFullId') ?: sampleAdmobFull,
-                    admobRewardId  : flavorProp('admobRewardId') ?: sampleAdmobReward,
-                    appSafeMode  : "false"
-            ]
-        }
 
+        // The ad+IAP flagship (Play channel). Ad SDK is WIRED but DORMANT:
+        // the src/admobAds manifest IS merged (a valid APPLICATION_ID is
+        // mandatory once play-services-ads is linked — see the sample-id
+        // comment above) but the ad-unit placeholders default to EMPTY and
+        // the empty-ID guards in AdMobAdsProvider keep all load/show calls
+        // no-ops, so no ad is ever requested. To activate ads later: set
+        // pro_admobAppId / pro_admobBannerId / pro_admobFullId /
+        // pro_admobRewardId in ~/.gradle/gradle.properties. IAP is an
+        // interface-level reservation (see mobi.librera.libgoogle.BillingManager
+        // in src/main) — no billing SDK is linked yet.
         pro {
             dimension = "version"
             applicationId = "com.leestudio.howread.pro.reader"
@@ -198,10 +193,10 @@ android {
                     appIcon      : "@mipmap/icon_pdf_pro",
                     appRoundIcon : "@mipmap/icon_pdf_pro",
                     appGdriveKey : project.findProperty('pro_appGdriveKey') ?: '',
-                    admobAppId   : "",
-                    admobBannerId: "",
-                    admobFullId  : "",
-                    admobRewardId  : "",
+                    admobAppId   : flavorProp('admobAppId') ?: sampleAdmobAppId,
+                    admobBannerId: flavorProp('admobBannerId') ?: '',
+                    admobFullId  : flavorProp('admobFullId') ?: '',
+                    admobRewardId  : flavorProp('admobRewardId') ?: '',
                     appSafeMode  : "false"
             ]
         }
@@ -230,15 +225,15 @@ android {
                     abiName = abiName.replace("arm64-v8a", "arm64").replace("armeabi-v7a", "arm")
 
                     output.versionCodeOverride = code
-                    // the "howread" flavor IS the HowRead brand: no flavor tag in
-                    // the file name; the other flavors keep their tag
-                    def brand = (flavor == "Howread") ? "HowRead" : "HowRead-" + flavor
+                    // every flavor keeps its tag in the file name
+                    // (HowRead-Pro-… / HowRead-Fdroid-…)
+                    def brand = "HowRead-" + flavor
 
                     def fullName = "${brand}-v${versionNumber}-${abiName}.apk"
 
                     output.outputFileName = fullName
                 } else {
-                    def brand = (flavor == "Howread") ? "HowRead" : "HowRead-" + flavor
+                    def brand = "HowRead-" + flavor
                     def fullName = "${brand}-v${versionNumber}-uni.apk"
                 output.versionCodeOverride = codeNumber
                 output.outputFileName = fullName
@@ -248,12 +243,23 @@ android {
 
     sourceSets {
         fdroid { assets.srcDirs = ['src/fdroid/assets', 'src/fdroid/assets/'] }
-        // The GMS-free flavors (fdroid, pro) compile the no-op ad provider from
-        // src/noAds so their APKs contain no ad-SDK code at all (F-Droid
+        // The GMS-free flavor (fdroid) compiles the no-op ad provider from
+        // src/noAds so its APK contains no ad-SDK calls at all (F-Droid
         // requirement). Google Drive / GMS was removed from all builds (2026-09),
         // so there is no longer a gmsStubs source set to mount.
         fdroid { java.srcDirs += ['src/noAds/java'] }
-        pro { java.srcDirs += ['src/noAds/java'] }
+        // pro compiles the REAL AdMob provider, wired but DORMANT: the
+        // manifest merge below is mandatory (play-services-ads injects
+        // MobileAdsInitProvider, and a missing APPLICATION_ID meta-data is a
+        // fatal crash at app start), yet the ad-UNIT placeholders default to
+        // EMPTY so AdMobAdsProvider's empty-ID guards keep every load/show
+        // call a no-op — no ad is ever requested. fdroid compiles the no-op
+        // provider so its APK contains no ad-SDK calls at all (F-Droid
+        // requirement). Both groups provide the same AdsProviderFactory class
+        // name, like the LibreraBuildConfig pattern — never compiled into the
+        // same variant.
+        pro { java.srcDirs += ['src/admobAds/java'] }
+        pro { manifest.srcFile('src/admobAds/AndroidManifest.xml') }
         // Native libraries are vendored under prebuilt/native/ at the REPO ROOT
         // (committed .so for all 4 ABIs, shared layer beside Builder/). Setting
         // srcDirs replaces the default src/main/jniLibs lookup so Gradle packages
@@ -262,17 +268,13 @@ android {
         main { jniLibs.srcDirs = ["${rootDir}/../prebuilt/native/mupdf-1.23.7"] }
     }
 
-    // Ad-provider implementation sources. The ad-enabled flavor (howread)
-    // compiles the real AdMob implementation (it pulls play-services-ads through
-    // libDepFree) and merges src/admobAds/AndroidManifest.xml (ad unit ids); the
-    // GMS-free flavors (fdroid, pro) compile the no-op provider from src/noAds
-    // so their APKs contain no ad-SDK code at all (F-Droid requirement). Both
-    // groups provide the same AdsProviderFactory class name, like the
-    // LibreraBuildConfig pattern — never compiled into the same variant.
-    ['howread'].each { fl ->
-        sourceSets[fl].java.srcDirs += ['src/admobAds/java']
-        sourceSets[fl].manifest.srcFile('src/admobAds/AndroidManifest.xml')
-    }
+    // Ad-provider implementation sources live in src/admobAds (real AdMob +
+    // UMP, pulled into pro via libDepFree) and src/noAds (no-op, fdroid only).
+    // Dormant-vs-active is decided purely by the ad-unit placeholders
+    // (see the productFlavors comment on the pro block): activation =
+    // set pro_admobAppId / pro_admobBannerId / pro_admobFullId /
+    // pro_admobRewardId in ~/.gradle/gradle.properties. fdroid stays
+    // GMS-free (no ad SDK at all).
 
     packagingOptions {
         resources {
@@ -358,13 +360,13 @@ dependencies {
 
     def dep_free = project(':libDepFree')
 
-    // libDepFree carries play-services-ads + UMP; only the ad-enabled howread
-    // flavor links it. fdroid/pro stay GMS-free (no ad SDK at all).
-    howreadImplementation dep_free
+    // libDepFree carries play-services-ads + UMP; only the ad+IAP flagship pro
+    // flavor links it (wired-but-dormant: no ad ids, guarded provider).
+    // fdroid stays GMS-free (no ad SDK at all).
+    proImplementation dep_free
     def dep_pro = project(':libDepPro')
 
     // libDepPro carries junrar + Play Review (non-ad GMS deps).
-    howreadImplementation dep_pro
     proImplementation dep_pro
 
 /** Testing **/

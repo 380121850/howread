@@ -19,15 +19,7 @@ cd ../
 
 ./gradlew clean incVersion
 
-./gradlew assembleLibreraRelease
-./gradlew assemblePdf_v2Release
-./gradlew assembleEbookaRelease
-./gradlew assemblePdf_classicRelease
-./gradlew assembleTts_readerRelease
-./gradlew assembleEpub_readerRelease
 ./gradlew assembleProRelease
-./gradlew assembleTts_readerRelease
-./gradlew assembleEpub_readerRelease
 ./gradlew assembleFdroidRelease
 
 ./gradlew copyApks -Prelease

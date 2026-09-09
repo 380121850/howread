@@ -5,6 +5,31 @@
 
 ---
 
+## [2026-09-09] 鸿蒙移植第七轮：偏好设置页 1:1 对齐安卓 + 软件说明页完整对齐（0.8.6 / versionCode 37）
+
+**背景**：用户指出 ①软件说明页与安卓版不一致、②偏好设置页与安卓界面差距大，要求对齐安卓并给出适配方案。经三方探索（安卓 About/PrefFragment2 全量结构 + 鸿蒙现状）后按「设置页尽量 1:1、About 完整对齐」实施，版本 0.8.5 → **0.8.6**（versionCode 37）。
+
+**① 偏好设置页重构（Index.ets buildSettingsTab 重写，安卓 PrefFragment2/fragment_preferences 对齐）**
+- 分组结构对齐安卓：**书库设置**（子区：格式设置/书库设置/书库显示配置/封面配置/阅读配置）→ **常规设置** → **备份配置** → **UI 配置**（子区：主题配置/标签栏配置）→ **关于** 行；分组标题条带图标 + 展开/折叠箭头（`groupExp`），二级子区同样可折叠。
+- 档案区对齐：头像取档案名首字母、显示档案名、点击开档案面板；原「系统集成」分组取消、散项归位（桌面卡片→书库显示、Tab 位置→标签栏配置、应用锁三件→阅读配置等）。
+- **新增设置项**（Settings.ets `ReaderSettings` 扩 28 字段，接口/默认值/merge 同步）：扫描格式白名单（14 族开关，仅过滤扫描/导入，同安卓 ExtUtils.seachExts 语义，`LibrarySearch` 新增 `parseScanFormats/isExtAllowed` + `.nomedia` 跳过）、列表/网格封面大小（0=自动）、封面列数扩 1–8、显示封面、封面阴影/裁剪/边框阴影（作用于 LibGridCell/BookRow）、显示书籍描述、作者姓氏在前（预留）、单击/长按动作（Reader 接线：`tapCenterAction` 覆盖 + 新增 action 4 无操作；长按可选文件信息/菜单/无操作，默认仍文本选择）、打开最后一本书（loadLibrary 完成后自动打开一次）、总是第 1 页打开（`alwaysPage1` 经路由参数传 Reader 忽略存档进度）、退出确认对话框、全屏（`setWindowSystemBarEnable` 隐/显状态栏）、字体缩放 0.7–2.0（`fsp()` 应用于顶栏/tab/设置行等关键文本，部分覆盖）、语言切换（`i18n.System.setAppPreferredLanguage`，重启生效 toast）、屏幕方向/列数/缩放改安卓式 KV 行+弹层选择（`buildOptSheet`）、主题色/强调色色板（8 预设 + HEX 输入弹层 + 恢复默认）、强调色用于文字、仅显示图标、抽屉显示偏好入口、**tab 拖拽排序**（`tabsOrder` JSON + List `onItemMove` 拖拽 + 上下箭头兜底 + 应用/恢复默认；TabContent 槽位固定经 `tabContentFor(pos)` 调度，`switchTab`/`onTabPos` 做显示序↔tab id 映射）、文件夹三行（存储根/字体/下载，手输路径）。
+- **修复 Reader.persistSettings 覆盖问题**：改为先 `loadSettings` 读旧值合并，Index 管理字段（锁/代理/书库/tabs/颜色等）在阅读器侧保存时不再被重置。
+- **动态主题色**：`$r('app.color.brand_primary')` 全量替换为动态色（Index 79 处/Reader 13 处/AiChat 2 处）；`thm()/acc()` 经 `@StorageProp(themeColorHex/accentColorHex/fontScale)` 驱动全局实时换色。构建器按值参数不追踪的坑已统一改为体内读状态（`tabContentFor`、`settingsColorRow`、`settingsToggleRow`、`settingsKvSheet` + `kvValue()/boolPref()`）。
+
+**② 软件说明页完整对齐（AboutSectionBinder/about_section.xml 对应）**
+- `buildAboutOverlay` 重写：版本 pill `HowRead: v<版本> build <时间>`（`bundleManager.getBundleInfoForSelfSync` 读真实版本号，替换原硬编码 "HarmonyOS port 1.0.0"；`model/BuildInfo.ets` BUILD_TIME 由 `build_hap_all.sh` 每次构建前自动生成）、应用描述、更新日志外链（GitHub CHANGES.md）、GPL v3 + 开源许可（安卓 assets/licenses.html 移植到 rawfile，Web 组件弹窗 `buildLicenses` 展示）、支持邮箱（mailto）、主页链接、fork 尾注。
+- 入口不变：抽屉「软件说明」+ 偏好页「关于」行。
+
+**③ 其它**：新增 ic_drag.svg（拖拽手柄）；string.json base+zh_CN 新增 63 对 key（set_*/group/about_*/exit_confirm/common_ok 等）。
+
+**验证**（Pura 90 模拟器，uitest）：构建通过；设置页 5 分组/子区渲染与折叠、档案行、格式开关矩阵、封面/阅读/常规/备份/UI 各行取值、tab 顺序编辑（下移首页→应用→底部顺序变化且内容映射正确→重启保留→恢复默认）、主题色一键换色全局生效（顶栏/分组条/tabBar/链接）、语言弹层选择 + 重启生效 toast、仅显示图标、重置联动（含色值复位）、About 完整内容 + 许可页 Web 渲染、阅读器打开 sample.md 正常。
+
+**产物**：`harmony/dist/{debug,release}/HowRead[-Pro]-v0.8.6-{arm64,x86_64}-hmos.hap`（pack.info 抽查 code=37/name=0.8.6）。
+
+**已知边界**：字体缩放仅覆盖关键文本点；字体目录/存储根目录/下载目录为手输且当前仅存档（扫描/下载消费点后续接）；作者姓氏在前/显示书籍描述为预留（扫描暂无元数据）；tab 拖拽手势本身留真机复验（排序编辑器箭头/应用通路已验）。
+
+---
+
 ## [2026-09-09] 鸿蒙版本号升级 0.8.5（versionCode 36）
 
 **改动**：`harmony/AppScope/app.json5` versionName 0.8.0 → **0.8.5**，versionCode 35 → **36**（保持单调递增，支持覆盖安装升级）。无其它代码改动，`build_hap_all.sh` default+pro 重建 8 个产物到 `harmony/dist/{debug,release}/HowRead[-Pro]-v0.8.5-{arm64,x86_64}-hmos.hap`。
@@ -2475,3 +2500,55 @@ iOS / Desktop 两个预留平台没有任何版本配置位。
 - 最终产物文件名带 v 前缀：`build_hap_all.sh` 从 AppScope/app.json5 读取 versionName，
   产物为 `HowRead[-Pro]-v0.5.1-<abi>-hmos.hap`；配置文件里的 versionName 字段本身为纯数字不含 v。
 - versionCode=32 为用户指定值；鸿蒙侧独立于安卓（安卓仍为 1.0.0 / 7200）。
+
+## [2026-09-09] 安卓：flavor 缩减 3→2（pro + fdroid），删除 howread；广告与 IAP 预留设计
+
+### 背景与决策（用户指定）
+- 原主渠道 howread flavor 删除；保留两个 flavor：**pro**（旗舰/Play 渠道，将含广告 SDK 与 IAP，
+  IAP 购买解锁 pro 功能并关闭广告）与 **fdroid**（零 GMS/零广告/无 IAP/无 pro 高级功能）。
+- 当前阶段不对接真实广告与 IAP，仅做预留设计；pro 保持现包名
+  com.leestudio.howread.pro.reader（已装用户覆盖升级），fdroid 包名不变。
+
+### 改动
+- **app/build.gradle**：删除 howread flavor 块与 sourceSets 挂载、howreadImplementation
+  依赖；pro 挂载 src/admobAds/java + src/admobAds/AndroidManifest.xml，新增
+  proImplementation dep_free（libDepFree：play-services-ads 25.4.0 + UMP）；
+  APK 命名去掉 howread 无标签特判，产物统一 HowRead-Pro-v1.0.0-<abi>.apk /
+  HowRead-Fdroid-v1.0.0-<abi>.apk；广告属性键查找顺序 pro_* → howread_* → google_*。
+- **广告预留（wired-but-dormant）**：链接 play-services-ads 后 MobileAdsInitProvider
+  随库进入合并 manifest，缺有效 APPLICATION_ID 会启动即崩，故 APPLICATION_ID 默认用
+  Google 官方 sample id（仅过校验）；4 个广告单元 ID 默认留空，AdMobAdsProvider 新增
+  isAdUnitConfigured() 空 ID 守卫（null/空串均 no-op）→ 不加载不展示任何广告。
+  启用 = 仅在 ~/.gradle/gradle.properties 配 pro_admobAppId/BannerId/FullId/RewardId。
+- **IAP 接口级预留（不引 billing SDK）**：新增 src/main 的
+  mobi.librera.libgoogle.BillingManager（isProUnlocked() 恒 false + launchPurchaseFlow()
+  no-op，TODO 标注对接点）；删除 src/pro 与 src/fdroid 的两个空壳 BillingManager stub。
+- **AppsConfig**：isShowAdsInApp 的"检测 Pro 包安装免广告"跨包逻辑（随 howread 删除而失效）
+  替换为 BillingManager.isProUnlocked() 门控；新增 isProFeaturesEnabled()
+  （pro=true / fdroid=false，将来挂 IAP 判断）。
+- **删除**：android/app/src/howread/ 目录（仅 LibreraBuildConfig.java FLAVOR="howread"）。
+- **同步脚本/文档**：Builder/all-beta.sh、all-release.sh 清理旧 flavor 任务（现仅
+  assembleProRelease/assembleFdroidRelease）；ci/autotest devices.json（flavors=pro/fdroid
+  + 新包名）、run_all.py（--flavor choices=[pro,fdroid] 默认 pro）、run_unit.sh、
+  tools/debug_avd.py、debug_p20_intent.py 包名更新；MULTI_PLATFORM.md、store/README.md、
+  store/android/{google,fdroid}/README.md、ci/README.md 同步双 flavor 说明。
+
+### 验证
+- Ubuntu 服务器 assembleProDebug + assembleFdroidDebug BUILD SUCCESSFUL；
+- 产物命名/目录符合新规范；fdroid APK 字节扫描零 gms/ads 命名空间；
+- 真机覆盖升级验证见会话记录（原 com.leestudio.howread.reader 主包不再出新版，
+  是否卸载由用户决定）。未执行任何 git 命令。
+
+## [2026-09-09] 安卓：版本号升级 1.0.1 / 7204
+
+### 改动
+- `android/app/gradle.properties`：appVersionNumberIndex 0 → **1**（versionName 1.0.0 → **1.0.1**）、
+  appCodeNumber 7200 → **7204**（沿用 incVersion 任务的 +4 步进，保持单调递增）；
+- 根 `VERSION` 文件 [Platform.Android] 节同步：versionName=1.0.1、versionCode=7204、
+  releaseDate=2026.09.09。鸿蒙 0.5.1/32 不变。
+
+### 验证
+- Ubuntu 服务器 assembleProDebug + assembleFdroidDebug BUILD SUCCESSFUL（19s），
+  产物 `HowRead-Pro-v1.0.1-arm64.apk` / `HowRead-Fdroid-v1.0.1-arm64.apk`；
+- MI9 覆盖安装双包均 Success，`dumpsys package` 实测 versionName=1.0.1、
+  versionCode=7205（ABI 拆分固有规则：基数 7204 + arm64 偏移 1）。未执行任何 git 命令。

@@ -1,10 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- AdMob entries: this manifest overlay is compiled into the ad-enabled
-         flavors only (src/admobAds is attached to them in app/build.gradle).
-         GMS-free flavors (fdroid/pro, src/noAds) never merge these, so their
-         final manifests carry no ad-SDK references. -->
+    <!-- AdMob entries: this manifest overlay is compiled into the ad-capable
+         flavor only (pro, since 2026-09-09; src/admobAds is attached to it in
+         app/build.gradle). The APPLICATION_ID must stay a VALID id (default =
+         Google sample id) because play-services-ads injects MobileAdsInitProvider
+         and an invalid id is a fatal crash at app start. The ad-UNIT ids default
+         to EMPTY → AdMobAdsProvider's empty-ID guards keep all load/show calls
+         no-ops (ads dormant). fdroid (src/noAds) never merges this overlay. -->
     <application>
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"

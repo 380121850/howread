@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """HowRead UI 层自动测试入口（真机 / AVD）
 用法:
-  python run_all.py --level L0                          # 全部真机跑 L0 (google)
+  python run_all.py --level L0                          # 全部真机跑 L0 (pro)
   python run_all.py --level L1 --serial 48fee174        # 指定设备
   python run_all.py --level L0 --avd                    # 在 AVD 模拟器上跑（UI 层）
   python run_all.py --level L0 --flavor fdroid
@@ -157,7 +157,7 @@ def main():
     ap.add_argument("--level", default="L0", choices=["L0", "L1", "L2"])
     ap.add_argument("--serial", action="append", help="指定设备 serial，可多次")
     ap.add_argument("--avd", action="store_true", help="使用 AVD 模拟器（UI 层）")
-    ap.add_argument("--flavor", default="google", choices=["google", "fdroid", "pro"])
+    ap.add_argument("--flavor", default="pro", choices=["pro", "fdroid"])
     ap.add_argument("--apk", help="显式指定 APK 路径")
     ap.add_argument("--serial-exec", action="store_true", help="设备间串行执行（调试）")
     args = ap.parse_args()

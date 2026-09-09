@@ -17,6 +17,8 @@ import com.foobnix.android.utils.LOG;
 import com.foobnix.model.AppProfile;
 import com.foobnix.model.AppState;
 
+import mobi.librera.libgoogle.BillingManager;
+
 import org.ebookdroid.droids.mupdf.codec.MuPdfDocument;
 
 import java.util.Arrays;
@@ -130,12 +132,26 @@ public class AppsConfig {
             return false;
         }
 
-        boolean is_pro = isPackageExisted(a, PRO_LIBRERA_READER);
-        LOG.d("isPackageExisted", is_pro);
-        if (is_pro) {
+        // 2026-09-09: the separate "howread" flavor was removed — the ad+IAP
+        // flagship IS the pro flavor now, so the old "skip ads when the Pro
+        // package is installed" cross-package check is gone. Ads are skipped
+        // once the IAP pro unlock is purchased (BillingManager.isProUnlocked,
+        // reserved no-op until the billing integration lands).
+        if (BillingManager.isProUnlocked()) {
+            LOG.d("no-ads: pro unlocked");
             return false;
         }
         return true;
+    }
+
+    /**
+     * Whether the PRO features are enabled in this build. Reserved gate for
+     * future pro-only features: true in the pro flavor, false everywhere else
+     * (fdroid has no pro features by design). Once IAP lands this becomes
+     * {@code isPro() && BillingManager.isProUnlocked()}.
+     */
+    public static boolean isProFeaturesEnabled() {
+        return FLAVOR.equals("pro");
     }
 
     public static boolean isPackageExisted(final Context a, final String targetPackage) {

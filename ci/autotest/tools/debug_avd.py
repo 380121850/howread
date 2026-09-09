@@ -6,7 +6,7 @@ import json
 
 meta = json.load(open(r"Z:\opt\librera\LibreraReader\ci\autotest\config\devices.json", encoding="utf-8"))["avd_devices"][0]
 cfg = {"main_activity": "com.foobnix.ui2.MainTabs2", "launcher_timeout_s": 10, "ui_timeout_s": 8}
-dev = Device("emulator-5554", meta, "google", "com.howread.reader", cfg)
+dev = Device("emulator-5554", meta, "pro", "com.leestudio.howread.pro.reader", cfg)
 dev.wake_unlock()
 
 print("resumed:", dev.shell("dumpsys activity activities | grep mResumedActivity").strip()[:130])

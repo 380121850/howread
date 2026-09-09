@@ -2,7 +2,9 @@
 
 发布矩阵：**手机三端（安卓 / 鸿蒙 / iOS）+ 桌面（Windows/Linux）**，安卓按商店细分
 （F-Droid / Google / 小米 / 华为…）。**2026-09-02 已完成平台目录化迁移**：仓库一级
-目录 = `android/` `harmony/` `ios/` `desktop/`，安卓主渠道 flavor 由 librera 改名 google。
+目录 = `android/` `harmony/` `ios/` `desktop/`。**2026-09-09 安卓 flavor 缩减为 2 个**：
+`pro`（旗舰/主渠道，广告+IAP 预留）/ `fdroid`（纯净），原主渠道 howread flavor（更早名
+librera→google）已删除。
 
 ---
 
@@ -20,7 +22,7 @@
      业务逻辑 + UI 各端原生（鸿蒙 ArkTS 跑不了 Java/KMP，边界不强推统一）
         ┌────────────┴──────┐
    android 按商店细分        harmony=华为 / ios=苹果（唯一渠道）
-   app/src/google|fdroid|xiaomi|huawei + ads 源集
+   app/src/pro|fdroid|xiaomi|huawei + ads 源集
 ```
 
 ## 2. 代码目录（迁移后现状，2026-09-02）
@@ -35,10 +37,10 @@ LibreraReader/                          ← 单仓库（git 根）
 │   ├─ howread.keystore keystore.pkcs12 local.properties
 │   └─ app/src/
 │       ├─ main/                        [广告/GMS 无关] 平台共享代码
-│       ├─ google/                      flavor=google（主渠道 Google Play/官网）
-│       ├─ fdroid/  pro/                F-Droid / Pro（均 GMS-free、零广告）
+│       ├─ pro/                         flavor=pro（旗舰/主渠道 Google Play/官网，广告+IAP）
+│       ├─ fdroid/                      F-Droid（GMS-free、零广告、无 IAP）
 │       ├─ xiaomi/  huawei/             预留渠道
-│       └─ admobAds/ noAds/             AdMob 实现（仅 google）/ 零广告实现（fdroid/pro）
+│       └─ admobAds/ noAds/             AdMob 实现（仅 pro，休眠）/ 零广告实现（fdroid）
 ├─ harmony/                             [平台] 鸿蒙 NEXT 工程（AppScope+entry+NAPI）
 ├─ ios/                                 [平台·预留] 未来 iOS（SwiftUI + .xcframework）
 ├─ desktop/                             [平台·预留] 未来 Win/Linux（暂缓）
@@ -69,8 +71,10 @@ main 从此零 GMS、零 Google 类型。同时删除 5 个上游遗留 UI 版�
 - 接口（main，零依赖）：`com.foobnix.ads.AdsProvider` + `RewardListener`；
   `com.foobnix.pdf.info.ADS` 纯门面（策略计时在门面，SDK 调用全委托）。
 - 实现按变体编译（同 FQCN `AdsProviderFactory`，组间互斥）：
-  - `src/admobAds`（`AdMobAdsProvider` + manifest overlay）：仅挂 **google**（唯一带广告 flavor）；
-  - `src/noAds`（`NoAdsProvider`）：挂 fdroid/pro → **APK 无任何广告 SDK 代码**。
+  - `src/admobAds`（`AdMobAdsProvider` + manifest overlay）：仅挂 **pro**（唯一带广告
+    flavor；2026-09-09 起广告单元 ID 默认留空 = 休眠，启用只需在
+    `~/.gradle/gradle.properties` 配 `pro_admob*` 属性，代码零改动）；
+  - `src/noAds`（`NoAdsProvider`）：挂 fdroid → **APK 无任何广告 SDK 代码**。
 - 新增广告网络 = 新源集实现 AdsProvider + 按渠道挂载；每包只编一个 provider；
   广告位 ID 经 manifest placeholder 按 flavor 注入。
 - 原 `libPro/`（GMS/UMP no-op 假类）已删除；GMS/Drive 假类（`com/google/**` + gmsStubs）
@@ -82,8 +86,7 @@ main 从此零 GMS、零 Google 类型。同时删除 5 个上游遗留 UI 版�
 # 安卓（gradle 根 = android/）。版本号统一来自 app/gradle.properties
 # （2026-09-02 起各 flavor 同版本，fdroid 不再固定 9.4.21/7174）：
 ssh ... "source ~/.bashrc && cd /docker/opt/librera/LibreraReader/android \
-  && ./gradlew :app:assembleGoogleDebug :app:assembleProDebug"
-ssh ... "cd /docker/opt/librera/LibreraReader/android && ./gradlew :app:assembleFdroidDebug"
+  && ./gradlew :app:assembleProDebug :app:assembleFdroidDebug"
 
 # 鸿蒙：cd .../harmony && bash build_hap.sh（未变）
 ```
@@ -94,7 +97,7 @@ ssh ... "cd /docker/opt/librera/LibreraReader/android && ./gradlew :app:assemble
 | 平台 | 商店 | 代码形态 | 广告方案 | 关键要求 |
 |---|---|---|---|---|
 | Android | F-Droid | flavor fdroid | 无（NoAdsProvider，APK 零广告类） | 全开源依赖；**零广告 + 零 GMS**（无 `com.google.android.gms`/`com.google.api`）；版本与主渠道统一；去 USE_BIOMETRIC；CI 闸门 |
-| Android | Google Play/官网 | flavor google（主渠道） | AdMob（src/admobAds；google_* 属性→manifest） | DATA SAFETY/隐私页；UMP 内置 |
+| Android | Google Play/官网 | flavor pro（旗舰/主渠道） | AdMob（src/admobAds；pro_* 属性→manifest；单元 ID 留空=休眠） | DATA SAFETY/隐私页；UMP 内置；IAP 预留（BillingManager 接口） |
 | Android | 小米 | [预留] src/xiaomi | 按需 AdMob 或穿山甲/优量汇（新源集） | 备案/隐私；加固后重签 |
 | Android | 华为(安卓包) | [预留] src/huawei | 华为 Ads(HMS) 或先无广告 | 无 GMS；AGC 签名 |
 | HarmonyOS | 华为(鸿蒙包) | harmony/ | 暂缓（AppGallery 变现远期） | AGC Profile；PORTING_PLAN 补功能 |
@@ -102,11 +105,13 @@ ssh ... "cd /docker/opt/librera/LibreraReader/android && ./gradlew :app:assemble
 | Desktop | Win/Linux | [预留] desktop/ | 无 | 暂缓（JVM/Compose 或 C++/Qt） |
 
 ## 5. 各端现状与差距
-- **Android**（android/）：app 模块 Java 文件；flavor 现为 3 个（google 主渠道带 AdMob；
-  fdroid/pro 均 GMS-free 零广告）+ 预留 xiaomi/huawei；5 个上游遗留 UI 版本
+- **Android**（android/）：app 模块 Java 文件；flavor 现为 2 个（pro 旗舰/主渠道，广告
+  SDK 挂载但休眠 + IAP 接口预留 `mobi.librera.libgoogle.BillingManager`；fdroid 纯净
+  GMS-free 零广告）+ 预留 xiaomi/huawei；原主渠道 howread flavor（更早名 librera→google）
+  已于 2026-09-09 删除；5 个上游遗留 UI 版本
   （pdf_classic/ebooka/pdf_v2/tts_reader/epub_reader）与 Google Drive 同步（GMS）已于
   2026-09-02 删除；版本号：app/gradle.properties
-  （appVersionNumberBase/Index、appCodeNumber=7198）；各 flavor 同版本（0.9.0）。
+  （appVersionNumberBase/Index、appCodeNumber）；各 flavor 同版本。
 - **鸿蒙**（harmony/）：NEXT API 24；ArkTS 10 文件；NAPI 22 函数；缺口表见 PORTING_PLAN.md。
 - **可移植逻辑盘点**：`com/foobnix/ext`（格式解析近零 Android 依赖）、model/dao2、
   opds、webdav 传输核心、AiClient —— JVM 桌面/服务端可整块复用；UI 系深度绑定安卓。

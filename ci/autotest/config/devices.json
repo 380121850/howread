@@ -48,11 +48,18 @@
     }
   ],
   "flavors": {
-    "google": { "applicationId": "com.howread.reader", "ads": true, "apk_glob": "app/build/outputs/apk/google/debug/HowRead-*-<abi>.apk" },
-    "fdroid": { "applicationId": "com.howread.reader.pro", "ads": false, "apk_glob": "app/build/outputs/apk/fdroid/debug/HowRead-Fdroid-*-<abi>.apk" },
-    "pro":    { "applicationId": "com.howread.reader.pro", "ads": false, "apk_glob": "app/build/outputs/apk/pro/debug/HowRead-Pro-*-<abi>.apk" }
+    "pro": {
+      "applicationId": "com.leestudio.howread.pro.reader",
+      "ads": true,
+      "apk_glob": "app/build/outputs/apk/pro/debug/HowRead-Pro-*-<abi>.apk"
+    },
+    "fdroid": {
+      "applicationId": "com.leestudio.howread.fd.reader",
+      "ads": false,
+      "apk_glob": "app/build/outputs/apk/fdroid/debug/HowRead-Fdroid-*-<abi>.apk"
+    }
   },
-  "conflicts": "fdroid 与 pro 同包名 com.howread.reader.pro，二者互斥；google 与 .pro 可共存",
+  "conflicts": "flavor 已缩减为 pro/fdroid 两个（2026-09-09）；pro 与 fdroid 包名不同，可同机共存；pro 为广告+IAP 旗舰（广告预留未启用，ads 标记表示能力）",
   "fixtures": {
     "pdf": "Z:/opt/librera/LibreraReader/ci/autotest/teskbook/big25.pdf",
     "epub": "Z:/opt/librera/LibreraReader/ci/autotest/teskbook/alicesadventures.epub",

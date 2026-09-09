@@ -7,8 +7,8 @@
 ```
 store/
 ├── android/
-│   ├── fdroid/    F-Droid（无广告、无 GMS，见其构建规范）
-│   ├── google/    Google Play / 官网主渠道（对应 app/src/librera flavor）
+│   ├── fdroid/    F-Droid（无广告、无 GMS、无 IAP，见其构建规范）
+│   ├── google/    Google Play / 官网主渠道（对应 app/src/pro flavor，广告+IAP 旗舰）
 │   ├── xiaomi/    小米应用商店（预留）
 │   └── huawei/    华为 AppGallery 安卓包（预留）
 ├── harmony/

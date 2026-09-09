@@ -41,9 +41,16 @@ import com.google.android.ump.FormError;
 import com.google.android.ump.UserMessagingPlatform;
 
 /**
- * Real AdMob implementation. Compiled only into the ad-enabled flavors
+ * Real AdMob implementation. Compiled only into the ad-capable flavors
  * (src/admobAds source set), which are the ones that depend on
  * play-services-ads (+ user-messaging-platform) through libDepFree.
+ *
+ * The ad-capable flavor (pro) is WIRED but DORMANT by default: the ad-unit
+ * meta-data values are empty placeholders, so {@link #isAdUnitConfigured}
+ * fails and every load/show call below is a no-op — no ad is ever requested.
+ * Ads activate as soon as real unit ids are injected through the manifest
+ * placeholders (pro_admobBannerId etc. in ~/.gradle/gradle.properties); no
+ * code change is needed.
  *
  * Everything AdMob/UMP-specific that used to live in the shared code
  * (LibreraApp init, the UMP consent flow in MainTabs2, the privacy-options
@@ -55,6 +62,11 @@ public class AdMobAdsProvider implements AdsProvider {
     private InterstitialAd interstitialAd;
     private RewardedAd rewardedAd;
     private AdView adView;
+
+    /** True when the ad-unit meta-data holds a non-blank id (ads activated). */
+    private static boolean isAdUnitConfigured(String adUnitId) {
+        return adUnitId != null && adUnitId.trim().length() > 0;
+    }
 
     @Override
     public void initialize(Context context) {
@@ -125,7 +137,8 @@ public class AdMobAdsProvider implements AdsProvider {
             adView.setAdSize(size);
 
             String metaData = Apps.getMetaData(a, "librera.ADMOB_BANNER_ID");
-            if (metaData == null) {
+            if (!isAdUnitConfigured(metaData)) {
+                LOG.d("ADS1", "Banner skipped: no ad unit id configured");
                 return;
             }
             adView.setAdUnitId(metaData);
@@ -247,7 +260,8 @@ public class AdMobAdsProvider implements AdsProvider {
             }
 
             String adUnitId = Apps.getMetaData(LibreraApp.context, "librera.ADMOB_FULLSCREEN_ID");
-            if (adUnitId == null) {
+            if (!isAdUnitConfigured(adUnitId)) {
+                LOG.d("ADS1", "Interstitial skipped: no ad unit id configured");
                 return;
             }
             InterstitialAd.load(LibreraApp.context, adUnitId, getAdRequest(a), new InterstitialAdLoadCallback() {
@@ -318,7 +332,8 @@ public class AdMobAdsProvider implements AdsProvider {
         LOG.d("ADS1", "RewardedAd load started...");
 
         String adUnitId = Apps.getMetaData(LibreraApp.context, "librera.ADMOB_REWARD");
-        if (adUnitId == null) {
+        if (!isAdUnitConfigured(adUnitId)) {
+            LOG.d("ADS1", "Rewarded skipped: no ad unit id configured");
             return;
         }
         RewardedAd.load(a, adUnitId, new AdRequest.Builder().build(), new RewardedAdLoadCallback() {
