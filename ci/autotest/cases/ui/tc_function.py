@@ -242,15 +242,15 @@ def _open_reader_bookmark_entry(dev, fixtures=None):
                 return False
         dev.d.click(int(0.5 * w), int(0.5 * h))
         time.sleep(2)
-        bm = dev.d(resourceId="com.howread.reader:id/pagesBookmark")
+        bm = dev.d(resourceId=dev.pkg + ":id/pagesBookmark")
         if not bm.exists:
-            tb = dev.d(resourceId="com.howread.reader:id/imageToolbar")
+            tb = dev.d(resourceId=dev.pkg + ":id/imageToolbar")
             if tb.exists:
                 tb.click()
                 time.sleep(1.5)
-            bm = dev.d(resourceId="com.howread.reader:id/pagesBookmark")
+            bm = dev.d(resourceId=dev.pkg + ":id/pagesBookmark")
             if not bm.exists:
-                bm = dev.d(resourceId="com.howread.reader:id/onBookmarks")
+                bm = dev.d(resourceId=dev.pkg + ":id/onBookmarks")
         if bm.exists:
             bm.click()
             time.sleep(1.8)
@@ -270,13 +270,13 @@ def fn03_bookmark(dev, case_id, cfg=None, fixtures=None):
         if not _open_reader_bookmark_entry(dev, fixtures):
             dev.save_dump(case_id, "no_menu")
             raise AssertionError("阅读器菜单未出现/无书签入口")
-        add = dev.d(resourceId="com.howread.reader:id/addBookmarkNormal")
+        add = dev.d(resourceId=dev.pkg + ":id/addBookmarkNormal")
         if not add.exists:
             add = dev.d(text="添加")
         if add.exists:
             add.click()
             time.sleep(1.2)
-        close = dev.d(resourceId="com.howread.reader:id/closePopup")
+        close = dev.d(resourceId=dev.pkg + ":id/closePopup")
         if close.exists:
             close.click()
         time.sleep(1)
@@ -325,7 +325,7 @@ def _try_open_search_page(dev):
     else:
         el.click()
     time.sleep(5)
-    return dev.d(resourceId="com.howread.reader:id/editSearchText").exists
+    return dev.d(resourceId=dev.pkg + ":id/editSearchText").exists
 
 
 def fn04_search(dev, case_id, cfg=None, fixtures=None):
@@ -349,13 +349,13 @@ def fn04_search(dev, case_id, cfg=None, fixtures=None):
             dev.save_dump(case_id, "no_search_entry")
             raise AssertionError("搜索页未打开")
     with dev.step(case_id, "search_keyword"):
-        et = dev.d(resourceId="com.howread.reader:id/editSearchText")
+        et = dev.d(resourceId=dev.pkg + ":id/editSearchText")
         et.click()
         time.sleep(1)
         et.set_text("big25")
         time.sleep(1)
         # 勾选"在书库中搜索"提高命中（测试书在书库 Download 下）
-        lib_cb = dev.d(resourceId="com.howread.reader:id/searchInLibreryResult")
+        lib_cb = dev.d(resourceId=dev.pkg + ":id/searchInLibreryResult")
         if lib_cb.exists:
             try:
                 info = lib_cb.info
@@ -364,7 +364,7 @@ def fn04_search(dev, case_id, cfg=None, fixtures=None):
                     time.sleep(1)
             except Exception:
                 pass
-        go = dev.d(resourceId="com.howread.reader:id/searchStart")
+        go = dev.d(resourceId=dev.pkg + ":id/searchStart")
         if go.exists:
             go.click()
         else:
@@ -449,12 +449,12 @@ def fn07_tts(dev, case_id, cfg=None, fixtures=None):
         dev.d.click(int(0.5 * w), int(0.5 * h))
         time.sleep(1.8)
         # 候选 1: 展开菜单里的 bookMenu（部分机型）
-        tb = dev.d(resourceId="com.howread.reader:id/imageToolbar")
+        tb = dev.d(resourceId=dev.pkg + ":id/imageToolbar")
         if tb.exists:
             tb.click()
             time.sleep(1.5)
-        if dev.d(resourceId="com.howread.reader:id/bookMenu").exists:
-            dev.d(resourceId="com.howread.reader:id/bookMenu").click()
+        if dev.d(resourceId=dev.pkg + ":id/bookMenu").exists:
+            dev.d(resourceId=dev.pkg + ":id/bookMenu").click()
             time.sleep(2)
         for kw in ("朗读", "TTS", "Text to speech", "Voice"):
             if dev.click_text(kw) or dev.click_desc(kw):
@@ -507,8 +507,67 @@ def fn08_intent_open(dev, case_id, cfg=None, fixtures=None):
             time.sleep(0.5)
 
 
+# 多格式测试书（teskbook 新增样本，设备侧 /sdcard/Download/ 下）。
+# 一律用 ASCII 文件名：adb push 中文文件名会乱码且丢扩展名（见 AGENTS.md gotcha 16）。
+MULTI_FORMAT_BOOKS = [
+    ("mobi", "book_mobi.mobi"),
+    ("azw3", "book_azw3.azw3"),
+    ("azw", "book_azw.azw"),
+    ("prc", "book_prc.prc"),
+    ("doc", "book_doc.doc"),
+    ("docx", "The Analysis Of Basic MFC Program Running Principle.docx"),
+    ("djvu", "book_djvu.djvu"),
+    ("html", "book_html.html"),
+    ("pdf", "book_pdf.pdf"),
+    ("txt", "book_txt.txt"),
+]
+
+
+def _exit_reader(dev, case_id):
+    """退出阅读器回主界面（最多 3 次 back，命中首页/最近阅读即停）。"""
+    for _ in range(3):
+        dev.d.press("back")
+        time.sleep(0.8)
+        if dev.dump_has_text("最近阅读") or dev.dump_has_text("首页") or dev.dump_has_text("Browse"):
+            break
+
+
+def fn09_multi_format(dev, case_id, cfg=None, fixtures=None):
+    """多格式开书冒烟：遍历 teskbook 新增样本，逐本 intent 开书→进阅读器→无 crash→翻一页→退出。
+    任何一本打不开或崩溃即 FAIL（指明格式）。翻页用 verify=False，避免单页/无页码格式误判。
+    仅用 open_book_via_intent（OpenerActivity 按扩展名解析书类型，MIME 走 octet-stream 兜底），
+    不依赖书库扫描，确定性高。"""
+    dl = "/sdcard/Download/"
+    opened, failed = [], []
+    for fmt, fname in MULTI_FORMAT_BOOKS:
+        device_path = dl + fname
+        with dev.step(case_id, "open_%s" % fmt):
+            if not dev.open_book_via_intent(device_path):
+                failed.append(fmt + "(未进阅读器)")
+                continue
+        c = dev.scan_crash()
+        if c:
+            failed.append(fmt + "(开书crash)")
+            continue
+        opened.append(fmt)
+        with dev.step(case_id, "turn_%s" % fmt):
+            try:
+                dev.page_turn(forward=True, verify=False)
+            except Exception:
+                pass
+            c = dev.scan_crash()
+            if c:
+                failed.append(fmt + "(翻页crash)")
+        _exit_reader(dev, case_id)
+    if failed:
+        dev.save_dump(case_id, "multi_format_fail")
+        raise AssertionError("以下格式开书失败/崩溃: %s（成功: %s）"
+                             % (", ".join(failed), ", ".join(opened)))
+
+
 ALL = [
     ("FN-08", "intent 打开", fn08_intent_open, None),
+    ("FN-09", "多格式开书", fn09_multi_format, None),
     ("FN-01", "最近列表", fn01_recent, None),
     ("FN-02", "收藏", fn02_favorites, None),
     ("FN-03", "书签", fn03_bookmark, None),

@@ -51,6 +51,7 @@ case_meta:
   FN-06: { layer: ui, priority: P1, timeout: 300, retries: 1 }
   FN-07: { layer: ui, priority: P2, timeout: 300, retries: 0 }
   FN-08: { layer: ui, priority: P0, timeout: 300, retries: 1 }
+  FN-09: { layer: ui, priority: P1, timeout: 600, retries: 1 }
   # --- L2 专项 ---
   PF-01: { layer: ui, priority: P1, timeout: 300, retries: 0 }
   PF-03: { layer: ui, priority: P1, timeout: 300, retries: 0 }
