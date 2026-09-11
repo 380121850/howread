@@ -78,6 +78,8 @@ public class DocumentModel extends ListenerProxy {
     }
 
     public void open(String fileName, String password) {
+        android.util.Log.i("REMOTE", "DocumentModel.open valid=" + ExtUtils.isValidFile(fileName)
+                + " decodeService=" + decodeService);
         if (!ExtUtils.isValidFile(fileName)) {
             throw new IllegalArgumentException("Invalid file:" + fileName);
         }

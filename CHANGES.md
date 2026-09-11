@@ -5,6 +5,39 @@
 
 ---
 
+## [2026-09-11] autotest 修复：tc_function.py 硬编码旧包名前缀导致 FN-03/FN-04 全机型误报 FAIL
+
+**背景**：v1.0.1 pro 包在 3 台真机（MI9/P20/KSA-AL10）跑 L1 功能回归时，FN-03 书签、FN-04 全文搜索 6 例全挂（"阅读器菜单未出现/无书签入口"、"搜索页未打开"）。取证 dump 分析证实：FN-04 失败时刻搜索页其实已打开，`editSearchText`/`searchStart`/`searchInLibreryResult` 元素都在且可点击，只是 resource-id 前缀是 2026-09-07 重品牌后的新包名 `com.leestudio.howread.pro.reader:id/...`，而脚本硬编码的是旧包名 `com.howread.reader:id/...`——测试脚本没跟着包名迁移，非应用 bug。
+
+**改动**：
+- `ci/autotest/cases/ui/tc_function.py`：13 处 `resourceId="com.howread.reader:id/..."` 全部改为动态 `resourceId=dev.pkg + ":id/..."`（书签入口 pagesBookmark/imageToolbar/onBookmarks、书签对话框 addBookmarkNormal/closePopup、搜索页 editSearchText/searchInLibreryResult/searchStart、TTS 入口 imageToolbar/bookMenu）。改后 pro/fdroid 两 flavor 通用，不再依赖具体包名。
+
+**验证**（3 台真机重跑 L1）：修复前 16 PASS / 6 FAIL / 5 SKIP → 修复后 **22 PASS / 0 FAIL / 5 SKIP**。FN-03/FN-04 全机型转 PASS。剩余 5 个 SKIP 均为用例设计内的环境性跳过：FN-07 TTS×3（入口待勘探，P2）、FN-02 收藏×2（P20/KSA-AL10 低配机书库首扫未收录 Download，环境限制）。L0 冒烟同批 24 PASS / 0 FAIL / 0 SKIP。
+
+---
+
+## [2026-09-10] autotest 测试书目补充：从 X:\（/documents）按格式挑选真实样本复制到 ci/autotest/teskbook/
+
+**背景**：为自动测试（ci/autotest）准备多格式测试书。用户要求从 `X:\`（Ubuntu 服务器 `/documents` 挂载，约 16.4 万文件）按应用支持的电子书格式各挑一本代表性样本，复制到 `ci/autotest/teskbook/`；源目录只读（不增删改），仅查找与复制。
+
+**改动**（仅新增测试数据，无代码改动；teskbook/ 本就不入库，见 `ci/autotest/.gitignore`）：
+- `ci/autotest/teskbook/` 新增 10 本真实样本（原有 14 个文件全部保留，未覆盖）：
+  - `一本书读懂大数据-黄颖.mobi`（451KB，真实 MOBI，补位原 497 字节的 demo.mobi 桩）
+  - `计算机与人脑 (科学素养文库·科学元典丛书) - 冯·诺伊曼(Neumann.J.V).azw3`（635KB）
+  - `论犯罪的价值 - 于志刚.azw`（825KB）
+  - `297孙子兵法.prc`（760KB，PRC 归 MOBI 族，用户清单遗漏项）
+  - `MySQL数据库如何实现双机热备的配置.doc`（60KB）
+  - `The Analysis Of Basic MFC Program Running Principle.docx`（96KB）
+  - `[深入理解计算机系统]…2003.Prentice.Hall.djvu`（63MB，X:\ 全书库唯一 DjVu）
+  - `教学设计.html`（10KB，真实 HTML 样本）
+  - `证据理论与决策、人工智能_10198357_段新生....pdf`（11.9MB，中等真实 PDF，区别于 big25.pdf 压力书）
+  - `十万个为什么Linux 问答.txt`（8.8KB）
+- 格式覆盖说明（对照 `BookType.java` 支持清单）：X:\ 上**不存在** FB2/RTF/CBZ/CBR/EPUB3/ODT/AZW4/PDB（抽检 53 本 EPUB 全部为 EPUB2）；其中 FB2/CBZ/XPS/TIFF 已有 teskbook 既有样本覆盖。CHM(29 本)/PDG(143 本) 在 X:\ 上存在但**应用不支持**（BookType 无对应扩展名），未复制。
+
+**验证**：10 个文件复制后逐一比对源/目的字节数全部一致（fail=0）；teskbook/ 最终 24 个文件（原 14 + 新 10）；X:\ 源目录仅执行读取，零变更。
+
+---
+
 ## [2026-09-09] 鸿蒙夜间/白天模式全 APP 生效修复（0.8.6 补丁，versionCode 37 不变）
 
 **背景**：用户反馈「夜间模式和白天模式不生效」。排查结论：数据链路（设置落盘/读取/阅读器 theme 应用）本身是通的，但 ①主界面除抽屉外全部硬编码浅色，切换主题后几乎无视觉变化；②阅读器正文反色从未真正生效——native `renderPageAsync` 的 invert 后处理把 **alpha 通道也一起 XOR**，整页位图变全透明，夜间下页面看似"白屏/黑屏"。
@@ -2620,3 +2653,55 @@ iOS / Desktop 两个预留平台没有任何版本配置位。
 - fdroid：按钮"升级 Pro 版本"，点击经浏览器打开 https://380121850.github.io/howread/（无 IAP 弹窗）；
 - 三组包构建全部 BUILD SUCCESSFUL（HowRead-Pro-v1.0.1 / HowRead-Pro-IapOn-v1.0.1 / HowRead-Fdroid-v1.0.1）。
 未执行任何 git 命令。
+## [2026-09-11] 安卓 1.3.0：SMB/SFTP 三协议统一"在线打开 + 分块缓存阅读"（Pro 功能）
+
+### 新增
+- **三协议远程书源**：在既有 WebDAV 之外新增 Samba(SMB, jcifs-ng 2.1.10) 与 SFTP(sshj 0.38.0) 两种协议；
+  新包 `com.foobnix.remote`：RemoteBook(remote:// 路径体系)/RemoteServer/RemoteStore(AppState.allSmbLinks/allSftpLinks)/
+  RemoteSessionFactory(会话 LRU 复用)/RemoteDataSource 三实现(WebDavRangeDataSource=OkHttp Range、
+  SmbDataSource=jcifs-ng SmbRandomAccessFile、SftpDataSource=sshj RemoteFile.read(offset))。
+- **在线打开 + 分块缓存阅读**：BlockCacheStore(256KB 块 + 内存 LRU 32MB + 磁盘 `cachePath/Remote/<sha256(path)>/`
+  data.bin/blocks.bin/meta.json，版本 tag 变更自动清空重载) + RemoteBookSession(前台 P0/P1 阻塞读、
+  P2 顺序预取 3 块、P3 小书≤20MB 后台整本续传 fullyCached 后零网络打开、P0 到达时后台让行)。
+- **MuPDF 流式打开能力（C 层）**：`Builder/jni/libmupdf-librera.c` 新增 `MuPdfDocument_openStream` JNI 导出
+  （回调式 fz_stream → `fz_open_accelerated_document_with_stream`，含 AttachCurrentThread，多渲染线程安全），
+  已重编 4 ABI 同步 `prebuilt/native/mupdf-1.23.7/`；Java 侧 `MuPdfDocument.openFile` 检测 remote:// 前缀走
+  `openStream` 分支（无本地文件、无 accel）。PDF/EPUB/CBZ/XPS 直开；其余格式自动整本下载后打开；
+  打开失败弹"下载后打开"兜底。
+- **网络浏览页**：`OpdsFragment2` 网络模式扩展(SMB/SFTP 复用 WebDavItem 渲染与目录导航)；
+  `BrowseFragment2` 新增 SMB(Pro)/SFTP(Pro) 服务器分区；`AddRemoteDialog`(SMB：主机/端口/共享/域/账号，
+  SFTP：主机/端口/账号/密码或私钥路径+口令，保存前连接验证、失败可强加)；SFTP 路径按登录 home 相对解析；
+  凭据沿用 WebDavCredentials Keystore 加密（键 remote://<id>，SFTP 私钥口令 remotekey://<id>）。
+- **设置页**：新增"在线阅读(Pro)"与"在线阅读缓存(Pro)"两行 → RemoteCacheDialog（在线阅读优先开关、
+  缓存上限、仅 WiFi 预取、小书整本阈值、占用显示与一键清空）；strings.xml 三语(en/zh-rCN/zh-rTW)同步。
+- **Pro 门控**：在线阅读为 Pro 功能——BrowseFragment2 分区置灰、点击文件默认在线打开仅当
+  `AppsConfig.isProFeaturesEnabled() && AppState.remoteOnlineFirst`，否则/长按菜单走既有"下载到本地再打开"；
+  fdroid 与未解锁 pro 相应入口置灰 + pro_toast_locked；RemoteBookOpener 内部二次兜底。
+
+### 接线点（远程路径贯穿整条打开管道）
+`Apps.getBookPathFromActivity`(remote:// 保原串)/`ExtUtils.isValidFile`(String 重载先判前缀——注意
+`new File("remote://..")` 会把 `//` 折叠成 `/`)/`ExtUtils.openFile`/`showDocumentInner`/`DefaultListeners`/
+`AbstractCodecContext.openDocument`(remote 分支跳过本地解压缓存)/`EpubContext`(remote 跳过连字脚注处理)/
+`FileMetaCore.createMetaIfNeed`(remote 不解析本地文件)/`AppDB.removeNotExist`(remote 不做存在性清理)。
+阅读进度/书签沿用文件名键（remote URI 末段即书名），与本地书一致。
+
+### 版本
+- app/gradle.properties：appVersionNumberBase=1.3、appVersionNumberIndex=0、appCodeNumber=7300（1.3.0/7300）；
+  根 VERSION 文件 [Platform.Android] 同步 1.3.0/7300/2026.09.10。
+
+### 验证（MI9, 48fee174）
+- 构建通过：`assembleProDebug` + `assembleFdroidDebug`（HowRead-Pro-v1.3.0-*.apk / HowRead-Fdroid-v1.3.0-*.apk）。
+- SFTP 实测（服务器 192.168.50.111 真实 OpenSSH + 专用 RSA PKCS8 测试私钥）：
+  添加服务器 → 浏览 home/remotebooks → 点击《alicesadventures.epub》在线打开 0.106s（不等整本）、
+  《big25.pdf》(28MB) 在线打开 6.08s 边读边翻页；分块缓存落盘 `Download/HowRead/Cache/Remote/`（28M）；
+  小书后台整本续传完成（meta.json fullyCached=true）；**关闭 WiFi 后从"最近阅读"重开：零网络、
+  181ms 打开、正文完整渲染翻页流畅**（断网离线阅读验证通过）。
+- fdroid 包：WebDAV(Pro)/SMB(Pro)/SFTP(Pro) 分区全部置灰、添加被门控（已存服务器仍可管理）。
+- sshj 在 Android 的两个坑已修复：剔除 curve25519 KEX（Android 内置 BC 无 X25519），
+  关闭 BC 注册改用平台默认 JCE（Android 9+ 的 BC 已裁剪 SHA-2）。
+- pro 包 MI9 已通过设置页长按"Pro 已激活"模拟退款恢复未解锁原状。
+
+### 备注
+- SMB 端到端本轮未实测（无 SMB 测试环境），仅编译 + 代码走查；后续可用局域网 NAS 补测。
+- 设备侧诊断日志用 `android.util.Log.i("REMOTE", ...)`（不受 IS_LOG 门控，参照 BENCH 惯例）。
+-AppsConfig.IS_LOG 门控已恢复为仅模拟器开启。

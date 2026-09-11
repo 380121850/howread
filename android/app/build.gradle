@@ -375,6 +375,10 @@ dependencies {
         exclude(group: 'stax', module: 'stax')
     }
 
+    // online reading: SMB (jcifs-ng) + SFTP (sshj) random-access sources
+    implementation(libs.jcifs.ng)
+    implementation(libs.sshj)
+
 
 
 

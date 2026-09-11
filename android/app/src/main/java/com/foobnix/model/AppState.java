@@ -302,6 +302,19 @@ public class AppState {
     public boolean isSystemThemeColor = false;
     public String allOPDSLinks = OPDS_DEFAULT;
     public String allWebDavLinks = "";
+    // SMB / SFTP server lists (online reading, see com.foobnix.remote);
+    // same line-per-server shape as allWebDavLinks, entries built by
+    // RemoteServer.buildLine(). Passwords live encrypted in WebDavCredentials.
+    public String allSmbLinks = "";
+    public String allSftpLinks = "";
+    // true: clicking a remote book opens it online with the chunk cache
+    // (Pro unlocked); false: download to the local library first
+    public boolean remoteOnlineFirst = true;
+    // remote-book cache config (RemoteCacheDialog)
+    public int remoteCacheMaxMB = 500;
+    public boolean remotePrefetchWifiOnly = true;
+    // progressive whole-book fill threshold in MB, 0 = off
+    public int remoteWholeBookThresholdMB = 20;
     // WebDAV reading-data sync (progress + bookmarks), see WebDavSyncer.
     // Server credentials are stored separately (WebDavCredentials, keyed by
     // this URL) so the sync config is fully independent from the browsing

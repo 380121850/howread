@@ -50,6 +50,12 @@ EpubContext extends PdfContext {
     public CodecDocument openDocumentInner(final String fileName, String password) {
         LOG.d(TAG, fileName);
 
+        if (com.foobnix.remote.RemoteBook.isRemotePath(fileName)) {
+            // Remote EPUB: no local file for hyphen / footnote / attachment
+            // post-processing — open the stream directly (online reading).
+            return openTextDoc(fileName, fileName, password);
+        }
+
         Map<String, String> notes = null;
         if (AppState.get().isShowFooterNotesInText) {
             notes = getNotes(fileName);

@@ -80,6 +80,16 @@ public class FileMetaCore {
 
         FileMeta fileMeta = AppDB.get().getOrCreate(path);
 
+        if (com.foobnix.remote.RemoteBook.isRemotePath(path)) {
+            // remote book: there is no local file to extract meta from —
+            // title/size were stored by RemoteBookOpener at open time
+            if (FileMetaCore.STATE_FULL != fileMeta.getState()) {
+                fileMeta.setState(FileMetaCore.STATE_FULL);
+                AppDB.get().update(fileMeta);
+            }
+            return fileMeta;
+        }
+
         LOG.d("BooksService-createMetaIfNeed", path, fileMeta.getState());
 
         try {

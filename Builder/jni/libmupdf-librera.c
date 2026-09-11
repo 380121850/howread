@@ -394,6 +394,301 @@ cleanup:
     return (jlong)(long)doc;
 }
 
+/* ================= Remote stream open (online books) =================
+ * Opens a document from a Java com.artifex.mupdf.fitz.SeekableInputStream:
+ * MuPDF calls back into Java for every read/seek, which lets the app feed
+ * a chunk-cached remote book (WebDAV/SMB/SFTP) without a local file.
+ * Stream callbacks can fire from render threads, so the JNIEnv is attached
+ * per call (render threads are not the JNI thread that opened the doc). */
+
+static JavaVM* rs_jvm = NULL;
+
+typedef struct
+{
+    jobject stream;     /* GlobalRef to the SeekableInputStream */
+    jbyteArray array;   /* GlobalRef scratch buffer handed to read() */
+    jmethodID mid_read; /* SeekableInputStream.read([B)I */
+    jmethodID mid_seek; /* SeekableStream.seek(JI)J */
+    jbyte buffer[8192];
+} RsStreamState;
+
+static JNIEnv*
+rs_attach_thread(jboolean* detach)
+{
+    JNIEnv* env = NULL;
+    if (!rs_jvm) {
+        return NULL;
+    }
+    *detach = JNI_FALSE;
+    if ((*rs_jvm)->GetEnv(rs_jvm, (void**)&env, JNI_VERSION_1_6) == JNI_EDETACHED) {
+        *detach = JNI_TRUE;
+        if ((*rs_jvm)->AttachCurrentThread(rs_jvm, &env, NULL) != JNI_OK) {
+            return NULL;
+        }
+    }
+    return env;
+}
+
+static void
+rs_detach_thread(jboolean detach)
+{
+    if (detach && rs_jvm) {
+        (*rs_jvm)->DetachCurrentThread(rs_jvm);
+    }
+}
+
+static int
+RsStream_next(fz_context* ctx, fz_stream* stm, size_t max)
+{
+    RsStreamState* state = stm->state;
+    jboolean detach = JNI_FALSE;
+    JNIEnv* env;
+    int n, ch;
+
+    env = rs_attach_thread(&detach);
+    if (env == NULL) {
+        fz_throw(ctx, FZ_ERROR_GENERIC, "cannot attach to JVM in RsStream_next");
+    }
+
+    n = (*env)->CallIntMethod(env, state->stream, state->mid_read, state->array);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env);
+        (*env)->ExceptionClear(env);
+        rs_detach_thread(detach);
+        fz_throw(ctx, FZ_ERROR_GENERIC, "SeekableInputStream.read() failed");
+    }
+
+    if (n > 0) {
+        (*env)->GetByteArrayRegion(env, state->array, 0, n, state->buffer);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            rs_detach_thread(detach);
+            fz_throw(ctx, FZ_ERROR_GENERIC, "GetByteArrayRegion failed");
+        }
+        /* update stm->pos so fz_tell knows the current position */
+        stm->rp = (unsigned char*)state->buffer;
+        stm->wp = stm->rp + n;
+        stm->pos += n;
+        ch = *stm->rp++;
+    } else if (n < 0) {
+        ch = EOF;
+    } else {
+        rs_detach_thread(detach);
+        fz_throw(ctx, FZ_ERROR_GENERIC, "no bytes read");
+    }
+
+    rs_detach_thread(detach);
+    return ch;
+}
+
+static void
+RsStream_seek(fz_context* ctx, fz_stream* stm, int64_t offset, int whence)
+{
+    RsStreamState* state = stm->state;
+    jboolean detach = JNI_FALSE;
+    JNIEnv* env;
+    int64_t pos;
+
+    env = rs_attach_thread(&detach);
+    if (env == NULL) {
+        fz_throw(ctx, FZ_ERROR_GENERIC, "cannot attach to JVM in RsStream_seek");
+    }
+
+    pos = (*env)->CallLongMethod(env, state->stream, state->mid_seek, offset, whence);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env);
+        (*env)->ExceptionClear(env);
+        rs_detach_thread(detach);
+        fz_throw(ctx, FZ_ERROR_GENERIC, "SeekableStream.seek() failed");
+    }
+
+    stm->pos = pos;
+    stm->rp = stm->wp = (unsigned char*)state->buffer;
+
+    rs_detach_thread(detach);
+}
+
+static void
+RsStream_drop(fz_context* ctx, void* streamState_)
+{
+    RsStreamState* state = streamState_;
+    jboolean detach = JNI_FALSE;
+    JNIEnv* env;
+
+    env = rs_attach_thread(&detach);
+    if (env == NULL) {
+        fz_warn(ctx, "cannot attach to JVM in RsStream_drop; leaking input stream");
+        return;
+    }
+
+    (*env)->DeleteGlobalRef(env, state->stream);
+    (*env)->DeleteGlobalRef(env, state->array);
+
+    free(state);
+
+    rs_detach_thread(detach);
+}
+
+JNIEXPORT jlong JNICALL
+Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_openStream(JNIEnv* env,
+                                                                jclass clazz,
+                                                                jint storememory,
+                                                                jint format,
+                                                                jstring jmagic,
+                                                                jstring pwd,
+                                                                jstring jcss,
+                                                                jint isDocCSS,
+                                                                jfloat imageScale,
+                                                                jint antialias,
+                                                                jint is_image_scale,
+                                                                jobject stream)
+{
+    renderdocument_t* doc;
+    jboolean iscopy;
+    char* magic;
+    char* password;
+    char* css;
+    RsStreamState* state = NULL;
+    fz_stream* docstream = NULL;
+    jclass cls;
+    jbyteArray array = NULL;
+
+    if (!rs_jvm) {
+        (*env)->GetJavaVM(env, &rs_jvm);
+    }
+
+    magic = (char*)(*env)->GetStringUTFChars(env, jmagic, &iscopy);
+    password = (char*)(*env)->GetStringUTFChars(env, pwd, &iscopy);
+    css = (char*)(*env)->GetStringUTFChars(env, jcss, NULL);
+
+    doc = malloc(sizeof(renderdocument_t));
+    if (!doc) {
+        mupdf_throw_exception(env, "Out of Memory");
+        goto cleanup;
+    }
+
+    doc->ctx = fz_new_context(NULL, NULL, FZ_STORE_DEFAULT);
+    if (!doc->ctx) {
+        free(doc);
+        mupdf_throw_exception(env, "Out of Memory");
+        goto cleanup;
+    }
+    doc->ctx->image_scale = imageScale;
+    doc->ctx->is_image_scale = is_image_scale;
+
+    fz_register_document_handlers(doc->ctx);
+
+    fz_install_load_system_font_funcs(doc->ctx, load_droid_font, load_droid_cjk_font, load_droid_fallback_font);
+
+    fz_set_user_css(doc->ctx, css);
+    fz_set_use_document_css(doc->ctx, isDocCSS);
+
+    doc->document = NULL;
+    doc->outline = NULL;
+    doc->accel = NULL;
+
+    fz_set_aa_level(doc->ctx, antialias);
+    doc->format = format;
+
+    cls = (*env)->FindClass(env, "com/artifex/mupdf/fitz/SeekableInputStream");
+    if (cls != NULL) {
+        state = malloc(sizeof(RsStreamState));
+        if (state) {
+            memset(state, 0, sizeof(RsStreamState));
+            state->mid_read = (*env)->GetMethodID(env, cls, "read", "([B)I");
+            cls = (*env)->FindClass(env, "com/artifex/mupdf/fitz/SeekableStream");
+            if (cls != NULL) {
+                state->mid_seek = (*env)->GetMethodID(env, cls, "seek", "(JI)J");
+            }
+            if (state->mid_read == NULL || state->mid_seek == NULL) {
+                free(state);
+                state = NULL;
+            }
+        }
+    }
+    if (state == NULL) {
+        mupdf_throw_exception(env, "Cannot bind SeekableInputStream methods");
+        mupdf_free_document(doc);
+        doc = NULL;
+        goto cleanup;
+    }
+
+    state->stream = (*env)->NewGlobalRef(env, stream);
+    array = (*env)->NewByteArray(env, sizeof(state->buffer));
+    state->array = (*env)->NewGlobalRef(env, array);
+    if (state->stream == NULL || array == NULL || state->array == NULL) {
+        mupdf_throw_exception(env, "Out of Memory (stream refs)");
+        free(state);
+        mupdf_free_document(doc);
+        doc = NULL;
+        goto cleanup;
+    }
+
+    fz_try(doc->ctx)
+    {
+        /* The document keeps its own reference to the stream; our initial
+         * reference is released in fz_always (same ownership as the upstream
+         * mupdf java bindings). */
+        docstream = fz_new_stream(doc->ctx, state, RsStream_next, RsStream_drop);
+        docstream->seek = RsStream_seek;
+
+        doc->document = (fz_document*)fz_open_accelerated_document_with_stream(doc->ctx, magic, docstream, NULL);
+
+        __android_log_print(ANDROID_LOG_DEBUG, "EBookDroid", "Open stream ok magic=%s", magic);
+    }
+    fz_always(doc->ctx)
+    {
+        fz_drop_stream(doc->ctx, docstream);
+    }
+    fz_catch(doc->ctx)
+    {
+        mupdf_throw_exception(env, "PDF file not found or corrupted");
+        mupdf_free_document(doc);
+        doc = NULL;
+        goto cleanup;
+    }
+
+    /*
+     * Handle encrypted PDF files
+     */
+    if (doc != NULL) {
+        fz_try(doc->ctx)
+        {
+            if (fz_needs_password(doc->ctx, doc->document)) {
+                if (strlen(password)) {
+                    int ok = fz_authenticate_password(doc->ctx, doc->document, password);
+                    if (!ok) {
+                        mupdf_free_document(doc);
+                        mupdf_throw_exception_ex(env, WRONG_PASSWORD_EXCEPTION, "Wrong password given");
+                        doc = NULL;
+                        goto cleanup;
+                    }
+                } else {
+                    mupdf_free_document(doc);
+                    mupdf_throw_exception_ex(env, PASSWORD_REQUIRED_EXCEPTION, "Document needs a password!");
+                    doc = NULL;
+                    goto cleanup;
+                }
+            }
+        }
+        fz_catch(doc->ctx)
+        {
+            mupdf_throw_exception(env, "PDF file not found or corrupted");
+            mupdf_free_document(doc);
+            doc = NULL;
+            goto cleanup;
+        }
+    }
+
+cleanup:
+
+    (*env)->ReleaseStringUTFChars(env, jmagic, magic);
+    (*env)->ReleaseStringUTFChars(env, pwd, password);
+    (*env)->ReleaseStringUTFChars(env, jcss, css);
+
+    return (jlong)(long)doc;
+}
+
 JNIEXPORT void JNICALL
 Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_free(JNIEnv* env, jclass clazz, jlong handle)
 {

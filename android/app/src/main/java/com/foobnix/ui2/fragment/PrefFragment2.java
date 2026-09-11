@@ -1000,6 +1000,40 @@ public class PrefFragment2 extends UIFragment {
         // PRO 置灰：未解锁/fdroid 整行半透明，点击弹升级提示
         alphaIfProLocked((View) aiConfigValue.getParent());
 
+        // 在线阅读（WebDAV/SMB/SFTP 缓存阅读）: row opens the settings dialog
+        // (PRO feature: locked/fdroid builds see usage + clear-cache only)
+        final TextView remoteConfigValue = inflate.findViewById(R.id.remoteConfigValue);
+        refreshRemoteRow(remoteConfigValue);
+        TxtUtils.underlineTextView(remoteConfigValue);
+        remoteConfigValue.setOnClickListener(new OnClickListener() {
+            @Override public void onClick(View v) {
+                if (!AppsConfig.isProFeaturesEnabled()) {
+                    proLockedToast(v);
+                    return;
+                }
+                com.foobnix.remote.RemoteCacheDialog.showDialog(getActivity(),
+                        () -> refreshRemoteRow(remoteConfigValue));
+            }
+        });
+        alphaIfProLocked((View) remoteConfigValue.getParent());
+
+        // 在线阅读缓存: same dialog, cache section (usable for the usage view
+        // even when locked — the switch part stays Pro only)
+        final TextView remoteCacheValue = inflate.findViewById(R.id.remoteCacheValue);
+        refreshRemoteCacheRow(remoteCacheValue);
+        TxtUtils.underlineTextView(remoteCacheValue);
+        remoteCacheValue.setOnClickListener(new OnClickListener() {
+            @Override public void onClick(View v) {
+                if (!AppsConfig.isProFeaturesEnabled()) {
+                    proLockedToast(v);
+                    return;
+                }
+                com.foobnix.remote.RemoteCacheDialog.showDialog(getActivity(),
+                        () -> refreshRemoteCacheRow(remoteCacheValue));
+            }
+        });
+        alphaIfProLocked((View) remoteCacheValue.getParent());
+
         final TextView appFontScale = inflate.findViewById(R.id.appFontScale);
         appFontScale.setText(
 
@@ -2615,6 +2649,22 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
             return;
         }
         aiConfigValue.setText(AppState.get().aiModel);
+    }
+
+    /** 常规设置 在线阅读 行的值：开关状态 + 已缓存占用 */
+    private void refreshRemoteRow(TextView v) {
+        if (v == null) {
+            return;
+        }
+        v.setText(AppState.get().remoteOnlineFirst ? R.string.remote_state_on : R.string.remote_state_off);
+    }
+
+    /** 常规设置 在线阅读缓存 行的值：当前占用 */
+    private void refreshRemoteCacheRow(TextView v) {
+        if (v == null) {
+            return;
+        }
+        v.setText(com.foobnix.pdf.info.ExtUtils.readableFileSize(com.foobnix.remote.BlockCacheStore.totalBytes()));
     }
 
     /** 常规设置 Pro 卡片：未解锁态（升级按钮+提示）与已激活态（信息+恢复/管理链接）切换 */

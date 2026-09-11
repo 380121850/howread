@@ -725,4 +725,31 @@
     <string name="pro_refund_title">模擬退款（IAP 樁）</string>
     <string name="pro_refund_msg">將清除本機解鎖標記，Pro 回到未解鎖狀態。繼續？</string>
     <string name="pro_channel_local_key">本地 key</string>
+    <string name="remote_config_row">線上閱讀(Pro)</string>
+    <string name="remote_cache_row">線上閱讀快取(Pro)</string>
+    <string name="remote_state_on">已開啟</string>
+    <string name="remote_state_off">已關閉</string>
+    <string name="remote_settings_title">線上閱讀</string>
+    <string name="remote_online_first">點擊遠端書線上閱讀</string>
+    <string name="remote_cache_size">快取大小上限 (MB)</string>
+    <string name="remote_wifi_only">僅 Wi-Fi 下預取與整本快取</string>
+    <string name="remote_whole_book_hint">小書整本快取閾值 (MB，0 = 關閉)</string>
+    <string name="remote_cache_usage">快取佔用</string>
+    <string name="remote_clear_cache">清空快取</string>
+    <string name="remote_cache_cleared">快取已清空</string>
+    <string name="remote_updated_title">檔案已更新</string>
+    <string name="remote_updated_msg">遠端檔案已更新，舊快取已清除並重新載入新版本。</string>
+    <string name="remote_open_failed">無法線上開啟</string>
+    <string name="remote_open_failed_msg">錯誤：%1$s</string>
+    <string name="remote_download_and_open">下載後開啟</string>
+    <string name="moon_net_section_smb">SMB (Pro)</string>
+    <string name="moon_net_section_sftp">SFTP (Pro)</string>
+    <string name="remote_add_smb">新增 SMB 伺服器</string>
+    <string name="remote_add_sftp">新增 SFTP 伺服器</string>
+    <string name="remote_host_hint">主機或 IP</string>
+    <string name="remote_port_hint">連接埠</string>
+    <string name="remote_share_hint">SMB 共享名稱</string>
+    <string name="remote_domain_hint">網域/工作群組（可選）</string>
+    <string name="remote_keypath_hint">私鑰檔案路徑（可選）</string>
+    <string name="remote_keypass_hint">私鑰通關密語（可選）</string>
 </resources>

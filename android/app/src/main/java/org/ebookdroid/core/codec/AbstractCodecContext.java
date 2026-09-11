@@ -84,6 +84,18 @@ public abstract class AbstractCodecContext implements CodecContext {
         AppsConfig.ensureMuPdfLoaded();
         LOG.d("Open-Document", fileNameOriginal);
         // TempHolder.loadingCancelled = false;
+        if (com.foobnix.remote.RemoteBook.isRemotePath(fileNameOriginal)) {
+            // Remote book: the chunk-cache stream is assembled inside
+            // MuPdfDocument; skip every local-file step (salt, unzip, cache
+            // files) — there is no local file to touch.
+            android.util.Log.i("REMOTE", "codec openDocument begin " + fileNameOriginal);
+            try {
+                return openDocumentInnerCanceled(fileNameOriginal, password);
+            } catch (Throwable e) {
+                android.util.Log.i("REMOTE", "remote open failed: " + e, e);
+                throw e;
+            }
+        }
         if (ExtUtils.isZip(fileNameOriginal)) {
             LOG.d("Open-Document ZIP", fileNameOriginal);
             return openDocumentInnerCanceled(fileNameOriginal, password);

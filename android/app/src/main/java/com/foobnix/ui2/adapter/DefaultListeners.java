@@ -121,6 +121,12 @@ public class DefaultListeners {
                 boolean isFolder = AppDB.get()
                                         .isFolder(result);
 
+                if (!isFolder && com.foobnix.remote.RemoteBook.isRemotePath(result.getPath())) {
+                    // remote (WebDAV/SMB/SFTP) book: online open or download
+                    ExtUtils.openFile(a, result);
+                    return false;
+                }
+
                 if (!isFolder && result.getPath()
                                        .startsWith(Clouds.PREFIX_CLOUD)) {
 

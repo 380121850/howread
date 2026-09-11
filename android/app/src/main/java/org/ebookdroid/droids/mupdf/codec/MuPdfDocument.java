@@ -101,6 +101,9 @@ public class MuPdfDocument extends AbstractCodecDocument {
     private native static String setMetaData(long docHandle, final String key, String value);
 
     private static long openFile(final int format, String fname, final String pwd, String css) {
+        if (fname != null && fname.startsWith(com.foobnix.remote.RemoteBook.PREFIX)) {
+            return openRemoteFile(format, fname, pwd, css);
+        }
         TempHolder.lock.lock();
         try {
             int allocatedMemory = AppState.get().allocatedMemorySize * 1024 * 1024;
@@ -138,10 +141,50 @@ public class MuPdfDocument extends AbstractCodecDocument {
         }
     }
 
+    /**
+     * Remote book: opens MuPDF over the chunk-cached random-access stream
+     * (no local file, no accelerator file — accelerators require a path).
+     */
+    private static long openRemoteFile(final int format, final String fname, final String pwd, final String css) {
+        android.util.Log.i("REMOTE", "openRemoteFile enter, waiting lock");
+        TempHolder.lock.lock();
+        android.util.Log.i("REMOTE", "openRemoteFile locked");
+        try {
+            int allocatedMemory = AppState.get().allocatedMemorySize * 1024 * 1024;
+            int isImageScale = AppState.get().enableImageScale ? 1 : 0;
+            com.foobnix.remote.RemoteBookSession session;
+            try {
+                session = com.foobnix.remote.RemoteSessionFactory.obtain(fname);
+            } catch (java.io.IOException e) {
+                android.util.Log.i("REMOTE", "session obtain failed: " + e, e);
+                LOG.e(e);
+                throw new RuntimeException("Cannot open remote book: " + e.getMessage(), e);
+            }
+            com.foobnix.remote.RemoteSeekableStream stream = new com.foobnix.remote.RemoteSeekableStream(session);
+            android.util.Log.i("REMOTE", "native openStream begin size=" + session.size);
+            final long open = openStream(allocatedMemory, format, com.foobnix.remote.RemoteBook.magicFor(fname),
+                    pwd, css,
+                    BookCSS.get().documentStyle == BookCSS.STYLES_ONLY_USER ? 0 : 1, BookCSS.get().imageScale,
+                    AppState.get().antiAliasLevel, isImageScale, stream);
+            android.util.Log.i("REMOTE", "native openStream done handle=" + open);
+            LOG.d("MUPDF! >>> openStream [document]", open, fname);
+            if (open == -1) {
+                throw new RuntimeException("Document is corrupted");
+            }
+            return open;
+        } finally {
+            TempHolder.lock.unlock();
+        }
+    }
+
     public static native String getFzVersion();
 
     private static native long open(int storememory, int format, String fname, String pwd, String css, int useDocStyle,
                                     float scale, int antialias, String accel, int isImageScale);
+
+    private static native long openStream(int storememory, int format, String magic, String pwd, String css,
+                                          int useDocStyle, float scale, int antialias, int isImageScale,
+                                          com.artifex.mupdf.fitz.SeekableInputStream stream);
 
     private static native void free(long handle);
 

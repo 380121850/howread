@@ -314,6 +314,11 @@ public class ExtUtils {
     }
 
     public static void openFile(Activity a, FileMeta meta) {
+        if (meta != null && com.foobnix.remote.RemoteBook.isRemotePath(meta.getPath())) {
+            // remote book: route through the online-open / download pipeline
+            com.foobnix.remote.RemoteBookOpener.openOrDownload(a, meta.getPath(), meta.getSize() == null ? 0 : meta.getSize());
+            return;
+        }
         File file = new File(meta.getPath());
 
         if (ExtUtils.isExteralSD(meta.getPath())) {
@@ -759,10 +764,20 @@ public class ExtUtils {
         if (Clouds.isCloud(file.getPath())) {
             return true;
         }
+        if (com.foobnix.remote.RemoteBook.isRemotePath(file.getPath())) {
+            // remote books live on the server; reachability is checked when
+            // the chunk-cache session is opened
+            return true;
+        }
         return file != null && file.isFile();
     }
 
     public static boolean isValidFile(final String path) {
+        // Check the raw string first: new File("remote://...") collapses the
+        // double slash ("remote:/..."), which would break the scheme check.
+        if (com.foobnix.remote.RemoteBook.isRemotePath(path)) {
+            return true;
+        }
         return path != null && isValidFile(new File(path));
     }
 
@@ -968,7 +983,7 @@ public class ExtUtils {
     }
 
     public static void showDocumentInner(final Context c, final Uri uri, final float percent, String playlist) {
-        if (!isValidFile(uri)) {
+        if (!isValidFile(uri) && !com.foobnix.remote.RemoteBook.isRemotePath(String.valueOf(uri))) {
             Toast.makeText(c, R.string.file_not_found, Toast.LENGTH_LONG).show();
             return;
         }

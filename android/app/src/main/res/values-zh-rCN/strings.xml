@@ -902,4 +902,31 @@
     <string name="pro_refund_title">模拟退款（IAP 桩）</string>
     <string name="pro_refund_msg">将清除本机解锁标记，Pro 回到未解锁状态。继续？</string>
     <string name="pro_channel_local_key">本地 key</string>
+    <string name="remote_config_row">在线阅读(Pro)</string>
+    <string name="remote_cache_row">在线阅读缓存(Pro)</string>
+    <string name="remote_state_on">已开启</string>
+    <string name="remote_state_off">已关闭</string>
+    <string name="remote_settings_title">在线阅读</string>
+    <string name="remote_online_first">点击远程书在线阅读</string>
+    <string name="remote_cache_size">缓存大小上限 (MB)</string>
+    <string name="remote_wifi_only">仅 WiFi 下预取与整本缓存</string>
+    <string name="remote_whole_book_hint">小书整本缓存阈值 (MB，0 = 关闭)</string>
+    <string name="remote_cache_usage">缓存占用</string>
+    <string name="remote_clear_cache">清空缓存</string>
+    <string name="remote_cache_cleared">缓存已清空</string>
+    <string name="remote_updated_title">文件已更新</string>
+    <string name="remote_updated_msg">远程文件已更新，旧缓存已清除并重新加载新版本。</string>
+    <string name="remote_open_failed">无法在线打开</string>
+    <string name="remote_open_failed_msg">错误：%1$s</string>
+    <string name="remote_download_and_open">下载后打开</string>
+    <string name="moon_net_section_smb">SMB (Pro)</string>
+    <string name="moon_net_section_sftp">SFTP (Pro)</string>
+    <string name="remote_add_smb">添加 SMB 服务器</string>
+    <string name="remote_add_sftp">添加 SFTP 服务器</string>
+    <string name="remote_host_hint">主机或 IP</string>
+    <string name="remote_share_hint">SMB 共享名</string>
+    <string name="remote_domain_hint">域/工作组（可选）</string>
+    <string name="remote_keypath_hint">私钥文件路径（可选）</string>
+    <string name="remote_keypass_hint">私钥口令（可选）</string>
+    <string name="remote_port_hint">端口</string>
 </resources>

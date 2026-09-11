@@ -150,6 +150,7 @@ public class ImageExtractor {
     }
 
     public static synchronized void clearCodeDocument() {
+        android.util.Log.i("REMOTE", "ImageExtractor.clearCodeDocument enter");
         if (codeCache != null) {
             codeCache.recycle();
             codeCache = null;

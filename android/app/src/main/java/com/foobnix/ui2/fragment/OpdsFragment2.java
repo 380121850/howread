@@ -102,6 +102,9 @@ public class OpdsFragment2 extends UIFragment<Entry> {
     // WebDAV browse mode, folded into this Network page (own storage,
     // credentials and client from the com.foobnix.webdav package).
     boolean webDavMode = false;
+    // "smb" / "sftp" while browsing a remote:// server of that protocol,
+    // "" for plain WebDAV / OPDS browsing
+    String netType = "";
     boolean authFailed = false;
     boolean webDavLoadFailed = false;
     String currentServerUrl = "";
@@ -404,6 +407,7 @@ public class OpdsFragment2 extends UIFragment<Entry> {
             public void onClick(View v) {
                 stack.clear();
                 webDavMode = false;
+                netType = "";
                 authFailed = false;
                 currentServerUrl = "";
                 url = getHome();
@@ -614,6 +618,7 @@ public class OpdsFragment2 extends UIFragment<Entry> {
         if (webDavMode && getHome().equals(last)) {
             // back to the combined root view of the Network page
             webDavMode = false;
+            netType = "";
             authFailed = false;
             webDavLoadFailed = false;
             currentServerUrl = "";
@@ -829,6 +834,7 @@ public class OpdsFragment2 extends UIFragment<Entry> {
         webDavMode = webDav;
         authFailed = false;
         webDavLoadFailed = false;
+        netType = com.foobnix.remote.RemoteBook.getType(targetUrl);
         currentServerUrl = webDav ? targetUrl : "";
         url = TxtUtils.isEmpty(targetUrl) ? "/" : targetUrl;
         stack.clear();
@@ -840,6 +846,7 @@ public class OpdsFragment2 extends UIFragment<Entry> {
         if (isRoot()) {
             currentServerUrl = item.href;
             webDavMode = true;
+            netType = com.foobnix.remote.RemoteBook.getType(item.href);
             url = item.href;
             stack.push(url);
             populate();
@@ -847,12 +854,21 @@ public class OpdsFragment2 extends UIFragment<Entry> {
             url = item.href;
             stack.push(url);
             populate();
+        } else if (com.foobnix.remote.RemoteBook.isRemotePath(item.href)) {
+            // remote book: online open (Pro + "online first" switch) or download
+            com.foobnix.remote.RemoteBookOpener.openOrDownload(getActivity(), item.href, item.size);
         } else {
             downloadWebDav(item);
         }
     }
 
     public void downloadWebDav(final WebDavItem item) {
+        if (com.foobnix.remote.RemoteBook.isRemotePath(item.href)) {
+            // SMB / SFTP download: block-cache aware full fetch into the
+            // downloads folder, then open the local copy
+            com.foobnix.remote.RemoteBookOpener.downloadAndOpen(getActivity(), item.href, item.size);
+            return;
+        }
         if (isInProgress()) {
             Toast.makeText(getContext(), R.string.please_wait, Toast.LENGTH_SHORT).show();
             return;
@@ -1008,6 +1024,27 @@ public class OpdsFragment2 extends UIFragment<Entry> {
     public List<Entry> prepareDataInBackground() {
         try {
             LOG.d("OPDS URL", url, "webDavMode", webDavMode);
+            if (webDavMode && com.foobnix.remote.RemoteBook.isRemotePath(url)) {
+                // SMB / SFTP browsing: same WebDavItem rows, own clients
+                List<WebDavItem> items = com.foobnix.remote.RemoteBook.TYPE_SFTP.equals(netType)
+                        ? com.foobnix.remote.SftpClient.list(url)
+                        : com.foobnix.remote.SmbClient.list(url);
+                if (items == null) {
+                    authFailed = com.foobnix.remote.RemoteBook.TYPE_SFTP.equals(netType)
+                            ? com.foobnix.remote.SftpClient.lastErrorWasAuth
+                            : com.foobnix.remote.SmbClient.lastErrorWasAuth;
+                    webDavLoadFailed = true;
+                    webDavItems = new ArrayList<WebDavItem>();
+                    return Collections.emptyList();
+                }
+                authFailed = false;
+                webDavLoadFailed = false;
+                webDavItems = items;
+                com.foobnix.remote.RemoteServer srv = com.foobnix.remote.RemoteStore.find(netType,
+                        com.foobnix.remote.RemoteBook.getServerId(url));
+                title = srv != null ? srv.title : decodeName(url);
+                return Collections.emptyList();
+            }
             if (webDavMode) {
                 WebDavServer srv = WebDavStore.findForUrl(url);
                 String login = "", password = "";
@@ -1254,6 +1291,7 @@ public class OpdsFragment2 extends UIFragment<Entry> {
         }
         stack.clear();
         webDavMode = false;
+        netType = "";
         authFailed = false;
         webDavLoadFailed = false;
         currentServerUrl = "";

@@ -715,6 +715,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
             try {
                 //Thread.sleep(3000);
                 m_fileName = Apps.getBookPathFromActivity(getActivity());
+                android.util.Log.i("REMOTE", "openTask file=" + m_fileName + " model=" + documentModel);
 
                 // Full metadata extraction + hyphenation language detection,
                 // both potentially O(file), run here on the background thread
@@ -729,6 +730,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                     LOG.e(e);
                 }
 
+                android.util.Log.i("REMOTE", "calling documentModel.open");
                 documentModel.open(m_fileName, m_password);
                 android.util.Log.i("BENCH", "doc-open-done " + (android.os.SystemClock.elapsedRealtime() - benchT0) + "ms");
 

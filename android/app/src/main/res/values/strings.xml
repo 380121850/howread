@@ -902,4 +902,31 @@
     <string name="pro_refund_title">Simulate refund (IAP stub)</string>
     <string name="pro_refund_msg">This clears the local unlock flag and locks Pro again. Continue?</string>
     <string name="pro_channel_local_key">Local key</string>
+    <string name="remote_config_row">Online reading (Pro)</string>
+    <string name="remote_cache_row">Online reading cache (Pro)</string>
+    <string name="remote_settings_title">Online reading</string>
+    <string name="remote_online_first">Read online when a remote book is clicked</string>
+    <string name="remote_cache_size">Cache size limit (MB)</string>
+    <string name="remote_wifi_only">Prefetch / whole-book cache on WiFi only</string>
+    <string name="remote_whole_book_hint">Small-book whole-cache threshold (MB, 0 = off)</string>
+    <string name="remote_cache_usage">Cache usage</string>
+    <string name="remote_clear_cache">Clear cache</string>
+    <string name="remote_cache_cleared">Cache cleared</string>
+    <string name="remote_updated_title">File updated</string>
+    <string name="remote_updated_msg">The remote file has changed. The old cache was cleared and the new version was loaded.</string>
+    <string name="remote_open_failed">Cannot open online</string>
+    <string name="remote_open_failed_msg">Error: %1$s</string>
+    <string name="remote_download_and_open">Download and open</string>
+    <string name="moon_net_section_smb">SMB (Pro)</string>
+    <string name="moon_net_section_sftp">SFTP (Pro)</string>
+    <string name="remote_add_smb">Add SMB server</string>
+    <string name="remote_add_sftp">Add SFTP server</string>
+    <string name="remote_host_hint">Host or IP</string>
+    <string name="remote_share_hint">SMB share name</string>
+    <string name="remote_domain_hint">Domain / workgroup (optional)</string>
+    <string name="remote_keypath_hint">Private key file path (optional)</string>
+    <string name="remote_keypass_hint">Private key passphrase (optional)</string>
+    <string name="remote_state_on">On</string>
+    <string name="remote_port_hint">Port</string>
+    <string name="remote_state_off">Off</string>
 </resources>

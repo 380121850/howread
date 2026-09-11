@@ -63,6 +63,11 @@ public class AppDB {
             if (Clouds.isCloud(next.getPath())) {
                 continue;
             }
+            if (com.foobnix.remote.RemoteBook.isRemotePath(next.getPath())) {
+                // remote books have no local file; they are removed through
+                // their own lifecycle, never by the existence check
+                continue;
+            }
 
             if (!new File(next.getPath()).isFile()) {
                 iterator.remove();

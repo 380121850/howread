@@ -266,9 +266,13 @@ public class Apps {
     }
 
     public static String getBookPathFromActivity(Activity a) {
-        return a.getIntent()
-                .getData()
-                .getPath();
+        android.net.Uri data = a.getIntent().getData();
+        if (data != null && "remote".equals(data.getScheme())) {
+            // Uri.getPath() would decode away the remote:// identity used as
+            // the book path / progress key — keep the full URI string
+            return data.toString();
+        }
+        return data == null ? null : data.getPath();
     }
 
 }

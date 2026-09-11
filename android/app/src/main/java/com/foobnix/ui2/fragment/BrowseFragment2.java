@@ -34,6 +34,10 @@ import android.widget.PopupMenu;
 import android.widget.TextView;
 import android.widget.Toast;
 import com.foobnix.opds.Entry;
+import com.foobnix.remote.AddRemoteDialog;
+import com.foobnix.remote.RemoteBook;
+import com.foobnix.remote.RemoteServer;
+import com.foobnix.remote.RemoteStore;
 import com.foobnix.webdav.WebDavCredentials;
 import com.foobnix.webdav.WebDavServer;
 import com.foobnix.webdav.WebDavStore;
@@ -1189,8 +1193,58 @@ import java.util.Map;
     }
 
     /**
-     * Network section of the "My files" root view: three separated blocks
-     * (OPDS catalogs, WebDAV servers, library folders), each with its own
+     * One remote-protocol server block (SMB or SFTP): header + "add" button
+     * (PRO gated) and the saved server list; tapping a server opens the
+     * detached network browse page on its remote:// root.
+     */
+    private void buildRemoteNetSection(String type, LinearLayout netSection, final Activity a, final Runnable rebuild) {
+        final boolean isSftp = RemoteBook.TYPE_SFTP.equals(type);
+        netSection.addView(netSectionDivider());
+        final View header = netSectionHeader(getString(isSftp ? R.string.moon_net_section_sftp : R.string.moon_net_section_smb),
+                new OnClickListener() {
+                    @Override public void onClick(View v) {
+                        if (!AppsConfig.isProFeaturesEnabled()) {
+                            PrefFragment2.proLockedToast(v);
+                            return;
+                        }
+                        AddRemoteDialog.showDialog(a, isSftp ? RemoteBook.TYPE_SFTP : RemoteBook.TYPE_SMB, rebuild, null);
+                    }
+                });
+        PrefFragment2.alphaIfProLocked(header);
+        netSection.addView(header);
+        for (final RemoteServer srv : RemoteStore.load(type)) {
+            netSection.addView(netListItem(R.drawable.glyphicons_544_cloud, srv.title, new OnClickListener() {
+                @Override public void onClick(View v) {
+                    ((MainTabs2) a).openNetworkPage(true, srv.browseRoot(), srv.title);
+                }
+            }, new OnClickListener() {
+                @Override public void onClick(View v) {
+                    AlertDialogs.showDialog(a,
+                            a.getString(R.string.do_you_want_to_delete_) + " " + srv.title,
+                            a.getString(R.string.delete), new Runnable() {
+                                @Override public void run() {
+                                    RemoteStore.remove(srv);
+                                    WebDavCredentials.clear(a, RemoteStore.credentialsKey(srv.id));
+                                    WebDavCredentials.clear(a, RemoteStore.keyPassKey(srv.id));
+                                    AppProfile.save(a);
+                                    rebuild.run();
+                                }
+                            });
+                }
+            }, new OnClickListener() {
+                @Override public void onClick(View v) {
+                    if (!AppsConfig.isProFeaturesEnabled()) {
+                        PrefFragment2.proLockedToast(v);
+                        return;
+                    }
+                    AddRemoteDialog.showDialog(a, srv.getTypeStored(), rebuild, srv);
+                }
+            }));
+        }
+    }
+
+    /**
+     * Network section of the "My files" root view: three separated blocks     * (OPDS catalogs, WebDAV servers, library folders), each with its own
      * header + "add" button and a vertical list. Tapping an OPDS/WebDAV entry
      * opens a detached network page on that target; every entry can be
      * removed individually with its own delete icon.
@@ -1301,6 +1355,10 @@ import java.util.Map;
                 }
             }));
         }
+
+        // --- SMB / SFTP servers (online reading, same PRO policy as WebDAV) ---
+        buildRemoteNetSection(RemoteBook.TYPE_SMB, netSection, a, rebuild);
+        buildRemoteNetSection(RemoteBook.TYPE_SFTP, netSection, a, rebuild);
 
         // --- library folders (the list itself lives in the RecyclerView) ---
         netSection.addView(netSectionDivider());
