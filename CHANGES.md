@@ -16,6 +16,20 @@
 
 ---
 
+## [2026-09-11] 测试基建：test_webdav.py 账密对齐 autotest 配置（howread/howread123）
+
+**背景**：为真机网络协议测试（WebDAV/SAMBA/SFTP）搭建服务器环境做的前置对齐。`ci/autotest/config/cases.yaml` 中 webdav 环境定义的是 `user: howread / password: howread123`（端口 8765），但 `Z:\opt\librera\test_webdav.py`（stdlib 最小 WebDAV 测试服务器，PROPFIND/GET/PUT/MKCOL/OPTIONS）内建的是 `USER='lee' / PASSWORD='librera'`，且鉴权只校验用户名、**任意密码可通过**——配置与脚本不一致，密码形同虚设。
+
+**改动**（仅测试工具脚本，无应用代码改动）：
+- `test_webdav.py`：`USER/PASSWORD` 改为 `howread/howread123`，与 cases.yaml 对齐；`authorized()` 同时校验用户名和密码（原实现仅比对用户名）。
+
+**同日测试环境决策与清理**（记录备考，无代码改动）：
+- 网络协议测试服务器**弃用 WSL 方案**：WSL2 为 NAT 虚拟网卡，真机（同网段）无法直连；Win10 19045 不支持 mirrored 模式，WSL2 无官方 bridged。已整体删除 WSL（unregister qwork + `wsl --uninstall` + 清除 `D:\VM\qwork\ext4.vhdx`），改由用户在 Ubuntu 22（192.168.50.111）上建测试虚拟机，VM 内配置 apache2 mod_dav（WebDAV :8765）/ openssh-server（SFTP :22）/ samba（SMB :445，min protocol SMB2），统一账号 howread/howread123。
+- 应用侧协议栈核实（`android/gradle/libs.versions.toml`）：WebDAV=sardine-android（Basic/Digest，URL 带端口，同步需 PROPFIND/GET/PUT/MKCOL + Range 探测）；SFTP=sshj 0.38（密码或私钥，端口可自定义）；SMB=jcifs-ng 2.1.10（要求 SMB2.10–3.1.1，host+port 分离输入、支持非 445 端口）；**无 FTP 客户端**。
+- 192.168.50.111 清理 3 件测试残留：`~/sftp_test_key/`（测试私钥）、`~/remotebooks/`（测试书，teskbook 已有同款）、`~/nul`（Windows 重定向残渣）；samba "llama data"（llama.cpp 用）、nginx :80、miniconda3 与本项目无关，保留未动。
+
+---
+
 ## [2026-09-10] autotest 测试书目补充：从 X:\（/documents）按格式挑选真实样本复制到 ci/autotest/teskbook/
 
 **背景**：为自动测试（ci/autotest）准备多格式测试书。从 `X:\`（Ubuntu 服务器 `/documents` 挂载，约 16.4 万文件）按应用支持的电子书格式各挑一本代表性样本，复制到 `ci/autotest/teskbook/`；源目录只读（不增删改），仅查找与复制。
