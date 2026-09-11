@@ -738,7 +738,7 @@
     <string name="remote_clear_cache">清空快取</string>
     <string name="remote_cache_cleared">快取已清空</string>
     <string name="remote_updated_title">檔案已更新</string>
-    <string name="remote_updated_msg">遠端檔案已更新，舊快取已清除並重新載入新版本。</string>
+    <string name="remote_updated_msg">遠端檔案已更新。是否清除舊快取並重新載入？也可下載新版本後開啟。</string>
     <string name="remote_open_failed">無法線上開啟</string>
     <string name="remote_open_failed_msg">錯誤：%1$s</string>
     <string name="remote_download_and_open">下載後開啟</string>
@@ -761,4 +761,20 @@
     <string name="remote_up">上一級</string>
     <string name="remote_pick_shares">共用清單（選擇一個共用）</string>
     <string name="remote_no_subdirs">此處沒有子目錄</string>
+    <string name="remote_trust_all">信任所有憑證（不校驗主機）</string>
+    <string name="remote_cache_expire">快取過期天數（0 = 永不過期）</string>
+    <string name="remote_retry_interval">重試基礎間隔（毫秒，指數退避）</string>
+    <string name="remote_retry_count">網路重試次數</string>
+    <string name="remote_whole_book_metered">行動網路下也整本快取</string>
+    <string name="remote_scan_done">%1$s：新增 %2$d 本，更新 %3$d 本，失敗 %4$d 個</string>
+    <string name="remote_scan_scanning">正在掃描 %1$s ...</string>
+    <string name="remote_scan_title">掃描入架</string>
+    <string name="remote_missing_msg">「%1$s」已被刪除或移動。</string>
+    <string name="remote_missing_title">檔案已不可用</string>
+    <string name="remote_drm_msg">該檔案受數位版權（DRM）保護，請下載到本地書庫後開啟。</string>
+    <string name="remote_drm_title">受 DRM 保護</string>
+    <string name="remote_fetch_and_open">取回並開啟</string>
+    <string name="remote_heavy_msg">「%1$s」無法直接線上串流開啟，將先整本取回（經分塊快取）再開啟。是否繼續？</string>
+    <string name="remote_heavy_title">該格式需整本取回</string>
+    <string name="remote_reload">重新載入</string>
 </resources>

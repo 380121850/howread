@@ -52,6 +52,7 @@ public class AddRemoteDialog {
         final EditText keyPath = dialog.findViewById(R.id.keyPath);
         final EditText keyPass = dialog.findViewById(R.id.keyPass);
         final EditText startDir = dialog.findViewById(R.id.startDir);
+        final android.widget.CheckBox trustAll = dialog.findViewById(R.id.trustAll);
         final TextView testBtn = dialog.findViewById(R.id.remoteTestBtn);
         final TextView browseBtn = dialog.findViewById(R.id.remoteBrowseBtn);
         final TextView testResult = dialog.findViewById(R.id.remoteTestResult);
@@ -75,6 +76,7 @@ public class AddRemoteDialog {
             login.setText(edit.user);
             keyPath.setText(edit.keyPath);
             startDir.setText(edit.startDir);
+            trustAll.setChecked(edit.trustAll);
             if (isSftp && TxtUtils.isNotEmpty(edit.keyPath)) {
                 String[] kp = WebDavCredentials.load(a, RemoteStore.keyPassKey(edit.id));
                 if (kp != null) {
@@ -88,13 +90,15 @@ public class AddRemoteDialog {
             }
         } else {
             port.setText(isSftp ? "22" : "445");
+            // secure default: verify the host key (TOFU), no trust-all
+            trustAll.setChecked(false);
         }
 
         builder.setView(dialog);
         builder.setTitle(isSftp ? R.string.remote_add_sftp : R.string.remote_add_smb);
         builder.setPositiveButton(R.string.add, (d, id) -> {
             RemoteServer srv = buildServer(type, edit, isSftp, name, host, port, share, domain,
-                    login, keyPath, startDir);
+                    login, keyPath, startDir, trustAll);
             if (srv == null) {
                 Toast.makeText(a, R.string.incorrect_value, Toast.LENGTH_SHORT).show();
                 return;
@@ -110,7 +114,7 @@ public class AddRemoteDialog {
         final AsyncTask[] testTask = new AsyncTask[1];
         testBtn.setOnClickListener(v -> {
             final RemoteServer srv = buildServer(type, edit, isSftp, name, host, port, share,
-                    domain, login, keyPath, startDir);
+                    domain, login, keyPath, startDir, trustAll);
             if (srv == null) {
                 Toast.makeText(a, R.string.incorrect_value, Toast.LENGTH_SHORT).show();
                 return;
@@ -153,7 +157,7 @@ public class AddRemoteDialog {
         // 浏览目录: pick a start folder (SMB: share list → folders; SFTP: home)
         browseBtn.setOnClickListener(v -> {
             final RemoteServer srv = buildServer(type, edit, isSftp, name, host, port, share,
-                    domain, login, keyPath, startDir);
+                    domain, login, keyPath, startDir, trustAll);
             if (srv == null) {
                 Toast.makeText(a, R.string.incorrect_value, Toast.LENGTH_SHORT).show();
                 return;
@@ -172,7 +176,7 @@ public class AddRemoteDialog {
     private static RemoteServer buildServer(String type, RemoteServer edit, boolean isSftp,
                                             EditText name, EditText host, EditText port, EditText share,
                                             EditText domain, EditText login, EditText keyPath,
-                                            EditText startDir) {
+                                            EditText startDir, android.widget.CheckBox trustAll) {
         final String hostText = host.getText().toString().trim();
         if (TxtUtils.isEmpty(hostText)) {
             return null;
@@ -193,7 +197,7 @@ public class AddRemoteDialog {
         srv.domain = isSftp ? (edit == null ? "" : edit.domain) : domain.getText().toString().trim();
         srv.keyPath = isSftp ? keyPath.getText().toString().trim() : "";
         srv.startDir = startDir.getText().toString().trim();
-        srv.trustAll = true;
+        srv.trustAll = trustAll.isChecked();
         return srv;
     }
 

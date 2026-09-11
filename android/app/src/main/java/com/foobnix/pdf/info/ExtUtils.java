@@ -1934,7 +1934,10 @@ public class ExtUtils {
         Iterator<FileMeta> iterator = all.iterator();
         while (iterator.hasNext()) {
             FileMeta next = iterator.next();
-            if (!new File(next.getPath()).exists()) {
+            // remote books live on a server: the File-exists check does not
+            // apply (their availability is re-checked at open time)
+            if (!com.foobnix.remote.RemoteBook.isRemotePath(next.getPath())
+                    && !new File(next.getPath()).exists()) {
                 iterator.remove();
             }
         }

@@ -31,6 +31,9 @@ public class RemoteCacheDialog {
         final boolean pro = AppsConfig.isProFeaturesEnabled();
         final EditText cacheSize;
         final EditText threshold;
+        final EditText retryCount;
+        final EditText retryInterval;
+        final EditText expireDays;
 
         LinearLayout body = new LinearLayout(a);
         body.setOrientation(LinearLayout.VERTICAL);
@@ -65,9 +68,34 @@ public class RemoteCacheDialog {
             body.addView(label(a, R.string.remote_whole_book_hint));
             threshold = numberField(a, st.remoteWholeBookThresholdMB);
             body.addView(threshold, row());
+
+            Switch metered = new Switch(a);
+            metered.setText(R.string.remote_whole_book_metered);
+            metered.setChecked(st.remoteWholeBookOnMetered);
+            metered.setOnCheckedChangeListener((b, isChecked) -> {
+                st.remoteWholeBookOnMetered = isChecked;
+                AppProfile.save(a);
+            });
+            body.addView(metered, row());
+            metered.setPadding(0, Dips.dpToPx(8), 0, Dips.dpToPx(8));
+
+            body.addView(label(a, R.string.remote_retry_count));
+            retryCount = numberField(a, st.remoteRetryCount);
+            body.addView(retryCount, row());
+
+            body.addView(label(a, R.string.remote_retry_interval));
+            retryInterval = numberField(a, st.remoteRetryIntervalMs);
+            body.addView(retryInterval, row());
+
+            body.addView(label(a, R.string.remote_cache_expire));
+            expireDays = numberField(a, st.remoteCacheExpireDays);
+            body.addView(expireDays, row());
         } else {
             cacheSize = null;
             threshold = null;
+            retryCount = null;
+            retryInterval = null;
+            expireDays = null;
         }
 
         body.addView(label(a, R.string.remote_cache_usage));
@@ -91,6 +119,24 @@ public class RemoteCacheDialog {
                                     Integer.parseInt(threshold.getText().toString().trim()));
                         } catch (Exception e) {
                             st.remoteWholeBookThresholdMB = 20;
+                        }
+                        try {
+                            st.remoteRetryCount = Math.max(0, Math.min(10,
+                                    Integer.parseInt(retryCount.getText().toString().trim())));
+                        } catch (Exception e) {
+                            st.remoteRetryCount = 3;
+                        }
+                        try {
+                            st.remoteRetryIntervalMs = Math.max(0, Math.min(30000,
+                                    Integer.parseInt(retryInterval.getText().toString().trim())));
+                        } catch (Exception e) {
+                            st.remoteRetryIntervalMs = 1000;
+                        }
+                        try {
+                            st.remoteCacheExpireDays = Math.max(0,
+                                    Integer.parseInt(expireDays.getText().toString().trim()));
+                        } catch (Exception e) {
+                            st.remoteCacheExpireDays = 30;
                         }
                         AppProfile.save(a);
                     }

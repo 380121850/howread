@@ -913,7 +913,7 @@
     <string name="remote_clear_cache">Clear cache</string>
     <string name="remote_cache_cleared">Cache cleared</string>
     <string name="remote_updated_title">File updated</string>
-    <string name="remote_updated_msg">The remote file has changed. The old cache was cleared and the new version was loaded.</string>
+    <string name="remote_updated_msg">The remote file has changed. Reload it online with a fresh cache, or download the new version?</string>
     <string name="remote_open_failed">Cannot open online</string>
     <string name="remote_open_failed_msg">Error: %1$s</string>
     <string name="remote_download_and_open">Download and open</string>
@@ -938,4 +938,20 @@
     <string name="remote_up">Up</string>
     <string name="remote_pick_shares">Shares — pick one</string>
     <string name="remote_no_subdirs">No subfolders here</string>
+    <string name="remote_trust_all">Trust all certificates (do NOT verify the host)</string>
+    <string name="remote_cache_expire">Cache expiry (days, 0 = never)</string>
+    <string name="remote_retry_interval">Retry base interval (ms, exponential backoff)</string>
+    <string name="remote_retry_count">Network retries</string>
+    <string name="remote_whole_book_metered">Whole-book cache on mobile networks</string>
+    <string name="remote_scan_done">%1$s: added %2$d, updated %3$d, failed %4$d</string>
+    <string name="remote_scan_scanning">Scanning %1$s ...</string>
+    <string name="remote_scan_title">Scan into shelf</string>
+    <string name="remote_missing_msg">"%1$s" was deleted or moved on the server.</string>
+    <string name="remote_missing_title">File no longer available</string>
+    <string name="remote_drm_msg">This file is protected by DRM. Download it to the local library to open it.</string>
+    <string name="remote_drm_title">DRM protected</string>
+    <string name="remote_fetch_and_open">Fetch and open</string>
+    <string name="remote_heavy_msg">"%1$s" cannot be streamed directly - it will be fetched completely (via the chunk cache) before opening. Continue?</string>
+    <string name="remote_heavy_title">Format needs a full fetch</string>
+    <string name="remote_reload">Reload</string>
 </resources>

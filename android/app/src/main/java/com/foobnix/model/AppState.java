@@ -315,6 +315,15 @@ public class AppState {
     public boolean remotePrefetchWifiOnly = true;
     // progressive whole-book fill threshold in MB, 0 = off
     public int remoteWholeBookThresholdMB = 20;
+    // whole-book fill tiers (tech-spec §5.3): books < 5MB always fill, even
+    // on metered networks; 5MB..threshold follow the switch below
+    public boolean remoteWholeBookOnMetered = false;
+    // network retry policy (RemoteRetry): attempts and initial backoff (ms,
+    // exponential base×2ⁿ)
+    public int remoteRetryCount = 3;
+    public int remoteRetryIntervalMs = 1000;
+    // remote-cache entries untouched for this many days are evicted, 0 = off
+    public int remoteCacheExpireDays = 30;
     // WebDAV reading-data sync (progress + bookmarks), see WebDavSyncer.
     // Server credentials are stored separately (WebDavCredentials, keyed by
     // this URL) so the sync config is fully independent from the browsing

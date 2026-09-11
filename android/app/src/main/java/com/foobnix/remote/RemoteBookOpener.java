@@ -46,9 +46,98 @@ public class RemoteBookOpener {
         }
         if (RemoteBook.isDirectOpen(remotePath)) {
             openOnline(a, remotePath, sizeHint);
+            return;
+        }
+        String ext = RemoteBook.getExt(remotePath);
+        if (isMobiFamily(ext)) {
+            // DRM probe first (one short head read); the answer decides
+            // between "protected → download" and "heavy → confirm & fetch"
+            checkMobiDrmThenFetch(a, remotePath, sizeHint);
+        } else if (isHeavyFormat(ext)) {
+            confirmHeavyFetch(a, remotePath, sizeHint);
         } else {
+            // simple formats (TXT / FB2 / RTF / HTML): silent fetch
             fetchToCacheAndOpen(a, remotePath, sizeHint);
         }
+    }
+
+    /** MOBI / AZW / AZW3 / PRC: binary containers, DRM probe applies. */
+    private static boolean isMobiFamily(String ext) {
+        return "mobi".equals(ext) || "azw".equals(ext) || "azw3".equals(ext) || "prc".equals(ext);
+    }
+
+    /** High-cost formats (tech-spec §3.4): parseable, but only after a full fetch. */
+    private static boolean isHeavyFormat(String ext) {
+        return isMobiFamily(ext) || "djvu".equals(ext) || "cbr".equals(ext) || "doc".equals(ext);
+    }
+
+    /** Confirms the whole-book fetch for high-cost formats (tech-spec §八). */
+    private static void confirmHeavyFetch(final Activity a, final String remotePath, final long sizeHint) {
+        new AlertDialog.Builder(a)
+                .setTitle(R.string.remote_heavy_title)
+                .setMessage(a.getString(R.string.remote_heavy_msg, displayName(remotePath)))
+                .setPositiveButton(R.string.remote_fetch_and_open,
+                        (d, w) -> fetchToCacheAndOpen(a, remotePath, sizeHint))
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    /** Reads the first KBs of a MOBI-family file and probes the DRM flag. */
+    private static void checkMobiDrmThenFetch(final Activity a, final String remotePath, final long sizeHint) {
+        new AsyncTask() {
+            Boolean encrypted;
+            Exception error;
+
+            @Override
+            protected Object doInBackground(Object[] objects) {
+                RemoteBookSession session = null;
+                try {
+                    session = RemoteSessionFactory.open(remotePath);
+                    byte[] head = new byte[8 * 1024];
+                    int got = 0;
+                    while (got < head.length) {
+                        int n = session.readAt(got, head, got, head.length - got);
+                        if (n <= 0) {
+                            break;
+                        }
+                        got += n;
+                    }
+                    encrypted = MobiHead.isEncrypted(head);
+                } catch (Exception e) {
+                    LOG.e(e);
+                    error = e;
+                } finally {
+                    if (session != null) {
+                        // open() bypasses the session pool: close directly
+                        try {
+                            session.close();
+                        } catch (Exception ignore) {
+                            LOG.w(ignore);
+                        }
+                    }
+                }
+                return null;
+            }
+
+            @Override
+            protected void onPostExecute(Object o) {
+                if (encrypted != null && encrypted) {
+                    new AlertDialog.Builder(a)
+                            .setTitle(R.string.remote_drm_title)
+                            .setMessage(R.string.remote_drm_msg)
+                            .setPositiveButton(R.string.remote_download_and_open,
+                                    (d, w) -> downloadAndOpen(a, remotePath, sizeHint))
+                            .setNegativeButton(android.R.string.cancel, null)
+                            .show();
+                    return;
+                }
+                if (error != null) {
+                    // probe inconclusive: let the fetch pipeline report the error
+                    android.util.Log.i("REMOTE", "mobi DRM probe failed: " + error);
+                }
+                confirmHeavyFetch(a, remotePath, sizeHint);
+            }
+        }.execute();
     }
 
     /** Online open through the chunk cache (Pro + direct-open formats). */
@@ -84,12 +173,25 @@ public class RemoteBookOpener {
                     offerDownloadFallback(a, remotePath, sizeHint, error);
                     return;
                 }
+                if (!session.isRangeSupported()) {
+                    // server ignores Range headers: no real random access —
+                    // degrade to a full fetch instead of skipping (§6.5)
+                    fetchToCacheAndOpen(a, remotePath, sizeHint);
+                    return;
+                }
                 if (session.versionChanged) {
                     new AlertDialog.Builder(a)
                             .setTitle(R.string.remote_updated_title)
                             .setMessage(R.string.remote_updated_msg)
-                            .setPositiveButton(android.R.string.ok, null)
+                            .setPositiveButton(R.string.remote_reload,
+                                    (d, w) -> {
+                                        ensureMeta(remotePath, session.size);
+                                        ExtUtils.showDocumentWithoutDialog2(a, Uri.parse(remotePath), 0, null);
+                                    })
+                            .setNegativeButton(R.string.remote_download_and_open,
+                                    (d, w) -> downloadAndOpen(a, remotePath, sizeHint))
                             .show();
+                    return;
                 }
                 ensureMeta(remotePath, session.size);
                 ExtUtils.showDocumentWithoutDialog2(a, Uri.parse(remotePath), 0, null);
@@ -271,6 +373,15 @@ public class RemoteBookOpener {
     }
 
     private static void offerDownloadFallback(Activity a, String remotePath, long sizeHint, String error) {
+        if (isMissingMessage(error)) {
+            // the remote file is gone — a download cannot fix that
+            new AlertDialog.Builder(a)
+                    .setTitle(R.string.remote_missing_title)
+                    .setMessage(a.getString(R.string.remote_missing_msg, displayName(remotePath)))
+                    .setPositiveButton(android.R.string.ok, null)
+                    .show();
+            return;
+        }
         new AlertDialog.Builder(a)
                 .setTitle(R.string.remote_open_failed)
                 .setMessage(a.getString(R.string.remote_open_failed_msg,
@@ -278,6 +389,16 @@ public class RemoteBookOpener {
                 .setPositiveButton(R.string.remote_download_and_open, (d, w) -> downloadAndOpen(a, remotePath, sizeHint))
                 .setNegativeButton(android.R.string.cancel, null)
                 .show();
+    }
+
+    /** True when the open error means the remote file no longer exists. */
+    private static boolean isMissingMessage(String error) {
+        if (error == null) {
+            return false;
+        }
+        String m = error.toLowerCase();
+        return m.contains("404") || m.contains("not found") || m.contains("no such file")
+                || m.contains("cannot stat") || m.contains("410");
     }
 
     /** Creates/updates the FileMeta record of a remote book (path-keyed). */

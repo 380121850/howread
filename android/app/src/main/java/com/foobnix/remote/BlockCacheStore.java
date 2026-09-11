@@ -24,34 +24,47 @@ import java.util.Map;
 public class BlockCacheStore {
 
     public static final int BLOCK_SIZE = 256 * 1024;
+    /** Page-based formats (PDF / CBZ / XPS) use 1MB blocks (tech-spec §7.1). */
+    public static final int BLOCK_SIZE_PAGE_FORMAT = 1024 * 1024;
     /** Memory LRU limit in blocks (256KB each ≈ 32MB). */
     private static final int MEM_LIMIT_BLOCKS = 128;
+    /** Memory LRU byte cap (tech-spec §14 double limit: blocks + bytes). */
+    private static final long MEM_LIMIT_BYTES = 32L * 1024 * 1024;
     /** Per-book disk cap for the progressive whole-book filler. */
     public static final long PER_BOOK_LIMIT = 200L * 1024 * 1024;
 
     private final File dir;
     private final long fileSize;
     private final int blockCount;
+    private final int blockSize;
     private final RandomAccessFile data;
     private final byte[] bitmap;
     private final Object lock = new Object();
+    /** Approximate sum of the materialized block arrays held in {@link #mem}. */
+    private long memBytes;
 
     /** Access-order LRU of materialized blocks (tail blocks are exact-size arrays). */
     private final LinkedHashMap<Long, byte[]> mem = new LinkedHashMap<Long, byte[]>(64, 0.75f, true) {
         @Override
         protected boolean removeEldestEntry(Map.Entry<Long, byte[]> eldest) {
             // Evicted blocks stay on disk; only the RAM copy is dropped.
-            return size() > MEM_LIMIT_BLOCKS;
+            if (size() > MEM_LIMIT_BLOCKS || memBytes > MEM_LIMIT_BYTES) {
+                memBytes -= eldest.getValue().length;
+                return true;
+            }
+            return false;
         }
     };
 
     private boolean fullyCached;
     private boolean closed;
 
-    private BlockCacheStore(File dir, long fileSize, RandomAccessFile data, byte[] bitmap, boolean fullyCached) {
+    private BlockCacheStore(File dir, long fileSize, RandomAccessFile data, byte[] bitmap, boolean fullyCached,
+                            int blockSize) {
         this.dir = dir;
         this.fileSize = fileSize;
-        this.blockCount = (int) ((fileSize + BLOCK_SIZE - 1) / BLOCK_SIZE);
+        this.blockCount = (int) ((fileSize + blockSize - 1) / blockSize);
+        this.blockSize = blockSize;
         this.data = data;
         this.bitmap = bitmap;
         this.fullyCached = fullyCached;
@@ -63,23 +76,26 @@ public class BlockCacheStore {
 
     /**
      * Opens (or creates) the cache for one book version. When the stored
-     * versionTag differs from {@code versionTag} the old directory is wiped.
+     * versionTag differs from {@code versionTag} — or the stored block size
+     * differs from {@code blockSize} — the old directory is wiped.
      */
-    public static BlockCacheStore open(String cacheKey, long fileSize, String versionTag) throws java.io.IOException {
+    public static BlockCacheStore open(String cacheKey, long fileSize, String versionTag, int blockSize)
+            throws java.io.IOException {
         File dir = new File(rootDir(), cacheKey);
         File dataF = new File(dir, "data.bin");
         File bitmapF = new File(dir, "blocks.bin");
         File metaF = new File(dir, "meta.json");
         boolean fullyCached = false;
-        int blockCount = (int) ((fileSize + BLOCK_SIZE - 1) / BLOCK_SIZE);
+        int blockCount = (int) ((fileSize + blockSize - 1) / blockSize);
 
         if (dir.exists() && metaF.isFile()) {
             try {
                 JSONObject m = new JSONObject(com.foobnix.android.utils.IO.readString(metaF));
                 String storedTag = m.optString("versionTag");
                 long storedSize = m.optLong("size", -1);
-                if (storedTag.equals(versionTag) && storedSize == fileSize && bitmapF.isFile()
-                        && bitmapF.length() >= blockCount) {
+                int storedBlockSize = m.optInt("blockSize", BLOCK_SIZE);
+                if (storedTag.equals(versionTag) && storedSize == fileSize && storedBlockSize == blockSize
+                        && bitmapF.isFile() && bitmapF.length() >= blockCount) {
                     fullyCached = m.optBoolean("fullyCached", false);
                     RandomAccessFile data = new RandomAccessFile(dataF, "rw");
                     byte[] bitmap = new byte[blockCount];
@@ -90,19 +106,19 @@ public class BlockCacheStore {
                         data.close();
                         throw new IllegalStateException("bitmap truncated");
                     }
-                    return new BlockCacheStore(dir, fileSize, data, bitmap, fullyCached);
+                    return new BlockCacheStore(dir, fileSize, data, bitmap, fullyCached, blockSize);
                 }
             } catch (Exception e) {
                 LOG.w(e);
             }
-            // version changed or corrupted cache: wipe and start over
+            // version / block size changed or corrupted cache: wipe and start over
             com.foobnix.ext.CacheZipUtils.deleteDir(dir);
         }
         dir.mkdirs();
         RandomAccessFile data = new RandomAccessFile(dataF, "rw");
         data.setLength(fileSize);
         byte[] bitmap = new byte[blockCount];
-        BlockCacheStore store = new BlockCacheStore(dir, fileSize, data, bitmap, false);
+        BlockCacheStore store = new BlockCacheStore(dir, fileSize, data, bitmap, false, blockSize);
         store.persistMeta(versionTag);
         return store;
     }
@@ -125,6 +141,7 @@ public class BlockCacheStore {
             m.put("size", fileSize);
             m.put("versionTag", versionTag == null ? "" : versionTag);
             m.put("fullyCached", fullyCached);
+            m.put("blockSize", blockSize);
             FileOutputStream out = new FileOutputStream(new File(dir, "meta.json"));
             out.write(m.toString().getBytes("UTF-8"));
             out.close();
@@ -166,10 +183,10 @@ public class BlockCacheStore {
                 int len = blockLen(index);
                 byte[] buf = new byte[len];
                 synchronized (data) {
-                    data.seek(index * BLOCK_SIZE);
+                    data.seek(index * blockSize);
                     data.readFully(buf);
                 }
-                mem.put(index, buf);
+                remember(index, buf);
                 touchDir();
                 return buf;
             } catch (Exception e) {
@@ -187,11 +204,11 @@ public class BlockCacheStore {
             }
             try {
                 synchronized (data) {
-                    data.seek(index * BLOCK_SIZE);
+                    data.seek(index * blockSize);
                     data.write(blockData, 0, blockData.length);
                 }
                 bitmap[(int) index] = 1;
-                mem.put(index, blockData);
+                remember(index, blockData);
                 FileOutputStream out = new FileOutputStream(new File(dir, "blocks.bin"));
                 out.write(bitmap);
                 out.close();
@@ -199,6 +216,16 @@ public class BlockCacheStore {
             } catch (Exception e) {
                 LOG.e(e);
             }
+        }
+    }
+
+    /** Puts a block into the RAM LRU keeping the byte accounting exact. */
+    private void remember(long index, byte[] blockData) {
+        byte[] old = mem.put(index, blockData);
+        if (old == null) {
+            memBytes += blockData.length;
+        } else {
+            memBytes += blockData.length - old.length;
         }
     }
 
@@ -210,9 +237,13 @@ public class BlockCacheStore {
         }
     }
 
+    public int getBlockSize() {
+        return blockSize;
+    }
+
     public int blockLen(long index) {
-        long from = index * BLOCK_SIZE;
-        return (int) Math.min(BLOCK_SIZE, fileSize - from);
+        long from = index * blockSize;
+        return (int) Math.min(blockSize, fileSize - from);
     }
 
     public long cachedBytes() {
@@ -289,14 +320,30 @@ public class BlockCacheStore {
     }
 
     /**
-     * Evicts least-recently-used books (by directory mtime) until the total
-     * cache fits {@code maxBytes}. Called before a new block write burst.
+     * Evicts expired books first ({@code remoteCacheExpireDays}, by directory
+     * mtime), then least-recently-used books until the total cache fits
+     * {@code maxBytes}. Called before a new block write burst.
      */
     public static void evict(long maxBytes) {
         try {
             File root = rootDir();
             File[] books = root.listFiles();
-            if (books == null || totalBytes() <= maxBytes) {
+            if (books == null) {
+                return;
+            }
+            int expireDays = com.foobnix.model.AppState.get().remoteCacheExpireDays;
+            long expireMs = expireDays > 0 ? expireDays * 86400000L : 0;
+            long now = System.currentTimeMillis();
+            for (File book : books) {
+                if (expireMs > 0 && now - book.lastModified() > expireMs) {
+                    com.foobnix.ext.CacheZipUtils.deleteDir(book);
+                }
+            }
+            if (totalBytes() <= maxBytes) {
+                return;
+            }
+            books = root.listFiles();
+            if (books == null) {
                 return;
             }
             java.util.Arrays.sort(books, new java.util.Comparator<File>() {

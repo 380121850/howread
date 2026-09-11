@@ -69,12 +69,18 @@ public class SftpDataSource implements RemoteDataSource {
         if (trustAll) {
             ssh.addHostKeyVerifier(new PromiscuousVerifier());
         } else {
-            try {
-                ssh.loadKnownHosts();
-            } catch (Exception e) {
-                LOG.w(e);
-                ssh.addHostKeyVerifier(new PromiscuousVerifier());
-            }
+            // trust-on-first-use host key verification (see SshHostKeys)
+            ssh.addHostKeyVerifier(new net.schmizz.sshj.transport.verification.HostKeyVerifier() {
+                @Override
+                public boolean verify(String hostname, int port, java.security.PublicKey key) {
+                    return SshHostKeys.verify(hostname, port, key);
+                }
+
+                @Override
+                public java.util.List<String> findExistingAlgorithms(String hostname, int port) {
+                    return java.util.Collections.emptyList();
+                }
+            });
         }
         ssh.connect(host, port);
         try {
@@ -123,8 +129,32 @@ public class SftpDataSource implements RemoteDataSource {
                 return remoteFile.read(offset, buffer, off, len);
             } catch (IOException e) {
                 LOG.e(e);
+                // broken connection: one reconnect + retry here (tech-spec
+                // §13: reconnects are NOT counted against retry_count; the
+                // session layer adds the exponential-backoff retries)
+                if (reconnectQuiet()) {
+                    try {
+                        return remoteFile.read(offset, buffer, off, len);
+                    } catch (IOException e2) {
+                        LOG.e(e2);
+                        throw e2;
+                    }
+                }
                 throw e;
             }
+        }
+    }
+
+    /** Closes and re-opens the whole SFTP session after a read failure. */
+    private boolean reconnectQuiet() {
+        android.util.Log.i("REMOTE", "sftp reconnect attempt after read failure");
+        try {
+            close();
+            open();
+            return true;
+        } catch (Exception e) {
+            LOG.e(e);
+            return false;
         }
     }
 

@@ -33,4 +33,13 @@ public interface RemoteDataSource extends Closeable {
 
     /** Human-readable protocol name for logs ("smb"/"sftp"/"webdav"). */
     String name();
+
+    /**
+     * Whether random reads are backed by real range requests. False means
+     * the caller must degrade to a full fetch (tech-spec §6.5) instead of
+     * faking seek by skipping through full responses.
+     */
+    default boolean supportsRange() {
+        return true;
+    }
 }

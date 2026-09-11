@@ -66,8 +66,33 @@ public class SmbDataSource implements RemoteDataSource {
                 return n < 0 ? 0 : n;
             } catch (jcifs.CIFSException e) {
                 LOG.e(e);
+                // broken handle / dropped connection: one reopen + retry
+                // (reconnects are not counted against retry_count)
+                if (reopenQuiet()) {
+                    try {
+                        raf.seek(offset);
+                        int n = raf.read(buffer, off, len);
+                        return n < 0 ? 0 : n;
+                    } catch (jcifs.CIFSException e2) {
+                        LOG.e(e2);
+                        throw new IOException("SMB read failed: " + e2.getMessage(), e2);
+                    }
+                }
                 throw new IOException("SMB read failed: " + e.getMessage(), e);
             }
+        }
+    }
+
+    /** Closes and re-opens the SMB handle after a read failure. */
+    private boolean reopenQuiet() {
+        android.util.Log.i("REMOTE", "smb reopen attempt after read failure");
+        try {
+            close();
+            open();
+            return true;
+        } catch (Exception e) {
+            LOG.e(e);
+            return false;
         }
     }
 

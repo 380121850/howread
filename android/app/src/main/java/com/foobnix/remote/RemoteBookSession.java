@@ -60,7 +60,8 @@ public class RemoteBookSession {
     /**
      * Opens the remote source and attaches (or creates) the block cache.
      * Network errors propagate as IOException; the caller decides between
-     * retry / fallback-to-download.
+     * retry / fallback-to-download. Page-based formats (PDF / CBZ / XPS)
+     * use 1MB blocks, everything else 256KB (tech-spec §7.1).
      */
     public static RemoteBookSession open(String remotePath, RemoteDataSource source) throws IOException {
         source.open();
@@ -71,17 +72,30 @@ public class RemoteBookSession {
         }
         String versionTag = source.versionTag();
         String cacheKey = RemoteBook.cacheKey(remotePath);
+        int blockSize = isPageFormat(RemoteBook.getExt(remotePath))
+                ? BlockCacheStore.BLOCK_SIZE_PAGE_FORMAT : BlockCacheStore.BLOCK_SIZE;
         // peek before open(): BlockCacheStore.open wipes the dir on a
         // version mismatch, the flag must reflect the pre-open state
         String cachedTag = BlockCacheStore.peekVersionTag(cacheKey);
         RemoteBookSession session = new RemoteBookSession(remotePath, source,
-                BlockCacheStore.open(cacheKey, size, versionTag), size, versionTag, cacheKey);
+                BlockCacheStore.open(cacheKey, size, versionTag, blockSize), size, versionTag, cacheKey);
         session.versionChanged = cachedTag != null && !cachedTag.equals(versionTag);
         return session;
     }
 
+    /** Page-based formats read large contiguous runs → bigger blocks/window. */
+    public static boolean isPageFormat(String ext) {
+        return "pdf".equals(ext) || "cbz".equals(ext) || "xps".equals(ext)
+                || "oxps".equals(ext) || "djvu".equals(ext);
+    }
+
     public String getCacheKey() {
         return cacheKey;
+    }
+
+    /** False only for WebDAV servers that ignore Range headers (open probe). */
+    public boolean isRangeSupported() {
+        return source.supportsRange();
     }
 
     /** Foreground random read (P0/P1). Returns 0 at EOF. */
@@ -96,10 +110,11 @@ public class RemoteBookSession {
         fgReads.incrementAndGet();
         try {
             int total = 0;
+            final int bs = cache.getBlockSize();
             while (total < len) {
                 long pos = offset + total;
-                long idx = pos / BlockCacheStore.BLOCK_SIZE;
-                int inOff = (int) (pos % BlockCacheStore.BLOCK_SIZE);
+                long idx = pos / bs;
+                int inOff = (int) (pos % bs);
                 int want = (int) Math.min(len - total, cache.blockLen(idx) - inOff);
                 if (want <= 0) {
                     break;
@@ -119,7 +134,7 @@ public class RemoteBookSession {
                 total += n;
             }
             if (total > 0) {
-                schedulePrefetch((offset + total - 1) / BlockCacheStore.BLOCK_SIZE + 1);
+                schedulePrefetch((offset + total - 1) / cache.getBlockSize() + 1);
                 maybeStartFiller();
             }
             return total;
@@ -157,9 +172,25 @@ public class RemoteBookSession {
         int len = cache.blockLen(idx);
         byte[] buf = new byte[len];
         int got = 0;
+        final long blockStart = idx * cache.getBlockSize();
         while (got < len) {
-            int n = source.readAt(idx * BlockCacheStore.BLOCK_SIZE + got, buf, got, len - got);
-            if (n <= 0) {
+            // transient network failures: retry with exponential backoff;
+            // the data sources additionally reconnect a broken session
+            // themselves (see SftpDataSource / SmbDataSource)
+            final int off = got;
+            final Integer n;
+            try {
+                n = RemoteRetry.execute(() -> source.readAt(blockStart + off, buf, off, len - off));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException(e);
+            } catch (Exception e) {
+                if (e instanceof IOException) {
+                    throw (IOException) e;
+                }
+                throw new IOException(e);
+            }
+            if (n == null || n <= 0) {
                 break;
             }
             got += n;
@@ -184,7 +215,24 @@ public class RemoteBookSession {
         return (mb <= 0 ? 500 : mb) * 1024L * 1024L;
     }
 
-    /** P2: refill the next few blocks in the background. */
+    /**
+     * P2: refill the next blocks in the background. Page-based formats get
+     * a wider sequential window (tech-spec §7.2: PDF 8–16MB), reflowable
+     * formats the cheap 3-block lookahead.
+     */
+    private static final int PREFETCH_DEPTH_DEFAULT = 3;
+    private static final int PREFETCH_DEPTH_PAGE_FORMAT = 32; // ≈ 8MB @ 256KB, 1MB blocks
+
+    private int prefetchDepth() {
+        if (!isPageFormat(RemoteBook.getExt(remotePath))) {
+            return PREFETCH_DEPTH_DEFAULT;
+        }
+        if (AppState.get().remotePrefetchWifiOnly && isMeteredNetwork()) {
+            return PREFETCH_DEPTH_DEFAULT;
+        }
+        return PREFETCH_DEPTH_PAGE_FORMAT;
+    }
+
     private void schedulePrefetch(long fromIdx) {
         if (cancelled || fromIdx < 0 || fromIdx >= cache.getBlockCount()) {
             return;
@@ -194,8 +242,9 @@ public class RemoteBookSession {
         }
         lastPrefetchFrom = fromIdx;
         final long start = fromIdx;
+        final int depth = prefetchDepth();
         prefetch.execute(() -> {
-            for (long i = start; i < start + 3 && i < cache.getBlockCount(); i++) {
+            for (long i = start; i < start + depth && i < cache.getBlockCount(); i++) {
                 if (cancelled) {
                     return;
                 }
@@ -213,7 +262,11 @@ public class RemoteBookSession {
         });
     }
 
-    /** P3: progressive whole-book fill for small books. */
+    /**
+     * P3: progressive whole-book fill for small books (tech-spec §5.3):
+     * &lt; 5MB fills on any network, 5MB..threshold only when the user
+     * allows metered networks, above the threshold never.
+     */
     private void maybeStartFiller() {
         if (cancelled || filler != null || cache.isFullyCached()) {
             return;
@@ -222,7 +275,8 @@ public class RemoteBookSession {
         if (thresholdMB <= 0 || size > thresholdMB * 1024L * 1024L) {
             return;
         }
-        if (AppState.get().remotePrefetchWifiOnly && isMeteredNetwork()) {
+        boolean smallAlways = size < 5 * 1024L * 1024L;
+        if (!smallAlways && isMeteredNetwork() && !AppState.get().remoteWholeBookOnMetered) {
             return;
         }
         filler = new Thread(() -> {
@@ -230,7 +284,7 @@ public class RemoteBookSession {
                 if (cancelled) {
                     return;
                 }
-                if (cache.hasBlock(i) || cache.cachedBytes() + BlockCacheStore.BLOCK_SIZE > BlockCacheStore.PER_BOOK_LIMIT) {
+                if (cache.hasBlock(i) || cache.cachedBytes() + cache.getBlockSize() > BlockCacheStore.PER_BOOK_LIMIT) {
                     continue;
                 }
                 waitIfForegroundBusy();

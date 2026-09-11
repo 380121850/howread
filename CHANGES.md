@@ -2782,3 +2782,39 @@ iOS / Desktop 两个预留平台没有任何版本配置位。
 ### 备注
 - native 变更影响 `prebuilt/native/mupdf-1.23.7` 4 ABI（增量重编 libmupdf-librera.c）。
 - 远程加密 PDF 密码语义核对：openStream 与 open 的 JNI 异常映射一致，无需改动。
+
+---
+
+## [2026-09-12] 1.3.0 第三轮：在线阅读按技术方案 v5.0 补齐策略层 + 远程目录扫描入架 + trustAll 安全修复
+
+**背景**：对照《安卓在线书籍缓存阅读技术方案》(v5.0) 逐项核对 v1.3.0 实现，确认核心链路（三协议随机访问/分块缓存/versionTag/四级优先级简化版/小书续传/格式分级打开）已落地，但策略层存在缺口：无重试/退避/断线重连、预取不感知格式、WebDAV 无 Range 时以 skip 慢读伪装流式、无 DRM/高成本格式提示、续传无网络分档、缓存无过期、文件变更仅通知不确认、无递归扫描入架、SFTP 信任所有证书。本轮按用户选定范围补齐：核心策略层 + 扫描入架 + trustAll。
+
+**改动**（android/app/src/main/）：
+- 重试/退避/重连（方案§13）：新增 remote/RemoteRetry.java（指数退避 base×2ⁿ，仅 IO 类异常重试，auth/404 不重试），RemoteBookSession.readRawBlock 每块读取接入；SftpDataSource/SmbDataSource 读失败断开重连一次再读（不计入 retry_count）；WebDAV 无状态不需要。
+- 格式感知预取（方案§7.2）：RemoteBookSession 按扩展名取预取深度，页式格式（pdf/cbz/xps/oxps/djvu）32 块（≈8MB 顺序窗口），其余 3 块；大窗口在 metered 且仅 WiFi 开启时回退 3 块。
+- Range 探测降级（方案§6.5）：RemoteDataSource 新增 supportsRange()（默认 true）；WebDavRangeDataSource.open 探测 206→支持/200→不支持；RemoteBookOpener.openOnline 对不支持 Range 的 WebDAV 显式改走 fetchToCacheAndOpen（整本取回后打开），删除 skip 慢读路径。
+- DRM 预检 + 高成本格式提示（方案§3.5/§八）：新增 remote/MobiHead.java（PalmDB record0 偏移 + PalmDOC 头 encryption 字段解析，读头部 8KB 即判）；mobi/azw/azw3/prc 在线打开前预检，加密→弹"受 DRM 保护，请下载后打开"；高成本组（mobi 族/djvu/cbr/doc）弹"该格式需整本取回"确认后 fetchToCacheAndOpen；TXT/FB2/HTML/RTF 简单组保持静默取回。EPUB DRM 不做主动检测（走既有解码失败兜底）。
+- 小书续传三档（方案§5.3）：maybeStartFiller 改为 <5MB 无条件（含 metered）、5MB–阈值需 remoteWholeBookOnMetered 开关、超阈值不续传；新增 AppState.remoteWholeBookOnMetered（默认 false）。续传保持后台 Thread（随书关闭取消，不迁 WorkManager，偏差备案）。
+- 缓存层细节（方案§7.1/§11）：BlockCacheStore 块大小分档（页式 1MB/其余 256KB，meta.json 记录 blockSize、不匹配重建）；内存 LRU 增加字节上限 32MB（块数+字节双限，remember() 精确记账）；evict() 先删超过 remoteCacheExpireDays（默认 30，0=永不过期）未动的书再做书级 LRU。"先块后书"淘汰不做（偏差备案，保留书级 LRU + 单书 200MB）。
+- 变更确认 + 删除提示（方案§十）：openOnline 的 versionTag 变化由通知式改为确认式弹窗[重新加载/下载后打开]；远程文件不存在（404/not found/no such file/cannot stat）弹"文件已不可用：已被删除或移动"，不再给无意义的下载兜底。
+- 远程目录扫描入架（方案§十二）：新增 remote/RemoteScanner.java——对服务器 startDir 做 BFS（深度≤5、目录≤2000、文件≤5000、跳过点开头），只拉清单不解析正文，逐本 getOrCreate(remote://path)→title/size/parentPath/ext + setIsSearchBook(true)（书架即可见，打开链路经 ExtUtils.openFile→RemoteBookOpener 已通）；WebDAV/SMB/SFTP 三协议统一（SMB/SFTP 走 Client.list 空密码自动取凭据，WebDAV 走 WebDavClient.list + Uri.decode 路径换算）；进度对话框可取消，完成 toast"新增 N/更新 M/失败 K"。BrowseFragment2 三个服务器区块（WebDAV/SMB/SFTP）每行加"扫描入架"图标（Pro 门控）。
+- trustAll 修复（方案§11.3）：AddRemoteDialog 硬编码 trustAll=true 改为勾选框（新服务器默认不勾，旧数据"1"回填不受影响）；新增 remote/SshHostKeys.java（TOFU 主机指纹，SharedPreferences remote_ssh_hostkeys，SHA-256 指纹，首连记录、变更拒绝）；SftpClient/SftpDataSource 不信任模式下改用 TOFU 校验器，移除 loadKnownHosts 失败回退 PromiscuousVerifier 的漏洞。SMB 不受影响，WebDAV 保留既有 per-server trustAll。
+- **顺手修复两处验证中发现的 bug**：①BrowseFragment2 netListItem 六参重载的 scan 回调参数插错位（初版插在 onEdit 前，导致搜索图标执行编辑、铅笔图标执行扫描），修正为 (onClick, onRemove, onEdit, onScan) 顺序；②ExtUtils.removeNotFound 用 File.exists() 过滤书库列表，remote:// 路径恒为 false 导致扫描书全部被书库隐藏/搜索为 0，现对 RemoteBook.isRemotePath 的条目跳过本地存在性检查（可用性在打开时再验）。
+- 设置 UI：RemoteCacheDialog（代码生成布局）新增 4 行——网络重试次数(默认 3)、重试基础间隔 ms(默认 1000)、移动网络下也整本缓存(默认关)、缓存过期天数(默认 30)；均入 AppState 持久化。
+- 资源：dialog_add_remote.xml 加 trustAll CheckBox；values{,-zh-rCN,-zh-rTW}/strings.xml 各新增 17 键（remote_reload/remote_heavy_*/remote_drm_*/remote_missing_*/remote_scan_*/remote_whole_book_metered/remote_retry_count/remote_retry_interval/remote_cache_expire/remote_trust_all，updated_msg 改为确认式文案）。
+
+**验证**（MI9 arm64, Android 11, pro+fdroid debug 1.3.0/7300, Ubuntu sshd 为 SFTP 服务端）：
+- 扫描入架：SFTP 服务器 ~/remote-books（含 sub/ 子目录、epub/pdf/mobi/伪 DRM mobi/azw3/djvu）→ 扫描 toast"新增 7 本，更新 0，失败 0"（子目录递归正确）。
+- 书架打开远程书：过滤出远程书点击 test.epub → ViewerActivity 在线流式打开（REMOTE 日志 stream seek 随机读 + getPageCountProgressive 272 页），无下载弹窗；demo.mobi → 高成本确认弹窗 →"取回并打开"→ 经分块缓存取回后打开本地副本。
+- DRM 预检：伪 DRM mobi（demo.mobi 补丁 encryption=1）→ 弹"受 DRM 保护，请下载到本地书库后打开"[取消/下载后打开]。
+- 版本变更：服务器 touch test.epub（SFTP versionTag=size+mtime 变化）→ 重开弹"文件已更新，是否清除旧缓存并重新加载？"[重新加载/下载后打开]→ 重新加载继续在线读。
+- 删除提示：服务器 rm test.pdf → 点开弹"文件已不可用：已被删除或移动"。
+- TOFU：trustAll 不勾 → 首连 logcat"ssh host key recorded (TOFU)"，次连指纹匹配直接通过；AddRemoteDialog 勾选框旧值正确回填。
+- 缓存设置：RemoteCacheDialog 新 4 行默认值正确（3/1000/关/30）。
+- fdroid 包：扫描图标点击 toast"Pro 功能，请先升级 Pro"，门控有效。
+- 重试/退避与 metered 分档弱网路径难以真机复现，以代码走查 + RemoteRetry 逻辑审读保证。
+
+### 备注
+- 方案偏差备案（与《技术方案》v5.0 的既定取舍）：先块后书淘汰不做；EPUB DRM 不做主动检测；续传保持 Thread 不迁 WorkManager；FileMeta 不加 drm/onlineSupported 字段；进度主键维持 remote:// 路径。
+- 块大小分档会使既有缓存目录按新 blockSize 重建一次（meta.json 无 blockSize 字段即 wipe），一次性代价。
+- 测试脚手架已还原：服务器 ~/remote-books 删除，设备 /data/local/tmp 测试文件删除；MI9 书库中扫描入架的 7 本远程书与 demo.mobi 本地缓存副本为验证产物，保留供用户复核。

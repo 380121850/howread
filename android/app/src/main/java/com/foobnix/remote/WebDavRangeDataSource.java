@@ -46,6 +46,8 @@ public class WebDavRangeDataSource implements RemoteDataSource {
     private long size = -1;
     private String etag = "";
     private String lastModified = "";
+    /** Set by the open() probe: 206 = real range support, 200 = ignored. */
+    private boolean rangeSupported = true;
 
     public WebDavRangeDataSource(String url, String login, String password, boolean trustAll) {
         this.url = url;
@@ -120,16 +122,20 @@ public class WebDavRangeDataSource implements RemoteDataSource {
             if (resp.code() == 206) {
                 String cr = resp.header("Content-Range");
                 size = parseTotal(cr);
+                rangeSupported = true;
                 if (size <= 0) {
                     throw new IOException("WebDAV: bad Content-Range: " + cr);
                 }
             } else if (resp.code() == 200) {
-                // Server ignored Range — full body. Use Content-Length; range
-                // reads will fall back to skipping (slow but functional).
+                // Server ignored Range — full body. Range reads are NOT
+                // possible; the opener must degrade to a full fetch
+                // (tech-spec §6.5: never fake streaming by skipping).
                 size = resp.body().contentLength();
+                rangeSupported = false;
                 if (size <= 0) {
                     throw new IOException("WebDAV: no size, code " + resp.code());
                 }
+                android.util.Log.i("REMOTE", "webdav: server ignores Range, degrading to full fetch: " + url);
             } else {
                 throw new IOException("WebDAV open failed: HTTP " + resp.code() + " " + url);
             }
@@ -222,6 +228,11 @@ public class WebDavRangeDataSource implements RemoteDataSource {
     @Override
     public String name() {
         return "webdav";
+    }
+
+    @Override
+    public boolean supportsRange() {
+        return rangeSupported;
     }
 
     @Override

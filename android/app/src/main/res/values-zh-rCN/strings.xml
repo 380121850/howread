@@ -915,7 +915,7 @@
     <string name="remote_clear_cache">清空缓存</string>
     <string name="remote_cache_cleared">缓存已清空</string>
     <string name="remote_updated_title">文件已更新</string>
-    <string name="remote_updated_msg">远程文件已更新，旧缓存已清除并重新加载新版本。</string>
+    <string name="remote_updated_msg">远程文件已更新。是否清除旧缓存并重新加载？也可下载新版本后打开。</string>
     <string name="remote_open_failed">无法在线打开</string>
     <string name="remote_open_failed_msg">错误：%1$s</string>
     <string name="remote_download_and_open">下载后打开</string>
@@ -938,4 +938,20 @@
     <string name="remote_up">上一级</string>
     <string name="remote_pick_shares">共享列表（选择一个共享）</string>
     <string name="remote_no_subdirs">此处没有子目录</string>
+    <string name="remote_trust_all">信任所有证书（不校验主机）</string>
+    <string name="remote_cache_expire">缓存过期天数（0 = 永不过期）</string>
+    <string name="remote_retry_interval">重试基础间隔（毫秒，指数退避）</string>
+    <string name="remote_retry_count">网络重试次数</string>
+    <string name="remote_whole_book_metered">移动网络下也整本缓存</string>
+    <string name="remote_scan_done">%1$s：新增 %2$d 本，更新 %3$d 本，失败 %4$d 个</string>
+    <string name="remote_scan_scanning">正在扫描 %1$s ...</string>
+    <string name="remote_scan_title">扫描入架</string>
+    <string name="remote_missing_msg">“%1$s”已被删除或移动。</string>
+    <string name="remote_missing_title">文件已不可用</string>
+    <string name="remote_drm_msg">该文件受数字版权（DRM）保护，请下载到本地书库后打开。</string>
+    <string name="remote_drm_title">受 DRM 保护</string>
+    <string name="remote_fetch_and_open">取回并打开</string>
+    <string name="remote_heavy_msg">“%1$s”无法直接在线流式打开，将先整本取回（经分块缓存）再打开。是否继续？</string>
+    <string name="remote_heavy_title">该格式需整本取回</string>
+    <string name="remote_reload">重新加载</string>
 </resources>

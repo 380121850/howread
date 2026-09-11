@@ -161,7 +161,19 @@ public class SftpClient {
         if (s.trustAll) {
             ssh.addHostKeyVerifier(new PromiscuousVerifier());
         } else {
-            ssh.loadKnownHosts();
+            // trust-on-first-use: record the host key on the first connect,
+            // refuse on fingerprint change afterwards (no silent MITM)
+            ssh.addHostKeyVerifier(new net.schmizz.sshj.transport.verification.HostKeyVerifier() {
+                @Override
+                public boolean verify(String hostname, int port, java.security.PublicKey key) {
+                    return SshHostKeys.verify(hostname, port, key);
+                }
+
+                @Override
+                public java.util.List<String> findExistingAlgorithms(String hostname, int port) {
+                    return java.util.Collections.emptyList();
+                }
+            });
         }
         android.util.Log.i("REMOTE", "sftp connect host=" + s.host + ":" + s.port
                 + " user=" + s.user + " keyPath=" + s.keyPath);

@@ -1240,6 +1240,15 @@ import java.util.Map;
                     }
                     AddRemoteDialog.showDialog(a, srv.getTypeStored(), rebuild, srv);
                 }
+            }, new OnClickListener() {
+                @Override public void onClick(View v) {
+                    // scan the server into the shelf (PRO feature)
+                    if (!AppsConfig.isProFeaturesEnabled()) {
+                        PrefFragment2.proLockedToast(v);
+                        return;
+                    }
+                    com.foobnix.remote.RemoteScanner.scan(a, srv);
+                }
             }));
         }
     }
@@ -1354,6 +1363,15 @@ import java.util.Map;
                         return;
                     }
                     AddWebDavDialog.showDialog(a, rebuild, srv);
+                }
+            }, new OnClickListener() {
+                @Override public void onClick(View v) {
+                    // scan the WebDAV server into the shelf (PRO feature)
+                    if (!AppsConfig.isProFeaturesEnabled()) {
+                        PrefFragment2.proLockedToast(v);
+                        return;
+                    }
+                    com.foobnix.remote.RemoteScanner.scanWebDav(a, srv);
                 }
             }));
         }
@@ -1533,6 +1551,12 @@ import java.util.Map;
 
     /** As above with an optional pencil edit icon (OPDS / WebDAV entries). */
     private View netListItem(int iconRes, String text, OnClickListener onClick, OnClickListener onRemove, OnClickListener onEdit) {
+        return netListItem(iconRes, text, onClick, onRemove, onEdit, null);
+    }
+
+    /** As above with an optional library-scan icon (remote server entries). */
+    private View netListItem(int iconRes, String text, OnClickListener onClick, OnClickListener onRemove,
+                             OnClickListener onEdit, OnClickListener onScan) {
         LinearLayout row = new LinearLayout(getActivity());
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
@@ -1552,6 +1576,15 @@ import java.util.Map;
         t.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
         t.setTextColor(TintUtil.getColorInDayNighth());
         row.addView(t, new LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+
+        if (onScan != null) {
+            ImageView scan = new ImageView(getActivity());
+            scan.setImageResource(R.drawable.glyphicons_144_database_search);
+            scan.setColorFilter(TintUtil.getColorInDayNighth());
+            scan.setPadding(Dips.dpToPx(8), Dips.dpToPx(2), Dips.dpToPx(2), Dips.dpToPx(2));
+            scan.setOnClickListener(onScan);
+            row.addView(scan, new LinearLayout.LayoutParams(Dips.dpToPx(40), Dips.dpToPx(40)));
+        }
 
         if (onEdit != null) {
             ImageView edit = new ImageView(getActivity());
