@@ -932,58 +932,7 @@
                     android:text="Russian" />
             </LinearLayout>
 
-            <!-- Pro upgrade card: locked state = "升级 Pro" button + hint;
-                 active state = "Pro 已激活" + unlock info + restore/manage links
-                 (fdroid: button jumps to the website, no IAP there). -->
-            <LinearLayout
-                android:id="@+id/proCardRoot"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginLeft="5dip"
-                android:layout_marginTop="10dip"
-                android:orientation="vertical">
-
-                <TextView
-                    android:id="@+id/proUpgradeBtn"
-                    style="@style/textLink"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/pro_upgrade_btn"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/proUpgradeHint"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="2dip"
-                    android:paddingRight="10dip"
-                    android:text="@string/pro_hint_locked"
-                    android:textAppearance="?android:attr/textAppearanceSmall" />
-
-                <LinearLayout
-                    android:id="@+id/proActiveLinks"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dip"
-                    android:orientation="horizontal"
-                    android:visibility="gone">
-
-                    <TextView
-                        android:id="@+id/proRestoreBtn"
-                        style="@style/textLink"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/pro_restore" />
-
-                    <TextView
-                        android:id="@+id/proManageBtn"
-                        style="@style/textLink"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginLeft="20dip"
-                        android:text="@string/pro_manage" />
-                </LinearLayout>
-            </LinearLayout>
+            <!-- Pro upgrade card moved to about_section.xml (软件说明 dialog) -->
 
             <LinearLayout
                 android:layout_width="match_parent"

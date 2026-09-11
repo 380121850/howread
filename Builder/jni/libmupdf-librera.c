@@ -529,6 +529,14 @@ RsStream_drop(fz_context* ctx, void* streamState_)
     rs_detach_thread(detach);
 }
 
+static void rs_warning_cb(void *user, const char *message) {
+    __android_log_print(ANDROID_LOG_INFO, "REMOTE", "fz warn: %s", message);
+}
+
+static void rs_error_cb(void *user, const char *message) {
+    __android_log_print(ANDROID_LOG_INFO, "REMOTE", "fz error: %s", message);
+}
+
 JNIEXPORT jlong JNICALL
 Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_openStream(JNIEnv* env,
                                                                 jclass clazz,
@@ -589,6 +597,8 @@ Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_openStream(JNIEnv* env,
 
     fz_set_aa_level(doc->ctx, antialias);
     doc->format = format;
+    fz_set_warning_callback(doc->ctx, rs_warning_cb, NULL);
+    fz_set_error_callback(doc->ctx, rs_error_cb, NULL);
 
     cls = (*env)->FindClass(env, "com/artifex/mupdf/fitz/SeekableInputStream");
     if (cls != NULL) {
@@ -1010,11 +1020,12 @@ JNIEXPORT jint
         fz_layout_document(doc->ctx, doc->document, width, height, size);
 
         count = fz_count_pages(doc->ctx, doc->document);
-        fz_save_accelerator(doc->ctx, doc->document, doc->accel);
+        if (doc->accel) fz_save_accelerator(doc->ctx, doc->document, doc->accel);
     }
     fz_catch(doc->ctx)
     {
-        // mupdf_throw_exception(env, "page count 0");
+        __android_log_print(ANDROID_LOG_INFO, "REMOTE", "getPageCount failed: %s",
+                            fz_caught_message(doc->ctx));
         count = 0;
     }
     return count;
@@ -1061,12 +1072,14 @@ JNIEXPORT jint
             }
         }
         count = total;
-        fz_save_accelerator(doc->ctx, doc->document, doc->accel);
+        if (doc->accel) fz_save_accelerator(doc->ctx, doc->document, doc->accel);
     }
     fz_catch(doc->ctx)
     {
         /* No chapter support (PDF) or layout failure: caller falls back to
          * the normal full page count. */
+        __android_log_print(ANDROID_LOG_INFO, "REMOTE", "getPageCountProgressive failed: %s",
+                            fz_caught_message(doc->ctx));
         count = 0;
     }
     return count;

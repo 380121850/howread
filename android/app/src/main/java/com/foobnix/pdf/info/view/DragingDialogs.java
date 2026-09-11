@@ -1977,6 +1977,16 @@ public class DragingDialogs {
                 // configured LLM. PRO feature: locked/fdroid builds get a toast.
                 View onSendToAi = view.findViewById(R.id.onSendToAi);
                 if (onSendToAi != null) {
+                    // lock icon on the label while Pro is locked
+                    if (onSendToAi instanceof android.view.ViewGroup) {
+                        android.view.ViewGroup g = (android.view.ViewGroup) onSendToAi;
+                        for (int i = 0; i < g.getChildCount(); i++) {
+                            View child = g.getChildAt(i);
+                            if (child instanceof TextView) {
+                                com.foobnix.ui2.fragment.PrefFragment2.applyProLock((TextView) child);
+                            }
+                        }
+                    }
                     onSendToAi.setOnClickListener(new OnClickListener() {
                         @Override public void onClick(View v) {
                             if (!com.foobnix.pdf.info.AppsConfig.isProFeaturesEnabled()) {

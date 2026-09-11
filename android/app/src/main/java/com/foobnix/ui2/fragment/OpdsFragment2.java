@@ -857,8 +857,39 @@ public class OpdsFragment2 extends UIFragment<Entry> {
         } else if (com.foobnix.remote.RemoteBook.isRemotePath(item.href)) {
             // remote book: online open (Pro + "online first" switch) or download
             com.foobnix.remote.RemoteBookOpener.openOrDownload(getActivity(), item.href, item.size);
+        } else if (toRemoteWebDav(item) != null) {
+            // plain WebDAV listing returns raw http hrefs: convert to the
+            // remote:// identity so the online cache-open path applies
+            com.foobnix.remote.RemoteBookOpener.openOrDownload(getActivity(), toRemoteWebDav(item), item.size);
         } else {
             downloadWebDav(item);
+        }
+    }
+
+    /**
+     * Converts a plain WebDAV file item (raw http href) to its remote:// URI
+     * using the server the browse session was entered through. Returns null
+     * when the href does not belong to a known WebDAV server — the caller
+     * then falls back to the legacy download flow.
+     */
+    private String toRemoteWebDav(WebDavItem item) {
+        try {
+            WebDavServer srv = WebDavStore.findForUrl(currentServerUrl);
+            if (srv == null) {
+                return null;
+            }
+            String root = WebDavStore.trimSlash(srv.url);
+            String href = item.href;
+            if (TxtUtils.isEmpty(href) || !href.startsWith(root)) {
+                return null;
+            }
+            // Uri.decode (NOT URLDecoder) keeps "+" intact, only %XX expands
+            String path = Uri.decode(href.substring(root.length()));
+            String id = com.foobnix.remote.RemoteSessionFactory.webdavId(srv.url);
+            return com.foobnix.remote.RemoteBook.build(com.foobnix.remote.RemoteBook.TYPE_WEBDAV, id, path);
+        } catch (Exception e) {
+            LOG.e(e);
+            return null;
         }
     }
 

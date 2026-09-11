@@ -108,7 +108,6 @@ import com.foobnix.ui2.BooksService;
 import com.foobnix.ui2.MainTabs2;
 import com.foobnix.ui2.MyContextWrapper;
 import com.foobnix.webdav.WebDavSyncDialog;
-import mobi.librera.libgoogle.BillingManager;
 import com.foobnix.work.SearchAllBooksWorker;
 import com.jmedeisis.draglinearlayout.DragLinearLayout;
 
@@ -932,39 +931,7 @@ public class PrefFragment2 extends UIFragment {
                                                  }
                                              });
 
-        // Pro upgrade card (IAP stub — see mobi.librera.libgoogle.BillingManager):
-        // locked = "升级 Pro" + hint (fdroid: "升级 Pro 版本" jumps to the website);
-        // active = "Pro 已激活" + unlock info + restore/manage links.
-        // Long-press the active button = STUB refund (back to locked).
-        final TextView proUpgradeBtn = inflate.findViewById(R.id.proUpgradeBtn);
-        final TextView proUpgradeHint = inflate.findViewById(R.id.proUpgradeHint);
-        final LinearLayout proActiveLinks = inflate.findViewById(R.id.proActiveLinks);
-        final Runnable refreshProCard = () -> refreshProCard(proUpgradeBtn, proUpgradeHint, proActiveLinks);
-        refreshProCard.run();
-        proUpgradeBtn.setOnClickListener(new OnClickListener() {
-            @Override public void onClick(View v) {
-                BillingManager.launchPurchaseFlow(getActivity(), refreshProCard);
-            }
-        });
-        proUpgradeBtn.setOnLongClickListener(new View.OnLongClickListener() {
-            @Override public boolean onLongClick(View v) {
-                if (AppsConfig.isProFlavor() && BillingManager.isProUnlocked()) {
-                    BillingManager.simulateRefund(getActivity(), refreshProCard);
-                    return true;
-                }
-                return false;
-            }
-        });
-        inflate.findViewById(R.id.proRestoreBtn).setOnClickListener(new OnClickListener() {
-            @Override public void onClick(View v) {
-                BillingManager.restorePurchases(getActivity(), refreshProCard);
-            }
-        });
-        inflate.findViewById(R.id.proManageBtn).setOnClickListener(new OnClickListener() {
-            @Override public void onClick(View v) {
-                BillingManager.manageEntitlements(getActivity());
-            }
-        });
+        // Pro upgrade card moved to the 软件说明 dialog (AboutSectionBinder).
 
         // WebDAV reading-data sync: row shows On/Off, click opens the config dialog
         // (PRO feature: locked/fdroid builds show a toast instead — the row is dimmed)
@@ -2585,6 +2552,13 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
         isRememberDictionary.setChecked(AppState.get().isRememberDictionary);
         selectedDictionaly.setText(DialogTranslateFromTo.getSelectedDictionaryUnderline());
 
+        // pro-gated rows: refresh values + lock icons (unlock happens in the
+        // 软件说明 dialog, so the state can change while the page is alive)
+        refreshWebdavSyncRow((TextView) inflate.findViewById(R.id.webdavSyncValue));
+        refreshAiConfigRow((TextView) inflate.findViewById(R.id.aiConfigValue));
+        refreshRemoteRow((TextView) inflate.findViewById(R.id.remoteConfigValue));
+        refreshRemoteCacheRow((TextView) inflate.findViewById(R.id.remoteCacheValue));
+
     }
 
     public void onColorChoose() {
@@ -2634,9 +2608,10 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
         }
         if (!AppState.get().webdavSyncEnabled || TxtUtils.isEmpty(AppState.get().webdavSyncServer)) {
             webdavSyncValue.setText(R.string.webdav_sync_state_off);
-            return;
+        } else {
+            webdavSyncValue.setText(AppState.get().webdavSyncServer);
         }
-        webdavSyncValue.setText(AppState.get().webdavSyncServer);
+        applyProLock(webdavSyncValue);
     }
 
     /** 常规设置 AI 大模型行的值：未配置 / 模型名 */
@@ -2646,9 +2621,10 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
         }
         if (TxtUtils.isEmpty(AppState.get().aiBaseUrl) || TxtUtils.isEmpty(AppState.get().aiModel)) {
             aiConfigValue.setText(R.string.ai_state_unconfigured);
-            return;
+        } else {
+            aiConfigValue.setText(AppState.get().aiModel);
         }
-        aiConfigValue.setText(AppState.get().aiModel);
+        applyProLock(aiConfigValue);
     }
 
     /** 常规设置 在线阅读 行的值：开关状态 + 已缓存占用 */
@@ -2657,6 +2633,7 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
             return;
         }
         v.setText(AppState.get().remoteOnlineFirst ? R.string.remote_state_on : R.string.remote_state_off);
+        applyProLock(v);
     }
 
     /** 常规设置 在线阅读缓存 行的值：当前占用 */
@@ -2665,31 +2642,7 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
             return;
         }
         v.setText(com.foobnix.pdf.info.ExtUtils.readableFileSize(com.foobnix.remote.BlockCacheStore.totalBytes()));
-    }
-
-    /** 常规设置 Pro 卡片：未解锁态（升级按钮+提示）与已激活态（信息+恢复/管理链接）切换 */
-    private void refreshProCard(TextView proUpgradeBtn, TextView proUpgradeHint, View proActiveLinks) {
-        final Activity a = getActivity();
-        if (a == null || proUpgradeBtn == null) {
-            return;
-        }
-        if (BillingManager.isProUnlocked()) {
-            proUpgradeBtn.setText(R.string.pro_btn_active);
-            proUpgradeHint.setText(a.getString(R.string.pro_active_info,
-                    BillingManager.getChannelText(a),
-                    BillingManager.getPurchaseTimeText(a),
-                    BillingManager.getOrderIdSuffix()));
-            if (proActiveLinks != null) {
-                proActiveLinks.setVisibility(View.VISIBLE);
-            }
-        } else {
-            proUpgradeBtn.setText(AppsConfig.isProFlavor() ? R.string.pro_upgrade_btn
-                                                           : R.string.pro_upgrade_btn_fdroid);
-            proUpgradeHint.setText(R.string.pro_hint_locked);
-            if (proActiveLinks != null) {
-                proActiveLinks.setVisibility(View.GONE);
-            }
-        }
+        applyProLock(v);
     }
 
     /** Pro 功能未解锁时的统一提示（fdroid 与未解锁 pro 共用） */
@@ -2706,6 +2659,18 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
     public static void alphaIfProLocked(View v) {
         if (!AppsConfig.isProFeaturesEnabled()) {
             v.setAlpha(0.3f);
+        }
+    }
+
+    /** Pro 功能未解锁时在控件右侧显示小锁图标，解锁后自动消失 */
+    public static void applyProLock(TextView v) {
+        if (v == null) {
+            return;
+        }
+        if (AppsConfig.isProFeaturesEnabled()) {
+            v.setCompoundDrawablesWithIntrinsicBounds(0, 0, 0, 0);
+        } else {
+            v.setCompoundDrawablesWithIntrinsicBounds(0, 0, R.drawable.ic_pro_lock, 0);
         }
     }
 

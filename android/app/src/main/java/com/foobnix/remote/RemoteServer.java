@@ -26,8 +26,14 @@ public class RemoteServer {
     public String share = "";
     /** SFTP private key file path, "" for password auth. */
     public String keyPath = "";
-    /** SFTP: accept any host key. SMB is unaffected. */
+    /** Accept any host key (SFTP). SMB is unaffected. */
     public boolean trustAll = true;
+    /**
+     * Browse start path: SFTP — home-relative dir; SMB — path inside the
+     * share (the share name itself lives in {@link #share}). "" = server
+     * root. Persisted as the 10th line field; older lines parse fine.
+     */
+    public String startDir = "";
 
     /** The raw persisted line, used by {@link RemoteStore#remove(RemoteServer)}. */
     public String appState;
@@ -55,15 +61,19 @@ public class RemoteServer {
         this.typeStored = typeStored;
     }
 
-    /** @return the browse-URL root of this server: remote://&lt;type&gt;/&lt;id&gt; */
+    /** @return the browse-URL root of this server:
+     * remote://&lt;type&gt;/&lt;id&gt;[/&lt;startDir&gt;] */
     public String browseRoot() {
-        return RemoteBook.browseRoot(typeStored, id);
+        if (TxtUtils.isEmpty(startDir)) {
+            return RemoteBook.browseRoot(typeStored, id);
+        }
+        return RemoteBook.build(typeStored, id, startDir);
     }
 
     public static String buildLine(RemoteServer s) {
         return s.id + "|" + safe(s.title) + "|" + safe(s.host) + "|" + s.port + "|" + safe(s.user)
                 + "|" + safe(s.domain) + "|" + safe(s.share) + "|" + safe(s.keyPath) + "|"
-                + (s.trustAll ? "1" : "0") + ";";
+                + (s.trustAll ? "1" : "0") + "|" + safe(s.startDir) + ";";
     }
 
     public static RemoteServer parse(String line, String type) {
@@ -85,6 +95,7 @@ public class RemoteServer {
         s.share = it.length > 6 ? it[6] : "";
         s.keyPath = it.length > 7 ? it[7] : "";
         s.trustAll = it.length > 8 && "1".equals(it[8].trim());
+        s.startDir = it.length > 9 ? it[9].trim() : "";
         s.appState = line.contains(";") ? line : line + ";";
         s.typeStored = type;
         return s;

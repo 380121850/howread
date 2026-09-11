@@ -53,8 +53,31 @@ public class SftpClient {
                 android.util.Log.i("REMOTE", "sftp list: server not found for " + browseUrl);
                 return null;
             }
-            String dir = RemoteBook.getRemotePath(browseUrl);
-            SSHClient ssh = connect(s);
+            List<WebDavItem> res = list(s, RemoteBook.getRemotePath(browseUrl), null, null);
+            if (res != null) {
+                for (WebDavItem it : res) {
+                    it.href = browseUrl.endsWith("/") ? browseUrl + it.name : browseUrl + "/" + it.name;
+                }
+            }
+            return res;
+        } catch (Exception e) {
+            android.util.Log.i("REMOTE", "sftp list failed: " + e, e);
+            LOG.e(e);
+            classify(e);
+            return null;
+        }
+    }
+
+    /**
+     * Lists a server that may not be persisted yet (probe / directory
+     * picker): {@code dir} is home-relative ("/" = login home). Credentials
+     * come from the store unless given explicitly.
+     */
+    public static List<WebDavItem> list(RemoteServer s, String dir, String password, String keyPass) {
+        lastError = "";
+        lastErrorWasAuth = false;
+        try {
+            SSHClient ssh = connect(s, password, keyPass);
             try {
                 SFTPClient sftp = ssh.newSFTPClient();
                 // SFTP paths are home-relative ("/" = the login home)
@@ -65,7 +88,7 @@ public class SftpClient {
                     it.isDir = k.isDirectory();
                     it.name = k.getName();
                     it.size = k.getAttributes().getSize();
-                    it.href = browseUrl.endsWith("/") ? browseUrl + it.name : browseUrl + "/" + it.name;
+                    it.href = "";
                     items.add(it);
                 }
                 SmbClient.sort(items);
@@ -77,14 +100,18 @@ public class SftpClient {
         } catch (Exception e) {
             android.util.Log.i("REMOTE", "sftp list failed: " + e, e);
             LOG.e(e);
-            String msg = String.valueOf(e.getMessage());
-            if (msg.contains("Auth") || msg.contains("auth") || msg.contains("permission")) {
-                lastErrorWasAuth = true;
-                lastError = "auth";
-            } else {
-                lastError = "network";
-            }
+            classify(e);
             return null;
+        }
+    }
+
+    private static void classify(Exception e) {
+        String msg = String.valueOf(e.getMessage());
+        if (msg.contains("Auth") || msg.contains("auth") || msg.contains("permission")) {
+            lastErrorWasAuth = true;
+            lastError = "auth";
+        } else {
+            lastError = "network";
         }
     }
 
@@ -123,6 +150,10 @@ public class SftpClient {
     }
 
     public static SSHClient connect(RemoteServer s) throws Exception {
+        return connect(s, null, null);
+    }
+
+    public static SSHClient connect(RemoteServer s, String password, String keyPass) throws Exception {
         SSHClient ssh = createClient();
         ssh.setConnectTimeout(15000);
         ssh.setTimeout(30000);
@@ -137,19 +168,53 @@ public class SftpClient {
         ssh.connect(s.host, s.port > 0 ? s.port : 22);
         try {
             if (TextUtils.isEmpty(s.keyPath)) {
-                String[] creds = com.foobnix.webdav.WebDavCredentials.load(com.foobnix.LibreraApp.context,
-                        RemoteStore.credentialsKey(s.id));
-                ssh.authPassword(s.user, creds == null ? "" : creds[1]);
+                if (password == null) {
+                    String[] creds = com.foobnix.webdav.WebDavCredentials.load(com.foobnix.LibreraApp.context,
+                            RemoteStore.credentialsKey(s.id));
+                    password = creds == null ? "" : creds[1];
+                }
+                ssh.authPassword(s.user, password);
             } else {
+            if (keyPass == null) {
                 String[] kp = com.foobnix.webdav.WebDavCredentials.load(com.foobnix.LibreraApp.context,
                         RemoteStore.keyPassKey(s.id));
-                PKCS8KeyFile kf = new PKCS8KeyFile();
-                if (kp == null || kp[1].isEmpty()) {
-                    kf.init(new File(s.keyPath));
+                keyPass = kp == null ? "" : kp[1];
+            }
+            // OpenSSH's own "-----BEGIN OPENSSH PRIVATE KEY-----" format needs
+            // OpenSSHKeyFile; everything else (PKCS#1 / PKCS#8 PEM) PKCS8KeyFile
+            net.schmizz.sshj.userauth.keyprovider.KeyProvider kf;
+            try {
+                String head = firstLine(s.keyPath);
+                android.util.Log.i("REMOTE", "key provider: head=" + head);
+                if (head != null && head.contains("OPENSSH PRIVATE KEY")) {
+                    net.schmizz.sshj.userauth.keyprovider.OpenSSHKeyFile okf =
+                            new net.schmizz.sshj.userauth.keyprovider.OpenSSHKeyFile();
+                    if (keyPass.isEmpty()) {
+                        okf.init(new File(s.keyPath));
+                    } else {
+                        okf.init(new File(s.keyPath), PasswordUtils.createOneOff(keyPass.toCharArray()));
+                    }
+                    kf = okf;
                 } else {
-                    kf.init(new File(s.keyPath), PasswordUtils.createOneOff(kp[1].toCharArray()));
+                    PKCS8KeyFile p8 = new PKCS8KeyFile();
+                    if (keyPass.isEmpty()) {
+                        p8.init(new File(s.keyPath));
+                    } else {
+                        p8.init(new File(s.keyPath), PasswordUtils.createOneOff(keyPass.toCharArray()));
+                    }
+                    kf = p8;
                 }
+                android.util.Log.i("REMOTE", "key loaded: " + kf.getPublic().getAlgorithm());
+            } catch (Throwable t) {
+                android.util.Log.i("REMOTE", "key load failed: " + t, t);
+                throw t;
+            }
+            try {
                 ssh.authPublickey(s.user, kf);
+            } catch (Throwable t) {
+                android.util.Log.i("REMOTE", "pubkey auth failed: " + t, t);
+                throw t;
+            }
             }
         } catch (Exception e) {
             try {
@@ -160,6 +225,26 @@ public class SftpClient {
             throw e;
         }
         return ssh;
+    }
+
+    /** First non-empty line of a text file, or null. */
+    private static String firstLine(String path) {
+        try {
+            java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(path));
+            try {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    if (!line.trim().isEmpty()) {
+                        return line;
+                    }
+                }
+                return null;
+            } finally {
+                r.close();
+            }
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     public static void disconnect(SSHClient ssh) {

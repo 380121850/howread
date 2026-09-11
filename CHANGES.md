@@ -18,14 +18,14 @@
 
 ## [2026-09-10] autotest 测试书目补充：从 X:\（/documents）按格式挑选真实样本复制到 ci/autotest/teskbook/
 
-**背景**：为自动测试（ci/autotest）准备多格式测试书。用户要求从 `X:\`（Ubuntu 服务器 `/documents` 挂载，约 16.4 万文件）按应用支持的电子书格式各挑一本代表性样本，复制到 `ci/autotest/teskbook/`；源目录只读（不增删改），仅查找与复制。
+**背景**：为自动测试（ci/autotest）准备多格式测试书。从 `X:\`（Ubuntu 服务器 `/documents` 挂载，约 16.4 万文件）按应用支持的电子书格式各挑一本代表性样本，复制到 `ci/autotest/teskbook/`；源目录只读（不增删改），仅查找与复制。
 
 **改动**（仅新增测试数据，无代码改动；teskbook/ 本就不入库，见 `ci/autotest/.gitignore`）：
 - `ci/autotest/teskbook/` 新增 10 本真实样本（原有 14 个文件全部保留，未覆盖）：
   - `一本书读懂大数据-黄颖.mobi`（451KB，真实 MOBI，补位原 497 字节的 demo.mobi 桩）
   - `计算机与人脑 (科学素养文库·科学元典丛书) - 冯·诺伊曼(Neumann.J.V).azw3`（635KB）
   - `论犯罪的价值 - 于志刚.azw`（825KB）
-  - `297孙子兵法.prc`（760KB，PRC 归 MOBI 族，用户清单遗漏项）
+  - `297孙子兵法.prc`（760KB，PRC 归 MOBI 族，清单遗漏项）
   - `MySQL数据库如何实现双机热备的配置.doc`（60KB）
   - `The Analysis Of Basic MFC Program Running Principle.docx`（96KB）
   - `[深入理解计算机系统]…2003.Prentice.Hall.djvu`（63MB，X:\ 全书库唯一 DjVu）
@@ -40,7 +40,7 @@
 
 ## [2026-09-09] 鸿蒙夜间/白天模式全 APP 生效修复（0.8.6 补丁，versionCode 37 不变）
 
-**背景**：用户反馈「夜间模式和白天模式不生效」。排查结论：数据链路（设置落盘/读取/阅读器 theme 应用）本身是通的，但 ①主界面除抽屉外全部硬编码浅色，切换主题后几乎无视觉变化；②阅读器正文反色从未真正生效——native `renderPageAsync` 的 invert 后处理把 **alpha 通道也一起 XOR**，整页位图变全透明，夜间下页面看似"白屏/黑屏"。
+**背景**：发现「夜间模式和白天模式不生效」。排查结论：数据链路（设置落盘/读取/阅读器 theme 应用）本身是通的，但 ①主界面除抽屉外全部硬编码浅色，切换主题后几乎无视觉变化；②阅读器正文反色从未真正生效——native `renderPageAsync` 的 invert 后处理把 **alpha 通道也一起 XOR**，整页位图变全透明，夜间下页面看似"白屏/黑屏"。
 
 **改动**：
 - `harmony/entry/src/main/ets/pages/Index.ets`：
@@ -63,7 +63,7 @@
 
 ## [2026-09-09] 鸿蒙移植第七轮：偏好设置页 1:1 对齐安卓 + 软件说明页完整对齐（0.8.6 / versionCode 37）
 
-**背景**：用户指出 ①软件说明页与安卓版不一致、②偏好设置页与安卓界面差距大，要求对齐安卓并给出适配方案。经三方探索（安卓 About/PrefFragment2 全量结构 + 鸿蒙现状）后按「设置页尽量 1:1、About 完整对齐」实施，版本 0.8.5 → **0.8.6**（versionCode 37）。
+**背景**：①软件说明页与安卓版不一致、②偏好设置页与安卓界面差距大，本轮对齐安卓并给出适配方案。经三方探索（安卓 About/PrefFragment2 全量结构 + 鸿蒙现状）后按「设置页尽量 1:1、About 完整对齐」实施，版本 0.8.5 → **0.8.6**（versionCode 37）。
 
 **① 偏好设置页重构（Index.ets buildSettingsTab 重写，安卓 PrefFragment2/fragment_preferences 对齐）**
 - 分组结构对齐安卓：**书库设置**（子区：格式设置/书库设置/书库显示配置/封面配置/阅读配置）→ **常规设置** → **备份配置** → **UI 配置**（子区：主题配置/标签栏配置）→ **关于** 行；分组标题条带图标 + 展开/折叠箭头（`groupExp`），二级子区同样可折叠。
@@ -94,7 +94,7 @@
 
 ## [2026-09-09] 鸿蒙移植第六轮：阅读器 UI 对齐 + 全库搜索/找书 + PDF 密码/格式验证 + TTS 播控卡片 + 偏好补齐 + 多档案 + i18n 第二批
 
-**背景**：继续对齐安卓版。用户确认本轮 7 块全做：阅读器 UI 布局对齐+图标补齐、全库全文搜索/找书导入/书库清理、PDF 密码+格式验证+字体、TTS 播控桌面卡片、偏好设置补齐、多 Profile 档案、i18n 第二批全量。版本 0.8.0 / versionCode 35。
+**背景**：继续对齐安卓版。本轮 7 块全做：阅读器 UI 布局对齐+图标补齐、全库全文搜索/找书导入/书库清理、PDF 密码+格式验证+字体、TTS 播控桌面卡片、偏好设置补齐、多 Profile 档案、i18n 第二批全量。版本 0.8.0 / versionCode 35。
 
 **改动**（`harmony/` 内）：
 
@@ -140,7 +140,7 @@
 
 ## [2026-09-09] 鸿蒙移植第五轮：TTS 后台播控 + 桌面服务卡片 + UI 资源收敛/图标补齐 + WebDAV 目录浏览 + 批注管理/生物识别 + 小功能包 + i18n 第一批
 
-**背景**：对齐安卓版差距分析后，用户确认本轮 7 个功能块全做：A TTS 后台播控、B 桌面服务卡片、C UI 资源收敛+图标补齐、D WebDAV/OPDS 增强、F 批注管理+应用锁升级+分享接收、G 小功能包（页缩略图/位置历史/对比度/页面分割）、E i18n 第一步。版本升至 0.7.0 / versionCode 34。
+**背景**：对齐安卓版差距分析后，本轮 7 个功能块全做：A TTS 后台播控、B 桌面服务卡片、C UI 资源收敛+图标补齐、D WebDAV/OPDS 增强、F 批注管理+应用锁升级+分享接收、G 小功能包（页缩略图/位置历史/对比度/页面分割）、E i18n 第一步。版本升至 0.7.0 / versionCode 34。
 
 **改动**（`harmony/` 内）：
 
@@ -188,7 +188,7 @@
 
 ## [2026-09-08] 鸿蒙移植第四轮：笔记/书签导出 + 自动滚动 + 播放列表 + WebDAV 同步三方合并 + 页内双语对照
 
-**背景**：继续对齐安卓版功能。用户确认本轮范围：A 小功能包（笔记导出/自动滚动/OPDS 预置对齐）+ B 播放列表 + C WebDAV 同步增强（三方合并/冲突策略/定时同步）+ D 页内双语对照（真实注入）。跳过项：TTS 录音导出（鸿蒙 ArkWeb speechSynthesis 无 synthesizeToFile 能力）、i18n 铺开（单独一轮）。蓝光滤镜鸿蒙已有，无需移植。
+**背景**：继续对齐安卓版功能。本轮范围：A 小功能包（笔记导出/自动滚动/OPDS 预置对齐）+ B 播放列表 + C WebDAV 同步增强（三方合并/冲突策略/定时同步）+ D 页内双语对照（真实注入）。跳过项：TTS 录音导出（鸿蒙 ArkWeb speechSynthesis 无 synthesizeToFile 能力）、i18n 铺开（单独一轮）。蓝光滤镜鸿蒙已有，无需移植。
 
 **改动**（`harmony/` 内）：
 
@@ -229,7 +229,7 @@
 
 ## [2026-09-08] 鸿蒙移植：AI 大模型接入全套 + OPDS/WebDAV 服务器管理 + WebDAV 同步基础版 + 木质书架 + 分享/在线查词
 
-**背景**：按安卓版功能（LibreraReader/CHANGES.md 2026-08-28~09-05 的 AI/WebDAV/OPDS 迭代）与截图 hr05/06/08/09/09b/13/17/18/19，把安卓有而鸿蒙缺的 5 大功能块一次移植完毕。用户确认的范围决策：WebDAV 同步做**基础版**（进度+书签、手动立即同步、无 PROPFIND/三向合并/定时）；AI 翻译的"页内双语对照"先做**面板模式**（鸿蒙阅读器是 PDF 页面图像渲染，无法照搬安卓的文本重排页内注入）。
+**背景**：按安卓版功能（LibreraReader/CHANGES.md 2026-08-28~09-05 的 AI/WebDAV/OPDS 迭代）与截图 hr05/06/08/09/09b/13/17/18/19，把安卓有而鸿蒙缺的 5 大功能块一次移植完毕。范围决策：WebDAV 同步做**基础版**（进度+书签、手动立即同步、无 PROPFIND/三向合并/定时）；AI 翻译的"页内双语对照"先做**面板模式**（鸿蒙阅读器是 PDF 页面图像渲染，无法照搬安卓的文本重排页内注入）。
 
 **改动**（`harmony/` 内）：
 
@@ -255,39 +255,39 @@
 
 **⑤ 分享/在线查词真实跳转**：Reader 选择菜单 分享(action 5)=@kit.ShareKit systemShare 文本分享（SDK 的 SharedData 构造需 SharedRecord{utd:'general.text',content,title}，ShareController.show；异常/失败回退"复制到剪贴板"）；网络搜索(action 7)=`openLink('https://www.google.com/search?q='+encodeURIComponent(选中文本))`；网络词典(action 8)=openLink 有道 dict.youdao.com。均以 common.UIAbilityContext.openLink（API 12）打开浏览器。
 
-**验证**（模拟器 127.0.0.1:5555 uitest 逐屏截图）：我的文件根=hr05（预设种入+MyNAS 添加成功持久化显示，✎/✕/＋添加齐备）；WebDAV 添加对话框=hr06；偏好 AI 对话框=hr08（修复模型厂商 chips 单行溢出：协议与厂商拆两行）；WebDAV 同步对话框=hr09、同步日志空态=hr09b；书库网格=hr04 木纹+书板生效；阅读器 AI 按钮弹 hr18 翻译对话框（面板模式徽章）；文本选择菜单=hr12、「发送给AI」跳转 hr13 页面正常（未配置 Key 时红字引导）。编译 BUILD SUCCESSFUL（default 与 pro 两变体全 8 产物）。AI 实际调用与 WebDAV PUT/GET 需真实 Key/局域网服务器后端到端验证（模拟器公共网 403 环境限制）；浏览器 openLink 跳转建议真机复验。未执行任何 git 命令。
+**验证**（模拟器 127.0.0.1:5555 uitest 逐屏截图）：我的文件根=hr05（预设种入+MyNAS 添加成功持久化显示，✎/✕/＋添加齐备）；WebDAV 添加对话框=hr06；偏好 AI 对话框=hr08（修复模型厂商 chips 单行溢出：协议与厂商拆两行）；WebDAV 同步对话框=hr09、同步日志空态=hr09b；书库网格=hr04 木纹+书板生效；阅读器 AI 按钮弹 hr18 翻译对话框（面板模式徽章）；文本选择菜单=hr12、「发送给AI」跳转 hr13 页面正常（未配置 Key 时红字引导）。编译 BUILD SUCCESSFUL（default 与 pro 两变体全 8 产物）。AI 实际调用与 WebDAV PUT/GET 需真实 Key/局域网服务器后端到端验证（模拟器公共网 403 环境限制）；浏览器 openLink 跳转建议真机复验。。
 
 ---
 
 ## [2026-09-08] Android 包名体系迁移（vendor=leestudio）+ APK 命名规范 + AdMob 首启动死锁修复；鸿蒙侧 vendor/bundleName 与双变体构建脚本
 
-**背景**：按用户要求统一 leestudio 品牌包名体系：Android 三渠道改名改包名、APK 按渠道/构建类型分目录命名；鸿蒙改 vendor/bundleName 并支持 howread / howread pro 双变体。
+**背景**：统一 leestudio 品牌包名体系：Android 三渠道改名改包名、APK 按渠道/构建类型分目录命名；鸿蒙改 vendor/bundleName 并支持 howread / howread pro 双变体。
 
 **① Android 包名与 flavor 迁移**（`android/`）：
 - flavor 改名与包名（`app/build.gradle`）：`google` → **howread**（`com.leestudio.howread.reader`，保留 AdMob，即当前 GOOGLE 渠道）；**pro** → `com.leestudio.howread.pro.reader`；**fdroid** → `com.leestudio.howread.fd.reader`（不再与 pro 共用包名，两渠道可同机共存）。flavor 源目录 `src/google/` 重命名为 `src/howread/`（LibreraBuildConfig.FLAVOR="howread"，代码中无 "google" 字符串比较，安全），sourceSets/googleImplementation 同步改名。
 - APK 命名规范：文件名加版本号 v 前缀，输出本就按 `apk/<flavor>/<debug|release>/` 分目录 → `HowRead-v1.0.0-arm64.apk` / `HowRead-Pro-v1.0.0-arm64.apk` / `HowRead-Fdroid-v1.0.0-arm64.apk`（uni 同规则）。
 - 代码内包名常量：`AppsConfig` 的 `LIBRERA_READER`/`PRO_LIBRERA_READER` 更新并新增 `FDROID_LIBRERA_READER`；`Urls.openPdfPro` 商店链接由硬编码改为常量拼接；`AppState`/`WebDavSyncer` 的 "What's New" 包名白名单补入 fdroid 新包名（否则 fdroid 渠道弹窗被误关）。
-- fdroid 渠道显示名：HowRead FD → **HowRead Fd / 好好读 Fd**（values/-zh-rCN/-zh-rTW 三份；曾一度改为 "FDroid"，因过长按用户要求定为 "Fd"）。AdMob 属性键优先 `howread_*`，回落旧 `google_*`（服务器 `~/.gradle/gradle.properties` 旧键继续生效）。
+- fdroid 渠道显示名：HowRead FD → **HowRead Fd / 好好读 Fd**（values/-zh-rCN/-zh-rTW 三份；曾一度改为 "FDroid"，因过长定为 "Fd"）。AdMob 属性键优先 `howread_*`，回落旧 `google_*`（服务器 `~/.gradle/gradle.properties` 旧键继续生效）。
 - **注意**：包名变更 = 全新应用，设备上为新安装、旧包数据不迁移；商店侧（Google Play）等同上架新 App。
 
 **② AdMob 首启动死锁（新装冷启动 ANR，严重）**：MI9 全新安装冷启动必现 ANR——ANR trace 显示主线程在 `AdsFragmentActivity.onResume → AdMobAdsProvider.loadInterstitial`（`MobileAds.setAppVolume`，:228）阻塞等待广告 SDK 初始化锁，而持锁的初始化线程又在等本机 WebView 首次加载（WebView 83 冷启动极慢）→ 主线程死锁、窗口永无焦点、黑屏（am start -W Status: timeout）。旧包因 WebView/SDK 已暖启动不触发，但**任何新装用户都可能命中**。修复（`src/admobAds/AdMobAdsProvider.java`）：`setAppVolume` 移入 `AppsConfig.executorService` 后台执行；`initialize()` 里的 `MobileAds.setRequestConfiguration` 一并移入后台线程。
 **验证**：卸载重装真首启动 `am start -W` → Status: ok / COLD / TotalTime 1239ms（修复前 timeout+ANR）；主页正常渲染、测试横幅广告成功加载（初始化与广告链路恢复）、logcat 0 FATAL / 0 ANR。
 
-**③ 鸿蒙侧（与用户并行的 AGC 签名材料工作交叉进行）**：`AppScope/app.json5` bundleName → `com.leestudio.howread.reader.hmos`、vendor → `leestudio`；`signing/gen_signing.sh`、`gen_release_profile.sh` 改为一次生成 reader/pro 两份 profile（`librera-{debug,release}.p7b` + `librera-pro-{debug,release}.p7b`，profile 内嵌 bundle-name，四份 verify 全通过）；密码回填收窄为只作用于 storeFile=librera-sign.p12 的签名配置（不触碰用户的 howread AGC 材料）；`build-profile.json5` 增加 pro 产品与 liberaprodebug/liberaprorelease 签名配置、entry 增加 pro target；`build_hap_all.sh` 支持变体参数（`bash build_hap_all.sh [default|pro]`，pro 变体临时替换 app.json5 bundleName 与 app_name 字符串、退出自动恢复），产物命名 `HowRead[-Pro]-v<ver>-<abi>-hmos.hap`。default 变体 4 个 HAP 构建成功；**pro 变体尚未打通**（hvigor 报 no executable target in module: 'entry'，产物为陈旧复制件）——已按用户要求暂停鸿蒙构建，待另行任务完成后恢复。
+**③ 鸿蒙侧（与 AGC 签名材料工作交叉进行）**：`AppScope/app.json5` bundleName → `com.leestudio.howread.reader.hmos`、vendor → `leestudio`；`signing/gen_signing.sh`、`gen_release_profile.sh` 改为一次生成 reader/pro 两份 profile（`librera-{debug,release}.p7b` + `librera-pro-{debug,release}.p7b`，profile 内嵌 bundle-name，四份 verify 全通过）；密码回填收窄为只作用于 storeFile=librera-sign.p12 的签名配置（不触碰 howread AGC 材料）；`build-profile.json5` 增加 pro 产品与 liberaprodebug/liberaprorelease 签名配置、entry 增加 pro target；`build_hap_all.sh` 支持变体参数（`bash build_hap_all.sh [default|pro]`，pro 变体临时替换 app.json5 bundleName 与 app_name 字符串、退出自动恢复），产物命名 `HowRead[-Pro]-v<ver>-<abi>-hmos.hap`。default 变体 4 个 HAP 构建成功；**pro 变体尚未打通**（hvigor 报 no executable target in module: 'entry'，产物为陈旧复制件）——已暂停鸿蒙构建，待另行任务完成后恢复。
 
-**④ 首启动主题默认改为浅色 + 清理旧产物**：用户反馈新装 App 打开界面很暗。`AppState.defaults()`（仅首启动）原跟随系统深色模式（`Dips.isDarkThemeOn() ? DARK : LIGHT`），系统深色模式的手机上新装首次打开即暗色；改为品牌默认 **THEME_LIGHT**（用户可在偏好设置切换，e-ink 默认不变），`WebDavSyncer.defaultAppState()` 镜像同步。另：删除输出目录中改名前的旧批次 APK（`HowRead[-Pro|-Fdroid]-1.0.0-*.apk` 无 v 前缀批次，旧 fdroid 包名与旧 pro 相同且显示名仍是 "好好读 FD"，已引起误装混淆——经 aapt2 验证新 APK 内 zh-CN label 已是 "好好读 Fd"）。三渠道 release 重编译 BUILD SUCCESSFUL，fdroid 新包已升级安装到 MI9。
+**④ 首启动主题默认改为浅色 + 清理旧产物**：新装 App 打开界面很暗。`AppState.defaults()`（仅首启动）原跟随系统深色模式（`Dips.isDarkThemeOn() ? DARK : LIGHT`），系统深色模式的手机上新装首次打开即暗色；改为品牌默认 **THEME_LIGHT**（用户可在偏好设置切换，e-ink 默认不变），`WebDavSyncer.defaultAppState()` 镜像同步。另：删除输出目录中改名前的旧批次 APK（`HowRead[-Pro|-Fdroid]-1.0.0-*.apk` 无 v 前缀批次，旧 fdroid 包名与旧 pro 相同且显示名仍是 "好好读 FD"，已引起误装混淆——经 aapt2 验证新 APK 内 zh-CN label 已是 "好好读 Fd"）。三渠道 release 重编译 BUILD SUCCESSFUL，fdroid 新包已升级安装到 MI9。
 
 **⑤ MI9 三应用界面发暗的定位与处理（设备侧数据修复，无代码改动）**：截图像素采样确认应用背景 141,141,141（系统设置 255,255,255）——应用内有一层约 44% 的均匀黑罩。读取共享配置 `/sdcard/HowRead/profile.HowRead/device.MI_9/app-State.json` 实锤：`isEnableBlueFilter=true + blueLightAlpha=93 + 滤镜色默认纯黑`（黑色 44% 遮罩，255×(1-111/255)≈144 与实测吻合）+ `appBrightness=0 / appBrightnessNight=11`（应用把屏幕背光压至 2%）。根因：**HowRead 系所有包名（旧 com.howread.reader 与新 com.leestudio.*）共享同一份 /sdcard/HowRead 外部配置**（0.9.0 起的设计），旧应用里的夜间护眼+低亮度设置被三个新应用继承。处理：force-stop 三个应用后把共享 app-State.json 修正（isEnableBlueFilter=false、appBrightness/appBrightnessNight=-1000 自动）并回写，fdroid/howread 重启后背景恢复 250,250,250，界面明亮。注意：该配置为全渠道共享，任一渠道里调 亮度/护眼滤镜 会影响其它渠道；旧应用 com.howread.reader 若再被使用且重设暗色值，新应用会再次继承。
 
-**⑥ 切换白天/夜晚模式时重置亮度与护眼滤镜到默认**：用户反馈切换主题后残留的暗色值仍会生效且找不到调亮入口。`AppState` 新增 `resetBrightnessAndFilterToDefaults()`（日/夜亮度→自动 AUTO、护眼滤镜→关、滤镜强度→默认 30、isAllowMinBrigthness→false）；偏好 → 主题色的 4 个模式分支（系统/浅色/深色/深色 OLED）在切换时调用，保证每次白天/夜晚模式切换都从干净的显示值开始。三渠道 release 重编译 BUILD SUCCESSFUL，fdroid/howread 更新包已安装到 MI9 并验证启动正常、背景明亮。
+**⑥ 切换白天/夜晚模式时重置亮度与护眼滤镜到默认**：切换主题后残留的暗色值仍会生效且找不到调亮入口。`AppState` 新增 `resetBrightnessAndFilterToDefaults()`（日/夜亮度→自动 AUTO、护眼滤镜→关、滤镜强度→默认 30、isAllowMinBrigthness→false）；偏好 → 主题色的 4 个模式分支（系统/浅色/深色/深色 OLED）在切换时调用，保证每次白天/夜晚模式切换都从干净的显示值开始。三渠道 release 重编译 BUILD SUCCESSFUL，fdroid/howread 更新包已安装到 MI9 并验证启动正常、背景明亮。
 
-**Android 编译验证**：Ubuntu 服务器 `assembleHowreadRelease assembleProRelease assembleFdroidRelease` 三渠道 BUILD SUCCESSFUL，15 个 APK 文件名/目录全部符合新规范；MI9 安装新包（versionName 1.0.0）冷启动/渲染/广告冒烟通过（见②）。MIUI 限制备注：卸载后重装新包需在手机上手动点一次"继续安装"（INSTALL_FAILED_USER_RESTRICTED）。未执行任何 git 命令。
+**Android 编译验证**：Ubuntu 服务器 `assembleHowreadRelease assembleProRelease assembleFdroidRelease` 三渠道 BUILD SUCCESSFUL，15 个 APK 文件名/目录全部符合新规范；MI9 安装新包（versionName 1.0.0）冷启动/渲染/广告冒烟通过（见②）。MIUI 限制备注：卸载后重装新包需在手机上手动点一次"继续安装"（INSTALL_FAILED_USER_RESTRICTED）。。
 
 ---
 
 ## [2026-09-07] 鸿蒙移植·阶段4-7：我的文件 / OPDS 网上书库 / 阅读器增强与品牌对齐收尾
 
-**背景**：按安卓 V1.0.0 功能与 UI（参考安卓 CHANGES、store/manual/img 截图、用户要求品牌/图标/包名/测试书）继续对齐鸿蒙端口。
+**背景**：按安卓 V1.0.0 功能与 UI（参考安卓 CHANGES、store/manual/img 截图，以及品牌/图标/包名/测试书的要求）继续对齐鸿蒙端口。
 
 **改动**（`harmony/` 内）：
 - **阶段4 我的文件**：my-files: 根视图（网络区 OPDS/WebDAV 入口 + 书库文件夹 + 快捷目录）；文件夹浏览器（⌂/↑/路径/网格列表切换、目录在前、长按操作菜单 打开/重命名/删除）；新建文件夹（对话框+fs.mkdirSync，验证 testfolder 创建成功）。系统分享暂缺（本 SDK 无 @ohos.share）。
@@ -297,13 +297,13 @@
 - **品牌（阶段3 延续）**：图标=docs/howread_cleaned.png 512px；包名 com.foobnix.pdf.reader→com.howread.reader（重签）；应用名 HowRead/好好读。
 - 参考素材：安卓 CHANGES（Z:\opt\librera\CHANGES.md）、截图 store/manual/img（hr01-19）、图标 docs/howread_cleaned.png、测试书 ci/autotest/teskbook（用于后续真机/压力验证）。
 
-**验证**（模拟器 uitest/hilog）：我的文件根视图/文件夹浏览/新建文件夹、OPDS 浮层与拉取日志、应用锁全流程、阅读器 Slider、蓝光/背景图设置项；各阶段编译 BUILD SUCCESSFUL、无崩溃。未执行任何 git 命令。
+**验证**（模拟器 uitest/hilog）：我的文件根视图/文件夹浏览/新建文件夹、OPDS 浮层与拉取日志、应用锁全流程、阅读器 Slider、蓝光/背景图设置项；各阶段编译 BUILD SUCCESSFUL、无崩溃。。
 
 ---
 
 ## [2026-09-07] 鸿蒙移植·阶段3：首页阅读统计 + 品牌对齐（图标/包名）
 
-**背景**：对齐安卓首页仪表盘（截图 hr01/hr03：5 统计卡 + 周/月/年柱状图弹层）；按用户要求统一品牌——图标、包名。
+**背景**：对齐安卓首页仪表盘（截图 hr01/hr03：5 统计卡 + 周/月/年柱状图弹层）；统一品牌——图标、包名。
 
 **改动**（`harmony/` 内）：
 - 新增 `model/ReadingStats.ets`：阅读时长/每日/每月持久化（preferences）；`recordReadTime`（30s 分块）、`recordPagesRead`、聚合统计、近 N 日/月序列。
@@ -311,7 +311,7 @@
 - `pages/Index.ets` 首页新增「阅读统计」5 卡片（总数/已读/总时长/今日/速度）+ 柱状图（周/月/年）；修复 @Builder 参数不追踪状态的坑（统计卡内联引用 @State、图表数据改 @State 数组驱动）；新增 `onPageShow` 从阅读器返回时刷新统计与书库。
 - **品牌对齐**：图标 = `docs/howread_cleaned.png` 缩放到 512px（AppScope app_icon.png + entry icon.png）；**包名 com.foobnix.pdf.reader → com.howread.reader**（与安卓 google 渠道一致），signing/gen_signing.sh + profile-template.json 包名同步并重新生成签名（verify bundle=com.howread.reader）；应用名 HowRead/好好读（阶段1已设）。
 
-**验证**（模拟器，uitest + hilog）：统计卡 总数=8 响应式；阅读 90s 后返回首页显示 总时长/今日 2m（hilog `[Stats] record 30000ms, total=90000`）；周柱状图 09-01~09-07 渲染；新包名 com.howread.reader 安装/启动正常，全部 NAPI 自测通过、无崩溃。未执行任何 git 命令。
+**验证**（模拟器，uitest + hilog）：统计卡 总数=8 响应式；阅读 90s 后返回首页显示 总时长/今日 2m（hilog `[Stats] record 30000ms, total=90000`）；周柱状图 09-01~09-07 渲染；新包名 com.howread.reader 安装/启动正常，全部 NAPI 自测通过、无崩溃。。
 
 ---
 
@@ -324,7 +324,7 @@
 - `pages/Index.ets` 书库 Tab 重构：搜索框（书名/作者/系列/标签）、状态 chips（全部/未读/在读/已读）、排序（最近/名称/日期/作者/系列）、5 视图（列表/紧凑/网格/封面/书架·木纹背景）、行内进度条、长按进入批量选择（N 项已选/全选/标记已读·未读·在读/取消）；列表/网格 ForEach key 改为 `path_page_status_star` 强制状态变化时重渲（ArkUI 同 key 复用不刷新的坑）。
 - 全部 RecentBook 字面量补 `status` 字段（Index 9 处 + Reader 2 处）。
 
-**验证**（模拟器 Pura 90，uitest + hilog + 设备 preferences 文件）：搜索"alice"→仅剩 Alice EPUB（共 1 本）；在读 chips→1 本；长按批量标记在读→hilog `setBooksStatus 1 books -> 1`、设备 prefs 文件 status=1、列表显示"在读"；5 视图切换正常；全部 NAPI 自测通过、无崩溃。未执行任何 git 命令。
+**验证**（模拟器 Pura 90，uitest + hilog + 设备 preferences 文件）：搜索"alice"→仅剩 Alice EPUB（共 1 本）；在读 chips→1 本；长按批量标记在读→hilog `setBooksStatus 1 books -> 1`、设备 prefs 文件 status=1、列表显示"在读"；5 视图切换正常；全部 NAPI 自测通过、无崩溃。。
 
 ---
 
@@ -342,7 +342,7 @@
 **验证**（鸿蒙模拟器 Pura 90，hdc + uitest + hilog 驱动）：
 - 编译 BUILD SUCCESSFUL；安装启动正常，全部 NAPI 自测通过（仅 demo.mobi 样本本身不支持，与本次无关）。
 - uitest dumpLayout 核对：4 Tab、顶栏（☰ 首页 ＋）、首页继续阅读卡片/最近封面轮播/快捷宫格（我的文件·网上书库·书签笔记·偏好）、FAB 均渲染；抽屉在左侧且含横幅/5 导航/格言/4 底部按钮；格言每次打开随机刷新（两次打开分别为"读书当读全书…"与"奇文共欣赏…"）。
-- 交互验证：4 Tab 切换（hilog `Tab switched to N`）、晚上模式切换（theme 0→1 持久化）、软件说明/书签笔记/网上书库三浮层开合居中、FAB→Reader 打开并渲染（theme=1 生效）。全程无崩溃。未执行任何 git 命令。
+- 交互验证：4 Tab 切换（hilog `Tab switched to N`）、晚上模式切换（theme 0→1 持久化）、软件说明/书签笔记/网上书库三浮层开合居中、FAB→Reader 打开并渲染（theme=1 生效）。全程无崩溃。。
 
 ---
 
@@ -360,7 +360,7 @@
 
 **⑤ TTSService 两处状态机缺陷**：①连续 3 个空白页（扫描版 PDF/空白章节）后原逻辑直接 return——不停止服务、不释放 wakeLock、状态仍显示"播放中"假死至 wakeLock 超时；现该分支调用 `stopMediaSesstionAndReleaweWakeLock()` + `TTSNotification.showLast()` 干净收尾。②暂停竞态：`TTS_PAUSE` 走 `ttsEngine.stop()` 清队列，但 stop 前已派发的 `onDone(UTTERANCE_ID_DONE)` 回调仍会执行 `playPage(下一页)` → 按暂停后又自动翻页续读。修复：TTSService 新增代际令牌 `playPageGen`（volatile int）——每次 `playPage` 入口与每次 `stopMediaSesstionAndReleaweWakeLock`（暂停/停止/销毁）递增，新旧两套 UtteranceProgressListener 的 `onDone/onError/onUtteranceCompleted` 回调入口校验令牌不匹配即丢弃，暂停后仍在途的旧回调不再误触发翻页；正常翻页链 onDone→playPage 递增令牌后，同队列残留的重复回调亦被自然抑制。
 
-**验证**：Ubuntu 服务器 `assembleGoogleDebug` / `assembleFdroidDebug` / `assembleProDebug` 三渠道 BUILD SUCCESSFUL（fdroid/pro 编译确认 noAds flavor 无回归）；MI9（48fee174，google arm64）安装冒烟——应用启动无崩溃、冷态 VIEW 打开 PDF 正常、**warm 态**（HOME 后应用存活）VIEW 打开 EPUB 成功切书（修复前被忽略）、EPUB 封面渲染清晰、连续 3 次快速翻页 0 FATAL。TTS 重复朗读/暂停续读与扫描版空白页场景建议人工试听复核。未执行任何 git 命令。
+**验证**：Ubuntu 服务器 `assembleGoogleDebug` / `assembleFdroidDebug` / `assembleProDebug` 三渠道 BUILD SUCCESSFUL（fdroid/pro 编译确认 noAds flavor 无回归）；MI9（48fee174，google arm64）安装冒烟——应用启动无崩溃、冷态 VIEW 打开 PDF 正常、**warm 态**（HOME 后应用存活）VIEW 打开 EPUB 成功切书（修复前被忽略）、EPUB 封面渲染清晰、连续 3 次快速翻页 0 FATAL。TTS 重复朗读/暂停续读与扫描版空白页场景建议人工试听复核。。
 
 ---
 
@@ -369,25 +369,25 @@
 
 **改动**:`ci/autotest/run_all.py` 的 worker 增加设备连接异常捕获——此前若 devices.json 中的设备不在线(u2.connect 抛 ConnectError),整个运行在收尾阶段崩溃且 report.md 不生成;现改为该设备用例记为 SKIP("device not online"),其余设备照常执行并正常产出报告。
 
-**验证**:三台真机(MI9/P20/KSA)L0 冒烟全集 24/24 PASS、0 FAIL、0 SKIP(结果目录 `ci/autotest/results/20260906-185109_L0_ui-device`);复现场景(仅一台在线)下首跑虽崩但 7/7 用例全过,修复后报告正常生成。未执行任何 git 命令。
+**验证**:三台真机(MI9/P20/KSA)L0 冒烟全集 24/24 PASS、0 FAIL、0 SKIP(结果目录 `ci/autotest/results/20260906-185109_L0_ui-device`);复现场景(仅一台在线)下首跑虽崩但 7/7 用例全过,修复后报告正常生成。。
 
 ## [2026-09-06] 清理旧测试目录 + 隔离测试过程文件与测试书目（不入代码仓）
 
 **改动**：①删除旧测试目录 `Z:\opt\librera\autotest`（约 458MB，其中 99% 为 artifacts/ 历史运行截图证据；其源码 driver/cases/run_all 均已复制并演进到 `ci/autotest/`，文档由 `ci/autotest/docs/` 取代，全仓无任何代码引用旧路径，经确认后整体删除）；②新增 `ci/autotest/.gitignore`，将测试过程产物与本地测试书目挡在代码仓外：`teskbook/`（约 97MB 测试书，big25 四格式 ~100MB 压力书等）、`results/`（约 29MB 每次运行的截图/日志/报告）、`__pycache__/`、`*.pyc`——`ci/` 为新增目录且从未提交，ignore 即生效；③`ci/autotest/docs/ENV_DEPENDENCIES.md` 第 5 节补充"teskbook/ 不入库"说明及各测试书目的来源/再获取方式（big25 系列由 `bench/genbooks.py` 现场生成、Alice EPUB 来自 Project Gutenberg、小样本手造），新环境部署先放书目再跑 UI 层用例。
 
-**验证**：`Z:\opt\librera\autotest` 已不存在；.gitignore 条目覆盖 teskbook/results/__pycache__ 全部路径；ENV_DEPENDENCIES 中 big25 来源经核实为 bench/genbooks.py 生成器（bench 下无现成 big25 拷贝）。未执行任何 git 命令，提交由用户完成。
+**验证**：`Z:\opt\librera\autotest` 已不存在；.gitignore 条目覆盖 teskbook/results/__pycache__ 全部路径；ENV_DEPENDENCIES 中 big25 来源经核实为 bench/genbooks.py 生成器（bench 下无现成 big25 拷贝）。
 
 ## [2026-09-06] 新增四层自动测试体系（ci/autotest）：JVM 单元 / Robolectric 集成 / AVD UI / 真机 UI
 
 **改动**：①新增 `ci/autotest/` 作为工程内自动测试目录——`docs/`（TEST_PLAN 分层矩阵/ARCHITECTURE 架构/ENV_DEPENDENCIES 环境依赖）、`config/`（devices.json 三真机+AVD 档案、cases.yaml 用例注册表含 layer/P0-P2 优先级/单用例超时/重试次数）、`lib/driver.py`（uiautomator2 驱动：进度显示+30s 心跳+单用例强制超时+失败自动重试+crash 守护+截图/dump/logcat 证据留存）、`cases/ui/`（L0 冒烟 SM-01~07、L1 功能回归 FN-01~08、L2 专项 PF-01/PF-03/ST-01）、`results/<时间戳>_<层级>/`（每次运行独立结果目录：report.md+run.log+证据）、`tools/ai_mock.py`（OpenAI 兼容 AI mock 服务 :8770）、`run_all.py`（UI 层入口，按 ABI 自动选包，--avd/--serial/--flavor）、`run_unit.sh`（服务器 JVM 层入口）、`teskbook/`（测试书目：big25.pdf/test.pdf/test.epub 等，新增 alicesadventures.epub）；②新增真实 JVM 测试 `android/app/src/test/java/com/foobnix/autotest/` 6 个类 53 条断言——单元层 MyMathTest/StringUtilsTest/TxtUtilsTest/AppBookmarkTest（LOG 框架依赖 Build.*，以 Robolectric runner 运行）、集成层 AppStatePersistTest（AppState JSON 持久化往返）/BookmarksDataTest（书签增查，走 getAllFiles 的 device.* 目录扫描语义）；③`libs.versions.toml`+`app/build.gradle` 新增 robolectric 4.16 testImplementation；④归档 8 个僵尸/坏断言旧测试（TestDB/TestGFile/TestSync/TestYearFormat/TestPage/TestSVG/ExampleUnitTest/LibreraBuildConfig）至 `ci/autotest/archive/stale_tests/`。
 
-**验证**：服务器 `./gradlew :app:testGoogleDebugUnitTest` BUILD SUCCESSFUL（53 tests, 0 failed）；真机层三台（MI9/P20/KSA）L0 冒烟 24/24 PASS、L1 功能回归 22 PASS/0 FAIL/5 环境性 SKIP、google/fdroid/pro 三 flavor 冒烟各自全绿；ST-01 受控 monkey 5min 零 crash；PF-03 内存无泄漏（开书后 PSS 增长 12%）；框架具备每用例进度/心跳/超时/重试与时间戳结果目录（results/<时间戳>_<层级>/）。已知发现：Debug 包冷启动 3.3s 超阈值（待 release 复测）、KSA/P20 书库首扫不收录 Download（FN-02 SKIP）、TTS 入口未定位（FN-07 SKIP）、VIEW intent 仅冷态生效（warm 态 onNewIntent 被忽略，driver 已固化冷态投递）、MedicineAVD 镜像损坏致 UI-AVD 层暂挂（框架就绪，待 wipe data）。未执行任何 git 命令。
+**验证**：服务器 `./gradlew :app:testGoogleDebugUnitTest` BUILD SUCCESSFUL（53 tests, 0 failed）；真机层三台（MI9/P20/KSA）L0 冒烟 24/24 PASS、L1 功能回归 22 PASS/0 FAIL/5 环境性 SKIP、google/fdroid/pro 三 flavor 冒烟各自全绿；ST-01 受控 monkey 5min 零 crash；PF-03 内存无泄漏（开书后 PSS 增长 12%）；框架具备每用例进度/心跳/超时/重试与时间戳结果目录（results/<时间戳>_<层级>/）。已知发现：Debug 包冷启动 3.3s 超阈值（待 release 复测）、KSA/P20 书库首扫不收录 Download（FN-02 SKIP）、TTS 入口未定位（FN-07 SKIP）、VIEW intent 仅冷态生效（warm 态 onNewIntent 被忽略，driver 已固化冷态投递）、MedicineAVD 镜像损坏致 UI-AVD 层暂挂（框架就绪，待 wipe data）。。
 
 ## [2026-09-06] 官网版本号同步：APK 升级 v1.0.0 后更新站点展示版本
 
 **改动**：随 `android/app/gradle.properties` 升级为 1.0.0（appCodeNumber 7200），同步更新官网展示——①中英首页下载区副标题"当前版本 0.9.0/current version 0.9.0"→1.0.0，Google Play/F-Droid/GitHub Releases 三张下载卡版本号→1.0.0；②中英更新日志页"当前版本 0.9.x/Current version: 0.9.x"→1.0.x。首页更新日志手风琴中"品牌焕新与架构升级（v0.9.0）"为历史条目，保留不动。
 
-**验证**：本地 jekyll 重建，中英首页与更新日志页版本字样全部为 1.0.0/1.0.x，无 0.9 遗留（历史条目除外）。未执行任何 git 命令。
+**验证**：本地 jekyll 重建，中英首页与更新日志页版本字样全部为 1.0.0/1.0.x，无 0.9 遗留（历史条目除外）。。
 
 ## [2026-09-06] 官网带宽优化：删除 pdf.js 源码映射与 Librera 历史版本截图（保留最新 8.9 系列），全站 399 张图片转 WebP，站点体积 105MB→33MB（-69%）
 
@@ -395,43 +395,43 @@
 
 **修复过程**（批量改写引发的三处回归，均已修复并验证）：引用改写映射曾误带目录前缀导致 427 个文件引用损坏（反向替换修复）；空表格清理误删 front matter `---` 分隔线（120 处恢复）；跨主题图片引用丢失 `../` 前缀（1448 处按站点根相对解析修复）。
 
-**验证**：jekyll 重建后 chrome 链接审计 8509 条全过、构建产物 webp 引用零缺失、md 内损坏图片引用零残留；浏览器实测首页（webp 图标+三张截图）、FAQ 页（9 张跨主题 webp 全载）、更新日志页（仅剩 8.9.54/8.9.50 最新系列 3 张）。docs 目录 105MB→33MB。未执行任何 git 命令。
+**验证**：jekyll 重建后 chrome 链接审计 8509 条全过、构建产物 webp 引用零缺失、md 内损坏图片引用零残留；浏览器实测首页（webp 图标+三张截图）、FAQ 页（9 张跨主题 webp 全载）、更新日志页（仅剩 8.9.54/8.9.50 最新系列 3 张）。docs 目录 105MB→33MB。。
 
 ## [2026-09-06] 用户手册同步刷新 v1.0.0:定位语对齐官网、版本号 1.0.0、WebDAV 截图匿名化
 
 **改动**:①手册定位语与官网首页统一——封面副标题与 1.1 首句由「高度可定制的电子书阅读器」改为「一个专注于个人阅读体验的开源电子书阅读软件」;②版本号随 v1.0.0 升级刷新——封面「适用版本」与 1.3「当前版本」改为 HowRead 1.0.0(versionCode 7200);手册文件名不带版本号,定名 `store/manual/HowRead用户手册.docx`,旧 `-0.9.docx` 删除;③真机截图 WebDAV 信息匿名化——`img/hr09.png`(WebDAV 同步配置)服务器地址 leestation.ddns.net:55005→dav.example.com:5005、账号 Lee→demo、同步路径 /home/Drive/Books/howread→/dav/Books,`img/hr05.png` 服务器名 LeeStation→MyNAS(PIL 擦除原文字后按原图字色/字号重绘,输入框下划线完整重绘,尺寸保持 1080x2221,原图备份于 bench/hr_backup/)。
 
-**验证**:重新生成 DOCX+TOC 占位(36 条)+页脚域修补,postcheck 0 错误;Word 导出 PDF(27 页)渲染后 judge 验收受影响 5 页(封面/1.1/1.3/图11 同步配置/图13 我的文件)全部通过——新定位语与 1.0.0 版本号生效、截图中无真实域名/账号残留、下划线与版式无回归。未执行任何 git 命令。
+**验证**:重新生成 DOCX+TOC 占位(36 条)+页脚域修补,postcheck 0 错误;Word 导出 PDF(27 页)渲染后 judge 验收受影响 5 页(封面/1.1/1.3/图11 同步配置/图13 我的文件)全部通过——新定位语与 1.0.0 版本号生效、截图中无真实域名/账号残留、下划线与版式无回归。。
 
 ## [2026-09-06] 版本升级 v1.0.0 + 软件说明措辞微调
 
 **改动**:①版本号由 0.9.0 升级为 1.0.0(`android/app/gradle.properties` 的 appVersionNumberBase 0.9→1.0,appCodeNumber 7198→7200 保持单调递增,三渠道 google/pro/fdroid 统一生效,`app/build.gradle` 注释同步);②软件说明页描述"一个专注于个人阅读体验的开源电子书阅读器"改为"一个专注于个人阅读体验的开源电子书阅读软件"(values-zh-rCN/strings.xml 的 app_description)。
 
-**验证**:Ubuntu 服务器构建三渠道 Release APK 全部 BUILD SUCCESSFUL,产物 HowRead-1.0.0-arm64.apk / HowRead-Pro-1.0.0-arm64.apk / HowRead-Fdroid-1.0.0-arm64.apk。未执行任何 git 命令。
+**验证**:Ubuntu 服务器构建三渠道 Release APK 全部 BUILD SUCCESSFUL,产物 HowRead-1.0.0-arm64.apk / HowRead-Pro-1.0.0-arm64.apk / HowRead-Fdroid-1.0.0-arm64.apk。。
 
 ## [2026-09-06] 官网素材升级：应用图标与首页截图替换为 HowRead 真实素材
 
 **改动**：①`docs/web/256.png` 由旧 Librera 绿色图标替换为 HowRead 新图标（书+「书」字金色设计，取自 `bench/howread_cleaned.png` 1536px 原图缩至 256px，站点导航栏/Hero/页脚/favicon/og:image 全部同步生效）；②首页三张截图 `docs/1.png/2.png/3.png` 由旧 Librera 英文占位图替换为 HowRead 真机截图（`store/manual/img/` 的 hr01 首页书架+阅读统计、hr04 书库网格、hr12 阅读器划词菜单），统一缩放至 720px 宽并做 256 色量化压缩（453/325/160KB→109/116/315KB，照顾国内带宽）；③旧素材备份于 `bench/tmp/backup_site_assets/`。
 
-**验证**：本地 jekyll 重建 + 浏览器实测，新图标（导航栏/Hero）与三张真机截图渲染清晰、点击放大正常；中英首页与旧版 zh.md 页面引用同一组文件，全部自动更新。未执行任何 git 命令。
+**验证**：本地 jekyll 重建 + 浏览器实测，新图标（导航栏/Hero）与三张真机截图渲染清晰、点击放大正常；中英首页与旧版 zh.md 页面引用同一组文件，全部自动更新。。
 
 ## [2026-09-06] 用户使用手册刷新:基于 CHANGES.md 全量梳理,附录重写为「与原版 Librera Reader 对比」(A.1 功能表 / A.2 界面优化 / A.3 懒加载性能优化+提速数据 / A.4 渠道工程),正文补书架视图与性能条目
 
 **改动**:①通读 CHANGES.md 全部条目(2026-08-12~09-06)汇总 HowRead 相对原版的全部差异;②附录由 4 条要点扩为四节——A.1 全新功能一览(表7:AI 交互/页内双语翻译/笔记/WebDAV 同步/阅读统计/首页仪表盘/书架视图/在线阅读器)、A.2 界面与交互优化(图标与 MIUI 绿边修复、阅读底栏四行精简两行、触控区 25→40dp、软件说明改版、OPDS 源精简、书库滚动位置记忆)、A.3 性能优化(引擎懒加载、标签页懒创建、按章惰性排版、首屏门闩、同步零冗余,附表8 提速实测:TXT 热 27~30s→0.09s、EPUB 冷首屏 17.2→7.1s、TXT 直转 28.5→12s、MOBI 二开页数坍缩修复)、A.4 渠道工程与多平台(三渠道统一版本、广告 SDK 抽象、去 GMS、官网+在线阅读器、HarmonyOS);③第 3 章补书架视图描述(木纹搁板/进度角标/收藏星标/四视图)、1.1 增加性能懒加载条目;④1.2 节段前分页修复表 1 跨页孤行。
 
-**验证**:postcheck 0 错误;Word 导出 PDF(27 页)渲染后 judge 逐页验收,首轮仅表 1 跨页孤行一处 fail,分页修复后复验 27/27 通过。未执行任何 git 命令。
+**验证**:postcheck 0 错误;Word 导出 PDF(27 页)渲染后 judge 逐页验收,首轮仅表 1 跨页孤行一处 fail,分页修复后复验 27/27 通过。。
 
 ## [2026-09-06] 新增用户使用手册:store/manual/HowRead用户手册-0.9.docx(中文 DOCX,封面/目录/10 章+附录/16 张 MI9 真机截图/6 张表格)
 
 **内容**:按"软件概述→安装配置→书库→阅读→AI 大模型交互→笔记→WebDAV 同步→阅读统计→备份迁移→常见问题→基于 Librera 的修改说明"大纲撰写,重点突出 HowRead 新增的 AI(问答/翻译双语对照/书籍简介)、笔记(按书分组/TXT·Markdown·JSON 导出)、WebDAV 同步(冲突策略/定时同步/同步日志/文件浏览)与阅读统计(5 卡片+周月柱状图)四大特色功能;所有界面入口、菜单文案、默认值均从源码(strings.xml/AiConfigDialog/WebDavSyncDialog/DashboardFragment2 等)核实。**配图**:MI9 真机(adb + uiautomator2)逐屏截取 19 张——首页仪表盘、统计柱状图、书架、我的文件、添加 WebDAV、偏好、AI 配置(密钥为掩码未泄露)、WebDAV 同步、同步日志、阅读界面、选中文本浮层、AI 问答(真实 glm-4.5-air 回答)、笔记编辑器、书签笔记列表、AI 笔记全文、AI 翻译、书籍操作菜单等,截图统一裁去系统状态栏/手势条(bench/crop_img.py)。
 
-**验证**:docx-js 生成(封面 R1/三节页码 罗马+阿拉伯/TOC 域)+ add_toc_placeholders 注入 32 条目录 + fix_footer_fields 修补页脚域;postcheck 0 错误;Word 导出 PDF(26 页)渲染 PNG 后逐页视觉验收 26/26 通过(封面铺满、目录页码、表格无跨页断裂、图注同页、无乱码)。生成脚本与中间产物在 bench/docxgen(不入库)。未执行任何 git 命令。
+**验证**:docx-js 生成(封面 R1/三节页码 罗马+阿拉伯/TOC 域)+ add_toc_placeholders 注入 32 条目录 + fix_footer_fields 修补页脚域;postcheck 0 错误;Word 导出 PDF(26 页)渲染 PNG 后逐页视觉验收 26/26 通过(封面铺满、目录页码、表格无跨页断裂、图注同页、无乱码)。生成脚本与中间产物在 bench/docxgen(不入库)。。
 
 ## [2026-09-06] 官网全站改版：套用 App-Showcase-Template 展示模板（GPL-3.0），首页改为 Hero+功能卡片+更新日志手风琴+下载区，全站 606 页换新导航栏/页脚
 
 **改动**：①新增 `docs/showcase/style.css` + `script.js`（基于 yxs2003/App-Showcase-Template 改编，GPL-3.0 署名保留于文件头与页脚；顺手补上模板缺失的 ripple 关键帧动画；去掉模板的 SyncPro 下载弹窗，改为真实链接）；②新增 `_layouts/home.html`（首页展示布局：导航/Hero/6 功能卡/真机截图/关于+数字/更新日志手风琴/4 下载卡/页脚）与 `_layouts/page.html`（子页通用布局，保留旧版的返回链接与 versions 引用逻辑、图片点击放大 modal）；③新增 `_includes/navbar.md`（全站导航 + 中英切换）与 `_data/changelog.yml`（首页手风琴最近 3 条中英数据）；④`index.md`/`en.md` 改为数据化 front matter 驱动的 home 布局；⑤其余 606 个 md（download/faq/what-is-new/PrivacyPolicy/wiki 等全部语言）由 `layout: main` 批量换为 `layout: page`，正文零改动；⑥旧 `main.html`/`wiki.css` 保留不再引用；在线阅读器页面为独立应用界面，不套官网外壳；⑦语言切换规则：优先当前目录的语言变体（Liquid 存在性校验），目录无对应语言文件时回落到目标语言首页；导航/页脚链接全部使用显式 `.html` 后缀，不依赖 GH Pages 的无扩展名解析。
 
-**验证**：Ubuntu 服务器 apt 安装 ruby3.0 + gem 安装 jekyll4.4.1（清华镜像），按 GH Pages 同构方式构建（baseurl /howread）并 :8767 起本地服务；browser-use 黑盒遍历截图——中/英首页（Hero、6 功能卡、截图区、手风琴展开、下载 4 卡、页脚 GPL 署名）、FAQ 图片点击放大、窄屏 390px 汉堡菜单、导航锚点滚动偏移、语言切换 6 个场景（含深层 FAQ 子页与 wiki 页）全部正确；navbar/footer 链接审计 8509 条全部命中磁盘文件；旧内容里历史遗留的无扩展名链接（GH Pages 可解析）未改动。未执行任何 git 命令。
+**验证**：Ubuntu 服务器 apt 安装 ruby3.0 + gem 安装 jekyll4.4.1（清华镜像），按 GH Pages 同构方式构建（baseurl /howread）并 :8767 起本地服务；browser-use 黑盒遍历截图——中/英首页（Hero、6 功能卡、截图区、手风琴展开、下载 4 卡、页脚 GPL 署名）、FAQ 图片点击放大、窄屏 390px 汉堡菜单、导航锚点滚动偏移、语言切换 6 个场景（含深层 FAQ 子页与 wiki 页）全部正确；navbar/footer 链接审计 8509 条全部命中磁盘文件；旧内容里历史遗留的无扩展名链接（GH Pages 可解析）未改动。。
 
 ## [2026-09-05] 全量 BUG 修复：两轮独立代码审查合并清单（除两处存疑项外全修），约 40 项，覆盖同步引擎/持久化/AI/阅读引擎/UI 五个板块
 
@@ -443,13 +443,13 @@
 
 **过程说明**：`BilingualSession.java` 在编辑中被一次 PowerShell 编码操作损坏（GBK/UTF-8 混写），已通过字节级逆向还原+从 21:58 旧构建 APK 的 dex 字符串池提取原始中文提示词/正则逐一恢复（翻译提示词、【编号】解析正则、底部提示语均与原文一致），修复后全文件扫描无残留损坏字符。
 
-**验证**：三渠道 Release `BUILD SUCCESSFUL`；MI9（google arm64）与华为机（pro arm）安装启动正常、书库/统计完好、AI 配置测试连接"连接成功"；A机（12S）USB 掉线待重连后补装（pro arm64 包已备好）。**同步实测**（MI9 app-SyncLog + BENCH 日志）：新代码首轮收敛上传 429 本（历史各设备书签路径互相不同的一次性合法收敛）后，**后续两轮静默周期同步均为 synced=0**——旧算法每轮无条件 429 个 PUT 的风暴彻底消除；顺带把 `searchPathsHiddenJson`（隐藏书库文件夹记忆，设备相关路径）加入 CSS_DEVICE_FIELDS 保持本机，不再跨设备同步。鸿蒙零改动，未执行任何 git 命令。
+**验证**：三渠道 Release `BUILD SUCCESSFUL`；MI9（google arm64）与华为机（pro arm）安装启动正常、书库/统计完好、AI 配置测试连接"连接成功"；A机（12S）USB 掉线待重连后补装（pro arm64 包已备好）。**同步实测**（MI9 app-SyncLog + BENCH 日志）：新代码首轮收敛上传 429 本（历史各设备书签路径互相不同的一次性合法收敛）后，**后续两轮静默周期同步均为 synced=0**——旧算法每轮无条件 429 个 PUT 的风暴彻底消除；顺带把 `searchPathsHiddenJson`（隐藏书库文件夹记忆，设备相关路径）加入 CSS_DEVICE_FIELDS 保持本机，不再跨设备同步。鸿蒙零改动，。
 
 ---
 
 ## [2026-09-05] 在线阅读器四项体验升级：①鼠标滚轮/点击翻页 ②刷新保持阅读（IndexedDB 会话+位置恢复）③非内嵌字体 PDF 兼容模式 ④小数进度显示；用《白鹿原》真实三格式实测
 
-**背景**：用户以《白鹿原》(epub/pdf/mobi，X 盘真实藏书) 实测反馈：PDF 打开无文字、刷新退出阅读界面、页面偏暗。诊断：白鹿原.pdf 为 2009 年版本，**0 个内嵌字体**（BaseFont 为 GBK 十六进制名的宋体/华文行楷，Encoding=GBK-EUC-H），pdf.js 在 Chrome 内核下因 local() 系统字体限制无法绘制非内嵌中文字形（仅标点/西文可见）——Chrome 平台硬限制。
+**背景**：以《白鹿原》(epub/pdf/mobi，X 盘真实藏书) 实测：PDF 打开无文字、刷新退出阅读界面、页面偏暗。诊断：白鹿原.pdf 为 2009 年版本，**0 个内嵌字体**（BaseFont 为 GBK 十六进制名的宋体/华文行楷，Encoding=GBK-EUC-H），pdf.js 在 Chrome 内核下因 local() 系统字体限制无法绘制非内嵌中文字形（仅标点/西文可见）——Chrome 平台硬限制。
 
 **① 滚轮/点击翻页**：`reader/foliate/paginator.js` 注入 wheel+click 处理（分页模式）——滚轮下/上=后/前一页（400ms 节流），点击左 1/3=上一页、右 2/3=下一页；书内 a/button 等元素点击不触发翻页；拖选文字（位移>6px）不误翻；scrolled 流保持原生滚动。坑：初版引用了 `#iframe` 私有字段，但该字段属于文件内另一个类，运行时 SyntaxError"Private field must be declared in an enclosing class"——改用元素自身 clientWidth + pointerdown/up 位移判定。
 
@@ -459,13 +459,13 @@
 
 **④ 进度小数显示**：fraction<10% 时显示一位小数（如 0.5%），避免长书开头进度恒显 0%。
 
-**验证**（LAN + 浏览器逐项）：白鹿原 EPUB 自动跳过空白分隔节直达第一章、35 章目录、滚轮/点击翻页生效、刷新后 CFI 恢复原位；白鹿原 MOBI 打开渲染；白鹿原 PDF 兼容模式可切换（pdf.js 视图内汉字缺失为 Chrome 平台限制，EPUB/MOBI 版本与兼容模式为推荐读法）；中文 TXT/EPUB 回归正常。未执行任何 git 命令。
+**验证**（LAN + 浏览器逐项）：白鹿原 EPUB 自动跳过空白分隔节直达第一章、35 章目录、滚轮/点击翻页生效、刷新后 CFI 恢复原位；白鹿原 MOBI 打开渲染；白鹿原 PDF 兼容模式可切换（pdf.js 视图内汉字缺失为 Chrome 平台限制，EPUB/MOBI 版本与兼容模式为推荐读法）；中文 TXT/EPUB 回归正常。。
 
 ---
 
 ## [2026-09-05] 在线阅读器重构：弃用 MuPDF WASM，改用浏览器原生引擎（pdf.js + foliate-js）——彻底解决中文乱码，体积从 7.7MB 降到 <2MB
 
-**背景**：上一轮已确认乱码根因是 wasm 编译参数 `-DTOFU_CJK` 剔除了 CJK 回退字体，修复需要 emscripten 重编译内嵌中文字体。因服务器到 GitHub 仅 ~20KB/s 无法拉取 emsdk，评估后选定**浏览器原生方案**（用户确认）：PDF 用 Mozilla pdf.js（Firefox 内置同款引擎），EPUB/MOBI/AZW3/FB2/CBZ/TXT 用 foliate-js（渲染为 HTML 由浏览器排版）——中文直接用浏览器系统字体回退，天然无乱码；首次加载从 7.7MB（1~3 分钟）降到 <2MB（普通网络秒开）。
+**背景**：上一轮已确认乱码根因是 wasm 编译参数 `-DTOFU_CJK` 剔除了 CJK 回退字体，修复需要 emscripten 重编译内嵌中文字体。因服务器到 GitHub 仅 ~20KB/s 无法拉取 emsdk，评估后选定**浏览器原生方案**：PDF 用 Mozilla pdf.js（Firefox 内置同款引擎），EPUB/MOBI/AZW3/FB2/CBZ/TXT 用 foliate-js（渲染为 HTML 由浏览器排版）——中文直接用浏览器系统字体回退，天然无乱码；首次加载从 7.7MB（1~3 分钟）降到 <2MB（普通网络秒开）。
 
 **重构 `docs/online-book-reader/`**：
 - `index.html` 全新入口页：打开文件/拖放/URL 输入，按扩展名路由——PDF 全屏 iframe 嵌入 `pdf/viewer.html`，其余格式动态挂载 foliate 阅读组件；保留 `?file=` 直连参数；错误显示在加载横幅上（修复了此前错误提示被隐藏的问题）。
@@ -475,7 +475,7 @@
 - 删除：`lib/`（mupdf wasm 14.4MB + gz 7.7MB + 绑定层）、`mupdf-view*.js`、`mupdf.c`、`build.sh`、`.gitignore`（mupdf-* 规则已无用）。
 - 库来源均走 npmmirror 国内镜像（pdfjs-dist 8.5MB tgz、foliate-js 104KB tgz、@zip.js/zip.js dist/zip-core.js 320KB）。
 
-**局域网端到端验证**（python http.server + 浏览器逐格式截图）：中文 PDF 简繁英全部清晰、目录/搜索/缩放工具齐全；中文 EPUB 正文/TOC 跳转/进度/字号正常；中文 TXT 分章正确、渲染清晰；demo.mobi 打开正常。未执行任何 git 命令。
+**局域网端到端验证**（python http.server + 浏览器逐格式截图）：中文 PDF 简繁英全部清晰、目录/搜索/缩放工具齐全；中文 EPUB 正文/TOC 跳转/进度/字号正常；中文 TXT 分章正确、渲染清晰；demo.mobi 打开正常。。
 
 ---
 
@@ -483,7 +483,7 @@
 
 **实现**：`mupdf-view-worker.js` 新增 `fetchWithProgress()`——用 `response.body.getReader()` 流式读取 wasm（.gz 优先，回退 .wasm），按 Content-Length 统计进度，每收到一个分块向页面 `postMessage(["PROGRESS", {received, total}])`，读取完拼接为 ArrayBuffer（替代直接 arrayBuffer()）。`mupdf-view.js` 初始消息处理（READY 之前）放行 PROGRESS 类型并转发给 `mupdfView.onwasmprogress` 回调（原先非 READY/ERROR 首消息会直接 reject）。`index.html` 注册回调：在 #placeholder 渲染「正在加载阅读器组件 Loading reader components… xx%」+ 进度条 + 已下载/总量 MB + "首次加载需下载渲染引擎，10 分钟内缓存" 提示；READY 后 openEmpty()/openURL() 自动替换该区域。
 
-**验证**：双 JS 文件过 node --check；局域网端到端回归（python3 http.server + 浏览器）：READY 正常、`?file=` 打开 PDF 渲染 5 页 canvas、无错误。线上效果（进度条动态）推送后在 github.io 慢网络下实测可见。未执行任何 git 命令。
+**验证**：双 JS 文件过 node --check；局域网端到端回归（python3 http.server + 浏览器）：READY 正常、`?file=` 打开 PDF 渲染 5 页 canvas、无错误。线上效果（进度条动态）推送后在 github.io 慢网络下实测可见。。
 
 ---
 
@@ -491,7 +491,7 @@
 
 **改动**：①`config.xml` 的 `my_site` 换为新官网（官网行为空时隐藏的逻辑不变），`about_section.xml` 官网行显示文本由硬编码 "howread.git" 改为 "HowRead 好好读"；②`AndroidWhatsNew.WHATSNEW_URL` 换为 CHANGES.md 地址，`getLangUrl` 不再追加语言后缀（单一 markdown 文件无语言变体）；③删除图标+Pro 推广行（`downloadPRO`），原位替换为引用新资源 `app_description` 的左对齐 TextView，`AboutSectionBinder` 同步移除该行的点击绑定（Pro 跳转方法 `Urls.openPdfPro` 保留未删）；④各可见行统一左对齐（唯一居中的就是被删除的 Pro 行），布局末尾新增 `fork_of_librera`（"This is a fork of Librera Reader"，仅英文）左对齐一行。
 
-**验证**（MI9 真机，google arm64 包）：软件说明弹窗自上而下——版本胶囊（好好读 v0.9.0 build…）、描述行、更新日志、许可、支持邮箱、官网（显示 HowRead 好好读）、fork 声明，全部左对齐；点"更新日志"在浏览器打开 380121850/howread 的 CHANGES.md ✓；官网目标 https://380121850.github.io/howread/ 实测可访问 ✓。pro+google Release 重新编译 `BUILD SUCCESSFUL`。鸿蒙零改动，未执行任何 git 命令。
+**验证**（MI9 真机，google arm64 包）：软件说明弹窗自上而下——版本胶囊（好好读 v0.9.0 build…）、描述行、更新日志、许可、支持邮箱、官网（显示 HowRead 好好读）、fork 声明，全部左对齐；点"更新日志"在浏览器打开 380121850/howread 的 CHANGES.md ✓；官网目标 https://380121850.github.io/howread/ 实测可访问 ✓。pro+google Release 重新编译 `BUILD SUCCESSFUL`。鸿蒙零改动，。
 
 ---
 
@@ -501,7 +501,7 @@
 
 **改动**：`docs/online-book-reader/lib/mupdf-wasm.wasm.gz`（gzip -9 预压缩，7.69MB）；`mupdf-view-worker.js` 的 loadWasmBinary() 优先 fetch `mupdf-wasm.wasm.gz` 并用 `DecompressionStream("gzip")` 解压（Chrome 80+/Edge/Firefox 113+/Safari 16.4+ 均支持），不支持时回退原始 `.wasm`。等价体积、双保险。
 
-**局域网端到端验证**（服务器 python3 http.server + 浏览器实测）：worker 正常 READY（20 个方法全部注册），`?file=` 打开 PDF 成功渲染多页 canvas、文本层与工具栏正常、无任何报错。**结论：worker 修复本身已验证正确；线上 github.io 首次打开预计需 2~3 分钟（7.7MB@50KB/s），之后走 HTTP 缓存（max-age 600s）。国内要快只能换 CDN/自定义域名（如 Cloudflare 前置）或境内托管，属后续可选方案。** 未执行任何 git 命令。
+**局域网端到端验证**（服务器 python3 http.server + 浏览器实测）：worker 正常 READY（20 个方法全部注册），`?file=` 打开 PDF 成功渲染多页 canvas、文本层与工具栏正常、无任何报错。**结论：worker 修复本身已验证正确；线上 github.io 首次打开预计需 2~3 分钟（7.7MB@50KB/s），之后走 HTTP 缓存（max-age 600s）。国内要快只能换 CDN/自定义域名（如 Cloudflare 前置）或境内托管，属后续可选方案。** 。
 
 ---
 
@@ -517,7 +517,7 @@
 
 **CI**：新增 `.github/workflows/deploy.yml` —— push 到 master（paths 限定 docs/** 与本文件）或手动触发时，checkout → configure-pages（enablement 自动开启 Pages）→ **jekyll-build-pages（source: ./docs，layout/baseurl 依赖 Jekyll 构建）** → upload-pages-artifact → deploy-pages，带 Pages 权限与并发锁。
 
-**遗留说明**：首页截图 1/2/3.png 仍为旧版 UI 截图，后续建议真机截图替换；FAQ/更新日志小语种翻译仅修链接不改内容。首次部署后需在仓库 Settings → Pages 确认 Source 为 GitHub Actions（workflow 的 enablement 会自动处理）。未执行任何 git 命令。
+**遗留说明**：首页截图 1/2/3.png 仍为旧版 UI 截图，后续建议真机截图替换；FAQ/更新日志小语种翻译仅修链接不改内容。首次部署后需在仓库 Settings → Pages 确认 Source 为 GitHub Actions（workflow 的 enablement 会自动处理）。。
 
 ---
 
@@ -531,7 +531,7 @@
 
 **④ 侧栏入口**：`_layouts/main.html` 侧栏阅读器链接在中文界面显示「HowRead在线阅读」，其他语言保持 "Online Book Reader"。
 
-**验证**：worker 文件过 node --check 语法检查；推送后 Run #3 由 GitHub Actions 验证，线上用浏览器实测阅读器打开 PDF、根页中文界面、FAQ/日志分区与侧栏中文入口。未执行任何 git 命令。
+**验证**：worker 文件过 node --check 语法检查；推送后 Run #3 由 GitHub Actions 验证，线上用浏览器实测阅读器打开 PDF、根页中文界面、FAQ/日志分区与侧栏中文入口。。
 
 ---
 
@@ -539,7 +539,7 @@
 
 **根因**（A机真机定位）：「单击」的值是 `AppSP.readingMode`（1=上下翻页，2=左右翻页）。A机与 MI9 的 `app-State.json` 里 `isPrefFormatMode=true`——这是"按扩展名决定打开模式"的隐藏功能（其唯一入口"更多模式设置"齿轮按钮在布局里 visibility=gone，界面找不到也关不掉）。`ExtUtils.showDocumentWithoutDialog2` 在该开关开启时按扩展名静默改写 readingMode：`prefScrollMode="pdf, djvu"→上下翻页`、`prefBookMode="epub, mobi, fb2, azw, azw3"→左右翻页`。A机主要在读 (官场小说).mobi——每打开一次 mobi/epub，单击就被改回左右翻页；同步日志中 readingMode 1↔2 的多次翻转与 lastBookPath 换书记录完全吻合。readingMode 又随 app-Misc.json 同步，翻转会被广播到所有设备。同步合并逻辑本身无责。
 
-**处理**：①A机（12S）：改 app-State.json 关掉 isPrefFormatMode + 通过应用 UI 把"单击"设为上下翻页（经应用自身写入才能持久，直接改 app-Misc.json 会被每轮同步的 exportMisc 用 SharedPreferences 重新覆盖）；②MI9 同样处理（关开关 + 单击=上下翻页；误关的"平面封面"勾选已恢复）；③华为机关掉 isPrefFormatMode（其单击本就是上下翻页）。④代码加固：PrefFragment2 的"单击"设置回调中显式 `isPrefFormatMode = false`——用户明确选择单击模式时该选择必须生效，杜绝隐藏开关再次静默改写。三渠道 Release 重新编译 `BUILD SUCCESSFUL`。鸿蒙零改动，未执行任何 git 命令。
+**处理**：①A机（12S）：改 app-State.json 关掉 isPrefFormatMode + 通过应用 UI 把"单击"设为上下翻页（经应用自身写入才能持久，直接改 app-Misc.json 会被每轮同步的 exportMisc 用 SharedPreferences 重新覆盖）；②MI9 同样处理（关开关 + 单击=上下翻页；误关的"平面封面"勾选已恢复）；③华为机关掉 isPrefFormatMode（其单击本就是上下翻页）。④代码加固：PrefFragment2 的"单击"设置回调中显式 `isPrefFormatMode = false`——用户明确选择单击模式时该选择必须生效，杜绝隐藏开关再次静默改写。三渠道 Release 重新编译 `BUILD SUCCESSFUL`。鸿蒙零改动，。
 
 ---
 
@@ -549,7 +549,7 @@
 
 **修复**：`BookCSS` 新增 `searchPathsHiddenJson`（随 app-CSS.json 持久化/同步）记录用户明确移除过的目录——①根页长按删除（BrowseFragment2）与旧偏好设置删除（PrefDialogs）时同步写入隐藏列表；②根页空列表兜底与 `load1` 默认回填（含异常分支）都跳过隐藏项，删了就不再复活（可以删空，"+"添加即可恢复）；③所有"添加书库文件夹/文件"入口在添加时把该路径移出隐藏列表。磁盘文件照旧不删（提示文案不变）。
 
-**验证**（华为畅享20 Plus，Pro arm 包）：重启后书库文件夹=[0]→长按"0"→删除→"0"立即消失（剩 Download）；force-stop 重启后"0"不再复活。三渠道 Release 重新编译 `BUILD SUCCESSFUL`。鸿蒙零改动，未执行任何 git 命令。
+**验证**（华为畅享20 Plus，Pro arm 包）：重启后书库文件夹=[0]→长按"0"→删除→"0"立即消失（剩 Download）；force-stop 重启后"0"不再复活。三渠道 Release 重新编译 `BUILD SUCCESSFUL`。鸿蒙零改动，。
 
 ---
 
@@ -559,7 +559,7 @@
 
 **② 删除文件夹修复**：删除走 `ExtUtils.deleteRecursive()`，原实现吞掉全部失败——目录 `listFiles()==null`（权限/IO 错误）直接返回 true、子项递归结果与 `File.delete()` 返回值全部忽略，几乎永远返回 true，UI 永远弹"成功"。现改为逐项累积真实结果并返回 `ok && delete()`，`listFiles()==null` 时以真实 `delete()` 结果为准——任何一步失败都会如实弹"失败"（AppProfile.deleteProfiles 等忽略返回值的调用方行为不变）。华为畅享20 Plus 真机验证：Download 下新建含子目录+文件的"删除测试"文件夹→长按删除→确认→磁盘与列表均清除；根目录长按书库条目仍为"从书库列表移除（磁盘不动）"设计并有明确提示。
 
-**③ OPDS 默认源**：`AppState.OPDS_DEFAULT` 由 5 条精简为 2 条——Project Gutenberg（海外）+ CBETA 电子佛典（中国，URL 从 `http://www.cbeta.org/opds/` 改为 301 后的 `https://archive2.cbeta.org/opds/`，应用内 http→https 跳转不可靠；原"文渊阁"wenyuange.org 实测已无法连接故移除）。存量设备已保存的列表不受影响，在"网上书库→重置"即可拿到新默认。华为真机验证：重置后仅剩 Gutenberg + CBETA 两条，CBETA 目录可正常浏览（大正藏/卍續藏等）。三渠道 Release 重新编译 `BUILD SUCCESSFUL`；MI9 与华为机均已装入新包回归通过。鸿蒙零改动，未执行任何 git 命令。
+**③ OPDS 默认源**：`AppState.OPDS_DEFAULT` 由 5 条精简为 2 条——Project Gutenberg（海外）+ CBETA 电子佛典（中国，URL 从 `http://www.cbeta.org/opds/` 改为 301 后的 `https://archive2.cbeta.org/opds/`，应用内 http→https 跳转不可靠；原"文渊阁"wenyuange.org 实测已无法连接故移除）。存量设备已保存的列表不受影响，在"网上书库→重置"即可拿到新默认。华为真机验证：重置后仅剩 Gutenberg + CBETA 两条，CBETA 目录可正常浏览（大正藏/卍續藏等）。三渠道 Release 重新编译 `BUILD SUCCESSFUL`；MI9 与华为机均已装入新包回归通过。鸿蒙零改动，。
 
 ---
 
@@ -571,7 +571,7 @@
 
 **MI9 恢复**（停应用→回写→删 base→重启触发首同步，同步日志可见上行）：`allWebDavLinks = http://leestation.ddns.net:55005,LeeStation;`、`app-NetworkSources.webdav = [LeeStation]`（17:03:56 up）、`aiConfigs = [智谱, Llama.cpp]`（17:11:57 up）、`webdavSyncIntervalMin = 5`；三渠道 Release 重新编译 `BUILD SUCCESSFUL`。
 
-**必须处理（已完成）**：A 机（小米12S）16:57 前一直运行旧包——其自身同步日志还原了完整链条：16:03:00 下拉到同一份空值（服务器早于 16:03 已被污染）、16:05:38 以旧包签名字段 `isSaveAiTranslation=true` 回写服务器、16:02:51 结束的那次 **48 分钟后台同步**（休眠/网络断续中完成）是污染窗口（16:01–16:03）内唯一结束的同步；16:59 又把 `aiConfigs=[]`/`webdavSyncPolicy=server` 上传（引发 MI9 17:03 的 `aiConfigs→[]`，已被 isEmptyValue 修复兜住）。17:26 已通过 adb 给 A 机装上含该修复的最新包，17:12 起 A 机已下拉到恢复后的正确配置（LeeStation、每5分钟、智谱+Llama.cpp 厂商），两机当前收敛一致。鸿蒙零改动，未执行任何 git 命令。
+**必须处理（已完成）**：A 机（小米12S）16:57 前一直运行旧包——其自身同步日志还原了完整链条：16:03:00 下拉到同一份空值（服务器早于 16:03 已被污染）、16:05:38 以旧包签名字段 `isSaveAiTranslation=true` 回写服务器、16:02:51 结束的那次 **48 分钟后台同步**（休眠/网络断续中完成）是污染窗口（16:01–16:03）内唯一结束的同步；16:59 又把 `aiConfigs=[]`/`webdavSyncPolicy=server` 上传（引发 MI9 17:03 的 `aiConfigs→[]`，已被 isEmptyValue 修复兜住）。17:26 已通过 adb 给 A 机装上含该修复的最新包，17:12 起 A 机已下拉到恢复后的正确配置（LeeStation、每5分钟、智谱+Llama.cpp 厂商），两机当前收敛一致。鸿蒙零改动，。
 
 ---
 
@@ -579,7 +579,7 @@
 
 **改动**：①布局合并——`dialog_ai_config.xml` 原独立"配置方案"行取消，"模型厂商"选择器移到"协议"行右侧（协议 | 值 | 模型厂商 | 值，各占弹性宽度）；②文案——ai_profile_config 改为"模型厂商/Model vendor"，未选择时显示"未添加"，删除项改为"删除当前厂商"；③下拉菜单重排——已有厂商列表、"删除当前厂商"、**最后一项"添加模型厂商…"**：点选后先输入厂商名称，随即进入空白配置页（URL 重置为当前协议默认地址、Key/模型清空、输出上限 4096、思考模式关），填完配置项后点对话框"保存"即把该厂商写入 `aiConfigs` 并激活（未保存关闭则不落地）；选中已有厂商仍然自动回填全部参数。数据结构与同步方式不变（aiConfigs 随 app-State 三方合并跨设备同步）。
 
-**验证**（Ubuntu 构建 assembleProRelease → MI9 真机）：新行内"协议 OpenAI 兼容 | 模型厂商 测试A"显示正常、升级后旧方案数据保留；下拉为 已有厂商…/删除当前厂商/添加模型厂商…（添加在最后）；输入"深度求索"→进入空白配置页（URL 重置 openai 默认、Key/模型为空）→填入模型名→点保存→厂商列表出现"深度求索"。三渠道 Release 重新编译 `BUILD SUCCESSFUL`。鸿蒙零改动，未执行任何 git 命令。
+**验证**（Ubuntu 构建 assembleProRelease → MI9 真机）：新行内"协议 OpenAI 兼容 | 模型厂商 测试A"显示正常、升级后旧方案数据保留；下拉为 已有厂商…/删除当前厂商/添加模型厂商…（添加在最后）；输入"深度求索"→进入空白配置页（URL 重置 openai 默认、Key/模型为空）→填入模型名→点保存→厂商列表出现"深度求索"。三渠道 Release 重新编译 `BUILD SUCCESSFUL`。鸿蒙零改动，。
 
 ---
 
@@ -591,7 +591,7 @@
 
 **③ AI 大模型多配置**：`AppState` 新增 `aiConfigs`（JSON 数组：name/protocol/baseUrl/apiKey/model/maxTokens/thinking）与 `aiConfigName`（当前激活方案名），随 app-State 参与字段级三方合并跨设备同步（key 随方案同步，沿用 app-AI.json 明文同步 key 的既有先例；激活方案的 key 继续镜像写入 AiCredentials 加密存储，`AiClient` 及全部现有调用点零改动）。AI 配置对话框顶部新增"配置方案"行：下拉列出已存方案（点选即把协议/URL/Key/模型/输出上限/思考模式全部回填）、"将当前配置保存为新方案…"（命名输入）、"删除当前配置"；保存按钮把当前控件值 upsert 回选中方案并标记激活；未选方案时行为与原单配置完全一致。新增字符串 ai_profile_*（en + zh-rCN）。
 
-**验证**（Ubuntu 构建 assembleProRelease → MI9 真机）：EPUB 弹窗"AI翻译结果保存"默认勾选且开关切换即时生效无崩溃；MOBI 弹窗两个复选框正确隐藏；big25.pdf 打开→退出无"保存更改"提示，加文本笔记退出也无提示（笔记存数据库不改 PDF），文件信息改标题走 setMeta+保存后退出干净（标题落盘且标题已恢复）；AI 配置对话框保存"测试A/测试B"两方案、下拉切换后模型名正确回填（glm-4.5-air↔glm-4.6）、保存激活后偏好行同步刷新、**应用重启后方案与激活名持久保留**。三渠道 Release 重新编译 `BUILD SUCCESSFUL`。鸿蒙零改动，未执行任何 git 命令。
+**验证**（Ubuntu 构建 assembleProRelease → MI9 真机）：EPUB 弹窗"AI翻译结果保存"默认勾选且开关切换即时生效无崩溃；MOBI 弹窗两个复选框正确隐藏；big25.pdf 打开→退出无"保存更改"提示，加文本笔记退出也无提示（笔记存数据库不改 PDF），文件信息改标题走 setMeta+保存后退出干净（标题落盘且标题已恢复）；AI 配置对话框保存"测试A/测试B"两方案、下拉切换后模型名正确回填（glm-4.5-air↔glm-4.6）、保存激活后偏好行同步刷新、**应用重启后方案与激活名持久保留**。三渠道 Release 重新编译 `BUILD SUCCESSFUL`。鸿蒙零改动，。
 
 **遗留说明**：测试书 `Download/librera_bench/big25.pdf` 的标题已恢复为 Big25，但验证过程在其上留了一条"test note"（首页书签笔记可见，长按会打开书、本机书签列表为空无法就地删除），属无害测试痕迹，可整本删除或忽略。MI9 已装本次修复包（pro release），AI 当前激活方案为"测试A"。
 
@@ -608,7 +608,7 @@
 - **"我的文件"分区**：书库文件夹（标题+文件夹列表）整体前移到"搜索"之前——搜索块移入列表下方新增的 `searchSection` 容器（`fragment_browse2.xml`），随根视图一并显隐；并新增 `onResume` 重建网络分区，同步下发的列表切换页面即可见。
 - **修复书库文件夹手动输入路径闪退**：真机复现 `BrowseFragment2.java:197` NPE——目录选择器"选择"按钮在 `TYPE_SELECT_FOLDER` 分支直接 `new File(BookCSS.get().dirLastPath)`，重装后 `dirLastPath` 为 null 必崩，且手动输入的路径完全未被使用。修复：手动输入的路径优先、为空回退当前浏览目录，空值/不可读/非目录一律 Toast 提示不再崩溃；`TYPE_SELECT_FILE/CREATE_FILE` 拼路径同样判空。
 
-**验证**（Ubuntu 构建，MI9 真机）：策略菜单四项齐全（较新/更靠前/本地/服务器优先）；定时菜单含"每 5 分钟"且本机切换后 `webdavSyncIntervalMin: 15 → 5` 即时发布（同步日志可见）；按钮顺序为"测试连接·同步日志·立即同步"；同步日志按两组方向展示（含统计合并与进度下行条目）；"我的文件"顺序为 OPDS→WebDAV→书库文件夹（标题+列表一体）→搜索；书库文件夹"+添加→添加文件夹→手动输入路径→选择"不再闪退（崩溃缓冲无新记录）。三渠道 Release 重编译 `BUILD SUCCESSFUL`。鸿蒙零改动，未执行任何 git 命令。
+**验证**（Ubuntu 构建，MI9 真机）：策略菜单四项齐全（较新/更靠前/本地/服务器优先）；定时菜单含"每 5 分钟"且本机切换后 `webdavSyncIntervalMin: 15 → 5` 即时发布（同步日志可见）；按钮顺序为"测试连接·同步日志·立即同步"；同步日志按两组方向展示（含统计合并与进度下行条目）；"我的文件"顺序为 OPDS→WebDAV→书库文件夹（标题+列表一体）→搜索；书库文件夹"+添加→添加文件夹→手动输入路径→选择"不再闪退（崩溃缓冲无新记录）。三渠道 Release 重编译 `BUILD SUCCESSFUL`。鸿蒙零改动，。
 
 ---
 
@@ -622,7 +622,7 @@
 
 **恢复**：借 `app-SyncLog.json` 记录的被覆盖旧值，回写 MI9 本地并删除 `.base` 触发首同步重新发布：`aiBaseUrl=https://open.bigmodel.cn/api/paas/v4/`、`aiModel=glm-4.5-air`、`aiMaxTokens=8192`、`allWebDavLinks=…LeeStation;`、"我的文件"WebDAV 服务器 LeeStation 与书库文件夹（并集）均已重新发布到服务器（同步日志 `[up] (空) -> …` 逐条可见）。AI key（app-AI.json 受 mergeAi 保护）全程未丢失。
 
-**验证**：MI9 装修复版后「偏好」页 AI 大模型行显示 glm-4.5-air、「我的文件」显示 LeeStation 服务器与 Books 书库文件夹；三个渠道 Release 已用修复后代码重新编译（`BUILD SUCCESSFUL`）。**A 机（旧包）只需再同步一次即可自动拉回全部配置**（其 base 也是被冲后的值，服务器恢复值按"远端变更"采纳）；建议 A 机也更新为本次新包。鸿蒙零改动，未执行任何 git 命令。
+**验证**：MI9 装修复版后「偏好」页 AI 大模型行显示 glm-4.5-air、「我的文件」显示 LeeStation 服务器与 Books 书库文件夹；三个渠道 Release 已用修复后代码重新编译（`BUILD SUCCESSFUL`）。**A 机（旧包）只需再同步一次即可自动拉回全部配置**（其 base 也是被冲后的值，服务器恢复值按"远端变更"采纳）；建议 A 机也更新为本次新包。鸿蒙零改动，。
 
 ---
 
@@ -647,7 +647,7 @@
 - 字段级合并：服务器改 `fontSizeSp 20→26` 本机不动 → 合入；同字段冲突（服务器 `appFontScale=1.4` vs 本机 `1.2`）→ **本地胜**并发布收敛；未冲突字段各自保留。
 - books/<hash>.json：设备 62 条进度记录，仅 52 本有真实本地文件的书上传（10 本文件已丢失的书不再用兜底哈希创建服务器条目），未打开的书零文件。
 - 同步日志：logcat `syncChange` 逐条 + 对话框"同步日志"显示每轮汇总（↑52本·关联52·2672ms）与逐字段"合入/发布：旧值→新值"明细。
-- 测完恢复：设备 `webdavSyncEnabled=false`、服务器/路径/间隔恢复原生产配置（leestation.ddns.net:55005 / Temp/Xiaomi / 15分钟）、测试注入的 NAS 服务器与 DCIM 文件夹移除、冲突测试改动的 appFontScale 恢复 1、`.base` 快照清除、测试 WebDAV 服务端与临时文件清理；恢复后启动无同步、无崩溃。鸿蒙零改动，未执行任何 git 命令。
+- 测完恢复：设备 `webdavSyncEnabled=false`、服务器/路径/间隔恢复原生产配置（leestation.ddns.net:55005 / Temp/Xiaomi / 15分钟）、测试注入的 NAS 服务器与 DCIM 文件夹移除、冲突测试改动的 appFontScale 恢复 1、`.base` 快照清除、测试 WebDAV 服务端与临时文件清理；恢复后启动无同步、无崩溃。鸿蒙零改动，。
 
 ---
 
@@ -662,9 +662,9 @@
   3. 缓存里存在 22 字节空占位 epub，枚举出 0 段被永久缓存，会话瘫痪。
   **修复（`BilingualSession.java`）**：`onPageShown` 从当前页真实文本层匹配出本页全部源段（`currentPageMd5s`，norm 缓存加速），提示/待译判定/重建门控全部改用精确集合——本页译完提示即消失、不再误触发重建（跳闪消除）；用精确锚点的实际段落序号校准线性估算（`ordOffset`，随每次翻页自适应微调），翻译窗口整体平移到真实阅读位置；窗口重算改为**确定性重建**——每次从"已译缓存/在途/失败"三个事实源直接推导三条车道（清空重排），账本不可能再漂移；并把精确页段落兜底并入当前页车道；`ensureParas` 对空枚举不再缓存（打 `paras EMPTY` 日志，下次重试）。
 - **④夜间全黑（`BrightnessHelper.java`）**：夜间亮度滑条 -100..0 区间被重定义为蓝灯滤镜强度，滑到底=滤镜100%+亮度0，"允许最低亮度"时 `BRIGHTNESS_OVERRIDE_OFF`（0.0=屏幕熄灭级）再叠近黑遮罩 alpha 200/255。修复：亮度一律取下限 0.02（永不熄灭级），遮罩 alpha 上限收紧为 150/120。
-- **③字体跳+7 / ⑤单击被改左右（设备配置修正，非代码缺陷）**：`appFontScale` 存于 app-CSS.json、readingMode 存于 app-Misc.json，均被 WebDAV 整文件同步覆盖（另一设备的"增大(+7)"与翻页模式盖过来）；"单击被改"另一原因是本机残留 `isPrefFormatMode=true`（强制文字书按左右翻页打开）。按用户要求：设备关闭 WebDAV 同步（`webdavSyncEnabled=false`，该字段仅存本机）、`isPrefFormatMode=false`、应用内把"单击"重设为上下翻页、`appFontScale=1`，并恢复了被同步清空的 AI 大模型配置（aiBaseUrl/aiModel，key 在 app-AI.json 未丢）。注意：用 PowerShell 改这些 JSON 必须写**无 BOM UTF-8**（带 BOM 会导致应用解析失败回退默认值）。
+- **③字体跳+7 / ⑤单击被改左右（设备配置修正，非代码缺陷）**：`appFontScale` 存于 app-CSS.json、readingMode 存于 app-Misc.json，均被 WebDAV 整文件同步覆盖（另一设备的"增大(+7)"与翻页模式盖过来）；"单击被改"另一原因是本机残留 `isPrefFormatMode=true`（强制文字书按左右翻页打开）。设备关闭 WebDAV 同步（`webdavSyncEnabled=false`，该字段仅存本机）、`isPrefFormatMode=false`、应用内把"单击"重设为上下翻页、`appFontScale=1`，并恢复了被同步清空的 AI 大模型配置（aiBaseUrl/aiModel，key 在 app-AI.json 未丢）。注意：用 PowerShell 改这些 JSON 必须写**无 BOM UTF-8**（带 BOM 会导致应用解析失败回退默认值）。
 
-**验证（MI9 真机 pro 包，BENCH 日志 + UI dump + 截图；全程 WebDAV 同步关闭）**：①停靠已译页：无提示、仅 `rebuild skipped` 日志（不重建不跳闪）；翻到未译页提示立即出现且计数与页面真实内容一致（"本页剩 6 段 · 队列 4 段"）；②缓冲全部译完即停（无新 AI 请求），翻页使缓冲出现未译页才恢复翻译；③关键复现——此前"卡住"的页 137（锚点 ord=533，旧窗口漂移完全覆盖不到）：新窗口精确对准 `queued=8` 全部入队，批量翻译完成后 `rebuild ensure` 原位合入、提示消失；ordOffset 每页自适应 1-2 段微调；④夜间模式暗色主题清晰可读、不再全黑；⑤主题切换后 appFontScale 保持 1，"单击"保持上下翻页且打开 epub 实际进入竖屏（VerticalViewActivity）；另修复空占位 epub 导致的会话瘫痪（paras EMPTY 不再缓存）。鸿蒙零改动，未执行任何 git 命令。
+**验证（MI9 真机 pro 包，BENCH 日志 + UI dump + 截图；全程 WebDAV 同步关闭）**：①停靠已译页：无提示、仅 `rebuild skipped` 日志（不重建不跳闪）；翻到未译页提示立即出现且计数与页面真实内容一致（"本页剩 6 段 · 队列 4 段"）；②缓冲全部译完即停（无新 AI 请求），翻页使缓冲出现未译页才恢复翻译；③关键复现——此前"卡住"的页 137（锚点 ord=533，旧窗口漂移完全覆盖不到）：新窗口精确对准 `queued=8` 全部入队，批量翻译完成后 `rebuild ensure` 原位合入、提示消失；ordOffset 每页自适应 1-2 段微调；④夜间模式暗色主题清晰可读、不再全黑；⑤主题切换后 appFontScale 保持 1，"单击"保持上下翻页且打开 epub 实际进入竖屏（VerticalViewActivity）；另修复空占位 epub 导致的会话瘫痪（paras EMPTY 不再缓存）。鸿蒙零改动，。
 
 
 
@@ -680,7 +680,7 @@
   - `DefaultListeners.deleteFile()` 删除成功后与 `CheckDeletedBooksWorker` 发现文件丢失删除 FileMeta 行的同一处调用 `removeByBook`；
   - `WebDavSyncer.doSync()` 在构建本地书籍信息前先 `pruneDeletedBooks()`；书级/key 级墓碑使既有合并守卫（`delBookmarks`/`deletedKeys`）跳过并回、并删除服务器 `books/<hash>.json` 副本。
 
-**验证（MI9 真机 pro 包，BENCH 日志 + UI dump + 截图）**：①跳到未译页后 `lanes=[5,22,9]` 三车道同时入队，**同一毫秒 3 个线程各发一个批量请求**（ords 互不相同、含当前页/往后/往前三组）；提示以 16sp 显示"正在翻译中… 本页剩 4 段 · 队列 13 段"（bounds [116,2058][963,2145]，底部居中），当前页译完合入后提示消失；停留期间仅 `rebuild skipped`、无周期性重载。②双语激活时打开 AI 对话框：勾选框 `checked=true enabled=false`（如实显示开启）、"开始翻译" `enabled=false` 置灰，仅"取消"与红色"关闭页内双语模式"可点（截图确认）；点关闭后回原书、`aiBilingual=false` 落盘。③删书书签测试：给《客户端AMR编解码库API参考.pdf》添加快速书签后经书库菜单删除——`app-Bookmarks.json` 该书条目即清零，`app-DeletedBooks.json` 出现完整墓碑（书级"b"+逐key+"p"），下一轮同步 `deleted=8、associated 53→52`（服务器副本被清理），同步后书签条目仍为 0（不再被合回）。鸿蒙零改动，未执行任何 git 命令。
+**验证（MI9 真机 pro 包，BENCH 日志 + UI dump + 截图）**：①跳到未译页后 `lanes=[5,22,9]` 三车道同时入队，**同一毫秒 3 个线程各发一个批量请求**（ords 互不相同、含当前页/往后/往前三组）；提示以 16sp 显示"正在翻译中… 本页剩 4 段 · 队列 13 段"（bounds [116,2058][963,2145]，底部居中），当前页译完合入后提示消失；停留期间仅 `rebuild skipped`、无周期性重载。②双语激活时打开 AI 对话框：勾选框 `checked=true enabled=false`（如实显示开启）、"开始翻译" `enabled=false` 置灰，仅"取消"与红色"关闭页内双语模式"可点（截图确认）；点关闭后回原书、`aiBilingual=false` 落盘。③删书书签测试：给《客户端AMR编解码库API参考.pdf》添加快速书签后经书库菜单删除——`app-Bookmarks.json` 该书条目即清零，`app-DeletedBooks.json` 出现完整墓碑（书级"b"+逐key+"p"），下一轮同步 `deleted=8、associated 53→52`（服务器副本被清理），同步后书签条目仍为 0（不再被合回）。鸿蒙零改动，。
 
 
 ## [2026-09-05] 修复与优化：双语跳页后当前页优先翻译、停留只提示不刷新、退出阅读页自动退出双语、AI对话框记住语言配置且双语默认不勾选、5段批量翻译提效
@@ -719,7 +719,7 @@
 4) "正在翻译中..."提示：翻到未译页底部出现（竖滑已实测），到位合入后消失；位置修复后贴工具栏上方不再压页脚；
 5) 关闭回归：aiBilingual=false 后重开书回到原版（页数回基、无双语会话/打开日志）。
 
-**说明/边界**：水平模式已做到"同 Activity 原位重排"（翻页真正无重建无转场）；竖滑模式因无原位重开入口，采用"无加载框、无转场、锚点复位"的静默重启（仍有一次窗口重建，已尽量压到无感）；.aitran 背景渲染沿用上一版（BookCSS 未动）；鸿蒙工程零改动，未执行任何 git 命令。
+**说明/边界**：水平模式已做到"同 Activity 原位重排"（翻页真正无重建无转场）；竖滑模式因无原位重开入口，采用"无加载框、无转场、锚点复位"的静默重启（仍有一次窗口重建，已尽量压到无感）；.aitran 背景渲染沿用上一版（BookCSS 未动）；鸿蒙工程零改动，。
 
 ## [2026-09-04] 修复：页内双语模式下译文不显示（页面仍只显示中文原文、无上下段）
 
@@ -752,7 +752,7 @@
 
 **验证（MI9 真机，pro 包，BENCH 日志 + 截图像素）**：开启后重启进入双语模式 → BilingualSession paras total=466 枚举源段、窗口入队并串行请求（约 17~36s/段，失败自动重试）→ 每段落位 3s 防抖后 BilingualBuilder build injected=N（与缓存 done 一致，重复段落文本去重）→ 自动 restartActivity 打开新的 __bi_<hash>.epub（页数随注入增长，进度保持原位）→ 屏幕截图像素分析：约 10.2 万个 #FDF2D8 色块像素（多行带）确认译文块带背景渲染在页面内。关闭按钮：回到原版、会话停止、无双语打开日志。译文缓存已落盘（profile.HowRead/device.MI_9/ai-translation/<书sha>.jsonl），下次开启命中缓存免 API。
 
-**说明/边界**：页内双语为"重排式"——译文按阅读窗口渐进出现，双语期间页数与原文版不同（与改字号同理，进度按百分比恢复）；仅走 epub 链的书支持页内双语（mobi/azw 直开原生，仅列表模式）；每次新译文落位伴随一次短暂后台重建+重开（约 1s，已用 3s 防抖合并减少频次）；鸿蒙工程零改动，未执行任何 git 命令。
+**说明/边界**：页内双语为"重排式"——译文按阅读窗口渐进出现，双语期间页数与原文版不同（与改字号同理，进度按百分比恢复）；仅走 epub 链的书支持页内双语（mobi/azw 直开原生，仅列表模式）；每次新译文落位伴随一次短暂后台重建+重开（约 1s，已用 3s 防抖合并减少频次）；鸿蒙工程零改动，。
 
 
 ## [2026-09-04] 修复：偏好设置"字体大小"选 +7 变大后，再选"正常"切不回正常字号
@@ -886,9 +886,9 @@
 - 复现链（本地无密钥的设备——新装或本地数据丢失后）：① `exportAi`（`:304`）把本地 `app-AI.json` 写成 `{"apiKey":""}`，`writeIfChanged` 发现内容不同就重写并把 mtime 刷成"现在"；② `syncWholeFile`（`:313`）比 mtime，服务器文件是别的设备过去写的（更旧）→ 判定本地"更新"→ **空密钥上传覆盖服务器**，服务器密钥被毁；③ `importAi`（`:315`）读本地 `app-AI.json` 仍是 `{"apiKey":""}`，旧守卫 `isNotEmpty` 为假 → 不保存。结果：链接（抗竞态路径）恢复了，密钥（竞态路径）没恢复，且服务器副本被空值覆盖、bug 自我延续。佐证：`ProfileStateIO.mergeAi` 这个专为密钥文件写的合并器存在但**从未被调用**（死代码）。
 
 **修复**（2 文件，核心 1 处改动）：
-1. `ProfileStateIO.mergeAi`（`ProfileStateIO.java`）：签名从 `mergeAi(Context, remote)` 改为匹配 `JsonMerger` 接口的 `mergeAi(LinkedJSONObject local, LinkedJSONObject remote)`，实现"**设值赢未设值，真冲突（两边都有且不同）服务器赢**"（与 `mergeAiState` 同构的单字段版）：本地空+服务器有→用服务器（**修复恢复**）；本地有+服务器空→用本地（能换密钥、能播种服务器）；两边都有且不同→服务器赢（用户选定）；两边都空→空。
+1. `ProfileStateIO.mergeAi`（`ProfileStateIO.java`）：签名从 `mergeAi(Context, remote)` 改为匹配 `JsonMerger` 接口的 `mergeAi(LinkedJSONObject local, LinkedJSONObject remote)`，实现"**设值赢未设值，真冲突（两边都有且不同）服务器赢**"（与 `mergeAiState` 同构的单字段版）：本地空+服务器有→用服务器（**修复恢复**）；本地有+服务器空→用本地（能换密钥、能播种服务器）；两边都有且不同→服务器赢（已选定）；两边都空→空。
 2. `WebDavSyncer.doSync`（`WebDavSyncer.java:317`）：`syncWholeFile(...syncAI...)` → `syncMergedObjectFile(...syncAI..., ProfileStateIO::mergeAi)`。`syncMergedObjectFile` 提供**结构性抗竞态**：GET 临时错误不碰任何东西；远端缺失（404）则上传本地；否则 `merged = mergeAi(local, remote)`，本地变了写本地、服务器变了上传。
-3. `ProfileStateIO.importAi`（`ProfileStateIO.java`）：从"仅本地为空时填"改为"文件值≠本地加密存储就应用"——合并后 `app-AI.json` 已含正确密钥，`importAi` 负责把文件值落到加密存储，既补缺失（恢复）也收敛冲突（服务器赢）。安全：`exportAi` 每轮同步开头都会把本地存储重新镜像进文件，用户在 AI 对话框刚保存的密钥在合并前已在文件里，不会被旧值覆盖。
+3. `ProfileStateIO.importAi`（`ProfileStateIO.java`）：从"仅本地为空时填"改为"文件值≠本地加密存储就应用"——合并后 `app-AI.json` 已含正确密钥，`importAi` 负责把文件值落到加密存储，既补缺失（恢复）也收敛冲突（服务器赢）。安全：`exportAi` 每轮同步开头都会把本地存储重新镜像进文件，刚在 AI 对话框保存的密钥在合并前已在文件里，不会被旧值覆盖。
 
 **效果**：本地重置/新装设备同步后从服务器恢复密钥；本地改密钥（服务器空）能上传；两边冲突服务器赢；不再出现"空密钥覆盖服务器"的竞态。与 `app-State.json` 用 `mergeAiState` 处理 AI 模型配置完全同构。
 
@@ -1103,7 +1103,7 @@
 | `WebDavSyncer.java` | 新增通用 `syncWholeFile()`（no-op / seed / 跳过 / 双向整份覆盖，带 BENCH 日志）；`doSync` 中 `app-Recent`、`app-Favorite`、`app-Stats`、`app-AI`、`app-Misc`、`app-NetworkSources` 六个文件改走整文件；`app-BookStates`（已读/未读标记）保留逐项合并；移除 `syncMergedArrayFile` 与相应 `syncMergedObjectFile` 调用；本机被远端更新时调用 `AppData.invalidateListCache()` 刷新首页 |
 | `ProfileStateIO.java` | `exportNetworkSources/exportStats/exportAi/exportMisc` 改为**内容变化才写盘**（整文件方案以 mtime 判断"谁改过"，导出必须保真旧 mtime）；`exportNetworkSources` 只写 opds/webdav/folders 三段；`importNetworkSources` 改为整份应用（folders 整段替换 `searchPathsJson`）；删除退役的 `mergeNetworkSources`、`mergeSimpleMetaArrays`、`mergeStats/mergeAi/mergeMisc`、`updateMarkers/mergeMarkers/unionMarkers/markerKeys/filterTombstoned/tombstonesToArray/keysOf/unionLines/entryKey/readSimpleMetaArray/appendAll` 及标记段常量 |
 
-**已知语义**（整文件方案的固有代价，用户已确认）：两台设备在一次同步间隔内各自改动同一文件时，后同步的一方整份获胜，另一方的中间改动被覆盖；依赖设备与服务器时钟大致一致。
+**已知语义**：两台设备在一次同步间隔内各自改动同一文件时，后同步的一方整份获胜，另一方的中间改动被覆盖；依赖设备与服务器时钟大致一致。
 
 ### 二、每本书的进度/书签本地删除 → 同步删除服务器
 
@@ -1682,7 +1682,7 @@ fdroid/pro 不崩:fdroid 不依赖 `libDepFree`(用 `libPro` 桩类,manifest 无
 | `PrefDialogs.importDialog` | 解压后：恢复统计/AI key，并**主动触发 JSON→DB**（getAllRecent/getAllFavoriteFiles/TagData.restoreTags），最近阅读、珍藏、统计、AI 配置重启后立即可见 |
 | `WebDavSyncer` | global 组扩展：`app-Recent.json`、`app-Favorite.json`（数组并集）、`app-BookStates.json`（按 key 取 t 新者）、`app-Stats.json`（数值/bucket max）、`app-AI.json`（非空 key 胜，双向回填） |
 
-安全说明：app-AI.json 内为明文 API Key（用户要求 AI 配置可完整恢复）；仅进用户自己的备份 zip / 私有 WebDAV 服务器。WebDAV 登录凭据因 AndroidKeyStore 设备绑定仍不导出。
+安全说明：app-AI.json 内为明文 API Key（AI 配置要求可完整恢复）；仅进用户自己的备份 zip / 私有 WebDAV 服务器。WebDAV 登录凭据因 AndroidKeyStore 设备绑定仍不导出。
 
 ### 二、真实书架（木板随滚动）
 
@@ -1929,7 +1929,7 @@ MOBI《2014中日战争》：一次 567ms（1613 页）/ 二次 108ms 且页数�
 
 ## [2026-08-30] 书架纹理调浅+整块木板纹理;修复 WebDAV 同步后 AI 模型配置丢失
 
-### 书架视觉(应用户反馈)
+### 书架视觉
 - 木纹背景调浅:深胡桃 #5C4232 一系 → 浅胡桃 #94745A 一系。
 - 取消横纹:不再按 128px 画板缝与每板色带,改为**一整块木板**——纯竖向细密木纹 + 少量木节;纹理线在 tile 高度上按整周期绘制、横向不出界,双向无缝平铺(`WoodShelf.makeTile` 重写)。
 - 木板装饰配色适配浅色底:亮边 #C29A6E、底线 #4A3018。
@@ -1943,7 +1943,7 @@ AI 模型配置(aiProtocol/aiBaseUrl/aiModel/aiMaxTokens/aiThinking)存在 `app-
 - `ProfileStateIO.mergeAiState`:app-State.json 同步时对 5 个 AI 字段做字段级并集——一边设置、一边未设置 → 取设置过的值;两边都设置且不同 → 新的一方胜出;`WebDavSyncer.syncGlobalFile` 在两种胜负路径都写入/上传合并结果(双向收敛)。
 - 新增 `ProfileStateIO.importAppState`:同步完成后把合并后的 app-State.json 原位加载进运行中的 AppState(`Objects.loadFromJson`),配置立即生效,并避免同步末尾的回写覆盖。
 
-涉及:`ui2/WoodShelf.java`、`ui2/ShelfBoardsDecoration.java`、`model/ProfileStateIO.java`、`webdav/WebDavSyncer.java`。真机验证:书架纹理视觉已核对;WebDAV AI 同步请在用户自己的服务器上按"重置 → 配 WebDAV → 同步 → 查看 AI 配置"流程确认。
+涉及:`ui2/WoodShelf.java`、`ui2/ShelfBoardsDecoration.java`、`model/ProfileStateIO.java`、`webdav/WebDavSyncer.java`。真机验证:书架纹理视觉已核对;WebDAV AI 同步需在自己的服务器上按"重置 → 配 WebDAV → 同步 → 查看 AI 配置"流程确认。
 
 ## [2026-08-30] 修复 WebDAV 同步后阅读统计未应用到本机
 
@@ -1951,7 +1951,7 @@ AI 模型配置(aiProtocol/aiBaseUrl/aiModel/aiMaxTokens/aiThinking)存在 `app-
 
 **修复**:`WebDavSyncer.doSync` 在 `importMisc` 之后调用 `ProfileStateIO.importStats(c)`,重新应用合并后的 app-Stats.json(applyStats 为幂等的最大值合并)并 `AppSP.get().save()` 持久化。重置场景同样覆盖:重置后本机统计为零,同步即取回服务器上的累计统计。
 
-涉及:`webdav/WebDavSyncer.java`(一行调用 + 注释)。请在用户自己的 WebDAV 服务器上按"重置 → 配 WebDAV → 同步 → 查看首页阅读统计"流程确认。
+涉及:`webdav/WebDavSyncer.java`(一行调用 + 注释)。需在自己的 WebDAV 服务器上按"重置 → 配 WebDAV → 同步 → 查看首页阅读统计"流程确认。
 
 ## [2026-08-30] 应用品牌更名 HowRead(好好读)+ 更换包名与签名
 
@@ -2304,7 +2304,7 @@ ios/desktop 预留位提升为一级目录；安卓主渠道（Google Play/官�
 ## [2026-09-07] 鸿蒙：产物改为按硬件平台分 ABI——DEBUG/RELEASE × arm64/x86_64 共 4 个 HAP
 
 ### 背景
-用户要求：不论 debug 还是 release，均按硬件平台（ARM64 与 X86_64）分开构建产物。
+要求：不论 debug 还是 release，均按硬件平台（ARM64 与 X86_64）分开构建产物。
 
 ### 改动（build_hap_all.sh 定稿）
 - 每次构建单一 ABI：`externalNativeOptions.abiFilters` 设为目标 ABI，并将 `entry/libs/` 下其它 ABI 的
@@ -2330,7 +2330,7 @@ ios/desktop 预留位提升为一级目录；安卓主渠道（Google Play/官�
 华为平台要求正式发布包使用 AGC 签发的发布证书与 Profile；本地生成 CSR 上传申请。
 
 ### 改动
-- 新增 `harmony/signing/gen_release_csr.sh`（等价 DevEco「Generate Key and CSR」向导，字段值经用户确认）：
+- 新增 `harmony/signing/gen_release_csr.sh`（等价 DevEco「Generate Key and CSR」向导，字段值已确认）：
   - 密钥库 `howread-release-sign.p12`（ECC NIST-P-256，别名 howread-release，密码 HowRead@2026，仅本地保存）；
   - 本地自签证书 `howread-release-local.cer`（CN=HowRead / OU=LeeStudio / O=Lee / C=CN，25 年，仅 IDE 对等物，不上传）；
   - **`howread-release.csr`——上传 AGC 申请发布证书（.cer）+ 发布 Profile（.p7b）**。
@@ -2343,7 +2343,7 @@ ios/desktop 预留位提升为一级目录；安卓主渠道（Google Play/官�
 ## [2026-09-07] 鸿蒙：生成 AGC 调试证书申请材料（debug 密钥库 + CSR）
 
 ### 改动
-- 新增 `harmony/signing/gen_debug_csr.sh`（与 gen_release_csr.sh 同构，字段值经用户确认）：
+- 新增 `harmony/signing/gen_debug_csr.sh`（与 gen_release_csr.sh 同构，字段值已确认）：
   - 密钥库 `howread-debug-sign.p12`（ECC NIST-P-256，别名 howread-debug，密码 HowRead@2026，与 release 同密码）；
   - 本地自签证书 `howread-debug-local.cer`（主体与 release 一致：CN=HowRead/OU=LeeStudio/O=Lee/C=CN，25 年）；
   - **`howread-debug.csr`——上传 AGC 申请调试证书（.cer）+ 调试 Profile（.p7b，平台侧绑定调试设备 UDID，可多台）**。
@@ -2355,7 +2355,7 @@ ios/desktop 预留位提升为一级目录；安卓主渠道（Google Play/官�
 ## [2026-09-07] 鸿蒙：接入 AGC 签发证书重建四产物（dist 目录改小写 debug/release）
 
 ### 背景
-用户在 AGC 完成调试/发布证书申请并放入 signing/（HowRead-debug.cer / HowRead-release.cer）；
+AGC 调试/发布证书申请完成并放入 signing/（HowRead-debug.cer / HowRead-release.cer）；
 要求基于新签名重建 debug/release，dist 文件夹改为小写 debug/release。
 
 ### 材料核验
@@ -2395,7 +2395,7 @@ ios/desktop 预留位提升为一级目录；安卓主渠道（Google Play/官�
 占位 profile，云真机只信任华为 Profile CA 签发的链。
 
 ### 改动
-- 用户提供 AGC 签发的发布 Profile `HowRead-releaseRelease.p7b`（verify True：type=release、
+- AGC 签发的发布 Profile 已到位 `HowRead-releaseRelease.p7b`（verify True：type=release、
   bundle-name=com.leestudio.howread.reader.hmos、app-identifier=6917615791336205965、
   叶子=AGC Release 证书且公钥与 howread-release.csr 匹配）；
 - 替换 `signing/howread-release.p7b`（占位文件保留为 howread-release-placeholder.p7b）；
@@ -2446,13 +2446,13 @@ build_hap_all.sh 的 OUT_HAP 已按 variant 参数化（此前误拷 default 产
 ### 待办
 - Pro 的 release 包若需上云/上架：Pro 包名需在 AGC 注册 App ID 并申请正式发布 Profile，替换
   `signing/howread-pro-release.p7b` 重打；调试 Profile（绑设备）同理。
-- default 的 debug 包云调试仍需 AGC 调试 Profile（待用户提供，绑云真机 UDID）。
+- default 的 debug 包云调试仍需 AGC 调试 Profile（待提供，绑云真机 UDID）。
 - 模拟器冒烟：HowRead-Pro debug x86_64 包安装启动正常，与 HowRead 包共存。
 
 ## [2026-09-08] 鸿蒙：Pro release 包换用 AGC 正式 Profile
 
 ### 改动
-- 用户提供 AGC 签发的 Pro 发布 Profile `HowRead pro-releaseRelease.p7b`（verify True：type=release、
+- AGC 签发的 Pro 发布 Profile 已到位 `HowRead pro-releaseRelease.p7b`（verify True：type=release、
   bundle-name=com.leestudio.howread.pro.reader.hmos、app-identifier=6917615791848364635、AGC Release 叶子）；
 - 替换 `signing/howread-pro-release.p7b`（占位保留为 howread-pro-release-placeholder.p7b）；
 - `build_hap_all.sh pro` 重打 4 个 Pro 产物。
@@ -2555,11 +2555,11 @@ iOS / Desktop 两个预留平台没有任何版本配置位。
 ### 说明
 - 最终产物文件名带 v 前缀：`build_hap_all.sh` 从 AppScope/app.json5 读取 versionName，
   产物为 `HowRead[-Pro]-v0.5.1-<abi>-hmos.hap`；配置文件里的 versionName 字段本身为纯数字不含 v。
-- versionCode=32 为用户指定值；鸿蒙侧独立于安卓（安卓仍为 1.0.0 / 7200）。
+- versionCode=32 为指定值；鸿蒙侧独立于安卓（安卓仍为 1.0.0 / 7200）。
 
 ## [2026-09-09] 安卓：flavor 缩减 3→2（pro + fdroid），删除 howread；广告与 IAP 预留设计
 
-### 背景与决策（用户指定）
+### 背景与决策（指定）
 - 原主渠道 howread flavor 删除；保留两个 flavor：**pro**（旗舰/Play 渠道，将含广告 SDK 与 IAP，
   IAP 购买解锁 pro 功能并关闭广告）与 **fdroid**（零 GMS/零广告/无 IAP/无 pro 高级功能）。
 - 当前阶段不对接真实广告与 IAP，仅做预留设计；pro 保持现包名
@@ -2593,7 +2593,7 @@ iOS / Desktop 两个预留平台没有任何版本配置位。
 - Ubuntu 服务器 assembleProDebug + assembleFdroidDebug BUILD SUCCESSFUL；
 - 产物命名/目录符合新规范；fdroid APK 字节扫描零 gms/ads 命名空间；
 - 真机覆盖升级验证见会话记录（原 com.leestudio.howread.reader 主包不再出新版，
-  是否卸载由用户决定）。未执行任何 git 命令。
+  是否卸载自行决定）。。
 
 ## [2026-09-09] 安卓：版本号升级 1.0.1 / 7204
 
@@ -2607,11 +2607,11 @@ iOS / Desktop 两个预留平台没有任何版本配置位。
 - Ubuntu 服务器 assembleProDebug + assembleFdroidDebug BUILD SUCCESSFUL（19s），
   产物 `HowRead-Pro-v1.0.1-arm64.apk` / `HowRead-Fdroid-v1.0.1-arm64.apk`；
 - MI9 覆盖安装双包均 Success，`dumpsys package` 实测 versionName=1.0.1、
-  versionCode=7205（ABI 拆分固有规则：基数 7204 + arm64 偏移 1）。未执行任何 git 命令。
+  versionCode=7205（ABI 拆分固有规则：基数 7204 + arm64 偏移 1）。。
 
 ## [2026-09-10] 安卓：Pro 功能门控体系 + 设置页升级卡片 + IAP 打桩验证
 
-### 背景（用户需求）
+### 背景（需求）
 - 设置页新增"升级 Pro"入口（已激活显示解锁方式/购买时间/订单号后四位 + 恢复购买/管理权益，
   退款/失效回退为"升级 Pro"）；
 - 9 项 Pro 功能（WebDAV 同步、WebDAV、AI 接入、书籍 AI 简介、AI 翻译、页面双语对照、
@@ -2652,7 +2652,7 @@ iOS / Desktop 两个预留平台没有任何版本配置位。
 - 开启版（-PiapStub=true）：安装后直接"Pro 已激活"，信息行显示构建期桩购买时间与订单号；
 - fdroid：按钮"升级 Pro 版本"，点击经浏览器打开 https://380121850.github.io/howread/（无 IAP 弹窗）；
 - 三组包构建全部 BUILD SUCCESSFUL（HowRead-Pro-v1.0.1 / HowRead-Pro-IapOn-v1.0.1 / HowRead-Fdroid-v1.0.1）。
-未执行任何 git 命令。
+。
 ## [2026-09-11] 安卓 1.3.0：SMB/SFTP 三协议统一"在线打开 + 分块缓存阅读"（Pro 功能）
 
 ### 新增
@@ -2705,3 +2705,66 @@ iOS / Desktop 两个预留平台没有任何版本配置位。
 - SMB 端到端本轮未实测（无 SMB 测试环境），仅编译 + 代码走查；后续可用局域网 NAS 补测。
 - 设备侧诊断日志用 `android.util.Log.i("REMOTE", ...)`（不受 IS_LOG 门控，参照 BENCH 惯例）。
 -AppsConfig.IS_LOG 门控已恢复为仅模拟器开启。
+## [2026-09-11] 1.3.0 第二轮：在线打开修复 + Pro 体验改造 + SMB/SFTP 配置增强
+
+### 修复
+- **WebDAV 点击路由断链（在线阅读不生效的根因）**：`OpdsFragment2.onClickWebDav` 原先只认已是
+  `remote://` 的 href，而普通 WebDAV 浏览（sardine 通道）返回的文件 href 是原始 http URL，导致
+  点击任何文件都弹"下载"确认框（与 Pro 解锁无关）。现于文件点击时将同服务器 http href 转换为
+  `remote://webdav/<id>/<path>`（`Uri.decode` 展开 %XX，不用 URLDecoder 以免 "+" 被误空格），进
+  入统一的在线打开/下载路由；无法归属已知服务器时回退旧行为。
+- **EPUB 远程打开页数为 0（native 缺陷）**：`Builder/jni/libmupdf-librera.c` 的
+  `getPageCount/getPageCountProgressive` 在 `fz_save_accelerator(doc->accel)` 时，流式打开无
+  accelerator 路径（accel==NULL）会抛 "no output to write to"，被 `fz_catch` 吞掉并把**已成功的
+  页数清零**，进而 `DocumentModel.retrievePagesInfo` 返回 null → `initPages` NPE
+  （"Attempt to get length of null array"）→ 弹"无法在线打开"。现两处 `fz_save_accelerator` 调用
+  增加 `if (doc->accel)` 守卫，并新增 fz warning/error 回调与 catch 内 `fz_caught_message`
+  REMOTE 日志（4 ABI 增量重编，产物同步 prebuilt）。实测 WebDAV/SFTP 的 EPUB 在线打开正常
+  （doc-open 269ms，渐进排版 175→331 页）。
+- **Pro 卡片购买弹窗崩溃**：`BillingManager` 原用 androidx `AlertDialog`，而 MainTabs2 主题非
+  AppCompat，从"软件说明"弹窗点"升级 Pro"直接崩溃（IllegalStateException: Theme.AppCompat）。
+  改为框架 `android.app.AlertDialog`。
+- **SFTP 私钥格式兼容**：`SftpClient.connect` 按文件头自动选择 KeyProvider——
+  `-----BEGIN OPENSSH PRIVATE KEY-----` 用 `OpenSSHKeyFile`，其余（PKCS#1/PKCS#8 PEM）用
+  `PKCS8KeyFile`；另注意 OpenSSH 8.8+ 服务器默认禁用 ssh-rsa，RSA 私钥将无法用于认证，
+  推荐用户使用 ECDSA/Ed25519（测试用 ECDSA P-256 PKCS#8 实测通过）。
+- `RemoteBookOpener.downloadAndOpen/fetchToCacheAndOpen` 的会话关闭由 `closeSession`（对
+  `open()` 直开的会话是空操作，导致连接泄漏）改为直接 `session.close()`。
+
+### 在线阅读行为修正
+- 点击行为完全由"在线阅读优先"开关决定：开=在线缓存阅读（直开组真流式、其余格式
+  `fetchToCacheAndOpen` 经分块缓存整本取回应用缓存目录 `Remote/books/<sha256>.<ext>` 后打开，
+  不进用户可见下载文件夹，versionTag 未变重开零网络）；关=下载后阅读；未购买 Pro 时开关
+  锁死为关（点击直接下载）。
+- 远程书解码失败（DRM/损坏等）时在阅读器内弹"无法在线打开/下载后打开"兜底窗
+  （`ViewerActivityController` 错误分支 + REMOTE 堆栈日志），替代通用错误框。
+
+### Pro 体验
+- **Pro 卡片从设置页移入"软件说明"**（`about_section.xml`，设置页"关于软件"行与抽屉 About
+  共用）；购买/长按已激活模拟退款/恢复/管理逻辑迁入 `AboutSectionBinder`，购买回调即时刷新
+  卡片；设置页移除原卡片。
+- **Pro 功能锁图标**：新增 `drawable/ic_pro_lock.xml` 与 `PrefFragment2.applyProLock(TextView)`；
+  接入设置页 WebDAV/AI/在线阅读/在线阅读缓存 4 行（刷新方法内，且补进 `onResume` 刷新）、
+  BrowseFragment2 网络页 WebDAV/SMB/SFTP 区块标题（`applyHeaderProLock`）、选中文本弹窗
+  "发送给 AI"标签；未解锁置灰+锁，解锁后消失。AI 其余入口为菜单项，维持 toast 门控。
+
+### SMB/SFTP 配置增强
+- `AddRemoteDialog` 新增"测试连接"（保存前即可验证，结果内联显示"连接成功 (N)/认证失败/
+  连接失败"）与"浏览目录"（远程起始目录选择器 `RemoteDirPicker`：SMB 先列共享再进目录，
+  SFTP 从登录主目录逐级导航，上一级/选择此目录）；`SmbClient/SftpClient` 增加
+  `list(RemoteServer, dir, password...)` 重载支持未持久化服务器（原保存前 probe 对新服务器
+  必定失败的隐患一并消除）。
+- `RemoteServer` 行格式追加第 10 字段 `startDir`（解析按 `it.length>9` 兼容旧行）；
+  `browseRoot()` 返回 `remote://<type>/<id>[/<startDir>]`，网络页从起始目录开始浏览。
+
+### 验证（华为畅享 20 Plus，Android 9 32 位 arm；MI9 未连接改用该设备）
+- 服务器起 wsgidav 临时 WebDAV + sshd（ECDSA PKCS8 key）实测：
+  WebDAV 点 EPUB 在线秒开（269ms/首屏 1012ms）不再弹下载；PDF 28MB 在线打开渲染正常；
+  TXT 25MB 点击后经缓存目录取回即开且下载文件夹无副本；断网（WiFi off）从最近阅读重开
+  EPUB 零网络渲染正常；SFTP 测试连接"连接成功 (33)"、目录选择器导航/回填/起始目录浏览生效、
+  SFTP EPUB 在线打开 1016ms；fdroid 包三网络分区置灰+锁图标、OPDS 可用。
+- Pro 未购买：设置行/网络区块锁图标+置灰，点击 toast，远程书点击直接下载。
+
+### 备注
+- native 变更影响 `prebuilt/native/mupdf-1.23.7` 4 ABI（增量重编 libmupdf-librera.c）。
+- 远程加密 PDF 密码语义核对：openStream 与 open 的 JNI 异常映射一致，无需改动。

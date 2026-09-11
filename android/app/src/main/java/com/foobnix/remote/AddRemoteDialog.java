@@ -2,18 +2,19 @@ package com.foobnix.remote;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.DialogInterface;
 import android.os.AsyncTask;
 import android.text.InputType;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.EditText;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import com.foobnix.android.utils.AsyncTasks;
 import com.foobnix.android.utils.Keyboards;
 import com.foobnix.android.utils.TxtUtils;
 import com.foobnix.model.AppProfile;
+import com.foobnix.pdf.info.AppsConfig;
 import com.foobnix.pdf.info.R;
 import com.foobnix.pdf.info.view.MyProgressBar;
 import com.foobnix.ui2.fragment.PrefFragment2;
@@ -22,16 +23,16 @@ import com.foobnix.webdav.WebDavCredentials;
 import java.util.List;
 
 /**
- * Add / edit an SMB or SFTP server. The connection is verified with a root
- * directory listing on save; when the check fails the user can still
- * force-add (same UX as the WebDAV dialog).
+ * Add / edit an SMB or SFTP server. A dedicated 测试连接 button verifies the
+ * connection (works before the server is saved), and 浏览目录 opens a remote
+ * folder picker that fills the share / start-directory fields.
  */
 public class AddRemoteDialog {
 
     public static void showDialog(final Activity a, final String type, final Runnable onRefresh,
                                   final RemoteServer edit) {
         // PRO feature gate (same policy as WebDAV servers)
-        if (!com.foobnix.pdf.info.AppsConfig.isProFeaturesEnabled()) {
+        if (!AppsConfig.isProFeaturesEnabled()) {
             PrefFragment2.proLockedToast(a);
             return;
         }
@@ -50,6 +51,10 @@ public class AddRemoteDialog {
         final EditText password = dialog.findViewById(R.id.password);
         final EditText keyPath = dialog.findViewById(R.id.keyPath);
         final EditText keyPass = dialog.findViewById(R.id.keyPass);
+        final EditText startDir = dialog.findViewById(R.id.startDir);
+        final TextView testBtn = dialog.findViewById(R.id.remoteTestBtn);
+        final TextView browseBtn = dialog.findViewById(R.id.remoteBrowseBtn);
+        final TextView testResult = dialog.findViewById(R.id.remoteTestResult);
         final MyProgressBar progress = dialog.findViewById(R.id.MyProgressBarAddRemote);
 
         password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
@@ -69,6 +74,7 @@ public class AddRemoteDialog {
             domain.setText(edit.domain);
             login.setText(edit.user);
             keyPath.setText(edit.keyPath);
+            startDir.setText(edit.startDir);
             if (isSftp && TxtUtils.isNotEmpty(edit.keyPath)) {
                 String[] kp = WebDavCredentials.load(a, RemoteStore.keyPassKey(edit.id));
                 if (kp != null) {
@@ -86,90 +92,112 @@ public class AddRemoteDialog {
 
         builder.setView(dialog);
         builder.setTitle(isSftp ? R.string.remote_add_sftp : R.string.remote_add_smb);
-        builder.setPositiveButton(R.string.add, null);
+        builder.setPositiveButton(R.string.add, (d, id) -> {
+            RemoteServer srv = buildServer(type, edit, isSftp, name, host, port, share, domain,
+                    login, keyPath, startDir);
+            if (srv == null) {
+                Toast.makeText(a, R.string.incorrect_value, Toast.LENGTH_SHORT).show();
+                return;
+            }
+            save(a, srv, isSftp, password, keyPass, onRefresh, (AlertDialog) d);
+        });
         builder.setNegativeButton(R.string.close, (d, id) -> Keyboards.close(a));
 
         final AlertDialog infoDialog = builder.create();
         infoDialog.show();
 
-        final boolean[] force = {false};
-        infoDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
-            AsyncTask asyncTask;
-
-            @Override
-            public void onClick(View v) {
-                final String hostText = host.getText().toString().trim();
-                final String title = name.getText().toString().trim();
-                if (TxtUtils.isEmpty(hostText)) {
-                    Toast.makeText(a, R.string.incorrect_value, Toast.LENGTH_SHORT).show();
-                    return;
-                }
-                int portNumber;
-                try {
-                    portNumber = Integer.parseInt(port.getText().toString().trim());
-                } catch (Exception e) {
-                    portNumber = isSftp ? 22 : 445;
-                }
-                final RemoteServer srv = edit == null ? new RemoteServer(type, title, hostText, portNumber) : edit;
-                srv.title = TxtUtils.isNotEmpty(title) ? title : hostText;
-                srv.host = hostText;
-                srv.port = portNumber;
-                srv.user = login.getText().toString().trim();
-                srv.share = isSftp ? (edit == null ? "" : edit.share) : share.getText().toString().trim();
-                srv.domain = isSftp ? (edit == null ? "" : edit.domain) : domain.getText().toString().trim();
-                srv.keyPath = isSftp ? keyPath.getText().toString().trim() : "";
-                srv.trustAll = true;
-
-                if (force[0]) {
-                    save(a, srv, type, isSftp, password, keyPass, onRefresh, infoDialog);
-                    return;
-                }
-                if (AsyncTasks.isRunning(asyncTask)) {
-                    AsyncTasks.toastPleaseWait(a);
-                    return;
-                }
-                progress.setVisibility(View.VISIBLE);
-                final int portFinal = portNumber;
-                asyncTask = new AsyncTask() {
-                    @Override
-                    protected Object doInBackground(Object[] params) {
-                        RemoteServer probe = new RemoteServer(type, srv.title, hostText, portFinal);
-                        probe.user = srv.user;
-                        probe.share = srv.share;
-                        probe.domain = srv.domain;
-                        probe.keyPath = srv.keyPath;
-                        WebDavCredentials.save(a, RemoteStore.credentialsKey(probe.id), srv.user,
-                                password.getText().toString());
-                        if (isSftp) {
-                            WebDavCredentials.save(a, RemoteStore.keyPassKey(probe.id), "", keyPass.getText().toString());
-                        }
-                        List res = isSftp
-                                ? SftpClient.list(RemoteBook.browseRoot(type, probe.id))
-                                : SmbClient.list(RemoteBook.browseRoot(type, probe.id));
-                        WebDavCredentials.clear(a, RemoteStore.credentialsKey(probe.id));
-                        WebDavCredentials.clear(a, RemoteStore.keyPassKey(probe.id));
-                        return res;
-                    }
-
-                    @Override
-                    protected void onPostExecute(Object result) {
-                        progress.setVisibility(View.GONE);
-                        if (result != null) {
-                            save(a, srv, type, isSftp, password, keyPass, onRefresh, infoDialog);
-                        } else {
-                            force[0] = true;
-                            infoDialog.getButton(AlertDialog.BUTTON_POSITIVE).setText(R.string.add_anyway);
-                            Toast.makeText(a, "auth".equals(isSftp ? SftpClient.lastError : SmbClient.lastError)
-                                    ? R.string.webdav_auth_failed
-                                    : R.string.webdav_connect_failed, Toast.LENGTH_LONG).show();
-                        }
-                    }
-                }.execute();
+        // 测试连接: verifies host/port/credentials before the server is saved
+        final AsyncTask[] testTask = new AsyncTask[1];
+        testBtn.setOnClickListener(v -> {
+            final RemoteServer srv = buildServer(type, edit, isSftp, name, host, port, share,
+                    domain, login, keyPath, startDir);
+            if (srv == null) {
+                Toast.makeText(a, R.string.incorrect_value, Toast.LENGTH_SHORT).show();
+                return;
             }
+            if (testTask[0] != null && AsyncTasks.isRunning(testTask[0])) {
+                AsyncTasks.toastPleaseWait(a);
+                return;
+            }
+            progress.setVisibility(View.VISIBLE);
+            testResult.setVisibility(View.GONE);
+            final String passwordText = password.getText().toString();
+            final String keyPassText = keyPass.getText().toString();
+            testTask[0] = new AsyncTask() {
+                List res;
+
+                @Override
+                protected Object doInBackground(Object[] params) {
+                    // "/" = share root (SMB, share empty → share list) / home (SFTP)
+                    res = isSftp ? SftpClient.list(srv, "/", passwordText, keyPassText)
+                            : SmbClient.list(srv, "/", passwordText);
+                    return null;
+                }
+
+                @Override
+                protected void onPostExecute(Object o) {
+                    progress.setVisibility(View.GONE);
+                    testResult.setVisibility(View.VISIBLE);
+                    if (res != null) {
+                        testResult.setText(a.getString(R.string.remote_test_ok) + " (" + res.size() + ")");
+                    } else {
+                        boolean auth = "auth".equals(isSftp ? SftpClient.lastError : SmbClient.lastError);
+                        testResult.setText(auth ? a.getString(R.string.webdav_auth_failed)
+                                : a.getString(R.string.webdav_connect_failed));
+                    }
+                }
+            };
+            testTask[0].execute();
+        });
+
+        // 浏览目录: pick a start folder (SMB: share list → folders; SFTP: home)
+        browseBtn.setOnClickListener(v -> {
+            final RemoteServer srv = buildServer(type, edit, isSftp, name, host, port, share,
+                    domain, login, keyPath, startDir);
+            if (srv == null) {
+                Toast.makeText(a, R.string.incorrect_value, Toast.LENGTH_SHORT).show();
+                return;
+            }
+            RemoteDirPicker.show(a, type, srv, password.getText().toString(),
+                    keyPass.getText().toString(), (pickedShare, pickedDir) -> a.runOnUiThread(() -> {
+                        if (!isSftp && TxtUtils.isNotEmpty(pickedShare)) {
+                            share.setText(pickedShare);
+                        }
+                        startDir.setText(pickedDir == null ? "" : pickedDir);
+                    }));
         });
     }
 
-    private static void save(Activity a, RemoteServer srv, String type, boolean isSftp,
+    /** Builds a transient RemoteServer from the dialog fields; null on invalid host. */
+    private static RemoteServer buildServer(String type, RemoteServer edit, boolean isSftp,
+                                            EditText name, EditText host, EditText port, EditText share,
+                                            EditText domain, EditText login, EditText keyPath,
+                                            EditText startDir) {
+        final String hostText = host.getText().toString().trim();
+        if (TxtUtils.isEmpty(hostText)) {
+            return null;
+        }
+        final String title = name.getText().toString().trim();
+        int portNumber;
+        try {
+            portNumber = Integer.parseInt(port.getText().toString().trim());
+        } catch (Exception e) {
+            portNumber = RemoteBook.TYPE_SFTP.equals(type) ? 22 : 445;
+        }
+        final RemoteServer srv = edit == null ? new RemoteServer(type, title, hostText, portNumber) : edit;
+        srv.title = TxtUtils.isNotEmpty(title) ? title : hostText;
+        srv.host = hostText;
+        srv.port = portNumber;
+        srv.user = login.getText().toString().trim();
+        srv.share = isSftp ? (edit == null ? "" : edit.share) : share.getText().toString().trim();
+        srv.domain = isSftp ? (edit == null ? "" : edit.domain) : domain.getText().toString().trim();
+        srv.keyPath = isSftp ? keyPath.getText().toString().trim() : "";
+        srv.startDir = startDir.getText().toString().trim();
+        srv.trustAll = true;
+        return srv;
+    }
+
+    private static void save(Activity a, RemoteServer srv, boolean isSftp,
                              EditText password, EditText keyPass, Runnable onRefresh, AlertDialog dialog) {
         if (srv.appState != null) {
             // edit mode: replace the old persisted line

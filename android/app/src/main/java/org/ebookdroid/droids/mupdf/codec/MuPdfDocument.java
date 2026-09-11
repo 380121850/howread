@@ -287,7 +287,10 @@ public class MuPdfDocument extends AbstractCodecDocument {
 
     @Override public int getPageCount() {
         LOG.d("MuPdfDocument,getPageCount", getW(), getH(), BookCSS.get().fontSizeSp);
-        return getPageCountWithException(documentHandle, getW(), getH(), BookCSS.get().fontSizeSp);
+        final int r = getPageCountWithException(documentHandle, getW(), getH(), BookCSS.get().fontSizeSp);
+        android.util.Log.i("REMOTE", "getPageCount handle=" + documentHandle
+                + " w=" + getW() + " h=" + getH() + " -> " + r);
+        return r;
     }
 
     @Override public CodecPageInfo getUnifiedPageInfo() {
@@ -332,6 +335,8 @@ public class MuPdfDocument extends AbstractCodecDocument {
             // layout inside a single call.
             final int n = getPageCountProgressive(documentHandle, w, h, Dips.spToPx(size), Math.max(1, uptoPage));
             LOG.d("MuPdfDocument getPageCountProgressive", uptoPage, "->", n);
+            android.util.Log.i("REMOTE", "getPageCountProgressive handle=" + documentHandle
+                    + " w=" + w + " h=" + h + " upto=" + uptoPage + " -> " + n);
             return n;
         } finally {
             TempHolder.lock.unlock();

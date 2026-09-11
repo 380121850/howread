@@ -38,8 +38,32 @@ public class SmbClient {
                 lastError = "other";
                 return null;
             }
-            String dir = RemoteBook.getRemotePath(browseUrl);
-            CIFSContext base = smbContext(s);
+            List<WebDavItem> res = list(s, RemoteBook.getRemotePath(browseUrl), null);
+            if (res != null) {
+                for (WebDavItem it : res) {
+                    it.href = browseUrl + "/" + it.name;
+                }
+            }
+            return res;
+        } catch (Exception e) {
+            LOG.e(e);
+            classify(e);
+            return null;
+        }
+    }
+
+    /**
+     * Lists a server that may not be persisted yet (probe / directory picker):
+     * {@code dir} is the path inside the share ("/" = share root, with an
+     * empty share listing the share names). Password read from the store
+     * unless given explicitly.
+     */
+    public static List<WebDavItem> list(RemoteServer s, String dir, String password) {
+        lastError = "";
+        lastErrorWasAuth = false;
+        List<WebDavItem> items = new ArrayList<WebDavItem>();
+        try {
+            CIFSContext base = smbContext(s, password);
             String url = "smb://" + s.host + ":" + (s.port > 0 ? s.port : 445) + "/"
                     + (s.share.isEmpty() ? "" : s.share + "/")
                     + (dir.equals("/") ? "" : dir.substring(1) + (dir.endsWith("/") ? "" : "/"));
@@ -57,7 +81,7 @@ public class SmbClient {
                     it.name = it.name.substring(0, it.name.length() - 1);
                 }
                 it.size = k.length();
-                it.href = browseUrl + "/" + it.name;
+                it.href = "";
                 items.add(it);
             }
             sort(items);
@@ -70,6 +94,10 @@ public class SmbClient {
     }
 
     public static CIFSContext smbContext(RemoteServer s) throws CIFSException {
+        return smbContext(s, null);
+    }
+
+    public static CIFSContext smbContext(RemoteServer s, String password) throws CIFSException {
         Properties p = new Properties();
         p.setProperty("jcifs.smb.client.minVersion", "SMB210");
         p.setProperty("jcifs.smb.client.maxVersion", "SMB311");
@@ -80,10 +108,12 @@ public class SmbClient {
             // empty user/password = anonymous (guest) session
             return ctx.withCredentials(new NtlmPasswordAuthenticator("", "", ""));
         }
-        String[] creds = com.foobnix.webdav.WebDavCredentials.load(com.foobnix.LibreraApp.context,
-                RemoteStore.credentialsKey(s.id));
-        return ctx.withCredentials(new NtlmPasswordAuthenticator(s.domain, s.user,
-                creds == null ? "" : creds[1]));
+        if (password == null) {
+            String[] creds = com.foobnix.webdav.WebDavCredentials.load(com.foobnix.LibreraApp.context,
+                    RemoteStore.credentialsKey(s.id));
+            password = creds == null ? "" : creds[1];
+        }
+        return ctx.withCredentials(new NtlmPasswordAuthenticator(s.domain, s.user, password));
     }
 
     private static void classify(Throwable e) {

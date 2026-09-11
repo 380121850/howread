@@ -929,4 +929,13 @@
     <string name="remote_state_on">On</string>
     <string name="remote_port_hint">Port</string>
     <string name="remote_state_off">Off</string>
+    <string name="remote_test_connection">Test connection</string>
+    <string name="remote_browse_dir">Browse folders</string>
+    <string name="remote_test_ok">Connection OK</string>
+    <string name="remote_startdir_hint">Start folder (optional)</string>
+    <string name="remote_pick_dir_title">Choose start folder</string>
+    <string name="remote_pick_here">Choose this folder</string>
+    <string name="remote_up">Up</string>
+    <string name="remote_pick_shares">Shares — pick one</string>
+    <string name="remote_no_subdirs">No subfolders here</string>
 </resources>

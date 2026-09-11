@@ -1211,6 +1211,7 @@ import java.util.Map;
                     }
                 });
         PrefFragment2.alphaIfProLocked(header);
+        applyHeaderProLock(header);
         netSection.addView(header);
         for (final RemoteServer srv : RemoteStore.load(type)) {
             netSection.addView(netListItem(R.drawable.glyphicons_544_cloud, srv.title, new OnClickListener() {
@@ -1322,8 +1323,9 @@ import java.util.Map;
                 AddWebDavDialog.showDialog(a, rebuild, null);
             }
         });
-        // PRO 置灰：未解锁/fdroid 标题半透明，点击弹升级提示
+        // PRO 置灰：未解锁/fdroid 标题半透明 + 小锁图标，点击弹升级提示
         PrefFragment2.alphaIfProLocked(webdavHeader);
+        applyHeaderProLock(webdavHeader);
         netSection.addView(webdavHeader);
         for (final WebDavServer srv : WebDavStore.load()) {
             netSection.addView(netListItem(R.drawable.glyphicons_544_cloud, srv.title, new OnClickListener() {
@@ -1488,6 +1490,13 @@ import java.util.Map;
         Intent intent = new Intent(UIFragment.INTENT_TINT_CHANGE)//
                 .putExtra(MainTabs2.EXTRA_PAGE_NUMBER, UITab.getCurrentTabIndex(UITab.SearchFragment));//
         LocalBroadcastManager.getInstance(a).sendBroadcast(intent);
+    }
+
+    /** Pro 门控区块标题：未解锁时在标题旁显示小锁图标 */
+    private void applyHeaderProLock(View header) {
+        if (header instanceof LinearLayout && ((LinearLayout) header).getChildAt(0) instanceof TextView) {
+            PrefFragment2.applyProLock((TextView) ((LinearLayout) header).getChildAt(0));
+        }
     }
 
     /** Section header row: title on the left, an "add" link on the right. */

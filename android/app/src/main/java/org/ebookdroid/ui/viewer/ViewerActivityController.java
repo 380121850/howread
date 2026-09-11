@@ -859,8 +859,25 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                     askPassword(m_fileName, promptId);
 
                 } else if (result != null) {
-                    final String msg = result.getMessage();
-                    showErrorDlg(R.string.msg_unexpected_error, msg);
+                    if (com.foobnix.remote.RemoteBook.isRemotePath(m_fileName)) {
+                        android.util.Log.i("REMOTE", "remote decode failed: " + result, result);
+                        // remote book failed to decode (DRM / corrupt / engine
+                        // error): offer the download fallback instead of the
+                        // plain error dialog
+                        final android.app.AlertDialog fallback = new android.app.AlertDialog.Builder(getActivity())
+                                .setTitle(R.string.remote_open_failed)
+                                .setMessage(getActivity().getString(R.string.remote_open_failed_msg,
+                                        result.getMessage() == null ? "" : result.getMessage()))
+                                .setPositiveButton(R.string.remote_download_and_open, (d, w) ->
+                                        com.foobnix.remote.RemoteBookOpener.downloadAndOpen(getActivity(), m_fileName, 0))
+                                .setNegativeButton(android.R.string.cancel, null)
+                                .create();
+                        fallback.setOnDismissListener(d -> closeActivity(null));
+                        fallback.show();
+                    } else {
+                        final String msg = result.getMessage();
+                        showErrorDlg(R.string.msg_unexpected_error, msg);
+                    }
                 }
             } catch (final Throwable th) {
                 LOG.e(th);

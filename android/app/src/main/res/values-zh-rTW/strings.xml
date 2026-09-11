@@ -752,4 +752,13 @@
     <string name="remote_domain_hint">網域/工作群組（可選）</string>
     <string name="remote_keypath_hint">私鑰檔案路徑（可選）</string>
     <string name="remote_keypass_hint">私鑰通關密語（可選）</string>
+    <string name="remote_test_connection">測試連線</string>
+    <string name="remote_browse_dir">瀏覽目錄</string>
+    <string name="remote_test_ok">連線成功</string>
+    <string name="remote_startdir_hint">起始目錄（可選）</string>
+    <string name="remote_pick_dir_title">選擇起始目錄</string>
+    <string name="remote_pick_here">選擇此目錄</string>
+    <string name="remote_up">上一級</string>
+    <string name="remote_pick_shares">共用清單（選擇一個共用）</string>
+    <string name="remote_no_subdirs">此處沒有子目錄</string>
 </resources>

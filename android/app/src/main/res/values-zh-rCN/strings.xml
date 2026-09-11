@@ -929,4 +929,13 @@
     <string name="remote_keypath_hint">私钥文件路径（可选）</string>
     <string name="remote_keypass_hint">私钥口令（可选）</string>
     <string name="remote_port_hint">端口</string>
+    <string name="remote_test_connection">测试连接</string>
+    <string name="remote_browse_dir">浏览目录</string>
+    <string name="remote_test_ok">连接成功</string>
+    <string name="remote_startdir_hint">起始目录（可选）</string>
+    <string name="remote_pick_dir_title">选择起始目录</string>
+    <string name="remote_pick_here">选择此目录</string>
+    <string name="remote_up">上一级</string>
+    <string name="remote_pick_shares">共享列表（选择一个共享）</string>
+    <string name="remote_no_subdirs">此处没有子目录</string>
 </resources>

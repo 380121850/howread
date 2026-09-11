@@ -3,7 +3,7 @@ package mobi.librera.libgoogle;
 import android.app.Activity;
 import android.widget.Toast;
 
-import androidx.appcompat.app.AlertDialog;
+import android.app.AlertDialog;
 
 import com.foobnix.LibreraApp;
 import com.foobnix.ai.IapStub;

@@ -82,6 +82,61 @@ public class AboutSectionBinder {
         TextView rateIt = root.findViewById(R.id.onRateIt);
         TxtUtils.underlineTextView(rateIt);
         rateIt.setOnClickListener(v -> Urls.rateIT(a));
+
+        bindProCard(a, root);
+    }
+
+    /**
+     * Pro card (moved here from the preferences page): purchase entry,
+     * long-press the active button = STUB refund, restore / manage links.
+     */
+    private static void bindProCard(final Activity a, View root) {
+        final TextView proUpgradeBtn = root.findViewById(R.id.proUpgradeBtn);
+        final TextView proUpgradeHint = root.findViewById(R.id.proUpgradeHint);
+        final View proActiveLinks = root.findViewById(R.id.proActiveLinks);
+        if (proUpgradeBtn == null) {
+            return;
+        }
+        final Runnable refresh = () -> refreshProCard(a, proUpgradeBtn, proUpgradeHint, proActiveLinks);
+        refresh.run();
+        proUpgradeBtn.setOnClickListener(v -> mobi.librera.libgoogle.BillingManager.launchPurchaseFlow(a, refresh));
+        proUpgradeBtn.setOnLongClickListener(v -> {
+            if (com.foobnix.pdf.info.AppsConfig.isProFlavor()
+                    && mobi.librera.libgoogle.BillingManager.isProUnlocked()) {
+                mobi.librera.libgoogle.BillingManager.simulateRefund(a, refresh);
+                return true;
+            }
+            return false;
+        });
+        View restore = root.findViewById(R.id.proRestoreBtn);
+        if (restore != null) {
+            restore.setOnClickListener(v -> mobi.librera.libgoogle.BillingManager.restorePurchases(a, refresh));
+        }
+        View manage = root.findViewById(R.id.proManageBtn);
+        if (manage != null) {
+            manage.setOnClickListener(v -> mobi.librera.libgoogle.BillingManager.manageEntitlements(a));
+        }
+    }
+
+    /** 未解锁态（升级按钮+提示）与已激活态（信息+恢复/管理链接）切换 */
+    private static void refreshProCard(Activity a, TextView btn, TextView hint, View activeLinks) {
+        if (mobi.librera.libgoogle.BillingManager.isProUnlocked()) {
+            btn.setText(R.string.pro_btn_active);
+            hint.setText(a.getString(R.string.pro_active_info,
+                    mobi.librera.libgoogle.BillingManager.getChannelText(a),
+                    mobi.librera.libgoogle.BillingManager.getPurchaseTimeText(a),
+                    mobi.librera.libgoogle.BillingManager.getOrderIdSuffix()));
+            if (activeLinks != null) {
+                activeLinks.setVisibility(View.VISIBLE);
+            }
+        } else {
+            btn.setText(com.foobnix.pdf.info.AppsConfig.isProFlavor() ? R.string.pro_upgrade_btn
+                                                                      : R.string.pro_upgrade_btn_fdroid);
+            hint.setText(R.string.pro_hint_locked);
+            if (activeLinks != null) {
+                activeLinks.setVisibility(View.GONE);
+            }
+        }
     }
 
     public static void showLicenses(final Activity a) {

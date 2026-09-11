@@ -27,19 +27,27 @@ import java.io.FileOutputStream;
  */
 public class RemoteBookOpener {
 
-    /** True when the book can be opened online right now (format + Pro). */
+    /**
+     * True when the click should go the online route. Behaviour is driven by
+     * the "online reading first" switch; with Pro not unlocked the switch is
+     * locked off, so clicks fall through to download.
+     */
     public static boolean canOnlineOpen(String remotePath) {
         return RemoteBook.isRemotePath(remotePath)
-                && RemoteBook.isDirectOpen(remotePath)
+                && AppState.get().remoteOnlineFirst
                 && AppsConfig.isProFeaturesEnabled();
     }
 
     /** The click handler used by the network pages. */
     public static void openOrDownload(final Activity a, final String remotePath, final long sizeHint) {
-        if (canOnlineOpen(remotePath) && AppState.get().remoteOnlineFirst) {
+        if (!canOnlineOpen(remotePath)) {
+            downloadAndOpen(a, remotePath, sizeHint);
+            return;
+        }
+        if (RemoteBook.isDirectOpen(remotePath)) {
             openOnline(a, remotePath, sizeHint);
         } else {
-            downloadAndOpen(a, remotePath, sizeHint);
+            fetchToCacheAndOpen(a, remotePath, sizeHint);
         }
     }
 
@@ -50,9 +58,9 @@ public class RemoteBookOpener {
             return;
         }
         if (!RemoteBook.isDirectOpen(remotePath)) {
-            // heavy formats (FB2/MOBI/DOC/...) need a local conversion pass:
-            // fetch the whole file first, then open the local copy
-            downloadAndOpen(a, remotePath, sizeHint);
+            // formats whose converters need a local file: fetch to the cache
+            // dir and open the local copy
+            fetchToCacheAndOpen(a, remotePath, sizeHint);
             return;
         }
         new AsyncTask() {
@@ -87,6 +95,108 @@ public class RemoteBookOpener {
                 ExtUtils.showDocumentWithoutDialog2(a, Uri.parse(remotePath), 0, null);
             }
         }.execute();
+    }
+
+    /**
+     * Formats whose converters need a real local file (FB2 / MOBI / DOC /
+     * DjVu / CBR / ...): fetch the whole book through the block cache into
+     * the app cache dir (never the user-visible downloads folder) and open
+     * the local copy. A cached copy whose remote versionTag still matches
+     * reopens with zero network.
+     */
+    public static void fetchToCacheAndOpen(final Activity a, final String remotePath, final long sizeHint) {
+        final File target = cacheBookFile(remotePath);
+        final File tagFile = new File(target.getPath() + ".tag");
+        new AsyncTask() {
+            RemoteBookSession session;
+            String error;
+            boolean done;
+
+            @Override
+            protected Object doInBackground(Object[] objects) {
+                try {
+                    session = RemoteSessionFactory.open(remotePath);
+                    if (isCopyCurrent(target, tagFile, session)) {
+                        done = true;
+                        return null;
+                    }
+                    target.getParentFile().mkdirs();
+                    FileOutputStream out = null;
+                    try {
+                        out = new FileOutputStream(target);
+                        CachingRemoteInputStream in = new CachingRemoteInputStream(session);
+                        byte[] buf = new byte[64 * 1024];
+                        int n;
+                        while ((n = in.read(buf)) > 0) {
+                            out.write(buf, 0, n);
+                        }
+                    } finally {
+                        if (out != null) {
+                            out.close();
+                        }
+                    }
+                    java.io.FileWriter tw = new java.io.FileWriter(tagFile);
+                    tw.write(session.versionTag == null ? "" : session.versionTag);
+                    tw.close();
+                    done = true;
+                } catch (Exception e) {
+                    LOG.e(e);
+                    error = e.getMessage();
+                    // remove a partial copy so a retry starts clean
+                    target.delete();
+                    tagFile.delete();
+                } finally {
+                    // open() bypasses the session pool: close directly
+                    if (session != null) {
+                        try {
+                            session.close();
+                        } catch (Exception ignore) {
+                            LOG.w(ignore);
+                        }
+                    }
+                }
+                return null;
+            }
+
+            @Override
+            protected void onPostExecute(Object o) {
+                if (!done) {
+                    Toast.makeText(a, TxtUtils.isNotEmpty(error) ? error
+                            : a.getString(R.string.remote_open_failed), Toast.LENGTH_LONG).show();
+                    return;
+                }
+                ensureMeta(remotePath, session == null ? 0 : session.size);
+                ExtUtils.openFile(a, AppDB.get().getOrCreate(target.getPath()));
+            }
+        }.execute();
+    }
+
+    /** True when the cache-dir copy matches the remote size and versionTag. */
+    private static boolean isCopyCurrent(File target, File tagFile, RemoteBookSession session) {
+        if (!target.isFile() || target.length() <= 0 || target.length() != session.size) {
+            return false;
+        }
+        try {
+            java.io.FileInputStream in = new java.io.FileInputStream(tagFile);
+            try {
+                byte[] b = new byte[(int) tagFile.length()];
+                in.read(b);
+                String cached = new String(b, "UTF-8");
+                String tag = session.versionTag == null ? "" : session.versionTag;
+                return cached.equals(tag);
+            } finally {
+                in.close();
+            }
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** Cache-dir copy of a fetched remote book: cachePath/Remote/books/<sha256>.<ext> */
+    private static File cacheBookFile(String remotePath) {
+        String ext = RemoteBook.getExt(remotePath);
+        String name = RemoteBook.cacheKey(remotePath) + (TxtUtils.isEmpty(ext) ? "" : "." + ext);
+        return new File(new File(new File(BookCSS.get().cachePath, "Remote"), "books"), name);
     }
 
     /**
@@ -134,7 +244,12 @@ public class RemoteBookOpener {
                         LOG.w(ignore);
                     }
                     if (session != null) {
-                        RemoteSessionFactory.closeSession(remotePath);
+                        // open() bypasses the session pool: close directly
+                        try {
+                            session.close();
+                        } catch (Exception ignore) {
+                            LOG.w(ignore);
+                        }
                     }
                 }
                 return null;

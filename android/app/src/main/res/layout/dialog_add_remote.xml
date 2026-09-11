@@ -72,6 +72,48 @@
         android:inputType="textPassword"
         android:singleLine="true" />
 
+    <EditText
+        android:id="@+id/startDir"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="@string/remote_startdir_hint"
+        android:singleLine="true" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/remoteTestBtn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:padding="8dp"
+            android:text="@string/remote_test_connection"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/remoteBrowseBtn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:padding="8dp"
+            android:text="@string/remote_browse_dir"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/remoteTestResult"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:textColor="#888888"
+        android:textSize="12sp"
+        android:visibility="gone" />
+
     <com.foobnix.pdf.info.view.MyProgressBar
         android:id="@+id/MyProgressBarAddRemote"
         android:layout_width="wrap_content"
