@@ -81,6 +81,14 @@
 8. ✅ 待续项已全部完成（2026-09-08 第二批，见下节）。
 
 
+### 阶段 15（2026-09-12）：在线书籍缓存阅读（安卓《在线书籍缓存阅读技术方案》移植，WebDAV 流式）✅ 已完成（0.9.0 / versionCode 38）
+
+1. ✅ **远程流式打开**（mupdf_napi.cpp）：自定义 fz_stream（next/seek 经块缓存供数）+ napi_threadsafe_function 双向桥（MuPDF 工作线程阻塞等 JS 取数）；openDocumentRemoteAsync 开文档即返回页数/可重排/加密/目录；docOpAsync 通用异步操作分发器 13 op（远程文档禁同步访问防 JS 自锁）；seek 镜像 seek_file 重置 rp/wp（修 fz_tell 负值 "cannot tell in file"）。
+2. ✅ **RemoteBook.ets**：remote://webdav/<serverId>/<url> URI；格式分级（直开 pdf/epub/cbz/xps/oxps、静默取回 txt/html/fb2/rtf、重格式确认下载 mobi 族/djvu/cbr/doc + MOBI DRM 头探测）；WebDAV Range 随机读源（Range 探测降级、ETag 版本戳、指数退避）；两级块缓存（内存 LRU 128 块/32MB + 磁盘 data.bin/blocks.bin/meta.json，256KB/1MB，版本变更失效）；P2 预取 + P3 小书整本续传；整本落地 Remote/books/；PROPFIND 递归扫描（任意命名空间前缀）；远程书目存储。
+3. ✅ **UI**：我的文件 WebDAV 文件行点击分流（在线优先/确认/下载）；远程书籍架（扫描 ⟳、云图标、大小、格式、缓存百分比徽标、长按删除）；偏好「在线阅读与缓存」组（3 开关 + 5 数值弹窗 + 用量 + 清空）；Reader remote:// 分支（加载遮罩、全操作异步化、批注编辑远程禁用提示）；库清理跳过远程书。
+4. ✅ **离线**：完全缓存的书零网络打开（openOffline 降级，服务器停机实测）；已缓存整本书重取回直接从缓存落地。
+5. ⏸ **待续**：SMB/SFTP 协议客户端（ArkTS 无 jcifs-ng/sshj 等价库）；OPDS 认证/分页；计费网络检测接入 wholeBookOnMetered；EPUB DRM 预探测。
+
 ### 阶段 14b（2026-09-09）：夜间/白天模式全 APP 生效修复（0.8.6 补丁）✅ 已完成
 
 1. ✅ **主界面明暗响应**（Index.ets）：新增 isDark()+11 个语义色助手（barColor/pageBg/cardBg/txtPri…inputBg）；顶栏/tabBar/分组条夜间切 #282b40；主界面硬编码浅色 sweep 348 行；抽屉 theme>0 分支统一 isDark（修正墨水主题误变暗）；夜切按钮按 isDark 取反（修 OLED 下点击无效）。

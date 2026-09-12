@@ -41,6 +41,14 @@ import bundleManager from '@ohos.bundle.bundleManager';
 import Want from '@ohos.app.ability.Want';
 import { BUILD_TIME } from '../model/BuildInfo';
 import { parseScanFormats } from '../model/LibrarySearch';
+import {
+  RemoteSession, WebDavFileSource, RemoteBookRec, DavListEntry, RemoteCacheSettings,
+  loadRemoteCacheSettings, buildRemoteUri, parseRemoteUri, serverIdOf, sha256Hex,
+  resolveWebDavServer, webdavListDir, basicAuthHeader,
+  fileExtOf, isDirectOpenExt, isSimpleFetchExt, isHeavyExt,
+  BlockCacheStore, cachedPercent, remoteCacheTotalBytes, clearRemoteCacheBook, clearRemoteCacheAll,
+  fetchWholeBookToCache, materializeBook, mobiIsEncrypted, upsertRemoteBook, removeRemoteBook, getRemoteBooks
+} from '../model/RemoteBook';
 
 /* Round 7: module-level resources & constants (Android PrefFragment2 parity) */
 const THEME_LABELS: Resource[] = [$r('app.string.set_theme_light'), $r('app.string.set_theme_dark'), $r('app.string.set_theme_oled'), $r('app.string.set_theme_ink')];
@@ -308,6 +316,22 @@ struct Index {
   @State syncTestOut: string = '';
   @State showSyncLog: boolean = false;
   @State syncLogs: SyncLogEntry[] = [];
+
+  /* ---- Round 8: online cache reading ---- */
+  /** Scanned remote books (Android RemoteScanner bookshelf) */
+  @State remoteBooks: RemoteBookRec[] = [];
+  @State remoteScanBusy: boolean = false;
+  /** cached percent per remote uri */
+  @State remotePercents: Record<string, number> = {};
+  /** remote whole-book fetch progress: -1 = idle */
+  @State remoteFetchName: string = '';
+  /** numeric remote pref dialog */
+  @State showRemoteNum: boolean = false;
+  @State remoteNumKey: string = '';
+  @State remoteNumValue: string = '';
+  @State remoteNumMin: number = 0;
+  @State remoteNumMax: number = 99999;
+  @State remoteCacheUsage: string = '';
 
   /* Round 6: resolve a string resource into a plain string */
   private L(r: Resource): string {
@@ -848,6 +872,8 @@ struct Index {
       console.info(`[Index] Library loaded: ${this.recentBooks.length} recent, ${this.starredBooks.length} starred`);
       /* Round 6: refresh the missing-files badge */
       this.missingCount = findMissingBooks(this.recentBooks).length;
+      /* Round 8: scanned remote books + cache usage */
+      this.loadRemoteBooks();
       /* Round 7: open the last book on launch (once, after the library is ready) */
       if (this.settings.openLastBook && !this.lastBookAutoOpened && this.recentBooks.length > 0) {
         this.lastBookAutoOpened = true;
@@ -1541,6 +1567,46 @@ struct Index {
           })
         this.buildExitConfirm()
       }
+      if (this.showRemoteNum) {
+        /* Round 8: numeric remote-cache pref dialog */
+        Column() {}
+          .width('100%').height('100%')
+          .backgroundColor('#66000000')
+          .onClick(() => {
+            this.showRemoteNum = false;
+          })
+        Column({ space: 12 }) {
+          Text('设置数值')
+            .fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
+          Text(this.remoteNumKey.startsWith('remote') ? this.remoteNumLabel(this.remoteNumKey) : this.remoteNumKey)
+            .fontSize(12).fontColor(this.txtSec())
+          TextInput({ text: this.remoteNumValue })
+            .fontSize(14).height(38).width('86%')
+            .type(InputType.NUMBER_DECIMAL)
+            .onChange((v: string) => {
+              this.remoteNumValue = v;
+            })
+          Row({ space: 12 }) {
+            Button('取消')
+              .fontSize(13).height(36).layoutWeight(1)
+              .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+              .onClick(() => {
+                this.showRemoteNum = false;
+              })
+            Button('确定')
+              .fontSize(13).height(36).layoutWeight(1)
+              .backgroundColor(this.thm()).fontColor(Color.White)
+              .onClick(() => {
+                this.confirmRemoteNum();
+              })
+          }
+          .width('86%')
+        }
+        .width('72%')
+        .padding(14)
+        .backgroundColor(this.cardBg())
+        .borderRadius(12)
+      }
       if (this.showLicenses) {
         Column() {}
           .width('100%').height('100%')
@@ -2003,6 +2069,333 @@ struct Index {
     this.webdavDownloading = '';
   }
 
+  // ---- Round 8: online cache reading (Android RemoteBookOpener) ----
+
+  private fmtBytes(n: number): string {
+    if (n >= 1024 * 1024 * 1024) {
+      return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+    }
+    if (n >= 1024 * 1024) {
+      return (n / 1024 / 1024).toFixed(1) + ' MB';
+    }
+    if (n >= 1024) {
+      return (n / 1024).toFixed(0) + ' KB';
+    }
+    return n + ' B';
+  }
+
+  /** Load the scanned remote-book shelf (+ cached percent per book). */
+  private async loadRemoteBooks(): Promise<void> {
+    const ctx = getContext(this);
+    this.remoteBooks = await getRemoteBooks(ctx);
+    const percents: Record<string, number> = {};
+    for (let i = 0; i < this.remoteBooks.length; i++) {
+      const rec: RemoteBookRec = this.remoteBooks[i];
+      try {
+        percents[rec.uri] = await cachedPercent(ctx, await sha256Hex(rec.uri));
+      } catch (e) {
+        percents[rec.uri] = 0;
+      }
+    }
+    this.remotePercents = percents;
+    const total: number = await remoteCacheTotalBytes(ctx);
+    this.remoteCacheUsage = this.fmtBytes(total);
+  }
+
+  /** Tap on a WebDAV file row: online-open (streaming) or download-and-open. */
+  private async remoteOpenOrDownload(fileName: string): Promise<void> {
+    if (this.webdavUrl.length === 0 || fileName.length === 0) {
+      return;
+    }
+    const ctx = getContext(this);
+    const ext: string = fileExtOf(fileName);
+    const settings = await loadRemoteCacheSettings(ctx);
+    const server: DavServer | undefined = this.davServers[this.davSelected];
+    if (server === undefined) {
+      this.webdavDownload(fileName);
+      return;
+    }
+    const fileUrl: string = this.webdavDirUrl() + encodeURIComponent(fileName);
+    const uri: string = buildRemoteUri('webdav', await serverIdOf(this.webdavUrl), fileUrl);
+    const source = new WebDavFileSource(fileUrl, server.user, server.password,
+      settings.retryCount, settings.retryIntervalMs);
+
+    /* heavy formats: confirm then whole-book download (Android confirmHeavyFetch) */
+    if (!settings.onlineFirst || !(isDirectOpenExt(ext) || isSimpleFetchExt(ext))) {
+      if (isHeavyExt(ext)) {
+        /* mobi family: DRM probe first (Android checkMobiDrmThenFetch) */
+        if (ext === 'mobi' || ext === 'azw' || ext === 'azw3' || ext === 'prc') {
+          try {
+            const head: ArrayBuffer = await source.readAt(0, 8192);
+            if (mobiIsEncrypted(head)) {
+              AlertDialog.show({
+                title: '受 DRM 保护',
+                message: '该文件受 DRM 权限保护，无法在线阅读。是否下载到本地后打开？',
+                primaryButton: {
+                  value: '取消',
+                  action: () => {}
+                },
+                secondaryButton: {
+                  value: '下载',
+                  action: () => {
+                    this.webdavDownload(fileName);
+                  }
+                }
+              });
+              return;
+            }
+          } catch (_e) { /* probe failed: continue to normal flow */ }
+        }
+        AlertDialog.show({
+          title: '整本下载',
+          message: `${fileName} 需要整本下载后才能打开，是否继续？`,
+          primaryButton: {
+            value: '取消',
+            action: () => {}
+          },
+          secondaryButton: {
+            value: '下载',
+            action: () => {
+              this.remoteFetchAndOpen(uri, fileUrl, fileName, server, settings, false);
+            }
+          }
+        });
+        return;
+      }
+      /* unknown/other formats: plain download */
+      this.webdavDownload(fileName);
+      return;
+    }
+
+    /* simple fetch formats (txt/html/fb2/rtf): silent download then open */
+    if (!isDirectOpenExt(ext)) {
+      this.remoteFetchAndOpen(uri, fileUrl, fileName, server, settings, false);
+      return;
+    }
+
+    /* direct-open formats: probe and stream (P0 first-open path) */
+    this.webdavStatus = '正在探测远程文件...';
+    const probe = await source.probe();
+    if (probe === null) {
+      this.webdavStatus = '无法读取远程文件';
+      return;
+    }
+    if (!probe.supportsRange) {
+      /* server without Range support: degrade to whole-book download */
+      this.remoteFetchAndOpen(uri, fileUrl, fileName, server, settings, true);
+      return;
+    }
+    const cacheKey: string = await sha256Hex(uri);
+    const meta = await BlockCacheStore.readMeta(ctx, cacheKey);
+    if (meta !== null && meta.versionTag !== probe.versionTag) {
+      /* remote file changed (Android versionChanged dialog) */
+      AlertDialog.show({
+        title: '文件已更新',
+        message: '远程文件已更新，是否清除旧缓存并重新加载？',
+        primaryButton: {
+          value: '取消',
+          action: () => {}
+        },
+        secondaryButton: {
+          value: '重新加载',
+          action: () => {
+            clearRemoteCacheBook(ctx, cacheKey);
+            this.remoteOpenOnline(fileName, uri);
+          }
+        }
+      });
+      return;
+    }
+    this.remoteOpenOnline(fileName, uri);
+  }
+
+  /** Register the book and jump into the streaming reader. */
+  private async remoteOpenOnline(fileName: string, uri: string): Promise<void> {
+    const ctx = getContext(this);
+    const book: RecentBook = {
+      path: uri,
+      title: fileName,
+      page: 0,
+      totalPages: 0,
+      lastRead: new Date().toISOString(),
+      star: false,
+      coverPath: '',
+      author: '',
+      tags: [],
+      series: '',
+      genre: '',
+      status: 0
+    };
+    await saveRecentBook(ctx, book);
+    await this.loadLibrary();
+    this.webdavStatus = `在线打开: ${fileName}`;
+    router.pushUrl({ url: 'components/Reader', params: { docPath: uri, title: fileName } });
+  }
+
+  /** Whole-book fetch through the block cache, then open the local copy. */
+  private async remoteFetchAndOpen(uri: string, fileUrl: string, fileName: string,
+    server: DavServer, settings: RemoteCacheSettings, silent: boolean): Promise<void> {
+    const ctx = getContext(this);
+    const source = new WebDavFileSource(fileUrl, server.user, server.password,
+      settings.retryCount, settings.retryIntervalMs);
+    const ext: string = fileExtOf(fileName);
+    const session = new RemoteSession(ctx, uri, await sha256Hex(uri), source, settings);
+    try {
+      this.remoteFetchName = fileName;
+      let path: string;
+      /* Round 8: fully-cached books materialize from the block cache only */
+      const cachedMeta = await BlockCacheStore.readMeta(ctx, session.cacheKey);
+      if (cachedMeta !== null && cachedMeta.fullyCached) {
+        await session.store.loadOrCreate(cachedMeta.size, cachedMeta.versionTag, cachedMeta.blockSize);
+        this.webdavProgress = 100;
+        this.webdavDownloading = fileName;
+        path = await materializeBook(session, ext);
+      } else {
+        const probe = await source.probe();
+        if (probe === null) {
+          this.webdavProgress = -1;
+          this.remoteFetchName = '';
+          this.webdavStatus = `下载失败: ${fileName}（无法连接）`;
+          promptAction.showToast({ message: '无法连接远程文件' });
+          return;
+        }
+        await session.store.loadOrCreate(probe.size, probe.versionTag,
+          isDirectOpenExt(ext) ? 1024 * 1024 : 256 * 1024);
+        path = await fetchWholeBookToCache(session, ext, (p: number) => {
+          this.webdavProgress = p;
+          this.webdavDownloading = fileName;
+        });
+      }
+      this.webdavProgress = -1;
+      this.remoteFetchName = '';
+      this.webdavStatus = `下载完成: ${fileName}`;
+      const book: RecentBook = {
+        path: path,
+        title: fileName,
+        page: 0,
+        totalPages: 0,
+        lastRead: new Date().toISOString(),
+        star: false,
+        coverPath: '',
+        author: '',
+        tags: [],
+        series: '',
+        genre: '',
+        status: 0
+      };
+      await saveRecentBook(ctx, book);
+      await this.loadLibrary();
+      router.pushUrl({ url: 'components/Reader', params: { docPath: path, title: fileName } });
+    } catch (e) {
+      this.webdavProgress = -1;
+      this.remoteFetchName = '';
+      const msg: string = e instanceof Error ? e.message : String(e);
+      this.webdavStatus = `下载失败: ${fileName} ${msg}`;
+      promptAction.showToast({ message: `下载失败：${msg}` });
+    } finally {
+      session.close();
+    }
+  }
+
+  /** Recursively scan a WebDAV server into the remote-book shelf. */
+  private async remoteScanServer(s: DavServer): Promise<void> {
+    if (this.remoteScanBusy) {
+      return;
+    }
+    this.remoteScanBusy = true;
+    promptAction.showToast({ message: '正在扫描远程目录...' });
+    try {
+      const ctx = getContext(this);
+      let added = 0;
+      const queue: string[] = [s.url];
+      let depth = 0;
+      let dirsVisited = 0;
+      while (queue.length > 0 && depth < 5 && dirsVisited < 200) {
+        const level: string[] = queue.splice(0, queue.length);
+        depth++;
+        for (let i = 0; i < level.length; i++) {
+          const entries: DavListEntry[] | null = await webdavListDir(level[i], s.user, s.password);
+          if (entries === null) {
+            console.warn(`[Index] remote scan listing failed: ${level[i]}`);
+            continue;
+          }
+          dirsVisited++;
+          for (let k = 0; k < entries.length; k++) {
+            const e: DavListEntry = entries[k];
+            if (e.isDir) {
+              const base: string = level[i].replace(/\/+$/, '');
+              queue.push(base + '/' + encodeURIComponent(e.name) + '/');
+              continue;
+            }
+            const ext: string = fileExtOf(e.name);
+            if (!isDirectOpenExt(ext) && !isSimpleFetchExt(ext) && !isHeavyExt(ext)) {
+              continue;
+            }
+            if (e.size <= 0) {
+              continue;
+            }
+            const fileUrl: string = level[i].replace(/\/+$/, '') + '/' + encodeURIComponent(e.name);
+            const uri: string = buildRemoteUri('webdav', await serverIdOf(s.url), fileUrl);
+            await upsertRemoteBook(ctx, {
+              uri: uri,
+              title: e.name,
+              size: e.size,
+              ext: ext,
+              serverName: s.name,
+              addedAt: new Date().toISOString()
+            });
+            added++;
+          }
+        }
+      }
+      await this.loadRemoteBooks();
+      promptAction.showToast({ message: `扫描完成：发现 ${added} 本书` });
+    } finally {
+      this.remoteScanBusy = false;
+    }
+  }
+
+  /** Open a scanned remote book (same tiering as tapping in the browse panel). */
+  private async remoteOpenRec(rec: RemoteBookRec): Promise<void> {
+    const parts = parseRemoteUri(rec.uri);
+    if (parts === null) {
+      return;
+    }
+    const ctx = getContext(this);
+    const settings = await loadRemoteCacheSettings(ctx);
+    const server = await resolveWebDavServer(ctx, parts.serverId);
+    if (server === null) {
+      promptAction.showToast({ message: '远程服务器配置不存在，请重新添加' });
+      return;
+    }
+    if (settings.onlineFirst && isDirectOpenExt(rec.ext)) {
+      this.remoteOpenOnline(rec.title, rec.uri);
+      return;
+    }
+    this.remoteFetchAndOpen(rec.uri, parts.fileUrl, rec.title, server, settings, false);
+  }
+
+  /** Long-press on a scanned remote book: delete record + cached blocks. */
+  private remoteRemoveRec(rec: RemoteBookRec): void {
+    AlertDialog.show({
+      title: '删除远程书籍',
+      message: `移除《${rec.title}》的记录与已缓存内容？\n不会删除服务器上的文件。`,
+      primaryButton: {
+        value: '取消',
+        action: () => {}
+      },
+      secondaryButton: {
+        value: '删除',
+        action: () => {
+          removeRemoteBook(getContext(this), rec.uri).then(() => {
+            this.loadRemoteBooks();
+            promptAction.showToast({ message: '已移除' });
+          });
+        }
+      }
+    });
+  }
+
   // ---- Phase 5: OPDS 网上书库 ----
 
   /** Open an OPDS feed URL (pushed onto the nav stack). */
@@ -2165,6 +2558,10 @@ struct Index {
                   .onClick(() => { this.webdavDownload(file); })
               }
               .width('90%').padding({ top: 6, bottom: 6 })
+              .onClick(() => {
+                /* Round 8: online-open first (streaming), download fallback by tier */
+                this.remoteOpenOrDownload(file);
+              })
             }
           }, (file: string) => file)
         }
@@ -4855,6 +5252,10 @@ struct Index {
                   })
               }
               .width('90%').padding({ top: 6, bottom: 6 })
+              .onClick(() => {
+                /* Round 8: online-open first (streaming), download fallback by tier */
+                this.remoteOpenOrDownload(file);
+              })
             }
           }, (file: string) => file)
         }
@@ -5371,7 +5772,57 @@ struct Index {
     })
   }
 
-  /** hr05: WebDAV server row with edit/delete; tap = connect + open cloud panel. */
+  /** Round 8: scanned remote-book row (cloud icon + size + cached % badge). */
+  @Builder
+  remoteBookRow(rec: RemoteBookRec) {
+    Row({ space: 12 }) {
+      Image($r('app.media.ic_cloud'))
+        .width(24).height(24).fillColor(this.isDirectOpenExtCached(rec.ext) ? this.thm() : this.txtFaint())
+      Column({ space: 2 }) {
+        Text(rec.title)
+          .fontSize(15).fontColor(this.txtSec()).maxLines(1)
+        Row({ space: 6 }) {
+          Text(rec.serverName.length > 0 ? rec.serverName : 'WebDAV')
+            .fontSize(11).fontColor(this.txtFaint())
+          Text(this.fmtBytes(rec.size))
+            .fontSize(11).fontColor(this.txtFaint())
+          Text(rec.ext.toUpperCase())
+            .fontSize(10).fontColor(this.thm())
+        }
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+      Text(`${this.remotePercentOf(rec.uri)}%`)
+        .fontSize(11).fontColor(this.thm())
+        .padding({ left: 8, right: 8, top: 2, bottom: 2 })
+        .borderRadius(10)
+        .backgroundColor(this.chipBg())
+    }
+    .width('94%')
+    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+    .backgroundColor(this.cardBg())
+    .borderRadius(3)
+    .margin({ bottom: 8 })
+    .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
+    .onClick(() => {
+      this.remoteOpenRec(rec);
+    })
+    .gesture(LongPressGesture().onAction(() => {
+      this.remoteRemoveRec(rec);
+    }))
+  }
+
+  private remotePercentOf(uri: string): number {
+    const v: number | undefined = this.remotePercents[uri];
+    return v !== undefined ? v : 0;
+  }
+
+  /** Direct-open formats stream instantly (brand color); heavy ones need download. */
+  private isDirectOpenExtCached(ext: string): boolean {
+    return isDirectOpenExt(ext);
+  }
+
+  /** hr05: WebDAV server row with edit/delete/scan; tap = connect + open cloud panel. */
   @Builder
   browseDavRow(s: DavServer, idx: number) {
     Row({ space: 12 }) {
@@ -5385,6 +5836,12 @@ struct Index {
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
+      Image($r('app.media.ic_refresh'))
+        .width(20).height(20).fillColor(this.thm())
+        .onClick(() => {
+          /* Round 8: scan this server into the remote-book shelf */
+          this.remoteScanServer(s);
+        })
       Image($r('app.media.ic_pencil'))
         .width(20).height(20).fillColor(this.thm())
         .onClick(() => {
@@ -5619,6 +6076,19 @@ struct Index {
         ForEach(this.davServers, (s: DavServer, idx: number) => {
           this.browseDavRow(s, idx)
         }, (s: DavServer) => s.url)
+
+        Divider().color(this.divColor()).margin({ top: 8 })
+
+        /* Round 8: remote books (Android RemoteScanner bookshelf) */
+        this.browseSectionHeader('远程书籍', 0)
+        if (this.remoteBooks.length === 0) {
+          Text('暂无远程书籍，可在 WebDAV 服务器行点 ⚙ 扫描，或浏览目录在线打开')
+            .fontSize(12).fontColor(this.txtFaint())
+            .width('94%').padding({ left: 12, bottom: 8 })
+        }
+        ForEach(this.remoteBooks, (rec: RemoteBookRec) => {
+          this.remoteBookRow(rec)
+        }, (rec: RemoteBookRec) => rec.uri)
 
         Divider().color(this.divColor()).margin({ top: 8 })
 
@@ -5911,6 +6381,27 @@ struct Index {
     }
     .width('100%')
     .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+  }
+
+  /** Round 8: numeric pref row (tap → input dialog, Android RemoteCacheDialog fields). */
+  @Builder
+  settingsNumRow(label: string, key: string, minV: number, maxV: number) {
+    Row() {
+      Text(label)
+        .fontSize(14).fontColor(this.accentTextColor() ? this.acc() : this.txtPri()).layoutWeight(1)
+      Text(`${this.numPref(key)}`)
+        .fontSize(14).fontColor(this.thm())
+        .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+    .onClick(() => {
+      this.remoteNumKey = key;
+      this.remoteNumMin = minV;
+      this.remoteNumMax = maxV;
+      this.remoteNumValue = `${this.numPref(key)}`;
+      this.showRemoteNum = true;
+    })
   }
 
   /** Round 7: color palette row (Android colorsLine + custom picker).
@@ -6494,6 +6985,46 @@ struct Index {
           .alignItems(HorizontalAlign.Start)
         }
 
+        /* ================= 4b. 在线阅读与缓存 (Round 8, Android RemoteCacheDialog) ================= */
+        this.settingsGroupBar('在线阅读与缓存', 'remote')
+        if (this.groupExp['remote'] === true) {
+          this.settingsToggleRow('在线优先阅读', 'remoteOnlineFirst', '支持格式直接流式打开')
+          this.settingsToggleRow('仅 WiFi 预取', 'remotePrefetchWifiOnly', '')
+          this.settingsToggleRow('计费网络允许整本缓存', 'remoteWholeBookOnMetered', '')
+          this.settingsNumRow('缓存上限 (MB)', 'remoteCacheMaxMB', 50, 4096)
+          this.settingsNumRow('整本缓存阈值 (MB)', 'remoteWholeBookThresholdMB', 0, 200)
+          this.settingsNumRow('重试次数', 'remoteRetryCount', 0, 10)
+          this.settingsNumRow('重试间隔 (ms)', 'remoteRetryIntervalMs', 100, 30000)
+          this.settingsNumRow('缓存过期 (天)', 'remoteCacheExpireDays', 1, 365)
+          Row() {
+            Text(`缓存用量：${this.remoteCacheUsage}`)
+              .fontSize(14).fontColor(this.txtSec()).layoutWeight(1)
+            Text('清空缓存')
+              .fontSize(13).fontColor('#e57373')
+              .onClick(() => {
+                AlertDialog.show({
+                  title: '清空远程缓存',
+                  message: '删除所有远程书籍的缓存块？已下载到本地的书不受影响。',
+                  primaryButton: {
+                    value: '取消',
+                    action: () => {}
+                  },
+                  secondaryButton: {
+                    value: '清空',
+                    action: () => {
+                      clearRemoteCacheAll(getContext(this)).then(() => {
+                        this.loadRemoteBooks();
+                        promptAction.showToast({ message: '已清空远程缓存' });
+                      });
+                    }
+                  }
+                });
+              })
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+        }
+
         /* ================= 4. UI 配置 (Android section4) ================= */
         this.settingsGroupBar(this.L($r('app.string.set_ui')), 'ui')
         if (this.groupExp['ui'] === true) {
@@ -6787,9 +7318,82 @@ struct Index {
       this.settings.showPrefsInDrawer = v;
     } else if (key === 'showTopBarInfo') {
       this.settings.showTopBarInfo = v;
+    } else if (key === 'remoteOnlineFirst') {
+      this.settings.remoteOnlineFirst = v;
+    } else if (key === 'remotePrefetchWifiOnly') {
+      this.settings.remotePrefetchWifiOnly = v;
+    } else if (key === 'remoteWholeBookOnMetered') {
+      this.settings.remoteWholeBookOnMetered = v;
     }
     this.saveNow();
     console.info(`[Index] Pref ${key} = ${v}`);
+  }
+
+  /** Round 8: read a numeric remote pref (used by settingsNumRow). */
+  private numPref(key: string): number {
+    if (key === 'remoteCacheMaxMB') {
+      return this.settings.remoteCacheMaxMB;
+    }
+    if (key === 'remoteWholeBookThresholdMB') {
+      return this.settings.remoteWholeBookThresholdMB;
+    }
+    if (key === 'remoteRetryCount') {
+      return this.settings.remoteRetryCount;
+    }
+    if (key === 'remoteRetryIntervalMs') {
+      return this.settings.remoteRetryIntervalMs;
+    }
+    if (key === 'remoteCacheExpireDays') {
+      return this.settings.remoteCacheExpireDays;
+    }
+    return 0;
+  }
+
+  /** Round 8: apply a numeric remote pref from the input dialog. */
+  private applyNumPref(key: string, v: number): void {
+    if (key === 'remoteCacheMaxMB') {
+      this.settings.remoteCacheMaxMB = v;
+    } else if (key === 'remoteWholeBookThresholdMB') {
+      this.settings.remoteWholeBookThresholdMB = v;
+    } else if (key === 'remoteRetryCount') {
+      this.settings.remoteRetryCount = v;
+    } else if (key === 'remoteRetryIntervalMs') {
+      this.settings.remoteRetryIntervalMs = v;
+    } else if (key === 'remoteCacheExpireDays') {
+      this.settings.remoteCacheExpireDays = v;
+    }
+    this.saveNow();
+  }
+
+  /** Round 8: confirm the numeric pref dialog. */
+  private confirmRemoteNum(): void {
+    const v: number = parseInt(this.remoteNumValue, 10);
+    if (isNaN(v) || v < this.remoteNumMin || v > this.remoteNumMax) {
+      promptAction.showToast({ message: `请输入 ${this.remoteNumMin} - ${this.remoteNumMax} 之间的数值` });
+      return;
+    }
+    this.applyNumPref(this.remoteNumKey, v);
+    this.showRemoteNum = false;
+  }
+
+  /** Round 8: Chinese label for a remote numeric pref key. */
+  private remoteNumLabel(key: string): string {
+    if (key === 'remoteCacheMaxMB') {
+      return '磁盘缓存总上限 (MB)';
+    }
+    if (key === 'remoteWholeBookThresholdMB') {
+      return '小书整本缓存阈值 (MB，0=关闭)';
+    }
+    if (key === 'remoteRetryCount') {
+      return '网络失败重试次数';
+    }
+    if (key === 'remoteRetryIntervalMs') {
+      return '重试初始间隔 (ms，指数退避)';
+    }
+    if (key === 'remoteCacheExpireDays') {
+      return '缓存过期天数';
+    }
+    return key;
   }
 
   /** Fullscreen: hide/show the system status bar (Android fullscreen popup). */
@@ -6919,6 +7523,15 @@ struct Index {
     }
     if (key === 'showTopBarInfo') {
       return this.settings.showTopBarInfo;
+    }
+    if (key === 'remoteOnlineFirst') {
+      return this.settings.remoteOnlineFirst;
+    }
+    if (key === 'remotePrefetchWifiOnly') {
+      return this.settings.remotePrefetchWifiOnly;
+    }
+    if (key === 'remoteWholeBookOnMetered') {
+      return this.settings.remoteWholeBookOnMetered;
     }
     return false;
   }

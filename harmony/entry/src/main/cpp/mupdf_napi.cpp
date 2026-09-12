@@ -35,6 +35,8 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
+#include <map>
 #include <pthread.h>
 #include <string>
 #include <utility>
@@ -2163,12 +2165,1277 @@ napi_value LoadFont(napi_env env, napi_callback_info info)
     return boolResult;
 }
 
+/* ====================================================================
+ * Remote document streaming (online cache reading).
+ *
+ * Port of Android's RemoteSeekableStream + MuPdfDocument.openRemoteFile:
+ * MuPDF opens the document over a custom fz_stream whose next/seek
+ * callbacks pull bytes through a block cache living in ArkTS. The C++
+ * side bridges to ArkTS with a napi_threadsafe_function; each read
+ * posts (seq, offset, len) to the JS dispatcher, which fetches the
+ * range (block cache + HTTP Range) and reports back via remoteReadDone.
+ *
+ * Threading:
+ * - The stream callbacks run on MuPDF worker threads (async open /
+ *   async render) and BLOCK on a condvar until the JS side answers.
+ *   This is safe because every entry point that can trigger stream
+ *   reads runs on a napi_async_work worker, so the JS thread stays
+ *   free to service the threadsafe-function callbacks.
+ * - Remote handles MUST NOT be passed to the synchronous document
+ *   accessors (pageCount/getToc/...): those run on the JS thread and
+ *   would self-deadlock waiting for their own reads. Use docOpAsync.
+ * - The RemoteReader is refcounted: the registry holds one reference,
+ *   every fz_stream holds one. unregisterRemoteReader marks it closed
+ *   and wakes pending reads; the struct is freed when the last
+ *   reference goes away.
+ * ==================================================================== */
+
+constexpr size_t kRemoteStreamBuf = 64 * 1024;
+constexpr int kRemoteReadTimeoutSec = 60;
+
+struct RemotePending {
+    uint64_t seq;
+    std::vector<uint8_t> data;
+    bool done;
+    bool failed;
+};
+
+struct RemoteReader {
+    int64_t id;
+    napi_threadsafe_function tsfn;
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
+    std::map<uint64_t, RemotePending *> pending;
+    uint64_t nextSeq;
+    int refs;    /* guarded by mu: registry + one per fz_stream */
+    bool closed; /* guarded by mu */
+};
+
+static pthread_mutex_t g_remoteMu = PTHREAD_MUTEX_INITIALIZER;
+static std::map<int64_t, RemoteReader *> g_remoteReaders;
+static int64_t g_remoteNextId = 1;
+
+struct RemoteReadRequest {
+    uint64_t seq;
+    int64_t offset;
+    size_t len;
+};
+
+/* JS-thread callback: invoke the ArkTS dispatcher (seq, offset, len).
+ * The dispatcher fetches the range asynchronously and reports the
+ * result back through remoteReadDone(id, seq, buffer). */
+static void RemoteReadCallJs(napi_env env, napi_value jsCb, void * /*context*/, void *data)
+{
+    auto *req = static_cast<RemoteReadRequest *>(data);
+    if (env != nullptr && jsCb != nullptr && req != nullptr) {
+        napi_value undefinedVal = nullptr;
+        napi_value args[3];
+        napi_get_undefined(env, &undefinedVal);
+        napi_create_int64(env, static_cast<int64_t>(req->seq), &args[0]);
+        napi_create_int64(env, req->offset, &args[1]);
+        napi_create_int64(env, static_cast<int64_t>(req->len), &args[2]);
+        napi_call_function(env, undefinedVal, jsCb, 3, args, nullptr);
+    }
+    delete req;
+}
+
+static void RemoteReaderWakeAll(RemoteReader *r)
+{
+    /* caller holds r->mu */
+    for (std::map<uint64_t, RemotePending *>::iterator it = r->pending.begin(); it != r->pending.end(); ++it) {
+        it->second->failed = true;
+        it->second->done = true;
+    }
+    pthread_cond_broadcast(&r->cv);
+}
+
+static void RemoteReaderRetain(RemoteReader *r)
+{
+    pthread_mutex_lock(&r->mu);
+    r->refs++;
+    pthread_mutex_unlock(&r->mu);
+}
+
+static void RemoteReaderRelease(RemoteReader *r)
+{
+    bool del = false;
+    pthread_mutex_lock(&r->mu);
+    r->refs--;
+    if (r->refs <= 0 && r->closed) {
+        del = true;
+    }
+    pthread_mutex_unlock(&r->mu);
+    if (del) {
+        napi_release_threadsafe_function(r->tsfn, napi_tsfn_release);
+        pthread_mutex_destroy(&r->mu);
+        pthread_cond_destroy(&r->cv);
+        delete r;
+    }
+}
+
+/* Register the ArkTS dispatcher. Returns the new reader id. */
+napi_value RegisterRemoteReader(napi_env env, napi_callback_info info)
+{
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 1) {
+        napi_throw_type_error(env, nullptr, "dispatcher (function) required");
+        return nullptr;
+    }
+    napi_valuetype t = napi_undefined;
+    napi_typeof(env, args[0], &t);
+    if (t != napi_function) {
+        napi_throw_type_error(env, nullptr, "dispatcher must be a function");
+        return nullptr;
+    }
+
+    auto *r = new RemoteReader();
+    r->id = 0;
+    r->tsfn = nullptr;
+    r->nextSeq = 0;
+    r->refs = 1; /* registry reference */
+    r->closed = false;
+    pthread_mutex_init(&r->mu, nullptr);
+    pthread_cond_init(&r->cv, nullptr);
+
+    napi_value name = nullptr;
+    napi_create_string_utf8(env, "mupdf_remote_read", NAPI_AUTO_LENGTH, &name);
+    if (napi_create_threadsafe_function(env, args[0], nullptr, name, 0, 1, nullptr, nullptr, nullptr,
+        RemoteReadCallJs, &r->tsfn) != napi_ok || r->tsfn == nullptr) {
+        pthread_mutex_destroy(&r->mu);
+        pthread_cond_destroy(&r->cv);
+        delete r;
+        napi_throw_error(env, "TSFN_FAILED", "cannot create threadsafe function");
+        return nullptr;
+    }
+
+    pthread_mutex_lock(&g_remoteMu);
+    r->id = g_remoteNextId++;
+    g_remoteReaders[r->id] = r;
+    pthread_mutex_unlock(&g_remoteMu);
+
+    napi_value result;
+    napi_create_int64(env, r->id, &result);
+    return result;
+}
+
+napi_value UnregisterRemoteReader(napi_env env, napi_callback_info info)
+{
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    int64_t id = 0;
+    if (argc < 1 || napi_get_value_int64(env, args[0], &id) != napi_ok) {
+        napi_throw_type_error(env, nullptr, "readerId (number) required");
+        return nullptr;
+    }
+
+    pthread_mutex_lock(&g_remoteMu);
+    std::map<int64_t, RemoteReader *>::iterator it = g_remoteReaders.find(id);
+    RemoteReader *r = (it != g_remoteReaders.end()) ? it->second : nullptr;
+    if (it != g_remoteReaders.end()) {
+        g_remoteReaders.erase(it);
+    }
+    pthread_mutex_unlock(&g_remoteMu);
+
+    if (r != nullptr) {
+        pthread_mutex_lock(&r->mu);
+        r->closed = true;
+        RemoteReaderWakeAll(r);
+        pthread_mutex_unlock(&r->mu);
+        RemoteReaderRelease(r); /* drop the registry reference */
+    }
+
+    napi_value result;
+    napi_get_undefined(env, &result);
+    return result;
+}
+
+/* ArkTS reports a completed read: remoteReadDone(id, seq, data?) */
+napi_value RemoteReadDone(napi_env env, napi_callback_info info)
+{
+    size_t argc = 3;
+    napi_value args[3];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 2) {
+        napi_throw_type_error(env, nullptr, "remoteReadDone(id, seq, data?) required");
+        return nullptr;
+    }
+    int64_t id = 0;
+    int64_t seq = 0;
+    napi_get_value_int64(env, args[0], &id);
+    napi_get_value_int64(env, args[1], &seq);
+
+    RemoteReader *r = nullptr;
+    pthread_mutex_lock(&g_remoteMu);
+    std::map<int64_t, RemoteReader *>::iterator it = g_remoteReaders.find(id);
+    if (it != g_remoteReaders.end()) {
+        r = it->second;
+    }
+    pthread_mutex_unlock(&g_remoteMu);
+
+    napi_value result;
+    napi_get_undefined(env, &result);
+    if (r == nullptr) {
+        return result; /* reader already unregistered: ignore late answers */
+    }
+
+    pthread_mutex_lock(&r->mu);
+    std::map<uint64_t, RemotePending *>::iterator pit = r->pending.find(static_cast<uint64_t>(seq));
+    if (pit != r->pending.end()) {
+        RemotePending *p = pit->second;
+        p->failed = true;
+        if (argc >= 3 && args[2] != nullptr) {
+            napi_valuetype t = napi_undefined;
+            napi_typeof(env, args[2], &t);
+            if (t == napi_object) {
+                void *data = nullptr;
+                size_t len = 0;
+                if (napi_get_arraybuffer_info(env, args[2], &data, &len) == napi_ok && data != nullptr && len > 0) {
+                    p->data.assign(static_cast<uint8_t *>(data), static_cast<uint8_t *>(data) + len);
+                    p->failed = false;
+                }
+            }
+        }
+        p->done = true;
+        pthread_cond_broadcast(&r->cv);
+    }
+    pthread_mutex_unlock(&r->mu);
+    return result;
+}
+
+/* Blocking read executed on MuPDF worker threads (called with the
+ * document's g_mu held). Returns bytes read or -1. */
+static int RemoteRead(RemoteReader *r, int64_t offset, size_t len, uint8_t *out, size_t outCap)
+{
+    if (r == nullptr || len == 0) {
+        return -1;
+    }
+    pthread_mutex_lock(&r->mu);
+    if (r->closed) {
+        pthread_mutex_unlock(&r->mu);
+        return -1;
+    }
+    RemotePending *p = new RemotePending();
+    p->seq = ++r->nextSeq;
+    p->done = false;
+    p->failed = false;
+    r->pending[p->seq] = p;
+    pthread_mutex_unlock(&r->mu);
+
+    auto *req = new RemoteReadRequest();
+    req->seq = p->seq;
+    req->offset = offset;
+    req->len = len;
+    if (napi_call_threadsafe_function(r->tsfn, req, napi_tsfn_blocking) != napi_ok) {
+        delete req;
+        pthread_mutex_lock(&r->mu);
+        p->failed = true;
+        p->done = true;
+        pthread_mutex_unlock(&r->mu);
+    }
+
+    pthread_mutex_lock(&r->mu);
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += kRemoteReadTimeoutSec;
+    while (!p->done) {
+        if (pthread_cond_timedwait(&r->cv, &r->mu, &ts) != 0) {
+            p->failed = true;
+            break;
+        }
+    }
+    r->pending.erase(p->seq);
+    int result = -1;
+    if (!p->failed && p->data.size() > 0 && p->data.size() <= outCap) {
+        memcpy(out, p->data.data(), p->data.size());
+        result = static_cast<int>(p->data.size());
+    }
+    pthread_cond_broadcast(&r->cv);
+    pthread_mutex_unlock(&r->mu);
+    delete p;
+    return result;
+}
+
+/* The blocking read above never touches r->refs: its lifetime is covered
+ * by the calling fz_stream (see RemoteStreamDrop / RemoteReaderRelease). */
+struct RemoteStreamState {
+    RemoteReader *reader;
+    int64_t size;
+    uint8_t *buf;
+};
+
+static int RemoteStreamNext(fz_context *ctx, fz_stream *stm, size_t /*max*/)
+{
+    auto *st = static_cast<RemoteStreamState *>(stm->state);
+    if (stm->pos >= st->size) {
+        stm->eof = 1;
+        return EOF;
+    }
+    int64_t remaining = st->size - stm->pos;
+    size_t want = (static_cast<int64_t>(kRemoteStreamBuf) < remaining) ? kRemoteStreamBuf
+        : static_cast<size_t>(remaining);
+    int n = RemoteRead(st->reader, stm->pos, want, st->buf, kRemoteStreamBuf);
+    if (n <= 0) {
+        stm->eof = 1;
+        return EOF;
+    }
+    stm->rp = st->buf;
+    stm->wp = st->buf + n;
+    stm->pos += static_cast<int64_t>(n);
+    return *stm->rp++;
+}
+
+static void RemoteStreamSeek(fz_context * /*ctx*/, fz_stream *stm, int64_t offset, int whence)
+{
+    auto *st = static_cast<RemoteStreamState *>(stm->state);
+    int64_t target = offset;
+    if (whence == SEEK_END) {
+        target = st->size + offset;
+    }
+    if (target < 0) {
+        target = 0;
+    }
+    if (target > st->size) {
+        target = st->size;
+    }
+    stm->pos = target;
+    /* invalidate the read buffer, mirroring seek_file — a stale rp/wp makes
+     * fz_tell() return pos minus the unconsumed bytes (pdf xref parsing
+     * relies on tell right after a backward seek) */
+    stm->rp = st->buf;
+    stm->wp = st->buf;
+}
+
+static void RemoteStreamDrop(fz_context *ctx, void *state)
+{
+    auto *st = static_cast<RemoteStreamState *>(state);
+    if (st != nullptr) {
+        fz_free(ctx, st->buf);
+        if (st->reader != nullptr) {
+            RemoteReaderRelease(st->reader);
+        }
+        delete st;
+    }
+}
+
+/* ---- JSON helpers for the async ops ---- */
+
+static void JsonAppendEscaped(std::string &out, const char *s)
+{
+    for (const unsigned char *p = reinterpret_cast<const unsigned char *>(s ? s : ""); *p; ++p) {
+        unsigned char c = *p;
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            case '\b': out += "\\b"; break;
+            case '\f': out += "\\f"; break;
+            default:
+                if (c < 0x20) {
+                    char b[8];
+                    snprintf(b, sizeof(b), "\\u%04x", c);
+                    out += b;
+                } else {
+                    out += static_cast<char>(c);
+                }
+        }
+    }
+}
+
+static std::string OpTocJson(fz_context *ctx, fz_document *doc)
+{
+    std::string json = "[";
+    fz_outline *toc = nullptr;
+    fz_var(toc);
+    if (!fz_setjmp(*fz_push_try(ctx))) do {
+        toc = fz_load_outline(ctx, doc);
+    } while (0);
+    if (fz_do_catch(ctx)) {
+        toc = nullptr; /* no outline is not fatal */
+    }
+    if (toc != nullptr) {
+        struct Frame { fz_outline *o; int depth; };
+        std::vector<Frame> stack;
+        stack.push_back({toc, 0});
+        bool first = true;
+        while (!stack.empty()) {
+            Frame frame = stack.back();
+            stack.pop_back();
+            std::string title = (frame.o->title != nullptr) ? frame.o->title : "";
+            int page = -1;
+            if (frame.o->uri != nullptr && frame.o->uri[0] != '\0') {
+                const char *p = strstr(frame.o->uri, "page=");
+                if (p == nullptr) {
+                    p = frame.o->uri;
+                }
+                int v = atoi(p + (p != frame.o->uri ? 5 : 0));
+                if (v > 0) {
+                    page = v - 1;
+                }
+            }
+            if (!first) {
+                json += ",";
+            }
+            first = false;
+            json += "{\"title\":\"";
+            JsonAppendEscaped(json, title.c_str());
+            json += "\",\"page\":";
+            json += std::to_string(page);
+            json += ",\"depth\":";
+            json += std::to_string(frame.depth);
+            json += "}";
+            if (frame.o->down != nullptr) {
+                std::vector<fz_outline *> children;
+                for (fz_outline *c = frame.o->down; c != nullptr; c = c->next) {
+                    children.push_back(c);
+                }
+                for (auto rit = children.rbegin(); rit != children.rend(); ++rit) {
+                    stack.push_back({*rit, frame.depth + 1});
+                }
+            }
+        }
+        fz_drop_outline(ctx, toc);
+    }
+    json += "]";
+    return json;
+}
+
+static std::string OpPageSizeJson(fz_context *ctx, fz_document *doc, int page)
+{
+    fz_rect media = fz_infinite_rect;
+    fz_var(media);
+    fz_page *pg = nullptr;
+    if (!fz_setjmp(*fz_push_try(ctx))) do {
+        pg = fz_load_page(ctx, doc, page);
+        if (pg != nullptr) {
+            media = fz_bound_page(ctx, pg);
+        }
+    } while (0);
+    if (fz_do_always(ctx)) do {
+        if (pg != nullptr) {
+            fz_drop_page(ctx, pg);
+        }
+    } while (0);
+    if (fz_do_catch(ctx)) {
+        return "{\"x0\":0,\"y0\":0,\"x1\":612000,\"y1\":792000}";
+    }
+    char buf[128];
+    snprintf(buf, sizeof(buf), "{\"x0\":%lld,\"y0\":%lld,\"x1\":%lld,\"y1\":%lld}",
+        static_cast<long long>(media.x0 * 1000), static_cast<long long>(media.y0 * 1000),
+        static_cast<long long>(media.x1 * 1000), static_cast<long long>(media.y1 * 1000));
+    return std::string(buf);
+}
+
+static std::string OpLayoutJson(fz_context *ctx, fz_document *doc, DocumentHandle *h,
+    double w, double ht, double em, const std::string &css)
+{
+    std::string out = "-1";
+    if (!fz_setjmp(*fz_push_try(ctx))) do {
+        if (!css.empty()) {
+            /* preserve a previously injected @font-face rule */
+            std::string combined = css;
+            if (h->userCss[0] != '\0') {
+                const char *face = strstr(h->userCss, "@font-face");
+                if (face != nullptr) {
+                    const char *end = strchr(face, '}');
+                    if (end != nullptr) {
+                        combined += " ";
+                        combined.append(face, static_cast<size_t>(end - face) + 1);
+                    }
+                }
+            }
+            fz_set_user_css(ctx, combined.c_str());
+            snprintf(h->userCss, sizeof h->userCss, "%s", combined.c_str());
+        }
+        fz_layout_document(ctx, doc, static_cast<float>(w), static_cast<float>(ht), static_cast<float>(em));
+        out = std::to_string(fz_count_pages(ctx, doc));
+    } while (0);
+    if (fz_do_catch(ctx)) {
+        out = "-1";
+    }
+    return out;
+}
+
+static std::string OpTextJson(fz_context *ctx, fz_document *doc, int page, double zoom)
+{
+    std::string out = "\"\"";
+    fz_stext_page *stext = nullptr;
+    char *text = nullptr;
+    fz_var(stext);
+    fz_var(text);
+    if (!fz_setjmp(*fz_push_try(ctx))) do {
+        fz_stext_options opts;
+        memset(&opts, 0, sizeof(opts));
+        stext = fz_new_stext_page_from_page_number(ctx, doc, page, &opts);
+        if (stext != nullptr) {
+            text = fz_copy_rectangle(ctx, stext, stext->mediabox, 0);
+        }
+    } while (0);
+    if (fz_do_always(ctx)) do {
+        if (stext != nullptr) {
+            fz_drop_stext_page(ctx, stext);
+        }
+    } while (0);
+    if (fz_do_catch(ctx)) {
+        return "\"\"";
+    }
+    out = "\"";
+    JsonAppendEscaped(out, text != nullptr ? text : "");
+    out += "\"";
+    if (text != nullptr) {
+        fz_free(ctx, text);
+    }
+    return out;
+}
+
+static std::string OpSearchPageJson(fz_context *ctx, fz_document *doc, const char *pattern, int page)
+{
+    std::string json = "[";
+    fz_quad *bbox = nullptr;
+    int count = 0;
+    fz_var(bbox);
+    fz_var(count);
+    if (!fz_setjmp(*fz_push_try(ctx))) do {
+        bbox = static_cast<fz_quad *>(fz_calloc(ctx, sizeof(fz_quad) * 64, 1));
+        fz_page *pg = fz_load_page(ctx, doc, page);
+        fz_try(ctx) {
+            count = fz_search_page(ctx, pg, pattern, nullptr, bbox, 64);
+        }
+        fz_always(ctx) {
+            fz_drop_page(ctx, pg);
+        }
+        fz_catch(ctx) {
+            fz_rethrow(ctx);
+        }
+    } while (0);
+    if (fz_do_always(ctx)) do {
+        if (bbox != nullptr) {
+            fz_free(ctx, bbox);
+        }
+    } while (0);
+    if (fz_do_catch(ctx)) {
+        return "[]";
+    }
+    if (count > 64) {
+        count = 64;
+    }
+    for (int i = 0; i < count; i++) {
+        fz_rect r = fz_rect_from_quad(bbox[i]);
+        if (i > 0) {
+            json += ",";
+        }
+        char buf[128];
+        snprintf(buf, sizeof(buf), "{\"x0\":%lld,\"y0\":%lld,\"x1\":%lld,\"y1\":%lld}",
+            static_cast<long long>(r.x0 * 1000), static_cast<long long>(r.y0 * 1000),
+            static_cast<long long>(r.x1 * 1000), static_cast<long long>(r.y1 * 1000));
+        json += buf;
+    }
+    json += "]";
+    return json;
+}
+
+static std::string OpSearchDocJson(fz_context *ctx, fz_document *doc, const char *pattern)
+{
+    const int maxTotal = 500;
+    int totalHits = 0;
+    int pages = fz_count_pages(ctx, doc);
+    std::string json = "{\"pages\":[";
+    bool first = true;
+    for (int p = 0; p < pages && totalHits < maxTotal; p++) {
+        int count = 0;
+        fz_quad *bbox = nullptr;
+        fz_var(bbox);
+        if (!fz_setjmp(*fz_push_try(ctx))) do {
+            bbox = static_cast<fz_quad *>(fz_calloc(ctx, sizeof(fz_quad) * 64, 1));
+            fz_page *pg = fz_load_page(ctx, doc, p);
+            fz_try(ctx) {
+                count = fz_search_page(ctx, pg, pattern, nullptr, bbox, 64);
+            }
+            fz_always(ctx) {
+                fz_drop_page(ctx, pg);
+            }
+            fz_catch(ctx) {
+                count = 0;
+            }
+        } while (0);
+        if (fz_do_always(ctx)) do {
+            if (bbox != nullptr) {
+                fz_free(ctx, bbox);
+            }
+        } while (0);
+        if (fz_do_catch(ctx)) {
+            count = 0;
+        }
+        if (count > 0) {
+            if (!first) {
+                json += ",";
+            }
+            first = false;
+            json += "{\"page\":";
+            json += std::to_string(p);
+            json += ",\"count\":";
+            json += std::to_string(count);
+            json += "}";
+            totalHits += count;
+        }
+    }
+    json += "],\"totalHits\":";
+    json += std::to_string(totalHits);
+    json += "}";
+    return json;
+}
+
+static std::string OpInfoJson(fz_context *ctx, fz_document *doc)
+{
+    static const char *kKeys[] = {"title", "author", "subject", "creator", "producer", "creationDate", "modDate"};
+    std::vector<std::pair<std::string, std::string>> collected;
+    if (!fz_setjmp(*fz_push_try(ctx))) do {
+        pdf_document *pdf = pdf_specifics(ctx, doc);
+        if (pdf != nullptr) {
+            pdf_obj *meta = pdf_metadata(ctx, pdf);
+            if (meta != nullptr) {
+                for (const char *key : kKeys) {
+                    pdf_obj *val = pdf_dict_gets(ctx, meta, key);
+                    if (val == nullptr || pdf_is_null(ctx, val)) {
+                        continue;
+                    }
+                    const char *str = pdf_to_name(ctx, val);
+                    if (str == nullptr || str[0] == '\0') {
+                        str = pdf_to_text_string(ctx, val);
+                    }
+                    if (str != nullptr && str[0] != '\0') {
+                        collected.emplace_back(key, str);
+                    }
+                }
+            }
+        } else {
+            const char *genKeys[] = {FZ_META_INFO_TITLE, FZ_META_INFO_AUTHOR};
+            const char *genNames[] = {"title", "author"};
+            for (int i = 0; i < 2; i++) {
+                char buf[512];
+                buf[0] = '\0';
+                int r = fz_lookup_metadata(ctx, doc, genKeys[i], buf, sizeof(buf));
+                if (r >= 0 && buf[0] != '\0') {
+                    collected.emplace_back(genNames[i], buf);
+                }
+            }
+        }
+    } while (0);
+    if (fz_do_catch(ctx)) {
+        /* damaged metadata is not fatal */
+    }
+    std::string json = "{";
+    for (size_t i = 0; i < collected.size(); i++) {
+        if (i > 0) {
+            json += ",";
+        }
+        json += "\"";
+        json += collected[i].first;
+        json += "\":\"";
+        JsonAppendEscaped(json, collected[i].second.c_str());
+        json += "\"";
+    }
+    json += "}";
+    return json;
+}
+
+/* ---- openDocumentRemoteAsync + docOpAsync (napi_async_work) ---- */
+
+struct OpenRemoteJob {
+    RemoteReader *reader;
+    char magic[32];
+    int64_t size;
+    bool doLayout;
+    double layoutW;
+    double layoutH;
+    double em;
+    std::string css;
+
+    fz_context *ctx = nullptr;
+    fz_document *doc = nullptr;
+    std::string json;
+    std::string failMsg;
+    bool failed = false;
+    napi_deferred deferred = nullptr;
+};
+
+static void OpenRemoteExecute(napi_env /*env*/, void *data)
+{
+    auto *job = static_cast<OpenRemoteJob *>(data);
+    RemoteReader *reader = job->reader;
+    if (reader == nullptr || reader->closed) {
+        job->failed = true;
+        return;
+    }
+
+    job->ctx = fz_new_context(nullptr, nullptr, FZ_STORE_DEFAULT);
+    if (job->ctx == nullptr) {
+        job->failed = true;
+        return;
+    }
+    fz_register_document_handlers(job->ctx);
+
+    fz_stream *stm = nullptr;
+    fz_document *doc = nullptr;
+    fz_var(stm);
+    fz_var(doc);
+    if (!fz_setjmp(*fz_push_try(job->ctx))) do {
+        auto *st = new RemoteStreamState();
+        st->reader = reader;
+        st->size = job->size;
+        st->buf = static_cast<uint8_t *>(fz_malloc(job->ctx, kRemoteStreamBuf));
+        RemoteReaderRetain(reader); /* the stream's reference */
+        stm = fz_new_stream(job->ctx, st, RemoteStreamNext, RemoteStreamDrop);
+        stm->seek = RemoteStreamSeek;
+        doc = fz_open_document_with_stream(job->ctx, job->magic[0] != '\0' ? job->magic : nullptr, stm);
+        job->doc = doc;
+
+        /* Gather the open-time metadata Reader needs in one pass. */
+        bool needsPassword = false;
+        if (!fz_setjmp(*fz_push_try(job->ctx))) do {
+            needsPassword = fz_needs_password(job->ctx, doc) != 0;
+        } while (0);
+        if (fz_do_catch(job->ctx)) {
+            needsPassword = false;
+        }
+
+        bool isReflow = false;
+        if (!fz_setjmp(*fz_push_try(job->ctx))) do {
+            isReflow = fz_is_document_reflowable(job->ctx, doc);
+        } while (0);
+        if (fz_do_catch(job->ctx)) {
+            isReflow = false;
+        }
+
+        int pages = 0;
+        if (!fz_setjmp(*fz_push_try(job->ctx))) do {
+            pages = fz_count_pages(job->ctx, doc);
+        } while (0);
+        if (fz_do_catch(job->ctx)) {
+            pages = 0;
+        }
+
+        std::string toc = "[]";
+        if (pages > 0) {
+            toc = OpTocJson(job->ctx, doc);
+        }
+
+        char meta[128];
+        snprintf(meta, sizeof(meta), "{\"pageCount\":%d,\"isReflow\":%s,\"needsPassword\":%s,\"toc\":",
+            pages, isReflow ? "true" : "false", needsPassword ? "true" : "false");
+        job->json = std::string(meta) + toc + "}";
+    } while (0);
+    if (fz_do_catch(job->ctx)) {
+        job->failed = true;
+        job->failMsg = job->ctx->error.message;
+        /* on failure the stream is not owned by a document: drop it */
+        if (doc == nullptr && stm != nullptr) {
+            fz_drop_stream(job->ctx, stm);
+        }
+    }
+    if (job->failed && job->failMsg.empty() && reader->closed) {
+        job->failMsg = "reader closed";
+    }
+}
+
+static void OpenRemoteComplete(napi_env env, napi_status status, void *data)
+{
+    auto *job = static_cast<OpenRemoteJob *>(data);
+    if (job->deferred != nullptr) {
+        if (status == napi_cancelled || job->failed || job->doc == nullptr || job->ctx == nullptr) {
+            if (job->ctx != nullptr) {
+                if (job->doc != nullptr) {
+                    fz_drop_document(job->ctx, job->doc);
+                }
+                fz_drop_context(job->ctx);
+            }
+            std::string code = "REMOTE_OPEN_FAILED";
+            if (!job->failMsg.empty()) {
+                code += ": " + job->failMsg;
+            }
+            napi_value e;
+            napi_create_string_utf8(env, code.c_str(), NAPI_AUTO_LENGTH, &e);
+            napi_reject_deferred(env, job->deferred, e);
+        } else {
+            napi_value obj;
+            napi_create_object(env, &obj);
+            napi_value ext = MakeExternal(env, job->ctx, job->doc); /* external owns ctx+doc */
+            napi_set_named_property(env, obj, "handle", ext);
+            napi_value meta;
+            napi_create_string_utf8(env, job->json.c_str(), NAPI_AUTO_LENGTH, &meta);
+            napi_set_named_property(env, obj, "meta", meta);
+            napi_resolve_deferred(env, job->deferred, obj);
+        }
+    }
+    delete job;
+}
+
+napi_value OpenDocumentRemoteAsync(napi_env env, napi_callback_info info)
+{
+    size_t argc = 8;
+    napi_value args[8];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 5) {
+        napi_throw_type_error(env, nullptr,
+            "openDocumentRemoteAsync(readerId, magic, size, doLayout, layoutW, layoutH, em, css?) required");
+        return nullptr;
+    }
+    int64_t readerId = 0;
+    if (napi_get_value_int64(env, args[0], &readerId) != napi_ok) {
+        napi_throw_type_error(env, nullptr, "readerId must be a number");
+        return nullptr;
+    }
+
+    RemoteReader *reader = nullptr;
+    pthread_mutex_lock(&g_remoteMu);
+    std::map<int64_t, RemoteReader *>::iterator it = g_remoteReaders.find(readerId);
+    if (it != g_remoteReaders.end()) {
+        reader = it->second;
+    }
+    pthread_mutex_unlock(&g_remoteMu);
+    if (reader == nullptr) {
+        napi_throw_error(env, "NO_READER", "remote reader not registered");
+        return nullptr;
+    }
+
+    auto *job = new OpenRemoteJob();
+    job->reader = reader;
+    job->magic[0] = '\0';
+    size_t magicLen = 0;
+    napi_get_value_string_utf8(env, args[1], job->magic, sizeof(job->magic) - 1, &magicLen);
+    napi_get_value_int64(env, args[2], &job->size);
+    bool doLayout = false;
+    napi_get_value_bool(env, args[3], &doLayout);
+    job->doLayout = doLayout;
+    napi_get_value_double(env, args[4], &job->layoutW);
+    napi_get_value_double(env, args[5], &job->layoutH);
+    napi_get_value_double(env, args[6], &job->em);
+    if (argc >= 8) {
+        napi_valuetype t = napi_undefined;
+        napi_typeof(env, args[7], &t);
+        if (t == napi_string) {
+            size_t len = 0;
+            napi_get_value_string_utf8(env, args[7], nullptr, 0, &len);
+            if (len > 0) {
+                job->css.resize(len);
+                napi_get_value_string_utf8(env, args[7], &job->css[0], len + 1, &len);
+            }
+        }
+    }
+
+    napi_value deferredVal = nullptr;
+    if (napi_create_promise(env, &job->deferred, &deferredVal) != napi_ok || job->deferred == nullptr) {
+        delete job;
+        napi_throw_error(env, "PROMISE_FAILED", "cannot create promise");
+        return nullptr;
+    }
+
+    napi_async_work work = nullptr;
+    napi_value nameVal = nullptr;
+    napi_create_string_utf8(env, "mupdf_open_remote", NAPI_AUTO_LENGTH, &nameVal);
+    if (napi_create_async_work(env, nullptr, nameVal, OpenRemoteExecute, OpenRemoteComplete, job, &work) != napi_ok ||
+        work == nullptr) {
+        delete job;
+        napi_throw_error(env, "WORK_FAILED", "cannot create async work");
+        return nullptr;
+    }
+    if (napi_queue_async_work(env, work) != napi_ok) {
+        napi_delete_async_work(env, work);
+        delete job;
+        napi_throw_error(env, "QUEUE_FAILED", "cannot queue async work");
+        return nullptr;
+    }
+    return deferredVal;
+}
+
+/* Per-page text lines with per-char bounds (mirrors GetTextRects but
+ * builds a std::string). Returns "[]" on error. */
+static std::string OpTextRectsJson(fz_context *ctx, fz_document *doc, int page)
+{
+    fz_display_list *dl = nullptr;
+    fz_stext_page *stext = nullptr;
+    fz_var(dl);
+    fz_var(stext);
+    if (!fz_setjmp(*fz_push_try(ctx))) do {
+        dl = fz_new_display_list_from_page_number(ctx, doc, page);
+        stext = fz_new_stext_page(ctx, fz_infinite_rect);
+        fz_stext_options opts;
+        memset(&opts, 0, sizeof(opts));
+        opts.flags = FZ_STEXT_PRESERVE_WHITESPACE | FZ_STEXT_MEDIABOX_CLIP;
+        fz_device *dev = fz_new_stext_device(ctx, stext, &opts);
+        fz_try(ctx) {
+            fz_run_display_list(ctx, dl, dev, fz_identity, fz_infinite_rect, nullptr);
+        }
+        fz_always(ctx) {
+            fz_close_device(ctx, dev);
+            fz_drop_device(ctx, dev);
+        }
+        fz_catch(ctx) {
+            fz_rethrow(ctx);
+        }
+    } while (0);
+    if (fz_do_always(ctx)) do {
+        if (dl != nullptr) {
+            fz_drop_display_list(ctx, dl);
+        }
+    } while (0);
+    if (fz_do_catch(ctx)) {
+        if (stext != nullptr) {
+            fz_drop_stext_page(ctx, stext);
+        }
+        return "[]";
+    }
+    if (stext == nullptr) {
+        return "[]";
+    }
+
+    float pw = stext->mediabox.x1 - stext->mediabox.x0;
+    float ph = stext->mediabox.y1 - stext->mediabox.y0;
+    if (pw <= 0.0f) pw = 612.0f;
+    if (ph <= 0.0f) ph = 792.0f;
+
+    std::string json = "[";
+    bool first = true;
+    for (const fz_stext_block *block = stext->first_block; block != nullptr; block = block->next) {
+        if (block->type != FZ_STEXT_BLOCK_TEXT) continue;
+        for (const fz_stext_line *line = block->u.t.first_line; line != nullptr; line = line->next) {
+            if (!first) json += ",";
+            first = false;
+            float x0 = (line->bbox.x0 - stext->mediabox.x0) / pw;
+            float y0 = (line->bbox.y0 - stext->mediabox.y0) / ph;
+            float x1 = (line->bbox.x1 - stext->mediabox.x0) / pw;
+            float y1 = (line->bbox.y1 - stext->mediabox.y0) / ph;
+            if (x0 < 0.0f) x0 = 0.0f;
+            if (x1 > 1.0f) x1 = 1.0f;
+            if (y0 < 0.0f) y0 = 0.0f;
+            if (y1 > 1.0f) y1 = 1.0f;
+            char buf[128];
+            snprintf(buf, sizeof(buf), "{\"x0\":%.4f,\"y0\":%.4f,\"x1\":%.4f,\"y1\":%.4f,\"text\":\"",
+                x0, y0, x1, y1);
+            json += buf;
+            for (const fz_stext_char *ch = line->first_char; ch != nullptr; ch = ch->next) {
+                char tmp[8];
+                unsigned int c = static_cast<unsigned int>(ch->c);
+                if (c == '"') {
+                    json += "\\\"";
+                } else if (c == '\\') {
+                    json += "\\\\";
+                } else if (c == '\n') {
+                    json += "\\n";
+                } else if (c < 0x20 || c > 0x10FFFF) {
+                    snprintf(tmp, sizeof(tmp), "\\u%04x", c & 0xFFFF);
+                    json += tmp;
+                } else if (c < 0x80) {
+                    json += static_cast<char>(c);
+                } else {
+                    /* UTF-8 encode (mirrors AppendJsonChar) */
+                    if (c < 0x800) {
+                        tmp[0] = static_cast<char>(0xC0 | (c >> 6));
+                        tmp[1] = static_cast<char>(0x80 | (c & 0x3F));
+                        json.append(tmp, 2);
+                    } else if (c < 0x10000) {
+                        tmp[0] = static_cast<char>(0xE0 | (c >> 12));
+                        tmp[1] = static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+                        tmp[2] = static_cast<char>(0x80 | (c & 0x3F));
+                        json.append(tmp, 3);
+                    } else {
+                        tmp[0] = static_cast<char>(0xF0 | (c >> 18));
+                        tmp[1] = static_cast<char>(0x80 | ((c >> 12) & 0x3F));
+                        tmp[2] = static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+                        tmp[3] = static_cast<char>(0x80 | (c & 0x3F));
+                        json.append(tmp, 4);
+                    }
+                }
+            }
+            json += "\",\"chars\":[";
+            bool fc = true;
+            for (const fz_stext_char *ch = line->first_char; ch != nullptr; ch = ch->next) {
+                float cx0 = ch->quad.ll.x, cx1 = ch->quad.lr.x;
+                if (ch->quad.ul.x < cx0) cx0 = ch->quad.ul.x;
+                if (ch->quad.ur.x > cx1) cx1 = ch->quad.ur.x;
+                cx0 = (cx0 - stext->mediabox.x0) / pw;
+                cx1 = (cx1 - stext->mediabox.x0) / pw;
+                if (cx0 < 0.0f) cx0 = 0.0f;
+                if (cx1 > 1.0f) cx1 = 1.0f;
+                if (!fc) json += ",";
+                fc = false;
+                snprintf(buf, sizeof(buf), "%.4f,%.4f", cx0, cx1);
+                json += buf;
+            }
+            json += "]}";
+        }
+    }
+    json += "]";
+    fz_drop_stext_page(ctx, stext);
+    return json;
+}
+
+/* PDF annotations as JSON (mirrors GetAnnotations). Returns "[]" when not PDF / no annots. */
+static std::string OpAnnotsJson(fz_context *ctx, fz_document *doc, int page)
+{
+    pdf_document *pdf = pdf_specifics(ctx, doc);
+    if (pdf == nullptr) {
+        return "[]";
+    }
+    fz_rect media = fz_infinite_rect;
+    pdf_page *pg = nullptr;
+    fz_var(media);
+    fz_var(pg);
+    if (!fz_setjmp(*fz_push_try(ctx))) do {
+        pg = pdf_load_page(ctx, pdf, page);
+        if (pg != nullptr) {
+            media = fz_bound_page(ctx, (fz_page *)pg);
+        }
+    } while (0);
+    if (fz_do_catch(ctx)) {
+        pg = nullptr;
+    }
+    if (pg == nullptr) {
+        return "[]";
+    }
+
+    float pw = (media.x1 - media.x0) > 0 ? (media.x1 - media.x0) : 1.0f;
+    float ph = (media.y1 - media.y0) > 0 ? (media.y1 - media.y0) : 1.0f;
+
+    std::string json = "[";
+    int index = 0;
+    if (!fz_setjmp(*fz_push_try(ctx))) do {
+        pdf_annot *annot = pdf_first_annot(ctx, pg);
+        while (annot != nullptr) {
+            enum pdf_annot_type t = pdf_annot_type(ctx, annot);
+            fz_rect r = pdf_bound_annot(ctx, annot);
+            const char *contents = pdf_annot_contents(ctx, annot);
+            if (index > 0) {
+                json += ",";
+            }
+            char buf[160];
+            snprintf(buf, sizeof(buf),
+                "{\"index\":%d,\"type\":\"%s\",\"x0\":%.4f,\"y0\":%.4f,\"x1\":%.4f,\"y1\":%.4f,\"contents\":\"",
+                index, AnnotTypeName(t), (r.x0 - media.x0) / pw, (r.y0 - media.y0) / ph,
+                (r.x1 - media.x0) / pw, (r.y1 - media.y0) / ph);
+            json += buf;
+            JsonAppendEscaped(json, contents != nullptr ? contents : "");
+            json += "\"}";
+            index++;
+            annot = pdf_next_annot(ctx, annot);
+        }
+    } while (0);
+    if (fz_do_catch(ctx)) {
+        /* partial results ok */
+    }
+    json += "]";
+    fz_drop_page(ctx, (fz_page *)pg);
+    return json;
+}
+
+/* Generic async document op. ops:
+ * 0 pageCount | 1 toc | 2 pageSize(a=page) | 3 layout(a=w,b=h,c=em,s=css)
+ * 4 text(a=page,b=zoom) | 5 search(s=text,a=page) | 6 searchdoc(s=text)
+ * 7 textrects(a=page) | 8 info | 9 isReflow | 10 needsPassword
+ * 11 annots(a=page) | 12 authenticate(s=password)
+ * All results are JSON strings (document accessors are unsafe to call
+ * synchronously on remote-streamed documents). */
+struct DocOpJob {
+    DocumentHandle *h; /* holds a reference for the job lifetime */
+    int op;
+    double a;
+    double b;
+    double c;
+    std::string s;
+    std::string json;
+    bool failed = false;
+    napi_deferred deferred = nullptr;
+};
+
+static void DocOpExecute(napi_env /*env*/, void *data)
+{
+    auto *job = static_cast<DocOpJob *>(data);
+    DocumentHandle *h = job->h;
+    pthread_mutex_lock(&g_mu);
+    if (h->closed) {
+        job->failed = true;
+        pthread_mutex_unlock(&g_mu);
+        return;
+    }
+    fz_context *ctx = h->ctx;
+    fz_document *doc = h->doc;
+    bool opErr = false;
+    if (!fz_setjmp(*fz_push_try(ctx))) do {
+        switch (job->op) {
+            case 0:
+                job->json = std::to_string(fz_count_pages(ctx, doc));
+                break;
+            case 1:
+                job->json = OpTocJson(ctx, doc);
+                break;
+            case 2:
+                job->json = OpPageSizeJson(ctx, doc, static_cast<int>(job->a));
+                break;
+            case 3:
+                job->json = OpLayoutJson(ctx, doc, h, job->a, job->b, job->c, job->s);
+                break;
+            case 4:
+                job->json = OpTextJson(ctx, doc, static_cast<int>(job->a), job->b);
+                break;
+            case 5:
+                job->json = OpSearchPageJson(ctx, doc, job->s.c_str(), static_cast<int>(job->a));
+                break;
+            case 6:
+                job->json = OpSearchDocJson(ctx, doc, job->s.c_str());
+                break;
+            case 7:
+                job->json = OpTextRectsJson(ctx, doc, static_cast<int>(job->a));
+                break;
+            case 8:
+                job->json = OpInfoJson(ctx, doc);
+                break;
+            case 9:
+                job->json = fz_is_document_reflowable(ctx, doc) ? "true" : "false";
+                break;
+            case 10:
+                job->json = fz_needs_password(ctx, doc) ? "true" : "false";
+                break;
+            case 11:
+                job->json = OpAnnotsJson(ctx, doc, static_cast<int>(job->a));
+                break;
+            case 12:
+                job->json = std::to_string(fz_authenticate_password(ctx, doc, job->s.c_str()));
+                break;
+            default:
+                job->failed = true;
+                break;
+        }
+    } while (0);
+    if (fz_do_catch(ctx)) {
+        opErr = true;
+    }
+    pthread_mutex_unlock(&g_mu);
+    if (opErr && job->json.empty()) {
+        job->failed = true;
+    }
+}
+
+static void DocOpComplete(napi_env env, napi_status status, void *data)
+{
+    auto *job = static_cast<DocOpJob *>(data);
+    if (job->deferred != nullptr) {
+        if (status == napi_cancelled || job->failed) {
+            napi_value e;
+            napi_create_string_utf8(env, "DOC_OP_FAILED", NAPI_AUTO_LENGTH, &e);
+            napi_reject_deferred(env, job->deferred, e);
+        } else {
+            napi_value result;
+            napi_create_string_utf8(env, job->json.c_str(), NAPI_AUTO_LENGTH, &result);
+            napi_resolve_deferred(env, job->deferred, result);
+        }
+    }
+    ReleaseHandle(job->h);
+    delete job;
+}
+
+napi_value DocOpAsync(napi_env env, napi_callback_info info)
+{
+    size_t argc = 6;
+    napi_value args[6];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 2) {
+        napi_throw_type_error(env, nullptr, "docOpAsync(handle, op, a?, b?, c?, s?) required");
+        return nullptr;
+    }
+    auto *h = GetHandle(env, args[0]);
+    if (h == nullptr) {
+        return nullptr;
+    }
+    int32_t op = 0;
+    napi_get_value_int32(env, args[1], &op);
+
+    auto *job = new DocOpJob();
+    job->h = h;
+    job->op = op;
+    job->a = 0;
+    job->b = 0;
+    job->c = 0;
+    if (argc >= 3) {
+        napi_valuetype t = napi_undefined;
+        napi_typeof(env, args[2], &t);
+        if (t == napi_number) {
+            napi_get_value_double(env, args[2], &job->a);
+        } else if (t == napi_string) {
+            size_t len = 0;
+            napi_get_value_string_utf8(env, args[2], nullptr, 0, &len);
+            if (len > 0) {
+                job->s.resize(len);
+                napi_get_value_string_utf8(env, args[2], &job->s[0], len + 1, &len);
+            }
+        }
+    }
+    if (argc >= 4) {
+        napi_get_value_double(env, args[3], &job->b);
+    }
+    if (argc >= 5) {
+        napi_get_value_double(env, args[4], &job->c);
+    }
+    if (argc >= 6) {
+        napi_valuetype t = napi_undefined;
+        napi_typeof(env, args[5], &t);
+        if (t == napi_string) {
+            std::string extra;
+            size_t len = 0;
+            napi_get_value_string_utf8(env, args[5], nullptr, 0, &len);
+            if (len > 0) {
+                extra.resize(len);
+                napi_get_value_string_utf8(env, args[5], &extra[0], len + 1, &len);
+            }
+            if (job->s.empty()) {
+                job->s = extra;
+            }
+        }
+    }
+    AcquireHandle(h);
+
+    napi_value deferredVal = nullptr;
+    if (napi_create_promise(env, &job->deferred, &deferredVal) != napi_ok || job->deferred == nullptr) {
+        ReleaseHandle(h);
+        delete job;
+        napi_throw_error(env, "PROMISE_FAILED", "cannot create promise");
+        return nullptr;
+    }
+
+    napi_async_work work = nullptr;
+    napi_value nameVal = nullptr;
+    napi_create_string_utf8(env, "mupdf_doc_op", NAPI_AUTO_LENGTH, &nameVal);
+    if (napi_create_async_work(env, nullptr, nameVal, DocOpExecute, DocOpComplete, job, &work) != napi_ok ||
+        work == nullptr) {
+        ReleaseHandle(h);
+        delete job;
+        napi_throw_error(env, "WORK_FAILED", "cannot create async work");
+        return nullptr;
+    }
+    if (napi_queue_async_work(env, work) != napi_ok) {
+        napi_delete_async_work(env, work);
+        ReleaseHandle(h);
+        delete job;
+        napi_throw_error(env, "QUEUE_FAILED", "cannot queue async work");
+        return nullptr;
+    }
+    return deferredVal;
+}
+
 napi_value Init(napi_env env, napi_value exports)
 {
     napi_property_descriptor desc[] = {
         {"version", nullptr, Version, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"openDocument", nullptr, OpenDocument, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"openDocumentByFd", nullptr, OpenDocumentByFd, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"registerRemoteReader", nullptr, RegisterRemoteReader, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"unregisterRemoteReader", nullptr, UnregisterRemoteReader, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"remoteReadDone", nullptr, RemoteReadDone, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"openDocumentRemoteAsync", nullptr, OpenDocumentRemoteAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"docOpAsync", nullptr, DocOpAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"pageCount", nullptr, PageCount, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"renderPage", nullptr, RenderPage, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"renderPageAsync", nullptr, RenderPageAsync, nullptr, nullptr, nullptr, napi_default, nullptr},

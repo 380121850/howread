@@ -32,6 +32,7 @@ import {
   addMarkupAnnotation, addTextNote,
   layoutDocument, isReflowable, getDocumentInfo, getTextRects, loadFont,
   needsPassword, authenticateDocument,
+  registerRemoteReader, unregisterRemoteReader, remoteReadDone, openDocumentRemoteAsync, docOpAsync,
   RenderResult, RenderOptions, TocEntry, CropRect, TextRect, TextLine, AnnotationInfo, DocumentInfo
 } from 'libmupdf_napi.so';
 import { saveRecentBook, getPageForPath, RecentBook } from '../model/ReadingProgress';
@@ -44,6 +45,11 @@ import { isBilingualDoc, buildBilingual } from '../model/Bilingual';
 import { TextUtils } from '../model/TextUtils';
 import { loadSettings, saveSettings, THEME_NAMES, ReaderSettings } from '../model/Settings';
 import { startTtsBackgroundTask, stopTtsBackgroundTask, showTtsNotification, cancelTtsNotification, syncTtsCardState } from '../service/TtsService';
+import {
+  RemoteSession, WebDavFileSource, loadRemoteCacheSettings, parseRemoteUri, resolveWebDavServer,
+  fileExtOf, isDirectOpenExt, isPageFormatExt, mobiIsEncrypted, sha256Hex,
+  BlockCacheStore, RemoteProbe
+} from '../model/RemoteBook';
 
 const LEFT_ZONE_RATIO: number = 0.3;
 const RIGHT_ZONE_RATIO: number = 0.3;
@@ -110,11 +116,9 @@ class PageDataSource implements IDataSource {
   }
 
   getPageCount(): number {
-    let count = 0;
-    if (this.docHandle !== undefined) {
-      count = pageCount(this.docHandle);
-    }
-    return count;
+    /* Round 8: pageIndices is authoritative for remote-streamed docs too
+     * (calling the sync native pageCount would self-deadlock on them) */
+    return this.pageIndices.length;
   }
 
   getDocHandle(): ESObject | undefined {
@@ -139,6 +143,22 @@ class PageDataSource implements IDataSource {
     } catch (e) {
       console.error('[Reader] Failed to open document');
       throw e as Error;
+    }
+  }
+
+  /** Round 8: adopt a handle opened by openDocumentRemoteAsync (remote:// docs). */
+  adoptRemote(handle: ESObject, total: number): void {
+    this.docPath = '';
+    if (this.docHandle !== undefined) {
+      try { closeDocument(this.docHandle); } catch (_e) {}
+    }
+    this.docHandle = handle;
+    this.pageIndices = [];
+    for (let i = 0; i < total; i++) {
+      this.pageIndices.push(i);
+    }
+    for (let j = 0; j < this.listeners.length; j++) {
+      this.listeners[j].onDataReloaded();
     }
   }
 
@@ -661,6 +681,107 @@ struct Reader {
   @State einkDetected: boolean = false;       /* I8: E-ink device auto-detect */
   @State renderQualityLevel: number = 1;      /* K4: 0=fast 1=balanced 2=high */
 
+  // ---- Round 8: remote (online cache reading) ----
+  @State isRemote: boolean = false;           /* docPath is a remote:// streamed book */
+  @State remoteOpening: boolean = false;      /* streaming open in progress */
+  @State remoteOpenMsg: string = '';          /* open progress text */
+  private remoteUri: string = '';
+  private remoteReaderId: number = -1;
+  private remoteSession: RemoteSession | undefined = undefined;
+
+  /** Generic async document op for remote-streamed documents. */
+  private async docOp(op: number, a?: number | string, b?: number, c?: number, s?: string): Promise<string | undefined> {
+    const h: ESObject | undefined = this.dataSource.getDocHandle();
+    if (h === undefined) {
+      return undefined;
+    }
+    try {
+      return await docOpAsync(h, op, a, b, c, s);
+    } catch (e) {
+      return undefined;
+    }
+  }
+
+  /** Round 8: open a remote:// book through the block-cache stream bridge. */
+  private async initRemoteReader(uri: string): Promise<void> {
+    this.isRemote = true;
+    this.remoteUri = uri;
+    this.remoteOpening = true;
+    this.remoteOpenMsg = '连接服务器...';
+    try {
+      const ctx = getContext(this);
+      const parts = parseRemoteUri(uri);
+      if (parts === null || parts.type !== 'webdav') {
+        throw new Error('bad remote uri');
+      }
+      const settings = await loadRemoteCacheSettings(ctx);
+      this.remoteOpenMsg = '加载缓存...';
+      const server = await resolveWebDavServer(ctx, parts.serverId);
+      if (server === null) {
+        throw new Error('远程服务器配置不存在，请重新添加');
+      }
+      const source = new WebDavFileSource(parts.fileUrl, server.user, server.password,
+        settings.retryCount, settings.retryIntervalMs);
+      const session = new RemoteSession(ctx, uri, await sha256Hex(uri), source, settings);
+      /* Round 8: fully-cached books open with zero network (Android openOffline);
+       * otherwise a failed probe aborts the open */
+      const cacheKey: string = await sha256Hex(uri);
+      const cached = await BlockCacheStore.readMeta(ctx, cacheKey);
+      let probe: RemoteProbe;
+      if (cached !== null && cached.fullyCached) {
+        await session.store.loadOrCreate(cached.size, cached.versionTag, cached.blockSize);
+        probe = { size: cached.size, versionTag: cached.versionTag, supportsRange: true };
+        console.info('[Reader] Remote open from local cache (fully cached)');
+      } else {
+        probe = await session.open();
+      }
+      this.remoteSession = session;
+      this.remoteReaderId = registerRemoteReader((seq: number, offset: number, len: number) => {
+        session.readAt(offset, len).then((buf: ArrayBuffer) => {
+          remoteReadDone(this.remoteReaderId, seq, buf);
+        }).catch((err: Error) => {
+          console.error(`[Reader] remote read FAIL off=${offset} len=${len}: ${err.message}`);
+          remoteReadDone(this.remoteReaderId, seq, undefined);
+        });
+      });
+      this.remoteOpenMsg = '解析文档...';
+      const ext: string = fileExtOf(parts.fileUrl);
+      const magic: string = isDirectOpenExt(ext) ? ext : (isPageFormatExt(ext) ? ext : '');
+      const css: string = `body{margin:${Math.round(this.pageMargin)}pt;line-height:${this.lineHeight.toFixed(2)}}`;
+      const res: ESObject = await openDocumentRemoteAsync(this.remoteReaderId, magic, probe.size, true,
+        REFLOW_W, REFLOW_H, this.fontSize, css);
+      const rec: Record<string, ESObject> = res as Record<string, ESObject>;
+      const meta: Record<string, ESObject> = JSON.parse(String(rec['meta'])) as Record<string, ESObject>;
+      const total: number = Number(meta['pageCount']);
+      this.dataSource.adoptRemote(rec['handle'], total);
+      this.isReflow = meta['isReflow'] === true;
+      this.totalPages = total;
+      this.pageList = [];
+      for (let i = 0; i < total; i++) {
+        this.pageList.push(i);
+      }
+      if (meta['needsPassword'] === true) {
+        this.showPwd = true;
+      }
+      const tocArr: ESObject = meta['toc'];
+      this.tocEntries = (tocArr !== undefined && tocArr !== null) ? tocArr as TocEntry[] : [];
+      this.loadBookmarks();
+      this.refreshAnnotations();
+      /* P3: whole-book background fill for small books */
+      session.maybeStartFiller();
+      console.info(`[Reader] Remote doc opened: ${total} pages, reflow=${this.isReflow}, size=${probe.size}`);
+    } catch (e) {
+      const msg: string = e instanceof Error ? e.message : String(e);
+      console.error(`[Reader] Remote open failed: ${msg}`);
+      promptAction.showToast({ message: `远程打开失败：${msg}` });
+      this.remoteOpening = false;
+      router.back();
+      return;
+    }
+    this.remoteOpening = false;
+    console.info(`[Reader] Remote document opened: ${this.totalPages} pages, page ${this.currentPage + 1}`);
+  }
+
   aboutToAppear(): void {
     try {
       const ctx = getContext(this);
@@ -698,12 +819,12 @@ struct Reader {
         getPageForPath(ctx, this.documentPath).then((savedPage: number) => {
           this.currentPage = jump >= 0 ? jump : (alwaysP1 ? 0 : savedPage);
           console.info(`[Reader] Restoring page ${this.currentPage + 1}`);
-          this.initReader();
+          this.initOrRemote();
         }).catch(() => {
           if (jump >= 0) {
             this.currentPage = jump;
           }
-          this.initReader();
+          this.initOrRemote();
         });
       });
     } catch (e) {
@@ -876,7 +997,15 @@ struct Reader {
       tabsOrder: cur.tabsOrder,
       rootFolder: cur.rootFolder,
       fontsFolder: cur.fontsFolder,
-      downloadsFolder: cur.downloadsFolder
+      downloadsFolder: cur.downloadsFolder,
+      remoteOnlineFirst: cur.remoteOnlineFirst,
+      remoteCacheMaxMB: cur.remoteCacheMaxMB,
+      remotePrefetchWifiOnly: cur.remotePrefetchWifiOnly,
+      remoteWholeBookThresholdMB: cur.remoteWholeBookThresholdMB,
+      remoteWholeBookOnMetered: cur.remoteWholeBookOnMetered,
+      remoteRetryCount: cur.remoteRetryCount,
+      remoteRetryIntervalMs: cur.remoteRetryIntervalMs,
+      remoteCacheExpireDays: cur.remoteCacheExpireDays
     };
     await saveSettings(ctx, s);
   }
@@ -952,21 +1081,40 @@ struct Reader {
     }
     try {
       const css = this.buildCss();
-      layoutDocument(handle, REFLOW_W, REFLOW_H, this.fontSize, css);
-      const newTotal: number = pageCount(handle);
-      this.pageList = [];
-      for (let i = 0; i < newTotal; i++) {
-        this.pageList.push(i);
+      let newTotal = -1;
+      if (this.isRemote) {
+        const r = await this.docOp(3, REFLOW_W, REFLOW_H, this.fontSize, css);
+        if (r !== undefined) {
+          newTotal = parseInt(r, 10);
+        }
+      } else {
+        layoutDocument(handle, REFLOW_W, REFLOW_H, this.fontSize, css);
+        newTotal = pageCount(handle);
       }
-      this.totalPages = newTotal;
-      this.currentPage = Math.min(this.currentPage, newTotal - 1);
-      this.reflowVersion++;
-      this.onPageChanged(this.currentPage);
-      this.loadToc();
-      this.persistSettings();
-      console.info(`[Reader] Reflow applied: ${newTotal} pages (em=${this.fontSize}, lh=${this.lineHeight.toFixed(1)}, m=${this.pageMargin})`);
+      if (newTotal >= 0) {
+        this.pageList = [];
+        for (let i = 0; i < newTotal; i++) {
+          this.pageList.push(i);
+        }
+        this.totalPages = newTotal;
+        this.currentPage = Math.min(this.currentPage, newTotal - 1);
+        this.reflowVersion++;
+        this.onPageChanged(this.currentPage);
+        this.loadToc();
+        this.persistSettings();
+        console.info(`[Reader] Reflow applied: ${newTotal} pages (em=${this.fontSize}, lh=${this.lineHeight.toFixed(1)}, m=${this.pageMargin})`);
+      }
     } catch (e) {
       console.error('[Reader] applyReflow failed');
+    }
+  }
+
+  /** Round 8: route local docs to the sync opener, remote:// docs to the stream bridge. */
+  private initOrRemote(): void {
+    if (this.documentPath.startsWith('remote://')) {
+      this.initRemoteReader(this.documentPath);
+    } else {
+      this.initReader();
     }
   }
 
@@ -1020,7 +1168,12 @@ struct Reader {
     try {
       const handle: ESObject | undefined = this.dataSource.getDocHandle();
       if (handle !== undefined) {
-        this.tocEntries = getToc(handle);
+        if (this.isRemote) {
+          const j = await this.docOp(1);
+          this.tocEntries = j !== undefined ? JSON.parse(j) as TocEntry[] : [];
+        } else {
+          this.tocEntries = getToc(handle);
+        }
         console.info(`[Reader] TOC loaded: ${this.tocEntries.length} entries`);
       }
     } catch (e) {
@@ -1082,6 +1235,17 @@ struct Reader {
       saveRecentBook(ctx, book);
     }
     this.dataSource.closeDoc();
+    /* Round 8: tear down the remote stream session after the document */
+    if (this.remoteSession !== undefined) {
+      this.remoteSession.close();
+      this.remoteSession = undefined;
+    }
+    if (this.remoteReaderId >= 0) {
+      try {
+        unregisterRemoteReader(this.remoteReaderId);
+      } catch (_e) { /* already gone */ }
+      this.remoteReaderId = -1;
+    }
   }
 
   /** Phase 3: accumulate a 30s reading-time chunk. */
@@ -1219,7 +1383,16 @@ struct Reader {
     }
     console.info(`[Reader] Search '${q}'...`);
     try {
-      const jsonStr: string = searchDocument(handle, q);
+      let jsonStr: string;
+      if (this.isRemote) {
+        const r = await this.docOp(6, q);
+        if (r === undefined) {
+          return;
+        }
+        jsonStr = r;
+      } else {
+        jsonStr = searchDocument(handle, q);
+      }
       const parsed: object = JSON.parse(jsonStr) as object;
       const pagesArr: object[] = (parsed['pages'] !== undefined ? parsed['pages'] : []) as object[];
       this.searchTotalHits = parsed['totalHits'] !== undefined ? parsed['totalHits'] as number : 0;
@@ -1246,13 +1419,26 @@ struct Reader {
   }
 
   /** Sprint O2: load and normalize hit rects for a specific page. */
-  private highlightPageHits(pageIdx: number): void {
+  private async highlightPageHits(pageIdx: number): Promise<void> {
     const handle: ESObject | undefined = this.dataSource.getDocHandle();
     if (handle === undefined) return;
     try {
       const q: string = this.searchQuery.trim();
-      const rects: TextRect[] = searchText(handle, q, pageIdx);
-      const size: TextRect = getPageSize(handle, pageIdx);
+      let rects: TextRect[];
+      let size: TextRect;
+      if (this.isRemote) {
+        const rj = await this.docOp(5, q, pageIdx);
+        const sj = await this.docOp(2, pageIdx);
+        if (rj === undefined || sj === undefined) {
+          return;
+        }
+        rects = JSON.parse(rj) as TextRect[];
+        const rawSize = JSON.parse(sj) as TextRect;
+        size = { x0: rawSize.x0, y0: rawSize.y0, x1: rawSize.x1, y1: rawSize.y1 };
+      } else {
+        rects = searchText(handle, q, pageIdx);
+        size = getPageSize(handle, pageIdx);
+      }
       const pw = (size.x1 - size.x0) > 0 ? (size.x1 - size.x0) : 1;
       const ph = (size.y1 - size.y0) > 0 ? (size.y1 - size.y0) : 1;
       const norm: TextRect[] = [];
@@ -1348,7 +1534,12 @@ struct Reader {
       return;
     }
     try {
-      this.annotations = getAnnotations(handle, this.currentPage);
+      if (this.isRemote) {
+        const j = await this.docOp(11, this.currentPage);
+        this.annotations = j !== undefined ? JSON.parse(j) as AnnotationInfo[] : [];
+      } else {
+        this.annotations = getAnnotations(handle, this.currentPage);
+      }
       console.info(`[Reader] Page ${this.currentPage + 1} annotations: ${this.annotations.length}`);
     } catch (e) {
       this.annotations = [];
@@ -1358,6 +1549,10 @@ struct Reader {
 
   /** Add a highlight over the current search hit region (or page center). */
   private async addHighlightOnPage(): Promise<void> {
+    if (this.isRemote) {
+      promptAction.showToast({ message: '远程文档暂不支持批注编辑（下载后可编辑）' });
+      return;
+    }
     const handle: ESObject | undefined = this.dataSource.getDocHandle();
     if (handle === undefined) {
       return;
@@ -1379,6 +1574,10 @@ struct Reader {
   }
 
   private async deleteAnnotationAt(index: number): Promise<void> {
+    if (this.isRemote) {
+      promptAction.showToast({ message: '远程文档暂不支持批注编辑（下载后可编辑）' });
+      return;
+    }
     const handle: ESObject | undefined = this.dataSource.getDocHandle();
     if (handle === undefined) {
       return;
@@ -1393,6 +1592,10 @@ struct Reader {
   }
 
   private async saveAnnotatedDoc(): Promise<void> {
+    if (this.isRemote) {
+      promptAction.showToast({ message: '远程文档暂不支持批注编辑（下载后可编辑）' });
+      return;
+    }
     const handle: ESObject | undefined = this.dataSource.getDocHandle();
     if (handle === undefined || this.documentPath.length === 0) {
       return;
@@ -1409,6 +1612,10 @@ struct Reader {
 
   /** Open the panel and scan annotations across all pages (capped). */
   private async openAnnPanel(): Promise<void> {
+    if (this.isRemote) {
+      promptAction.showToast({ message: '远程文档暂不支持批注编辑（下载后可编辑）' });
+      return;
+    }
     this.showAnnPanel = true;
     this.annScanning = true;
     this.annAll = [];
@@ -1436,6 +1643,10 @@ struct Reader {
 
   /** Delete one entry from the whole-book list (page-local index needed). */
   private async deleteAnnEntry(idx: number): Promise<void> {
+    if (this.isRemote) {
+      promptAction.showToast({ message: '远程文档暂不支持批注编辑（下载后可编辑）' });
+      return;
+    }
     const handle: ESObject | undefined = this.dataSource.getDocHandle();
     if (handle === undefined) {
       return;
@@ -1513,13 +1724,19 @@ struct Reader {
   }
 
   /** Round 6: try to unlock the encrypted document with the typed password. */
-  private doUnlockDoc(): void {
+  private async doUnlockDoc(): Promise<void> {
     const handle: ESObject | undefined = this.dataSource.getDocHandle();
     if (handle === undefined || this.pwdInput.length === 0) {
       return;
     }
     try {
-      const r: number = authenticateDocument(handle, this.pwdInput) as number;
+      let r = 0;
+      if (this.isRemote) {
+        const j = await this.docOp(12, this.pwdInput);
+        r = j !== undefined ? parseInt(j, 10) : 0;
+      } else {
+        r = authenticateDocument(handle, this.pwdInput) as number;
+      }
       if (r > 0) {
         this.showPwd = false;
         this.pwdInput = '';
@@ -1752,6 +1969,30 @@ struct Reader {
     }
   }
 
+  /** Page text via sync getText (local) or docOpAsync (remote-stream safe). */
+  private async pageText(page: number): Promise<string> {
+    if (this.isRemote) {
+      const j = await this.docOp(4, page, 1.0);
+      if (j === undefined) {
+        return '';
+      }
+      try {
+        return JSON.parse(j) as string;
+      } catch (e) {
+        return '';
+      }
+    }
+    const handle: ESObject | undefined = this.dataSource.getDocHandle();
+    if (handle === undefined) {
+      return '';
+    }
+    try {
+      return getText(handle, page, 1.0);
+    } catch (e) {
+      return '';
+    }
+  }
+
   private async loadTtsSentences(page: number): Promise<void> {
     const handle: ESObject | undefined = this.dataSource.getDocHandle();
     if (handle === undefined) {
@@ -1759,7 +2000,7 @@ struct Reader {
       return;
     }
     try {
-      const raw: string = getText(handle, page, 1.0);
+      const raw: string = await this.pageText(page);
       this.ttsSentences = TextUtils.splitSentences(TextUtils.normalize(raw));
       this.ttsIndex = 0;
     } catch (e) {
@@ -1964,7 +2205,7 @@ struct Reader {
     try {
       const h: ESObject | undefined = this.dataSource.getDocHandle();
       if (h === undefined) return;
-      const raw: string = getText(h, this.currentPage);
+      const raw: string = await this.pageText(this.currentPage);
       const ctx = getContext(this);
       const path: string = ctx.cacheDir + '/tts_export.txt';
       let f = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
@@ -2040,7 +2281,7 @@ struct Reader {
       return;
     }
     try {
-      const raw: string = getText(handle, page, 1.0);
+      const raw: string = await this.pageText(page);
       this.rsvpTokens = TextUtils.splitTokens(TextUtils.normalize(raw));
       this.rsvpIndex = 0;
     } catch (e) {
@@ -2184,7 +2425,7 @@ struct Reader {
     return css;
   }
 
-  private applyTypography(): void {
+  private async applyTypography(): Promise<void> {
     try {
       const h: ESObject | undefined = this.dataSource.getDocHandle();
       if (h === undefined) return;
@@ -2192,9 +2433,20 @@ struct Reader {
 
       const css = this.buildCss();
       console.info(`[Reader] Typography applied: align=${this.textAlign} para=${this.paragraphSpacing} indent=${this.textIndent} dropcap=${this.dropCapEnabled} font=${this.fontFamilyIdx}`);
-      layoutDocument(h, REFLOW_W, REFLOW_H, this.fontSize, css);
-      /* L2: refresh page count after re-layout */
-      const newTotal: number = pageCount(h);
+      let newTotal = -1;
+      if (this.isRemote) {
+        const r = await this.docOp(3, REFLOW_W, REFLOW_H, this.fontSize, css);
+        if (r !== undefined) {
+          newTotal = parseInt(r, 10);
+        }
+      } else {
+        layoutDocument(h, REFLOW_W, REFLOW_H, this.fontSize, css);
+        /* L2: refresh page count after re-layout */
+        newTotal = pageCount(h);
+      }
+      if (newTotal < 0) {
+        return;
+      }
       this.pageList = [];
       for (let i = 0; i < newTotal; i++) {
         this.pageList.push(i);
@@ -2208,11 +2460,17 @@ struct Reader {
   }
 
   /** Load text line rectangles for the current page (sprint H2). */
-  private loadTextRects(): void {
+  private async loadTextRects(): Promise<void> {
     try {
       const h: ESObject | undefined = this.dataSource.getDocHandle();
       if (h === undefined) return;
-      const json: string = getTextRects(h, this.currentPage);
+      let json: string;
+      if (this.isRemote) {
+        const j = await this.docOp(7, this.currentPage);
+        json = j !== undefined ? j : '[]';
+      } else {
+        json = getTextRects(h, this.currentPage);
+      }
       this.textRectsJson = json;
       console.info(`[Reader] Text rects loaded for page ${this.currentPage}: ${json.length} chars JSON`);
     } catch (e) {
@@ -2492,37 +2750,64 @@ struct Reader {
       const parts: string[] = [];
       parts.push(`文件名: ${this.docTitle}`);
 
+      if (this.isRemote) {
+        /* remote:// docs: show the remote URI instead of stat'ing a local file */
+        parts.push(`来源: 远程（在线缓存阅读）`);
+        parts.push(`路径: ${this.remoteUri}`);
+      }
+
       /* Try to get document info via NAPI (handle lives in dataSource) */
       const h: ESObject | undefined = this.dataSource.getDocHandle();
       if (h !== undefined) {
-        try {
-          const info: DocumentInfo = getDocumentInfo(h);
-          if (info.title && info.title.length > 0) {
-            parts.push(`标题: ${info.title}`);
-          }
-          if (info.author && info.author.length > 0) {
-            parts.push(`作者: ${info.author}`);
-          }
-          if (info.producer && info.producer.length > 0) {
-            parts.push(`生成器: ${info.producer}`);
-          }
-        } catch (_e) {}
+        if (this.isRemote) {
+          this.docOp(8).then((j: string | undefined) => {
+            if (j !== undefined) {
+              try {
+                const info = JSON.parse(j) as Record<string, string>;
+                if (info['title'] && info['title'].length > 0) {
+                  parts.push(`标题: ${info['title']}`);
+                }
+                if (info['author'] && info['author'].length > 0) {
+                  parts.push(`作者: ${info['author']}`);
+                }
+              } catch (_e) { /* ignore */ }
+              this.fileInfoText = parts.join('\n');
+            }
+          });
+        } else {
+          try {
+            const info: DocumentInfo = getDocumentInfo(h);
+            if (info.title && info.title.length > 0) {
+              parts.push(`标题: ${info.title}`);
+            }
+            if (info.author && info.author.length > 0) {
+              parts.push(`作者: ${info.author}`);
+            }
+            if (info.producer && info.producer.length > 0) {
+              parts.push(`生成器: ${info.producer}`);
+            }
+          } catch (_e) {}
+        }
       }
 
       parts.push(`页数: ${this.totalPages > 0 ? this.totalPages + ' 页' : $r('app.string.common_unknown')}`);
       parts.push(`当前页: p${this.currentPage + 1}`);
 
       /* File size */
-      try {
-        const stat = fs.statSync(this.documentPath);
-        const sizeKB = Math.round(stat.size / 1024);
-        parts.push(`大小: ${sizeKB} KB`);
-      } catch (_e) {}
+      if (!this.isRemote) {
+        try {
+          const stat = fs.statSync(this.documentPath);
+          const sizeKB = Math.round(stat.size / 1024);
+          parts.push(`大小: ${sizeKB} KB`);
+        } catch (_e) {}
+      }
 
       /* Format (from extension) */
-      const dotIdx = this.documentPath.lastIndexOf('.');
-      const ext = dotIdx >= 0 ? this.documentPath.substring(dotIdx + 1).toUpperCase() : 'UNKNOWN';
-      parts.push(`格式: ${ext}`);
+      if (!this.isRemote) {
+        const dotIdx = this.documentPath.lastIndexOf('.');
+        const ext = dotIdx >= 0 ? this.documentPath.substring(dotIdx + 1).toUpperCase() : 'UNKNOWN';
+        parts.push(`格式: ${ext}`);
+      }
 
       this.fileInfoText = parts.join('\n');
       console.info(`[Reader] File info generated for ${this.docTitle}`);
@@ -5131,6 +5416,19 @@ struct Reader {
           .borderRadius(12)
           .shadow({ radius: 16, color: '#40000000', offsetX: 0, offsetY: 4 })
         }
+      }
+
+      /* Round 8: remote streaming open overlay */
+      if (this.remoteOpening) {
+        Column({ space: 12 }) {
+          Progress({ value: 40, total: 100 })
+            .width(46).height(46).color(Color.White)
+          Text(`正在打开远程文档…\n${this.remoteOpenMsg}`)
+            .fontSize(13).fontColor(Color.White).textAlign(TextAlign.Center)
+        }
+        .justifyContent(FlexAlign.Center)
+        .width('100%').height('100%')
+        .backgroundColor('#96000000')
       }
     }
     .width('100%')

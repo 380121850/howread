@@ -251,6 +251,9 @@ export async function searchLibraryText(
 export function findMissingBooks(books: RecentBook[]): string[] {
   const missing: string[] = [];
   for (let i = 0; i < books.length; i++) {
+    if (books[i].path.startsWith('remote://')) {
+      continue; /* Round 8: remote books have no local file; they stream or use the cache */
+    }
     try {
       if (!fs.accessSync(books[i].path)) {
         missing.push(books[i].path);

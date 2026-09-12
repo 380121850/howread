@@ -142,3 +142,36 @@ export function closeDocument(handle: ESObject): void;
 /* Round 6: encrypted-document support */
 export function needsPassword(handle: ESObject): boolean;
 export function authenticateDocument(handle: ESObject, password: string): number;
+
+/* ---- Round 8: remote (online cache reading) streaming bridge ---- */
+
+/** Register the ArkTS read dispatcher (seq, offset, len) => void; returns reader id. */
+export function registerRemoteReader(dispatcher: (seq: number, offset: number, len: number) => void): number;
+/** Unregister and free a remote reader (marks it closed; pending reads fail). */
+export function unregisterRemoteReader(id: number): void;
+/** Deliver a completed remote read for (id, seq); pass undefined on failure. */
+export function remoteReadDone(id: number, seq: number, data: ArrayBuffer | undefined): void;
+
+/**
+ * Open a document over a registered remote reader on a worker thread.
+ * magic: format hint ('pdf'/'epub'/'cbz'/'xps'/'oxps'/'html'/'txt', '' = sniff).
+ * size: total remote file size in bytes (required for streaming).
+ * When doLayout is true (reflowable docs) the document is laid out with
+ * layoutW/layoutH/em/css before the metadata is collected.
+ * Resolves { handle: ESObject, meta: string } where meta is JSON:
+ * {"pageCount":N,"isReflow":bool,"needsPassword":bool,"toc":[{title,page,depth}...]}
+ */
+export function openDocumentRemoteAsync(readerId: number, magic: string, size: number, doLayout: boolean,
+  layoutW: number, layoutH: number, em: number, css: string): Promise<ESObject>;
+
+/**
+ * Run a document operation on a worker thread (remote-stream safe — the
+ * synchronous accessors would self-deadlock on remote documents). ops:
+ * 0 pageCount | 1 toc | 2 pageSize(a=page) | 3 layout(a=w,b=h,c=em,s=css)
+ * 4 text(a=page,b=zoom) | 5 search(s=text,a=page) | 6 searchdoc(s=text)
+ * 7 textrects(a=page) | 8 info | 9 isReflow | 10 needsPassword
+ * 11 annots(a=page) | 12 authenticate(s=password)
+ * Resolves a JSON string result.
+ */
+export function docOpAsync(handle: ESObject, op: number, a?: number | string, b?: number, c?: number,
+  s?: string): Promise<string>;

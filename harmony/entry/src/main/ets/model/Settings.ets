@@ -155,6 +155,24 @@ export interface ReaderSettings {
   fontsFolder: string;
   /** Downloads folder for fetched books ('' = default Download/HowRead) */
   downloadsFolder: string;
+
+  /* ---- Round 8: online cache reading (Android AppState.remote*) ---- */
+  /** Online-first: open remote books streaming when the format supports it */
+  remoteOnlineFirst: boolean;
+  /** Disk cache total cap in MB (50..4096) */
+  remoteCacheMaxMB: number;
+  /** Prefetch only on unmetered (wifi-like) networks */
+  remotePrefetchWifiOnly: boolean;
+  /** Whole-book background fill threshold in MB (0 = off) */
+  remoteWholeBookThresholdMB: number;
+  /** Allow whole-book fill on metered networks */
+  remoteWholeBookOnMetered: boolean;
+  /** Network retry count for range reads */
+  remoteRetryCount: number;
+  /** Initial retry interval in ms (exponential backoff) */
+  remoteRetryIntervalMs: number;
+  /** Cache expire days (LRU eviction) */
+  remoteCacheExpireDays: number;
 }
 
 const PREF_NAME = 'librera_settings';
@@ -241,7 +259,16 @@ export function defaultSettings(): ReaderSettings {
     tabsOrder: '',
     rootFolder: '',
     fontsFolder: '',
-    downloadsFolder: ''
+    downloadsFolder: '',
+    /* Round 8: online cache reading defaults (Android AppState.remote*) */
+    remoteOnlineFirst: true,
+    remoteCacheMaxMB: 500,
+    remotePrefetchWifiOnly: true,
+    remoteWholeBookThresholdMB: 20,
+    remoteWholeBookOnMetered: false,
+    remoteRetryCount: 3,
+    remoteRetryIntervalMs: 1000,
+    remoteCacheExpireDays: 30
   };
 }
 
@@ -323,7 +350,18 @@ export async function loadSettings(ctx: Context): Promise<ReaderSettings> {
       tabsOrder: typeof r.tabsOrder === 'string' ? r.tabsOrder : d.tabsOrder,
       rootFolder: typeof r.rootFolder === 'string' ? r.rootFolder : d.rootFolder,
       fontsFolder: typeof r.fontsFolder === 'string' ? r.fontsFolder : d.fontsFolder,
-      downloadsFolder: typeof r.downloadsFolder === 'string' ? r.downloadsFolder : d.downloadsFolder
+      downloadsFolder: typeof r.downloadsFolder === 'string' ? r.downloadsFolder : d.downloadsFolder,
+      remoteOnlineFirst: r.remoteOnlineFirst !== false,
+      remoteCacheMaxMB: typeof r.remoteCacheMaxMB === 'number' ? r.remoteCacheMaxMB : d.remoteCacheMaxMB,
+      remotePrefetchWifiOnly: r.remotePrefetchWifiOnly !== false,
+      remoteWholeBookThresholdMB: typeof r.remoteWholeBookThresholdMB === 'number'
+        ? r.remoteWholeBookThresholdMB : d.remoteWholeBookThresholdMB,
+      remoteWholeBookOnMetered: r.remoteWholeBookOnMetered === true,
+      remoteRetryCount: typeof r.remoteRetryCount === 'number' ? r.remoteRetryCount : d.remoteRetryCount,
+      remoteRetryIntervalMs: typeof r.remoteRetryIntervalMs === 'number'
+        ? r.remoteRetryIntervalMs : d.remoteRetryIntervalMs,
+      remoteCacheExpireDays: typeof r.remoteCacheExpireDays === 'number'
+        ? r.remoteCacheExpireDays : d.remoteCacheExpireDays
     };
     return s;
   } catch (e) {
