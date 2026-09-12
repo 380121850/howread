@@ -26,10 +26,49 @@ public class BlockCacheStore {
     public static final int BLOCK_SIZE = 256 * 1024;
     /** Page-based formats (PDF / CBZ / XPS) use 1MB blocks (tech-spec §7.1). */
     public static final int BLOCK_SIZE_PAGE_FORMAT = 1024 * 1024;
-    /** Memory LRU limit in blocks (256KB each ≈ 32MB). */
-    private static final int MEM_LIMIT_BLOCKS = 128;
-    /** Memory LRU byte cap (tech-spec §14 double limit: blocks + bytes). */
-    private static final long MEM_LIMIT_BYTES = 32L * 1024 * 1024;
+    /** Memory LRU byte cap, tiered by device RAM (tech-spec §14 double
+     * limit: blocks + bytes). Low-RAM devices keep the conservative 32MB;
+     * mid-range get 64MB, large-RAM devices 128MB. */
+    private static volatile long memLimitBytes = -1;
+
+    private static long memLimitBytes() {
+        long v = memLimitBytes;
+        if (v >= 0) {
+            return v;
+        }
+        synchronized (BlockCacheStore.class) {
+            if (memLimitBytes >= 0) {
+                return memLimitBytes;
+            }
+            long mb = 32;
+            try {
+                android.app.ActivityManager am = (android.app.ActivityManager)
+                        com.foobnix.LibreraApp.context.getSystemService(android.content.Context.ACTIVITY_SERVICE);
+                if (am != null) {
+                    android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+                    am.getMemoryInfo(mi);
+                    if (am.isLowRamDevice() || mi.totalMem <= 2L * 1024 * 1024 * 1024) {
+                        mb = 32;
+                    } else if (mi.totalMem <= 4L * 1024 * 1024 * 1024) {
+                        mb = 64;
+                    } else {
+                        mb = 128;
+                    }
+                }
+            } catch (Exception e) {
+                LOG.w(e);
+            }
+            android.util.Log.i("REMOTE", "block cache RAM limit: " + mb + "MB");
+            memLimitBytes = mb * 1024L * 1024L;
+            return memLimitBytes;
+        }
+    }
+
+    /** Block-count cap derived from the byte cap (256KB base blocks; for
+     * 1MB page-format blocks the byte cap binds first). */
+    private static int memLimitBlocks() {
+        return (int) (memLimitBytes() / BLOCK_SIZE);
+    }
     /** Per-book disk cap for the progressive whole-book filler. */
     public static final long PER_BOOK_LIMIT = 200L * 1024 * 1024;
 
@@ -48,7 +87,7 @@ public class BlockCacheStore {
         @Override
         protected boolean removeEldestEntry(Map.Entry<Long, byte[]> eldest) {
             // Evicted blocks stay on disk; only the RAM copy is dropped.
-            if (size() > MEM_LIMIT_BLOCKS || memBytes > MEM_LIMIT_BYTES) {
+            if (size() > memLimitBlocks() || memBytes > memLimitBytes()) {
                 memBytes -= eldest.getValue().length;
                 return true;
             }

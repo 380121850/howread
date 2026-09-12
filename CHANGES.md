@@ -5,11 +5,29 @@
 
 ---
 
+## [2026-09-12] 侧边栏读书格言随界面语言切换：英文界面显示英文格言
+
+**背景**：主界面左侧抽屉（侧边栏）会随机显示一条读书格言，此前无论 APP 语言设置为何，格言永远是中文。本次让格言与界面语言同步：界面为英文时显示英文格言，其余语言维持中文格言。
+
+**做了什么**：
+- 在「偏好 → 语言」选择 English（或系统语言为英文且设为"系统默认"）后，打开侧边栏看到的格言变为英文，格式为"格言 — 作者, 作品"，例如 *Reading maketh a full man. — Francis Bacon, Essays (Of Studies)*。
+- 切回中文（或系统默认且系统为中文）后，格言恢复为原来的中文格言，行为与之前完全一致。
+- 英文格言共 1042 条，与中文格言数量一致，均带真实作者与出处；每次打开侧边栏仍随机换一条。
+- 其他语言（日语、韩语、德语等）暂维持显示中文格言，不受影响。
+
+**实现要点**：
+- 新增 `android/app/src/main/assets/reading_quotes_en.txt`（1042 行，源自工作区 `1000_English_Reading_Quotes.md` 去编号、去斜体标记）。
+- `MainTabs2.showRandomQuote()`：按 `AppState.get().getAppLang()` 判断语言，为 `en` 时加载英文文件，否则加载原中文文件；英文文件缺失或为空时自动回退中文文件，保证格言永不消失。切换语言时主界面本就整体重建，格言缓存随旧实例销毁，无需额外失效处理。
+
+**验证**（Huawei SNE-AL00 真机，pro debug v1.3.2 arm64）：中文界面打开侧边栏显示中文格言（"书籍是人类进步的阶梯 —— 高尔基"）→ 偏好切 English 后界面重建，打开侧边栏显示英文格言（"Sylvia Plath writes in Ariel: books are doors to other worlds. — Sylvia Plath, Ariel"，与 assets 文件第 654 行逐字一致）→ 切回系统默认（中文）后恢复中文格言。pro + fdroid 两 flavor debug 包均构建成功，英文格言文件已确认打入 APK。
+
+---
+
 ## [2026-09-12] 鸿蒙移植第八轮：在线书籍缓存阅读（WebDAV 流式打开 + 分块缓存，对齐安卓 RemoteBook 方案，0.9.0 / versionCode 38）
 
 **背景**：按《安卓在线书籍缓存阅读技术方案》把"远程书不下载完即可打开阅读、边读边缓存、下次打开优先命中本地缓存"移植到鸿蒙版。安卓侧已有 `com.foobnix.remote` 完整实现（三协议 RandomAccessRemoteFile + BlockCacheStore + RemoteBookOpener + RemoteSeekableStream），鸿蒙侧此前只有"浏览 + 整本下载"，无在线阅读能力。
 
-**做了什么（用户视角）**：
+**做了什么**：
 - **在线打开**：「我的文件」里点击 WebDAV 目录中的书，PDF/EPUB/CBZ/XPS 这类格式**不再整本下载，直接在线打开阅读**，首屏秒级可用；翻到哪缓存到哪，再打开同一本书时已读部分直接走本地缓存，断网后**完全缓存过的书仍可打开**（零网络）。
 - **格式分级**（与安卓一致）：TXT/HTML/FB2/RTF 静默取回后打开；MOBI/AZW3/DJVU/CBR/DOC 等重格式弹「整本下载」确认后取回打开；MOBI 族先做 DRM 探测，受保护文件提示"请下载到本地后打开"；服务器不支持断点范围读（Range）时自动降级整本下载。
 - **远程书籍架**：WebDAV 服务器行新增 ⟳ 扫描按钮，递归扫描服务器上的书籍入「我的文件 → 远程书籍」列表；每行显示云图标、大小、格式徽标和**已缓存百分比**，点击即按上述分级打开，长按可删除记录与本地缓存（不动服务器文件）。
@@ -18,7 +36,7 @@
 
 **范围说明**：本轮实现 **WebDAV** 一种协议的在线缓存阅读——ArkTS 生态没有 jcifs-ng/sshj 的等价库，SMB/SFTP 的协议客户端需自研或等三方库成熟（安卓侧 SMB/SFTP 不受影响）；OPDS 行为不变。
 
-**实现要点**（佐证）：
+**实现要点**：
 - `entry/src/main/cpp/mupdf_napi.cpp`：新增远程流式桥——自定义 `fz_stream`（next/seek 走块缓存）+ `napi_threadsafe_function` 双向调度（MuPDF 工作线程阻塞等 JS 取数，JS 侧 `remoteReadDone` 回填），`openDocumentRemoteAsync` 一次开文档并顺带返回页数/可重排/加密/目录；`docOpAsync` 通用异步操作分发器（pageCount/toc/pageSize/layout/text/search/annots 等 13 个操作），远程文档禁止同步访问以免 JS 线程自锁。seek 严格镜像 `seek_file`（重置 rp/wp），修掉 `fz_tell` 返回负值导致的 "cannot tell in file"。
 - `model/RemoteBook.ets`（新增 ~950 行）：`remote://webdav/<serverId>/<url>` URI 方案、格式分级、WebDAV Range 随机读源（Range 探测 + ETag/Last-Modified 版本戳 + 指数退避重试）、两级块缓存（内存 LRU 128 块/32MB + 磁盘 data.bin/blocks.bin/meta.json，256KB/1MB 双块规格，版本变更整目录失效）、会话层（并发同块去重、P2 预取、P3 小书整本后台续传）、整本取回并落地 `Remote/books/`、MOBI DRM 头探测、PROPFIND 递归扫描（兼容任意命名空间前缀）、远程书目存储。
 - UI/设置/Reader 接线：Index.ets 点击分流 + 确认弹窗 + 进度显示 + 远程书籍架 + 设置组；Reader.ets `remote://` 分支（加载遮罩、全部文档操作走异步、批注编辑远程禁用并提示）；LibrarySearch 清理跳过远程书。
@@ -2883,3 +2901,16 @@ iOS / Desktop 两个预留平台没有任何版本配置位。
 - 飞行模式下：杀进程冷启动后点开已整本缓存的远程书正常打开且进度保持（日志确认走了"离线从块缓存打开"路径）✓；长按远程书弹出删除确认，确认后书架记录消失、本机缓存同步清理 ✓。
 
 **产物**：`android/app/build/outputs/apk/{pro,fdroid}/debug/HowRead-*-v1.3.2-*.apk`（5 个 ABI 全量）。
+
+## [2026-09-12] 1.3.2 补充轮：书架网络书阅读进度 / “不支持在线阅读”弹窗统一 / 缓存内存上限按设备分级
+
+1. **书架网络书现在显示阅读进度**（此前恒为无）：
+   - 根因一：书库页从不刷新进度数据——只有“最近/收藏/仪表盘”会刷新，而网络书又被它们的“必须是本地文件”过滤条件排除在外。现在书库每次加载书单时先把最新阅读进度刷进书库数据库，书架封面/网格/列表三种视图的进度百分比直接生效。
+   - 根因二：整本取回类格式（mobi/djvu/doc/cbr 等）的本地副本此前按内部指纹命名存放，阅读进度记录在对不上的名字下。现在副本统一存放在“缓存目录/Remote/books/<指纹>/<原文件名>”，进度、书签等按书名记录的数据与书架条目完全对应。
+   - 真机验证：book_pdf 封面同时显示“阅读进度 20% + 缓存 100% 云朵角标”；book_mobi 取回阅读后进度按原书名正常记录。
+2. **不支持在线阅读的格式点击提示统一**：点击 mobi/azw/azw3/prc/djvu/cbr/doc 弹出“不支持在线阅读——该格式不支持在线阅读。[取消][下载]”，下载后自动打开；取消不打扰。同时移除了 MOBI 的 DRM 头部探测（DRM 书的出口本来就是下载，探测只是白等一场）；txt/fb2/rtf/html 等小格式保持静默取回后直接打开的流畅体验。
+3. **在线阅读块缓存内存上限按设备内存分级**（技术方案 v5.0 备案差距补齐）：低内存或 ≤2GB 设备维持 32MB，≤4GB 设备 64MB，>4GB 设备 128MB（原为全设备一刀切 32MB）；块数上限随字节上限联动。生效档位打印在 logcat（REMOTE 标签，P30 Pro 实测 128MB）。
+4. 删除网络书时连带清理新布局的整本副本目录；旧布局遗留的历史副本由“清空缓存”统一回收。
+5. 回归验证（P30 Pro 真机 + 50.23 WebDAV 测试服务器）：飞行模式冷启动后整本缓存的书离线打开正常；断网长按删除网络书正常（记录与缓存同步清理）；本地书进度显示不受影响；无崩溃。
+
+产物：`android/app/build/outputs/apk/pro/debug/`、`.../fdroid/debug/` 下 HowRead-Pro/Fdroid-v1.3.2 全 ABI APK。

@@ -948,10 +948,8 @@
     <string name="remote_scan_title">扫描入架</string>
     <string name="remote_missing_msg">“%1$s”已被删除或移动。</string>
     <string name="remote_missing_title">文件已不可用</string>
-    <string name="remote_drm_msg">该文件受数字版权（DRM）保护，请下载到本地书库后打开。</string>
-    <string name="remote_drm_title">受 DRM 保护</string>
-    <string name="remote_fetch_and_open">取回并打开</string>
-    <string name="remote_heavy_msg">“%1$s”无法直接在线流式打开，将先整本取回（经分块缓存）再打开。是否继续？</string>
-    <string name="remote_heavy_title">该格式需整本取回</string>
+    <string name="remote_unsupported_title">不支持在线阅读</string>
+    <string name="remote_unsupported_msg">该格式不支持在线阅读。</string>
+    <string name="remote_download">下载</string>
     <string name="remote_reload">重新加载</string>
 </resources>

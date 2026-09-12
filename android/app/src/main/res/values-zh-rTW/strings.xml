@@ -771,10 +771,8 @@
     <string name="remote_scan_title">掃描入架</string>
     <string name="remote_missing_msg">「%1$s」已被刪除或移動。</string>
     <string name="remote_missing_title">檔案已不可用</string>
-    <string name="remote_drm_msg">該檔案受數位版權（DRM）保護，請下載到本地書庫後開啟。</string>
-    <string name="remote_drm_title">受 DRM 保護</string>
-    <string name="remote_fetch_and_open">取回並開啟</string>
-    <string name="remote_heavy_msg">「%1$s」無法直接線上串流開啟，將先整本取回（經分塊快取）再開啟。是否繼續？</string>
-    <string name="remote_heavy_title">該格式需整本取回</string>
+    <string name="remote_unsupported_title">不支援線上閱讀</string>
+    <string name="remote_unsupported_msg">該格式不支援線上閱讀。</string>
+    <string name="remote_download">下載</string>
     <string name="remote_reload">重新載入</string>
 </resources>

@@ -336,13 +336,18 @@ public class DefaultListeners {
             String key = com.foobnix.remote.RemoteBook.cacheKey(result.getPath());
             com.foobnix.remote.BlockCacheStore.clearBook(key);
             com.foobnix.remote.RemoteSessionFactory.closeSession(result.getPath());
-            // whole-book copy + .tag: Remote/books/<key>.<ext>[.tag]
+            // whole-book copy: Remote/books/<key>/<name>[.tag] (new layout,
+            // a directory) or Remote/books/<key>.<ext>[.tag] (old layout)
             File books = new File(new File(com.foobnix.pdf.info.model.BookCSS.get().cachePath, "Remote"), "books");
             File[] kids = books.listFiles();
             if (kids != null) {
                 for (File k : kids) {
                     if (k.getName().startsWith(key)) {
-                        k.delete();
+                        if (k.isDirectory()) {
+                            com.foobnix.ext.CacheZipUtils.deleteDir(k);
+                        } else {
+                            k.delete();
+                        }
                     }
                 }
             }

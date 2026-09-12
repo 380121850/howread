@@ -211,6 +211,43 @@ class Device:
                     return True
         return False
 
+    def legacy_dump(self):
+        """系统 uiautomator dump 兜底：uia2(wetest) 服务器在部分 EMUI 机型上
+        会漏抽屉底部一行节点（实测 P30：设置选项/软件说明/夜间模式/退出不进 uia2 树，
+        系统 dump 里有）。注意：界面刚切换后 ~3s 内 dump 会静默失败（空输出），
+        须重试。"""
+        for _ in range(4):
+            try:
+                self.shell("uiautomator dump /sdcard/autotest_uic.xml", timeout=30)
+                xml = self.shell("cat /sdcard/autotest_uic.xml")
+                if xml and "<node" in xml:
+                    return xml
+            except Exception:
+                pass
+            time.sleep(2)
+        self.shell("rm -f /sdcard/autotest_uic.xml")
+        return ""
+
+    def dump_has_text_legacy(self, text):
+        try:
+            return text in self.legacy_dump()
+        except Exception:
+            return False
+
+    def click_text_legacy(self, text):
+        """按系统 dump 的 bounds 用 input tap 点击（uia2 树缺节点时的兜底）。"""
+        try:
+            m = re.search(r'text="%s"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"' % text,
+                          self.legacy_dump())
+        except Exception:
+            return False
+        if not m:
+            return False
+        x = (int(m.group(1)) + int(m.group(3))) // 2
+        y = (int(m.group(2)) + int(m.group(4))) // 2
+        self.shell("input tap %d %d" % (x, y))
+        return True
+
     def start_app(self, cold=True):
         if cold:
             self.d.app_stop(self.pkg)
@@ -245,8 +282,10 @@ class Device:
             mime = "application/x-mobipocket-ebook"
         else:
             mime = "application/octet-stream"
-        self.shell('am start -a android.intent.action.VIEW -d "file://%s" -t %s %s'
-                   % (device_path, mime, self.pkg))
+        # 指定组件直达，不走系统 MIME 解析：P30 等装有 WPS/华为查看器的机型会把
+        # octet-stream/文档类 VIEW intent 直接路由给第三方默认应用，选择器根本不弹。
+        self.shell('am start -n %s/com.foobnix.OpenerActivity -a android.intent.action.VIEW -d "file://%s" -t %s'
+                   % (self.pkg, device_path, mime))
         deadline = time.time() + max(15, self.cfg.get("launcher_timeout_s", 10) + 5)
         resolver_hits = 0
         while time.time() < deadline:

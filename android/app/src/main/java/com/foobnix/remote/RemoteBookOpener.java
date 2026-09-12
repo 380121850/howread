@@ -49,19 +49,17 @@ public class RemoteBookOpener {
             return;
         }
         String ext = RemoteBook.getExt(remotePath);
-        if (isMobiFamily(ext)) {
-            // DRM probe first (one short head read); the answer decides
-            // between "protected → download" and "heavy → confirm & fetch"
-            checkMobiDrmThenFetch(a, remotePath, sizeHint);
-        } else if (isHeavyFormat(ext)) {
-            confirmHeavyFetch(a, remotePath, sizeHint);
+        if (isHeavyFormat(ext)) {
+            // formats that need the whole book before opening (mobi family,
+            // djvu, cbr, doc): the user decides between download and cancel
+            confirmUnsupportedFetch(a, remotePath, sizeHint);
         } else {
             // simple formats (TXT / FB2 / RTF / HTML): silent fetch
             fetchToCacheAndOpen(a, remotePath, sizeHint);
         }
     }
 
-    /** MOBI / AZW / AZW3 / PRC: binary containers, DRM probe applies. */
+    /** MOBI / AZW / AZW3 / PRC: binary containers, not streamable. */
     private static boolean isMobiFamily(String ext) {
         return "mobi".equals(ext) || "azw".equals(ext) || "azw3".equals(ext) || "prc".equals(ext);
     }
@@ -71,73 +69,19 @@ public class RemoteBookOpener {
         return isMobiFamily(ext) || "djvu".equals(ext) || "cbr".equals(ext) || "doc".equals(ext);
     }
 
-    /** Confirms the whole-book fetch for high-cost formats (tech-spec §八). */
-    private static void confirmHeavyFetch(final Activity a, final String remotePath, final long sizeHint) {
+    /**
+     * Formats that cannot be streamed online (mobi family / djvu / cbr /
+     * doc): one uniform dialog — 取消 or 下载. DRM-protected books end up
+     * here too: their only exit is a download anyway, so no head probe.
+     */
+    private static void confirmUnsupportedFetch(final Activity a, final String remotePath, final long sizeHint) {
         new AlertDialog.Builder(a)
-                .setTitle(R.string.remote_heavy_title)
-                .setMessage(a.getString(R.string.remote_heavy_msg, displayName(remotePath)))
-                .setPositiveButton(R.string.remote_fetch_and_open,
-                        (d, w) -> fetchToCacheAndOpen(a, remotePath, sizeHint))
+                .setTitle(R.string.remote_unsupported_title)
+                .setMessage(R.string.remote_unsupported_msg)
+                .setPositiveButton(R.string.remote_download,
+                        (d, w) -> downloadAndOpen(a, remotePath, sizeHint))
                 .setNegativeButton(android.R.string.cancel, null)
                 .show();
-    }
-
-    /** Reads the first KBs of a MOBI-family file and probes the DRM flag. */
-    private static void checkMobiDrmThenFetch(final Activity a, final String remotePath, final long sizeHint) {
-        new AsyncTask() {
-            Boolean encrypted;
-            Exception error;
-
-            @Override
-            protected Object doInBackground(Object[] objects) {
-                RemoteBookSession session = null;
-                try {
-                    session = RemoteSessionFactory.open(remotePath);
-                    byte[] head = new byte[8 * 1024];
-                    int got = 0;
-                    while (got < head.length) {
-                        int n = session.readAt(got, head, got, head.length - got);
-                        if (n <= 0) {
-                            break;
-                        }
-                        got += n;
-                    }
-                    encrypted = MobiHead.isEncrypted(head);
-                } catch (Exception e) {
-                    LOG.e(e);
-                    error = e;
-                } finally {
-                    if (session != null) {
-                        // open() bypasses the session pool: close directly
-                        try {
-                            session.close();
-                        } catch (Exception ignore) {
-                            LOG.w(ignore);
-                        }
-                    }
-                }
-                return null;
-            }
-
-            @Override
-            protected void onPostExecute(Object o) {
-                if (encrypted != null && encrypted) {
-                    new AlertDialog.Builder(a)
-                            .setTitle(R.string.remote_drm_title)
-                            .setMessage(R.string.remote_drm_msg)
-                            .setPositiveButton(R.string.remote_download_and_open,
-                                    (d, w) -> downloadAndOpen(a, remotePath, sizeHint))
-                            .setNegativeButton(android.R.string.cancel, null)
-                            .show();
-                    return;
-                }
-                if (error != null) {
-                    // probe inconclusive: let the fetch pipeline report the error
-                    android.util.Log.i("REMOTE", "mobi DRM probe failed: " + error);
-                }
-                confirmHeavyFetch(a, remotePath, sizeHint);
-            }
-        }.execute();
     }
 
     /** Online open through the chunk cache (Pro + direct-open formats). */
@@ -309,11 +253,21 @@ public class RemoteBookOpener {
         }
     }
 
-    /** Cache-dir copy of a fetched remote book: cachePath/Remote/books/<sha256>.<ext> */
+    /**
+     * Cache-dir copy of a fetched remote book:
+     * cachePath/Remote/books/<sha256>/<original file name>. The copy keeps
+     * the remote file's own name so reading progress / bookmarks (keyed by
+     * file name) match the shelf entry.
+     */
     private static File cacheBookFile(String remotePath) {
-        String ext = RemoteBook.getExt(remotePath);
-        String name = RemoteBook.cacheKey(remotePath) + (TxtUtils.isEmpty(ext) ? "" : "." + ext);
-        return new File(new File(new File(BookCSS.get().cachePath, "Remote"), "books"), name);
+        String name = displayName(remotePath);
+        if (TxtUtils.isEmpty(name)) {
+            name = RemoteBook.cacheKey(remotePath);
+        }
+        // a remote (Linux-side) name may carry characters the app storage rejects
+        name = name.replaceAll("[\\\\/:*?\"<>|]", "_");
+        return new File(new File(new File(new File(BookCSS.get().cachePath, "Remote"), "books"),
+                RemoteBook.cacheKey(remotePath)), name);
     }
 
     /**

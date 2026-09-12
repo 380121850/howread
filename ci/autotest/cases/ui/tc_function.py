@@ -10,7 +10,9 @@
 import time
 import re
 
-from lib.driver import TestSkip
+from lib.driver import TestSkip, adb
+
+ROOT = r"Z:\opt\librera\LibreraReader\ci\autotest"
 
 
 def _ensure_home(dev):
@@ -412,28 +414,46 @@ def fn05_reading_settings(dev, case_id, cfg=None, fixtures=None):
 def fn06_theme(dev, case_id, cfg=None, fixtures=None):
     """主题切换：抽屉菜单 → 夜间模式，截图对比验证生效后还原。"""
     from cases.ui.tc_smoke import _same_png
+
+    def has_night():
+        return dev.dump_has_text("夜间模式") or dev.dump_has_text_legacy("夜间模式")
+
+    def click_night():
+        if dev.click_text("夜间模式") or dev.click_desc("夜间模式"):
+            return True
+        if dev.click_text_legacy("夜间模式"):
+            return True
+        # P30：uia2 树缺抽屉底行、uia2 活跃时系统 dump 也返回空树，
+        # 只能按坐标点抽屉底行"夜间模式"（4 按钮行从左第 3 个，实测 0.5w/0.91h 有效），
+        # 是否生效由 toggle_night 的截图对比把关。
+        w, h = dev.d.window_size()
+        dev.shell("input tap %d %d" % (int(0.5 * w), int(0.91 * h)))
+        time.sleep(1)
+        return True
+
     with dev.step(case_id, "open_drawer"):
         _ensure_home(dev)
         if not dev.click_desc("菜单"):
             raise AssertionError("抽屉菜单按钮未找到")
         time.sleep(1.5)
-        if not (dev.dump_has_text("夜间模式") or dev.click_text("夜间模式")):
+        # 抽屉是否打开以 u2 树里能看到的上半区条目为准（P30 底行不进任何 dump）
+        if not (has_night() or dev.dump_has_text("最近阅读")):
             dev.save_dump(case_id, "no_drawer")
             raise AssertionError("抽屉菜单未出现/无夜间模式项")
     with dev.step(case_id, "toggle_night"):
         before = dev.screenshot(case_id, "theme_before")
-        dev.click_text("夜间模式") or dev.click_desc("夜间模式")
+        click_night()
         time.sleep(2.5)
         after = dev.screenshot(case_id, "theme_after")
         if _same_png(before, after):
             dev.save_dump(case_id, "theme_nochange")
             raise AssertionError("切换夜间模式后画面无变化")
     with dev.step(case_id, "restore"):
-        dev.click_desc("菜单") if dev.dump_has_text("我的书架") is False else None
-        time.sleep(1)
-        if dev.dump_has_text("夜间模式"):
-            dev.click_text("夜间模式") or dev.click_desc("夜间模式")
-            time.sleep(1.5)
+        if not dev.dump_has_text("我的书架"):
+            dev.click_desc("菜单")
+            time.sleep(1)
+        click_night()
+        time.sleep(1.5)
         dev.d.press("back")
         time.sleep(1)
 
@@ -522,6 +542,22 @@ MULTI_FORMAT_BOOKS = [
     ("txt", "book_txt.txt"),
 ]
 
+# 设备侧 ASCII 名 → 本地 teskbook 原始文件名（多数原始样本是中文名，需映射）。
+MULTI_FORMAT_SOURCES = {
+    "book_mobi.mobi": "一本书读懂大数据-黄颖.mobi",
+    "book_azw3.azw3": "计算机与人脑 (科学素养文库·科学元典丛书) - 冯·诺伊曼(Neumann.J.V).azw3",
+    "book_azw.azw": "论犯罪的价值 - 于志刚.azw",
+    "book_prc.prc": "297孙子兵法.prc",
+    "book_doc.doc": "MySQL数据库如何实现双机热备的配置.doc",
+    "book_docx.docx": "The Analysis Of Basic MFC Program Running Principle.docx",
+    # docx 的设备侧文件名就是 teskbook 原名（ASCII），两条键名都要能查到
+    "The Analysis Of Basic MFC Program Running Principle.docx": "The Analysis Of Basic MFC Program Running Principle.docx",
+    "book_djvu.djvu": "[深入理解计算机系统].Computer.Systems.-.A.Programmers.Perspective.-.Randal.Bryant,.David.O.Hallaron.-.1008.pages.High.Quality.-.2003.Prentice.Hall.djvu",
+    "book_html.html": "教学设计.html",
+    "book_pdf.pdf": "test.pdf",
+    "book_txt.txt": "demo.txt",
+}
+
 
 def _exit_reader(dev, case_id):
     """退出阅读器回主界面（最多 3 次 back，命中首页/最近阅读即停）。"""
@@ -539,6 +575,16 @@ def fn09_multi_format(dev, case_id, cfg=None, fixtures=None):
     不依赖书库扫描，确定性高。"""
     dl = "/sdcard/Download/"
     opened, failed = [], []
+    # 样本书不随 fixtures 推送，新设备（如 P30）Download 里没有 → 先按映射补推缺失的
+    import os
+    for fmt, fname in MULTI_FORMAT_BOOKS:
+        device_path = dl + fname
+        if "No such" in dev.shell("ls " + device_path):
+            src = os.path.join(ROOT, "teskbook", MULTI_FORMAT_SOURCES[fname])
+            code, out = adb("-s", dev.serial, "push", src, device_path, timeout=300)
+            if code != 0:
+                failed.append(fmt + "(推书失败)")
+                continue
     for fmt, fname in MULTI_FORMAT_BOOKS:
         device_path = dl + fname
         with dev.step(case_id, "open_%s" % fmt):

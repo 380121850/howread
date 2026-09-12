@@ -93,6 +93,7 @@ import com.foobnix.work.CheckDeletedBooksWorker;
 import com.foobnix.work.SearchAllBooksWorker;
 import com.foobnix.work.SelfTestWorker;
 
+import org.ebookdroid.common.settings.books.SharedBooks;
 import org.greenrobot.eventbus.EventBus;
 import org.greenrobot.eventbus.Subscribe;
 import org.greenrobot.eventbus.ThreadMode;
@@ -1048,6 +1049,11 @@ public class SearchFragment2 extends UIFragment<FileMeta> {
             List<FileMeta> searchBy = AppDB.get()
                                            .searchBy(txt, SORT_BY.getByID(AppState.get().sortBy),
                                                    AppState.get().isSortAsc);
+
+            // flush the latest reading percent into the DB before any filter
+            // consumes it — remote:// books are excluded from the recent /
+            // favorites loaders that used to be the only refresh points
+            SharedBooks.updateProgress(searchBy, false, -1);
 
             if (TxtUtils.isEmpty(selectedReadState)) {
                 // "All" keeps the original hide-finished-books behavior;

@@ -23,6 +23,17 @@
       "rom_notes": "EMUI：会自动息屏（driver 已做唤醒+常亮）；书库首扫慢"
     },
     {
+      "serial": "Q5S5T19605008064",
+      "model": "ELE-AL00 (P30)",
+      "brand": "Huawei",
+      "android": "10",
+      "sdk": 29,
+      "abi": "arm64-v8a",
+      "resolution": "720x1560",
+      "density": 480,
+      "rom_notes": "EMUI：自动息屏（driver 已做唤醒+常亮）；用户侧调低分辨率 Override 720x1560"
+    },
+    {
       "serial": "NETNU20617301956",
       "model": "KSA-AL10",
       "brand": "Huawei",

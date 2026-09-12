@@ -102,6 +102,7 @@ import org.greenrobot.eventbus.ThreadMode;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -999,8 +1000,10 @@ public class MainTabs2 extends AdsFragmentActivity {
 
     /**
      * Shows a random reading quote in the drawer banner's top-left corner.
-     * The 1000+ quotes ship in assets/reading_quotes.txt (one per line,
-     * "text —— source"), loaded once and kept in memory.
+     * The 1000+ quotes ship in assets/reading_quotes.txt (Chinese, one per line,
+     * "text —— source"); when the app display language is English,
+     * assets/reading_quotes_en.txt ("text — Author, Work") is used instead.
+     * Loaded once and kept in memory.
      */
     private void showRandomQuote() {
         if (drawerQuote == null) {
@@ -1008,27 +1011,45 @@ public class MainTabs2 extends AdsFragmentActivity {
         }
         try {
             if (drawerQuotes == null) {
-                List<String> lines = new ArrayList<>();
-                BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(getAssets().open("reading_quotes.txt"), StandardCharsets.UTF_8));
-                try {
-                    for (String line; (line = reader.readLine()) != null; ) {
-                        if (!line.trim().isEmpty()) {
-                            lines.add(line.trim());
-                        }
-                    }
-                } finally {
-                    reader.close();
+                String file = "reading_quotes.txt";
+                if ("en".equals(AppState.get().getAppLang())) {
+                    file = "reading_quotes_en.txt";
                 }
-                drawerQuotes = lines;
+                try {
+                    drawerQuotes = loadQuotes(file);
+                } catch (Exception e) {
+                    LOG.e(e);
+                }
+                if ((drawerQuotes == null || drawerQuotes.isEmpty()) && !file.equals("reading_quotes.txt")) {
+                    drawerQuotes = loadQuotes("reading_quotes.txt");
+                }
             }
-            if (!drawerQuotes.isEmpty()) {
+            if (drawerQuotes != null && !drawerQuotes.isEmpty()) {
                 drawerQuote.setTextColor(TintUtil.getColorInDayNighth());
                 drawerQuote.setText(drawerQuotes.get(drawerQuoteRandom.nextInt(drawerQuotes.size())));
             }
         } catch (Exception e) {
             LOG.e(e);
         }
+    }
+
+    /**
+     * Reads a quotes asset file (one quote per line, blank lines skipped).
+     */
+    private List<String> loadQuotes(String file) throws IOException {
+        List<String> lines = new ArrayList<>();
+        BufferedReader reader = new BufferedReader(
+                new InputStreamReader(getAssets().open(file), StandardCharsets.UTF_8));
+        try {
+            for (String line; (line = reader.readLine()) != null; ) {
+                if (!line.trim().isEmpty()) {
+                    lines.add(line.trim());
+                }
+            }
+        } finally {
+            reader.close();
+        }
+        return lines;
     }
 
     /**

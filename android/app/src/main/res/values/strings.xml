@@ -948,10 +948,8 @@
     <string name="remote_scan_title">Scan into shelf</string>
     <string name="remote_missing_msg">"%1$s" was deleted or moved on the server.</string>
     <string name="remote_missing_title">File no longer available</string>
-    <string name="remote_drm_msg">This file is protected by DRM. Download it to the local library to open it.</string>
-    <string name="remote_drm_title">DRM protected</string>
-    <string name="remote_fetch_and_open">Fetch and open</string>
-    <string name="remote_heavy_msg">"%1$s" cannot be streamed directly - it will be fetched completely (via the chunk cache) before opening. Continue?</string>
-    <string name="remote_heavy_title">Format needs a full fetch</string>
+    <string name="remote_unsupported_title">Online reading not supported</string>
+    <string name="remote_unsupported_msg">This format does not support online reading.</string>
+    <string name="remote_download">Download</string>
     <string name="remote_reload">Reload</string>
 </resources>
