@@ -24,6 +24,8 @@ import promptAction from '@ohos.promptAction';
 import picker from '@ohos.file.picker';
 import pasteboard from '@ohos.pasteboard';
 import common from '@ohos.app.ability.common';
+import inputConsumer from '@ohos.multimodalInput.inputConsumer';
+import mmiKeyEvent from '@ohos.multimodalInput.keyEvent';
 import { systemShare } from '@kit.ShareKit';
 import { importUriToSandbox } from '../model/FileImport';
 import {
@@ -42,6 +44,7 @@ import { AiConfig, loadAiConfig, chatCompletion, aiConfigReady, AiMessage } from
 import { getNotes, addNote, removeNote, AiNote } from '../model/Notes';
 import { exportNotesFile, ExportData } from '../model/Export';
 import { isBilingualDoc, buildBilingual } from '../model/Bilingual';
+import { convertToHtml, isConvertibleExt } from '../model/DocConvert';
 import { TextUtils } from '../model/TextUtils';
 import { loadSettings, saveSettings, THEME_NAMES, ReaderSettings } from '../model/Settings';
 import { startTtsBackgroundTask, stopTtsBackgroundTask, showTtsNotification, cancelTtsNotification, syncTtsCardState } from '../service/TtsService';
@@ -671,11 +674,19 @@ struct Reader {
   @State bgImageAlpha: number = 30;           /* I6: background opacity 0-100 */
   @State rtlEnabled: boolean = false;         /* I2: right-to-left reading direction */
   @State showGestureConfig: boolean = false;  /* I4: gesture configuration dialog */
-  @State tapLeftAction: number = 0;           /* I4: 0=prev, 1=menu, 2=toc, 3=bookmark */
+  /* Round 9: unified tap-zone action codes (shared across zones):
+   * 0=prev 1=next 2=menu 3=toc 4=bookmark 5=brightness 6=fullscreen 7=none */
+  @State tapLeftAction: number = 0;           /* default: previous page */
   /* Round 7: prefs long-press action: 0=text selection, 1=file info, 2=menu, 3=none */
   @State longTapActionPref: number = 0;
-  @State tapCenterAction: number = 0;         /* I4: 0=menu, 1=fullscreen, 2=brightness */
-  @State tapRightAction: number = 0;          /* I4: 0=next, 1=menu, 2=toc, 3=bookmark */
+  @State tapCenterAction: number = 2;         /* default: toggle menu */
+  @State tapRightAction: number = 1;          /* default: next page */
+  /* Round 9: logical source path — set when docx/rtf was converted to HTML,
+   * so reading progress/bookmarks keep the ORIGINAL file as their key */
+  private logicalPath: string = '';
+
+  /* Round 9: volume keys: 0=off, 1=page turn, 2=zoom (auto-scroll speed while scrolling) */
+  private volumeKeyAction: number = 1;
   @State showTextReplace: boolean = false;    /* I7: text replacement panel */
   @State replaceFrom: string = '';            /* I7: search text */
   @State replaceTo: string = '';              /* I7: replacement text */
@@ -815,6 +826,9 @@ struct Reader {
   aboutToAppear(): void {
     try {
       const ctx = getContext(this);
+      /* Round 9: subscribe the volume keys while the reader is open
+       * (Android enable_volume_keys; API 16+ inputConsumer). */
+      this.registerVolumeKeys();
       /* Phase 3: report reading time in 30s chunks while the reader is open */
       this.readTimerId = setInterval(() => {
         this.tickReadTime();
@@ -924,14 +938,20 @@ struct Reader {
     this.pageMargin = s.margin;
     this.blueLightFilter = s.blueLightFilter;
     this.bgImagePath = s.bgImagePath;
-    /* Round 7: global single-tap action from the prefs (Android readingMode):
-     * 0 = reader-panel default, 1 = menu toggle, 2 = no action */
+    /* Round 9: tap-zone actions from the gesture panel (unified codes);
+     * prefs singleTapAction still overrides the center zone like Android
+     * readingMode: 0 = reader-panel default (keep the panel value),
+     * 1 = menu toggle, 2 = no action */
+    this.tapLeftAction = s.tapLeftAction;
+    this.tapRightAction = s.tapRightAction;
+    this.tapCenterAction = s.tapCenterAction;
     if (s.singleTapAction === 1) {
-      this.tapCenterAction = 1;
+      this.tapCenterAction = 2;
     } else if (s.singleTapAction === 2) {
-      this.tapCenterAction = 4;
+      this.tapCenterAction = 7;
     }
     this.longTapActionPref = s.longTapAction;
+    this.volumeKeyAction = s.volumeKeyAction;
     this.dataSource.setZoom(this.zoomLevel);
     this.dataSource.setInvert(this.nightMode);
     if (this.brightnessLevel > 0) {
@@ -1035,7 +1055,11 @@ struct Reader {
       remoteWholeBookOnMetered: cur.remoteWholeBookOnMetered,
       remoteRetryCount: cur.remoteRetryCount,
       remoteRetryIntervalMs: cur.remoteRetryIntervalMs,
-      remoteCacheExpireDays: cur.remoteCacheExpireDays
+      remoteCacheExpireDays: cur.remoteCacheExpireDays,
+      tapLeftAction: this.tapLeftAction,
+      tapCenterAction: this.tapCenterAction,
+      tapRightAction: this.tapRightAction,
+      volumeKeyAction: this.volumeKeyAction
     };
     await saveSettings(ctx, s);
   }
@@ -1139,12 +1163,43 @@ struct Reader {
     }
   }
 
-  /** Round 8: route local docs to the sync opener, remote:// docs to the stream bridge. */
+  /** Round 8: route local docs to the sync opener, remote:// docs to the stream bridge.
+   *  Batch 2: .docx/.rtf are converted to cached HTML first; .doc shows an explicit
+   *  unsupported toast (the engine has no Word-97 handler). */
   private initOrRemote(): void {
     if (this.documentPath.startsWith('remote://')) {
       this.initRemoteReader(this.documentPath);
-    } else {
+      return;
+    }
+    const ext: string = fileExtOf(this.documentPath);
+    if (isConvertibleExt(ext)) {
+      this.openConverted();
+      return;
+    }
+    if (ext === 'doc') {
+      console.error('[Reader] Legacy .doc is not supported');
+      promptAction.showToast({ message: '暂不支持旧版 .doc 文件，请先另存为 .docx' });
+      router.back();
+      return;
+    }
+    this.initReader();
+  }
+
+  /** Batch 2: convert docx/rtf to cached HTML, then open the converted copy.
+   *  Reading progress keeps the ORIGINAL path as its key (logicalPath). */
+  private async openConverted(): Promise<void> {
+    const src: string = this.documentPath;
+    const ext: string = fileExtOf(src);
+    try {
+      const html: string = await convertToHtml(getContext(this), src, ext);
+      this.logicalPath = src;
+      this.documentPath = html;
       this.initReader();
+    } catch (e) {
+      const msg: string = e instanceof Error ? e.message : String(e);
+      console.error(`[Reader] ${ext} convert failed: ${msg}`);
+      promptAction.showToast({ message: `文档转换失败：${msg}` });
+      router.back();
     }
   }
 
@@ -1224,6 +1279,7 @@ struct Reader {
   }
 
   aboutToDisappear(): void {
+    this.unregisterVolumeKeys();
     if (this.readTimerId >= 0) {
       clearInterval(this.readTimerId);
       this.readTimerId = -1;
@@ -1249,7 +1305,7 @@ struct Reader {
     if (this.documentPath.length > 0 && this.totalPages > 0) {
       const ctx = getContext(this);
       const book: RecentBook = {
-        path: this.documentPath,
+        path: this.logicalPath.length > 0 ? this.logicalPath : this.documentPath,
         title: this.docTitle,
         page: this.currentPage,
         totalPages: this.totalPages,
@@ -1331,7 +1387,7 @@ struct Reader {
     if (this.documentPath.length > 0 && this.totalPages > 0) {
       const ctx = getContext(this);
       const book: RecentBook = {
-        path: this.documentPath,
+        path: this.logicalPath.length > 0 ? this.logicalPath : this.documentPath,
         title: this.docTitle,
         page: page,
         totalPages: this.totalPages,
@@ -2737,41 +2793,112 @@ struct Reader {
     }
   }
 
-  /** Execute configurable tap zone action (sprint I4). */
+  /** Round 9: labels for the unified tap-zone action codes (index = code). */
+  private zoneActionRes(): Array<Resource> {
+    return [
+      $r('app.string.action_prev_page'),
+      $r('app.string.action_next_page'),
+      $r('app.string.reader_menu'),
+      $r('app.string.reader_contents'),
+      $r('app.string.reader_bookmark'),
+      $r('app.string.reader_brightness_n'),
+      $r('app.string.action_fullscreen'),
+      $r('app.string.set_action_none')
+    ];
+  }
+
+  /** Execute a tap-zone action. Round 9: unified action codes shared by all
+   *  zones (and by the volume keys): 0=prev 1=next 2=menu 3=toc 4=bookmark
+   *  5=brightness 6=fullscreen 7=none. */
   private onTapZoneAction(action: number): void {
     if (action === 0) {
-      /* prev page / next page / menu (default) */
+      /* previous page */
       if (this.currentPage > 0) {
         this.currentPage = this.currentPage - 1;
         this.onPageChanged(this.currentPage);
-      } else if (this.totalPages > 0 && this.currentPage < this.totalPages - 1) {
-        this.currentPage = this.currentPage + 1;
-        this.onPageChanged(this.currentPage);
-      } else {
-        this.showMenu = !this.showMenu;
       }
     } else if (action === 1) {
-      /* menu / fullscreen */
-      if (this.tapCenterAction === 1) {
-        this.toggleFullscreen();
-      } else {
-        this.showMenu = !this.showMenu;
+      /* next page */
+      if (this.totalPages > 0 && this.currentPage < this.totalPages - 1) {
+        this.currentPage = this.currentPage + 1;
+        this.onPageChanged(this.currentPage);
       }
     } else if (action === 2) {
-      /* TOC / brightness */
-      if (this.tapCenterAction === 2) {
-        this.brightnessLevel = this.brightnessLevel > 200 ? 64 : this.brightnessLevel + 32;
-        this.setBrightness(this.brightnessLevel);
-      } else {
-        this.showToc = true;
-      }
+      this.showMenu = !this.showMenu;
     } else if (action === 3) {
-      /* bookmark */
-      this.toggleBookmark();
+      this.showToc = true;
     } else if (action === 4) {
-      /* Round 7: no action (prefs singleTapAction = none) */
+      this.toggleBookmark();
+    } else if (action === 5) {
+      /* brightness cycle (same stepping as the top-bar button) */
+      this.brightnessLevel = this.brightnessLevel > 200 ? 64 : this.brightnessLevel + 32;
+      this.setBrightness(this.brightnessLevel);
+    } else if (action === 6) {
+      this.toggleFullscreen();
     }
+    /* 7 = no action */
     console.info(`[Reader] Tap zone action: ${action}`);
+  }
+
+  /** Round 9: volume-key navigation (Android enable_volume_keys).
+   *  Returns true when the key was consumed (so the system does not adjust
+   *  the volume). While auto-scrolling the keys adjust the scroll speed. */
+  private onVolumeKey(keyCode: number): boolean {
+    if (this.volumeKeyAction === 0) {
+      return false;
+    }
+    const volUp: boolean = keyCode === 16; /* KEYCODE_VOLUME_UP */
+    if (!volUp && keyCode !== 17 /* KEYCODE_VOLUME_DOWN */) {
+      return false;
+    }
+    if (this.autoScroll) {
+      if (volUp && this.autoScrollSpeed < 10) {
+        this.autoScrollSpeed = this.autoScrollSpeed + 1;
+      } else if (!volUp && this.autoScrollSpeed > 2) {
+        this.autoScrollSpeed = this.autoScrollSpeed - 1;
+      }
+      console.info(`[Reader] Volume key: auto-scroll speed ${this.autoScrollSpeed}`);
+      return true;
+    }
+    if (this.volumeKeyAction === 2) {
+      if (volUp) {
+        this.zoomIn();
+      } else {
+        this.zoomOut();
+      }
+      return true;
+    }
+    /* page turn (default) */
+    this.onTapZoneAction(volUp ? 0 : 1);
+    console.info(`[Reader] Volume key: ${volUp ? 'prev' : 'next'} page`);
+    return true;
+  }
+
+  /** Round 9: subscribe the volume keys via inputConsumer 'keyPressed'
+   *  (API 16+, the official app-side path for VOLUME_UP/DOWN). Silently
+   *  skipped when the capability is unavailable. */
+  private registerVolumeKeys(): void {
+    try {
+      const cfgUp: inputConsumer.KeyPressedConfig = { key: 16, action: 1, isRepeat: false };
+      const cfgDown: inputConsumer.KeyPressedConfig = { key: 17, action: 1, isRepeat: false };
+      inputConsumer.on('keyPressed', cfgUp, (e: mmiKeyEvent.KeyEvent) => {
+        this.onVolumeKey(e.key.code);
+      });
+      inputConsumer.on('keyPressed', cfgDown, (e: mmiKeyEvent.KeyEvent) => {
+        this.onVolumeKey(e.key.code);
+      });
+      console.info('[Reader] Volume keys registered');
+    } catch (e) {
+      console.info('[Reader] Volume keys unavailable: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  private unregisterVolumeKeys(): void {
+    try {
+      inputConsumer.off('keyPressed');
+    } catch (e) {
+      /* capability absent — nothing to clean up */
+    }
   }
 
   /** Open file info dialog (sprint G6): show title/author/pages/format/size. */
@@ -4478,67 +4605,57 @@ struct Reader {
               Text($r('app.string.reader_gestures'))
                 .fontSize(15).fontWeight(FontWeight.Bold)
 
-              /* Left tap zone */
-              Row({ space: 6 }) {
+              /* Round 9: all three zones share the unified 8-action list;
+               * Flex-wrap keeps all chips visible on narrow screens */
+              Row() {
                 Text($r('app.string.reader_zone_left'))
                   .fontSize(12).fontColor('#555').width(40)
-                Button($r('app.string.action_prev_page')).fontSize(11).height(28)
-                  .backgroundColor(this.tapLeftAction === 0 ? '#2a7' : '#e0e0e0')
-                  .fontColor(this.tapLeftAction === 0 ? Color.White : '#333')
-                  .onClick(() => { this.tapLeftAction = 0; })
-                Button($r('app.string.reader_menu')).fontSize(11).height(28)
-                  .backgroundColor(this.tapLeftAction === 1 ? '#2a7' : '#e0e0e0')
-                  .fontColor(this.tapLeftAction === 1 ? Color.White : '#333')
-                  .onClick(() => { this.tapLeftAction = 1; })
-                Button($r('app.string.reader_contents')).fontSize(11).height(28)
-                  .backgroundColor(this.tapLeftAction === 2 ? '#2a7' : '#e0e0e0')
-                  .fontColor(this.tapLeftAction === 2 ? Color.White : '#333')
-                  .onClick(() => { this.tapLeftAction = 2; })
-                Button($r('app.string.reader_bookmark')).fontSize(11).height(28)
-                  .backgroundColor(this.tapLeftAction === 3 ? '#2a7' : '#e0e0e0')
-                  .fontColor(this.tapLeftAction === 3 ? Color.White : '#333')
-                  .onClick(() => { this.tapLeftAction = 3; })
+                Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
+                  ForEach(this.zoneActionRes(), (res: Resource, idx: number) => {
+                    Button(res).fontSize(11).height(28)
+                      .backgroundColor(this.tapLeftAction === idx ? '#2a7' : '#e0e0e0')
+                      .fontColor(this.tapLeftAction === idx ? Color.White : '#333')
+                      .margin(3)
+                      .onClick(() => { this.tapLeftAction = idx; })
+                  }, (res: Resource, idx: number) => `L${idx}_${this.tapLeftAction}`)
+                }
+                .layoutWeight(1)
               }
+              .width('100%')
 
               /* Center tap zone */
-              Row({ space: 6 }) {
+              Row() {
                 Text($r('app.string.reader_zone_center'))
                   .fontSize(12).fontColor('#555').width(40)
-                Button($r('app.string.reader_menu')).fontSize(11).height(28)
-                  .backgroundColor(this.tapCenterAction === 0 ? '#2a7' : '#e0e0e0')
-                  .fontColor(this.tapCenterAction === 0 ? Color.White : '#333')
-                  .onClick(() => { this.tapCenterAction = 0; })
-                Button($r('app.string.action_fullscreen')).fontSize(11).height(28)
-                  .backgroundColor(this.tapCenterAction === 1 ? '#2a7' : '#e0e0e0')
-                  .fontColor(this.tapCenterAction === 1 ? Color.White : '#333')
-                  .onClick(() => { this.tapCenterAction = 1; })
-                Button($r('app.string.reader_brightness_n')).fontSize(11).height(28)
-                  .backgroundColor(this.tapCenterAction === 2 ? '#2a7' : '#e0e0e0')
-                  .fontColor(this.tapCenterAction === 2 ? Color.White : '#333')
-                  .onClick(() => { this.tapCenterAction = 2; })
+                Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
+                  ForEach(this.zoneActionRes(), (res: Resource, idx: number) => {
+                    Button(res).fontSize(11).height(28)
+                      .backgroundColor(this.tapCenterAction === idx ? '#2a7' : '#e0e0e0')
+                      .fontColor(this.tapCenterAction === idx ? Color.White : '#333')
+                      .margin(3)
+                      .onClick(() => { this.tapCenterAction = idx; })
+                  }, (res: Resource, idx: number) => `C${idx}_${this.tapCenterAction}`)
+                }
+                .layoutWeight(1)
               }
+              .width('100%')
 
               /* Right tap zone */
-              Row({ space: 6 }) {
+              Row() {
                 Text($r('app.string.reader_zone_right'))
                   .fontSize(12).fontColor('#555').width(40)
-                Button($r('app.string.action_next_page')).fontSize(11).height(28)
-                  .backgroundColor(this.tapRightAction === 0 ? '#2a7' : '#e0e0e0')
-                  .fontColor(this.tapRightAction === 0 ? Color.White : '#333')
-                  .onClick(() => { this.tapRightAction = 0; })
-                Button($r('app.string.reader_menu')).fontSize(11).height(28)
-                  .backgroundColor(this.tapRightAction === 1 ? '#2a7' : '#e0e0e0')
-                  .fontColor(this.tapRightAction === 1 ? Color.White : '#333')
-                  .onClick(() => { this.tapRightAction = 1; })
-                Button($r('app.string.reader_contents')).fontSize(11).height(28)
-                  .backgroundColor(this.tapRightAction === 2 ? '#2a7' : '#e0e0e0')
-                  .fontColor(this.tapRightAction === 2 ? Color.White : '#333')
-                  .onClick(() => { this.tapRightAction = 2; })
-                Button($r('app.string.reader_bookmark')).fontSize(11).height(28)
-                  .backgroundColor(this.tapRightAction === 3 ? '#2a7' : '#e0e0e0')
-                  .fontColor(this.tapRightAction === 3 ? Color.White : '#333')
-                  .onClick(() => { this.tapRightAction = 3; })
+                Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
+                  ForEach(this.zoneActionRes(), (res: Resource, idx: number) => {
+                    Button(res).fontSize(11).height(28)
+                      .backgroundColor(this.tapRightAction === idx ? '#2a7' : '#e0e0e0')
+                      .fontColor(this.tapRightAction === idx ? Color.White : '#333')
+                      .margin(3)
+                      .onClick(() => { this.tapRightAction = idx; })
+                  }, (res: Resource, idx: number) => `R${idx}_${this.tapRightAction}`)
+                }
+                .layoutWeight(1)
               }
+              .width('100%')
 
               Button($r('app.string.common_save'))
                 .fontSize(13).height(34)
@@ -4546,6 +4663,8 @@ struct Reader {
                 .margin({ top: 8 })
                 .onClick(() => {
                   this.showGestureConfig = false;
+                  /* Round 9: actually persist the zone actions (was log-only) */
+                  this.persistSettings();
                   console.info(`[Reader] Gestures saved: L=${this.tapLeftAction} C=${this.tapCenterAction} R=${this.tapRightAction}`);
                 })
             }
@@ -5463,5 +5582,14 @@ struct Reader {
     }
     .width('100%')
     .height('100%')
+    /* Round 9: volume-key navigation; intercept at the root so the system
+     * volume is not changed while the reader consumes the keys */
+    .onKeyEventDispatch((event: KeyEvent): boolean => {
+      /* KeyType.Down = 0: act once per press */
+      if (event.type !== 0) {
+        return false;
+      }
+      return this.onVolumeKey(event.keyCode);
+    })
   }
 }

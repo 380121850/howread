@@ -89,6 +89,22 @@
 4. ✅ **离线**：完全缓存的书零网络打开（openOffline 降级，服务器停机实测）；已缓存整本书重取回直接从缓存落地。
 5. ✅ **SMB/SFTP/EPUB DRM 已在阶段 15b 完成（2026-09-12，见下）**。剩余待续：OPDS 认证/分页；计费网络检测接入 wholeBookOnMetered。
 
+### 阶段 16b（2026-09-13）：功能补齐批次 2——DOCX/RTF 打开 ✅ 已完成（0.9.3）
+
+1. ✅ **转换管线**（新 `model/DocConvert.ets`）：docx = `@ohos.zlib` 解压 + document.xml 扫描器（段落/粗斜体/br/tab/实体）；rtf = 自写状态机（组栈/控制字/\uN+\'hh 转义/目标组丢弃）。产物缓存 HTML（键 = 名_大小_时间，确定性），MuPDF html handler 打开、reflow 可调。
+2. ✅ **接线**（Reader.initOrRemote）：docx/rtf 转换后打开，logicalPath 保原路径（进度/书签键 = 原文件）；转换失败 toast；**.doc 明确提示不支持**（原为 0 页空白）。远程整本取回的 docx/rtf 自动受益。
+3. ✅ **验证**（模拟器 + 50.23）：book_docx.docx 下载→转换→46 页阅读正常（含中文/粗体/代码示例字面显示）；自造 RTF（中文 \uN/粗斜体/符号）静默取回→转换→内容逐字正确；缓存复用。修复 `<w:p>` 开标签缺失与 `<title>` 泄漏进正文两个问题。
+4. ⏸ **待续**：.doc（Word 97 二进制，需 antiword 类 C 库交叉编译）；复杂样式（表格/图片/页眉脚）不保留；.doc toast 模拟器未 UI 实测（逻辑 3 行已走查）。后续批次：3=标签管理+按作者分组（C3/C4）、4=自动裁边（B2）、5=OPDS 认证/分页 + 计费网络检测（C10/C11）。
+
+### 阶段 16（2026-09-13）：功能补齐批次 1——音量键翻页/缩放 + 点击分区动作扩充 ✅ 已完成（0.9.3）
+
+> 背景：2026-09-13 完成"安卓 vs 鸿蒙功能全量对比"（约 20 项硬缺口 + 8 项部分实现，集中 在格式引擎/阅读器定制/书库元数据/系统集成），用户批准按优先级逐批补齐。本批 = 差距表 B1（音量键）+ B3 收尾（分区动作）。**对比修正**：B3"点击分区自定义"实际已实现（sprint I4 三区可配 + 手势面板），真实缺口只有动作选项不全；且"护眼蓝光滤镜"（B9 部分）也已存在（Settings.blueLightFilter, Phase 7）。
+
+1. ✅ **音量键三档**（对齐安卓 enable_volume_keys）：偏好「阅读配置」新增「音量键功能」KV 行（0=关闭/1=翻页/2=缩放，默认翻页）；翻页模式音量+/- = 上/下一页；缩放模式复用 zoomIn/zoomOut（0.25 步进）；自动滚动开启时优先调 autoScrollSpeed（2..10）。实现走 `inputConsumer.on('keyPressed')`（API 16+ 官方音量键订阅，open 注册/disappear 注销）+ 根 Stack `onKeyEventDispatch` 兜底；实测消费后系统音量条不弹出。
+2. ✅ **分区动作统一 8 码**：0=上页 1=下页 2=菜单 3=目录 4=书签 5=亮度 6=全屏 7=无操作；`onTapZoneAction` 重写为纯动作分发；手势面板三区 chips 换 Flex 换行（8 动作窄屏完整可见）；**修复手势面板保存从未持久化的老 bug**（原来只打日志），现经 persistSettings 存 Settings 新字段 tapLeft/Center/RightAction（默认 0/2/1 = 左上页/中菜单/右下页，向后兼容）。偏好「单击动作」覆盖中区语义纠正（0=面板默认、1=菜单、2=无操作；旧实现 1 误设全屏）。
+3. ✅ **验证**（模拟器）：三档切换 + 跨重启持久化、翻页页码真实变化、缩放 1.50↔1.75、关闭档不拦截、手势 8 chips 选中态重启恢复、中心菜单回归；双变体 8 件套出包 + 冒烟。
+4. ⏸ **待续**：真机音量键复验；自动滚动调速分支模拟器未实测（需先开自动滚动）；对比报告后续批次——批次 2 RTF/DOCX（A1）、批次 3 标签管理+按作者分组（C3/C4）、批次 4 自动裁边（B2）、批次 5 OPDS 认证/分页 + 计费网络检测（C10/C11）。
+
 ### 阶段 15b（2026-09-12）：SMB/SFTP 自研 native 协议客户端 + EPUB DRM 预探测 ✅ 已完成（0.9.3 / versionCode 41）
 
 1. ✅ **native 协议客户端**：自研交叉编译 libsmb2-6.0（内置加密）+ libssh2 1.11.1（静态链 openssl 3.0.17）双 ABI（arm64-v8a/x86_64），vendored 到 Builder/，产物入 prebuilt/harmony/net/ + entry/libs/；新增 remote_net.cpp（9 个 NAPI 异步导出：smb/sftp 的 open/readAt/list/connect/home/close），每连接互斥 + 读失败重连重试一次（对齐安卓 SmbDataSource/SftpDataSource）。

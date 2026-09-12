@@ -1909,6 +1909,22 @@
       "value": "无操作"
     },
     {
+      "name": "set_volume_keys",
+      "value": "音量键功能"
+    },
+    {
+      "name": "set_volkey_off",
+      "value": "关闭"
+    },
+    {
+      "name": "set_volkey_page",
+      "value": "翻页"
+    },
+    {
+      "name": "set_volkey_zoom",
+      "value": "缩放"
+    },
+    {
       "name": "set_long_tap_select",
       "value": "选择文本"
     },

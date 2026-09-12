@@ -1917,6 +1917,22 @@
       "value": "No action"
     },
     {
+      "name": "set_volume_keys",
+      "value": "Volume keys"
+    },
+    {
+      "name": "set_volkey_off",
+      "value": "Off"
+    },
+    {
+      "name": "set_volkey_page",
+      "value": "Page turn"
+    },
+    {
+      "name": "set_volkey_zoom",
+      "value": "Zoom in/out"
+    },
+    {
       "name": "set_long_tap_select",
       "value": "Text selection"
     },

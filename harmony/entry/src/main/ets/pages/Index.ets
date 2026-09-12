@@ -7699,6 +7699,7 @@ struct Index {
           if (this.groupExp['read'] === true) {
             this.settingsKvSheet(this.L($r('app.string.set_single_tap')), 'singleTap')
             this.settingsKvSheet(this.L($r('app.string.set_long_tap')), 'longTap')
+            this.settingsKvSheet(this.L($r('app.string.set_volume_keys')), 'volKey')
             this.settingsToggleRow(this.L($r('app.string.set_app_lock')), 'appLockEnabled', this.L($r('app.string.set_app_lock_hint')))
             Row({ space: 8 }) {
               Text($r('app.string.set_lock_pass'))
@@ -8525,6 +8526,9 @@ struct Index {
     if (target === 'longTap') {
       return this.longTapLabel();
     }
+    if (target === 'volKey') {
+      return this.volumeKeyLabel();
+    }
     return '';
   }
 
@@ -8629,6 +8633,10 @@ struct Index {
       this.optTitle = this.L($r('app.string.set_long_tap'));
       this.optLabels = [this.L($r('app.string.set_long_tap_select')), this.L($r('app.string.set_long_tap_info')), this.L($r('app.string.set_single_tap_menu')), this.L($r('app.string.set_action_none'))];
       this.optSel = this.settings.longTapAction;
+    } else if (target === 'volKey') {
+      this.optTitle = this.L($r('app.string.set_volume_keys'));
+      this.optLabels = [this.L($r('app.string.set_volkey_off')), this.L($r('app.string.set_volkey_page')), this.L($r('app.string.set_volkey_zoom'))];
+      this.optSel = this.settings.volumeKeyAction;
     }
     this.showOptSheet = true;
   }
@@ -8658,6 +8666,9 @@ struct Index {
     } else if (t === 'longTap') {
       this.settings.longTapAction = idx;
       this.saveNow();
+    } else if (t === 'volKey') {
+      this.settings.volumeKeyAction = idx;
+      this.saveNow();
     }
     this.showOptSheet = false;
   }
@@ -8685,6 +8696,13 @@ struct Index {
       : this.settings.longTapAction === 1 ? this.L($r('app.string.set_long_tap_info'))
         : this.settings.longTapAction === 2 ? this.L($r('app.string.set_single_tap_menu'))
           : this.L($r('app.string.set_action_none'));
+  }
+
+  /* Round 9: volume-key action label (Android enable_volume_keys) */
+  private volumeKeyLabel(): string {
+    return this.settings.volumeKeyAction === 0 ? this.L($r('app.string.set_volkey_off'))
+      : this.settings.volumeKeyAction === 2 ? this.L($r('app.string.set_volkey_zoom'))
+        : this.L($r('app.string.set_volkey_page'));
   }
 
   @Builder

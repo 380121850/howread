@@ -173,6 +173,14 @@ export interface ReaderSettings {
   remoteRetryIntervalMs: number;
   /** Cache expire days (LRU eviction) */
   remoteCacheExpireDays: number;
+
+  /* ---- Round 9: volume-key navigation (Android enable_volume_keys) ---- */
+  /** Volume keys: 0=off, 1=page turn, 2=zoom (auto-scroll speed when auto-scrolling) */
+  volumeKeyAction: number;
+  /** Tap zones, unified action codes: 0=prev 1=next 2=menu 3=toc 4=bookmark 5=brightness 6=fullscreen 7=none */
+  tapLeftAction: number;
+  tapCenterAction: number;
+  tapRightAction: number;
 }
 
 const PREF_NAME = 'librera_settings';
@@ -268,7 +276,11 @@ export function defaultSettings(): ReaderSettings {
     remoteWholeBookOnMetered: false,
     remoteRetryCount: 3,
     remoteRetryIntervalMs: 1000,
-    remoteCacheExpireDays: 30
+    remoteCacheExpireDays: 30,
+    volumeKeyAction: 1,
+    tapLeftAction: 0,
+    tapCenterAction: 2,
+    tapRightAction: 1
   };
 }
 
@@ -361,7 +373,11 @@ export async function loadSettings(ctx: Context): Promise<ReaderSettings> {
       remoteRetryIntervalMs: typeof r.remoteRetryIntervalMs === 'number'
         ? r.remoteRetryIntervalMs : d.remoteRetryIntervalMs,
       remoteCacheExpireDays: typeof r.remoteCacheExpireDays === 'number'
-        ? r.remoteCacheExpireDays : d.remoteCacheExpireDays
+        ? r.remoteCacheExpireDays : d.remoteCacheExpireDays,
+      volumeKeyAction: typeof r.volumeKeyAction === 'number' ? r.volumeKeyAction : d.volumeKeyAction,
+      tapLeftAction: typeof r.tapLeftAction === 'number' ? r.tapLeftAction : d.tapLeftAction,
+      tapCenterAction: typeof r.tapCenterAction === 'number' ? r.tapCenterAction : d.tapCenterAction,
+      tapRightAction: typeof r.tapRightAction === 'number' ? r.tapRightAction : d.tapRightAction
     };
     return s;
   } catch (e) {
