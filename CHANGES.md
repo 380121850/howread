@@ -5,6 +5,23 @@
 
 ---
 
+## [2026-09-12] 测试基建：P30 接入自动测试机队 + L1 框架三处兼容性修复（新机型全绿）
+
+**背景**：华为 P30（ELE-AL00，EMUI 10 / SDK 29 / arm64，用户侧降分辨率 720x1560@480dpi）接入真机测试机队。装好 v1.3.2 pro 包与 ATX 后跑基础回归：L0 冒烟 8/8 一次全过；L1 首轮 2 FAIL 经取证定位均为**测试框架对新机型的兼容问题**，非应用 bug。
+
+**改动**（仅 ci/autotest 测试脚本，无应用代码改动）：
+- `config/devices.json`：新增 P30（Q5S5T19605008064）设备档案。
+- `lib/driver.py` `open_book_via_intent`：VIEW intent 改为 `-n pkg/com.foobnix.OpenerActivity` 组件直达，不再走系统 MIME 解析——P30 上装有 WPS/华为压缩文件查看器，octet-stream/文档类 intent 被系统默认应用直接抢走（选择器不弹，取证截图可见"压缩文件查看器:无法打开"）。
+- `lib/driver.py` 新增系统 dump 兜底三件套（`legacy_dump`/`dump_has_text_legacy`/`click_text_legacy`，带空树重试）：uia2(wetest) 服务器在 P30 上漏掉抽屉底部一行节点（设置选项/软件说明/夜间模式/退出），且 uia2 活跃时系统 `uiautomator dump` 会返回空树、界面刚切换后 ~3s 内静默失败。
+- `cases/ui/tc_function.py` FN-06 主题切换：夜间模式点击增加"u2 → 系统 dump bounds → 坐标(0.5w/0.91h)"三级兜底，抽屉是否打开以上半区条目（最近阅读）为准；是否生效仍由截图对比把关。
+- `cases/ui/tc_function.py` FN-09 多格式开书：开跑前按 `MULTI_FORMAT_SOURCES` 映射自动补推设备缺失的样本书（远端 ASCII 名 ← 本地 teskbook 中文名，如 book_mobi.mobi ← 一本书读懂大数据-黄颖.mobi）。此前样本书未随 fixtures 推送，新设备 Download 为空，10 格式 9 个"未进阅读器"。
+
+**验证**（P30, v1.3.2 pro, 2026-09-12）：
+- L0 冒烟 **8 PASS / 0 FAIL / 0 SKIP**（安装/冷启/Tab 遍历/PDF、EPUB 翻页/退出重进/无 crash）。
+- L1 修复后 **8 PASS / 0 FAIL / 2 SKIP**：FN-09 十格式（mobi/azw3/azw/prc/doc/docx/djvu/html/pdf/txt）全部进阅读器无 crash（178s 一次过）；FN-06 夜间模式切换+还原 PASS。2 个 SKIP 为设计内环境跳过（FN-02 新设备书库首扫未收录 big25、FN-07 TTS 入口待勘探 P2，与其它机型一致）。
+
+---
+
 ## [2026-09-12] 侧边栏读书格言随界面语言切换：英文界面显示英文格言
 
 **背景**：主界面左侧抽屉（侧边栏）会随机显示一条读书格言，此前无论 APP 语言设置为何，格言永远是中文。本次让格言与界面语言同步：界面为英文时显示英文格言，其余语言维持中文格言。
