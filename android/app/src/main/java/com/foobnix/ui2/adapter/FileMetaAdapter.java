@@ -1108,7 +1108,76 @@ public class FileMetaAdapter extends AppRecycleAdapter<FileMeta, RecyclerView.Vi
             }
         }
 
+        // network-book badge on the cover: cloud glyph + cached percent,
+        // independent of the adapter type (shelf / grid / list)
+        if (holder.remoteBadge != null) {
+            if (fileMeta.getPath() != null && com.foobnix.remote.RemoteBook.isRemotePath(fileMeta.getPath())) {
+                holder.remoteBadge.setVisibility(View.VISIBLE);
+                bindRemotePercent(holder, fileMeta.getPath());
+            } else {
+                holder.remoteBadge.setVisibility(View.GONE);
+            }
+        }
+
         return fileMeta;
+    }
+
+    /** remotePath → percent memo (BlockCacheStore reads are disk I/O). */
+    private static class RemotePercent {
+        final int percent;
+        final long at;
+
+        RemotePercent(int percent, long at) {
+            this.percent = percent;
+            this.at = at;
+        }
+    }
+
+    private static final long REMOTE_PERCENT_TTL = 30_000L;
+    private static final java.util.concurrent.ConcurrentHashMap<String, RemotePercent> REMOTE_PERCENT_CACHE =
+            new java.util.concurrent.ConcurrentHashMap<String, RemotePercent>();
+    private static final java.util.concurrent.ExecutorService REMOTE_PERCENT_POOL =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "RemoteBadge");
+                t.setDaemon(true);
+                return t;
+            });
+
+    /**
+     * Fills the cloud badge with the cached share of the remote book.
+     * Computed off the UI thread, memoized briefly so scrolling does not
+     * hammer the disk; the result is posted back only when the badge still
+     * shows the same book (holder recycling guard via the badge tag).
+     */
+    private void bindRemotePercent(final FileMetaViewHolder holder, final String remotePath) {
+        holder.remoteBadge.setTag(remotePath);
+        final long now = System.currentTimeMillis();
+        RemotePercent memo = REMOTE_PERCENT_CACHE.get(remotePath);
+        if (memo != null && now - memo.at < REMOTE_PERCENT_TTL) {
+            applyRemotePercent(holder, remotePath, memo.percent);
+            return;
+        }
+        holder.remoteBadgeText.setText("");
+        REMOTE_PERCENT_POOL.execute(new Runnable() {
+            @Override
+            public void run() {
+                final int pct = com.foobnix.remote.BlockCacheStore.cachedPercent(remotePath);
+                REMOTE_PERCENT_CACHE.put(remotePath, new RemotePercent(pct, System.currentTimeMillis()));
+                holder.remoteBadge.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        applyRemotePercent(holder, remotePath, pct);
+                    }
+                });
+            }
+        });
+    }
+
+    private void applyRemotePercent(FileMetaViewHolder holder, String remotePath, int pct) {
+        if (holder.remoteBadge == null || !remotePath.equals(holder.remoteBadge.getTag())) {
+            return; // the holder moved on to another book meanwhile
+        }
+        holder.remoteBadgeText.setText(pct < 0 ? "" : pct + "%");
     }
 
     @Override
@@ -1194,6 +1263,11 @@ public class FileMetaAdapter extends AppRecycleAdapter<FileMeta, RecyclerView.Vi
         // Moon+ bookshelf extras (present only in browse_item_shelf.xml)
         public View shelfBadge, shelfMenu;
         public ImageView shelfStar;
+        // network-book badge (cloud + cached percent), present in all three
+        // book layouts; the badge view also carries the bound remote:// path
+        // as its tag so async percent updates never leak into recycled rows
+        public View remoteBadge;
+        public TextView remoteBadgeText;
         // XML ripple background captured on first bind, so the recycled row
         // can always be restored to it (selection accent must not leak)
         public android.graphics.drawable.Drawable defaultBackground;
@@ -1235,6 +1309,8 @@ public class FileMetaAdapter extends AppRecycleAdapter<FileMeta, RecyclerView.Vi
             shelfBadge = view.findViewById(R.id.shelfBadge);
             shelfMenu = view.findViewById(R.id.shelfMenu);
             shelfStar = (ImageView) view.findViewById(R.id.shelfStar);
+            remoteBadge = view.findViewById(R.id.remoteBadge);
+            remoteBadgeText = (TextView) view.findViewById(R.id.remoteBadgeText);
 
             menu = (ImageView) view.findViewById(R.id.itemMenu);
             remove = view.findViewById(R.id.delete);

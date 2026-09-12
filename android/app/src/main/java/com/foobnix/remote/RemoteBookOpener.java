@@ -217,6 +217,15 @@ public class RemoteBookOpener {
             @Override
             protected Object doInBackground(Object[] objects) {
                 try {
+                    // offline (or the whole copy already fetched earlier):
+                    // the .tag is only written after a complete copy, so an
+                    // existing tag means the copy is usable without a
+                    // version re-check
+                    if (target.isFile() && target.length() > 0 && tagFile.isFile()
+                            && isNetworkOffline()) {
+                        done = true;
+                        return null;
+                    }
                     session = RemoteSessionFactory.open(remotePath);
                     if (isCopyCurrent(target, tagFile, session)) {
                         done = true;
@@ -244,9 +253,15 @@ public class RemoteBookOpener {
                 } catch (Exception e) {
                     LOG.e(e);
                     error = e.getMessage();
-                    // remove a partial copy so a retry starts clean
-                    target.delete();
-                    tagFile.delete();
+                    if (target.isFile() && target.length() > 0 && tagFile.isFile()) {
+                        // server unreachable but an older complete copy
+                        // exists: open it instead of reporting failure
+                        done = true;
+                    } else {
+                        // remove a partial copy so a retry starts clean
+                        target.delete();
+                        tagFile.delete();
+                    }
                 } finally {
                     // open() bypasses the session pool: close directly
                     if (session != null) {
@@ -303,73 +318,29 @@ public class RemoteBookOpener {
 
     /**
      * Full download (through the same block cache, so bytes already read
-     * online are not fetched twice) into the downloads folder, then opens
-     * the local copy. Available on every flavor — it is the fdroid path.
+     * online are not fetched twice), then opens the local copy. Available
+     * on every flavor — it is the fdroid path. The copy lands in the
+     * unified cache dir (cachePath/Remote/books, cleared with the cache),
+     * NOT the user-visible downloads folder — every remote copy is
+     * cache-managed since 1.3.2.
      */
     public static void downloadAndOpen(final Activity a, final String remotePath, final long sizeHint) {
-        final File target = new File(BookCSS.get().downlodsPath, TxtUtils.fixFileName(displayName(remotePath)));
-        if (target.isFile() && target.length() > 0) {
-            // already downloaded once — just open it
-            ExtUtils.openFile(a, AppDB.get().getOrCreate(target.getPath()));
-            return;
+        fetchToCacheAndOpen(a, remotePath, sizeHint);
+    }
+
+    /** True when no usable network connection is available right now. */
+    private static boolean isNetworkOffline() {
+        try {
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager)
+                    com.foobnix.LibreraApp.context.getSystemService(android.content.Context.CONNECTIVITY_SERVICE);
+            if (cm == null) {
+                return true;
+            }
+            android.net.NetworkInfo ni = cm.getActiveNetworkInfo();
+            return ni == null || !ni.isConnected();
+        } catch (Exception e) {
+            return false;
         }
-        new AsyncTask() {
-            RemoteBookSession session;
-            String error;
-            boolean done;
-
-            @Override
-            protected Object doInBackground(Object[] objects) {
-                FileOutputStream out = null;
-                try {
-                    session = RemoteSessionFactory.open(remotePath);
-                    target.getParentFile().mkdirs();
-                    out = new FileOutputStream(target);
-                    CachingRemoteInputStream in = new CachingRemoteInputStream(session);
-                    byte[] buf = new byte[64 * 1024];
-                    int n;
-                    while ((n = in.read(buf)) > 0) {
-                        out.write(buf, 0, n);
-                    }
-                    out.close();
-                    out = null;
-                    done = true;
-                } catch (Exception e) {
-                    LOG.e(e);
-                    error = e.getMessage();
-                } finally {
-                    try {
-                        if (out != null) {
-                            out.close();
-                        }
-                    } catch (Exception ignore) {
-                        LOG.w(ignore);
-                    }
-                    if (session != null) {
-                        // open() bypasses the session pool: close directly
-                        try {
-                            session.close();
-                        } catch (Exception ignore) {
-                            LOG.w(ignore);
-                        }
-                    }
-                }
-                return null;
-            }
-
-            @Override
-            protected void onPostExecute(Object o) {
-                if (!done) {
-                    // remove a partial file so a retry starts clean
-                    target.delete();
-                    Toast.makeText(a, TxtUtils.isNotEmpty(error) ? error
-                            : a.getString(R.string.remote_open_failed), Toast.LENGTH_LONG).show();
-                    return;
-                }
-                ensureMeta(remotePath, session == null ? 0 : session.size);
-                ExtUtils.openFile(a, AppDB.get().getOrCreate(target.getPath()));
-            }
-        }.execute();
     }
 
     private static void offerDownloadFallback(Activity a, String remotePath, long sizeHint, String error) {

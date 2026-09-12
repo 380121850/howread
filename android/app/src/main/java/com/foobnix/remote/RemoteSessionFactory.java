@@ -83,7 +83,9 @@ public class RemoteSessionFactory {
 
     /**
      * Opens (or reuses) the session for a path. Throws IOException on
-     * network/auth problems.
+     * network/auth problems — unless the book is fully cached, in which
+     * case a broken network open falls back to an offline session served
+     * from the block cache.
      */
     public static RemoteBookSession obtain(String remotePath) throws IOException {
         synchronized (LOCK) {
@@ -91,7 +93,16 @@ public class RemoteSessionFactory {
             if (existing != null && !existing.isClosed()) {
                 return existing;
             }
-            RemoteBookSession session = open(remotePath);
+            RemoteBookSession session;
+            try {
+                session = open(remotePath);
+            } catch (IOException e) {
+                session = RemoteBookSession.openOffline(remotePath);
+                if (session == null) {
+                    throw e;
+                }
+                android.util.Log.i("REMOTE", "offline open from block cache: " + remotePath);
+            }
             SESSIONS.put(remotePath, session);
             return session;
         }

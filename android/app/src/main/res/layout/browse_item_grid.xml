@@ -37,6 +37,38 @@
                 android:background="@color/white"
                 android:cropToPadding="true"
                 android:padding="0dip" />
+
+            <!-- network book badge: cloud glyph + cached percent -->
+            <FrameLayout
+                android:id="@+id/remoteBadge"
+                android:layout_width="30dip"
+                android:layout_height="30dip"
+                android:layout_gravity="top|left"
+                android:layout_margin="4dip"
+                android:background="@drawable/shelf_badge_bg"
+                android:visibility="gone" >
+
+                <ImageView
+                    android:layout_width="13dip"
+                    android:layout_height="13dip"
+                    android:layout_gravity="top|center_horizontal"
+                    android:layout_marginTop="3dip"
+                    android:src="@drawable/glyphicons_544_cloud"
+                    android:tint="@color/white"
+                    android:contentDescription="@string/moon_net_section_webdav" />
+
+                <TextView
+                    android:id="@+id/remoteBadgeText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="bottom|center_horizontal"
+                    android:layout_marginBottom="2dip"
+                    android:singleLine="true"
+                    android:text="35%"
+                    android:textColor="@color/white"
+                    android:textSize="8sp"
+                    android:textStyle="bold" />
+            </FrameLayout>
         </androidx.cardview.widget.CardView>
 
         <FrameLayout

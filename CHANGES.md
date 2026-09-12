@@ -5,6 +5,29 @@
 
 ---
 
+## [2026-09-12] 鸿蒙移植第八轮：在线书籍缓存阅读（WebDAV 流式打开 + 分块缓存，对齐安卓 RemoteBook 方案，0.9.0 / versionCode 38）
+
+**背景**：按《安卓在线书籍缓存阅读技术方案》把"远程书不下载完即可打开阅读、边读边缓存、下次打开优先命中本地缓存"移植到鸿蒙版。安卓侧已有 `com.foobnix.remote` 完整实现（三协议 RandomAccessRemoteFile + BlockCacheStore + RemoteBookOpener + RemoteSeekableStream），鸿蒙侧此前只有"浏览 + 整本下载"，无在线阅读能力。
+
+**做了什么（用户视角）**：
+- **在线打开**：「我的文件」里点击 WebDAV 目录中的书，PDF/EPUB/CBZ/XPS 这类格式**不再整本下载，直接在线打开阅读**，首屏秒级可用；翻到哪缓存到哪，再打开同一本书时已读部分直接走本地缓存，断网后**完全缓存过的书仍可打开**（零网络）。
+- **格式分级**（与安卓一致）：TXT/HTML/FB2/RTF 静默取回后打开；MOBI/AZW3/DJVU/CBR/DOC 等重格式弹「整本下载」确认后取回打开；MOBI 族先做 DRM 探测，受保护文件提示"请下载到本地后打开"；服务器不支持断点范围读（Range）时自动降级整本下载。
+- **远程书籍架**：WebDAV 服务器行新增 ⟳ 扫描按钮，递归扫描服务器上的书籍入「我的文件 → 远程书籍」列表；每行显示云图标、大小、格式徽标和**已缓存百分比**，点击即按上述分级打开，长按可删除记录与本地缓存（不动服务器文件）。
+- **设置**：偏好页新增「在线阅读与缓存」分组——在线优先开关、仅 WiFi 预取、计费网络整本开关、缓存上限/整本阈值/重试次数/重试间隔/过期天数、缓存实时用量与一键清空。
+- **阅读体验**：远程书进度、书签、TTS、搜索、夜间模式均与本地书一致（书架/最近阅读里远程书带 remote:// 路径正常续读；库清理不再把远程书误判为"文件丢失"）。
+
+**范围说明**：本轮实现 **WebDAV** 一种协议的在线缓存阅读——ArkTS 生态没有 jcifs-ng/sshj 的等价库，SMB/SFTP 的协议客户端需自研或等三方库成熟（安卓侧 SMB/SFTP 不受影响）；OPDS 行为不变。
+
+**实现要点**（佐证）：
+- `entry/src/main/cpp/mupdf_napi.cpp`：新增远程流式桥——自定义 `fz_stream`（next/seek 走块缓存）+ `napi_threadsafe_function` 双向调度（MuPDF 工作线程阻塞等 JS 取数，JS 侧 `remoteReadDone` 回填），`openDocumentRemoteAsync` 一次开文档并顺带返回页数/可重排/加密/目录；`docOpAsync` 通用异步操作分发器（pageCount/toc/pageSize/layout/text/search/annots 等 13 个操作），远程文档禁止同步访问以免 JS 线程自锁。seek 严格镜像 `seek_file`（重置 rp/wp），修掉 `fz_tell` 返回负值导致的 "cannot tell in file"。
+- `model/RemoteBook.ets`（新增 ~950 行）：`remote://webdav/<serverId>/<url>` URI 方案、格式分级、WebDAV Range 随机读源（Range 探测 + ETag/Last-Modified 版本戳 + 指数退避重试）、两级块缓存（内存 LRU 128 块/32MB + 磁盘 data.bin/blocks.bin/meta.json，256KB/1MB 双块规格，版本变更整目录失效）、会话层（并发同块去重、P2 预取、P3 小书整本后台续传）、整本取回并落地 `Remote/books/`、MOBI DRM 头探测、PROPFIND 递归扫描（兼容任意命名空间前缀）、远程书目存储。
+- UI/设置/Reader 接线：Index.ets 点击分流 + 确认弹窗 + 进度显示 + 远程书籍架 + 设置组；Reader.ets `remote://` 分支（加载遮罩、全部文档操作走异步、批注编辑远程禁用并提示）；LibrarySearch 清理跳过远程书。
+- 版本 0.8.6 → **0.9.0**（versionCode 37 → 38）。
+
+**验证**（Pura 90 模拟器，hdc uitest 实测）：WebDAV 添加/连接/列目录 → 点 PDF 直接在线打开渲染（日志可见大量 Range 随机读）→ 冷启动重开命中缓存 → EPUB 在线打开（105 页重排 + 目录）→ MOBI 弹「整本下载」→ 块缓存取回并本地打开（76 页真实书）→ 扫描服务器入远程书籍架（大小/百分比正确）→ 设置组数值弹窗改值持久化 → **停掉服务器后 100% 缓存的书离线打开成功**。构建双变体 8 件套（HowRead/Pro v0.9.0 debug+release × arm64/x86_64）。
+
+---
+
 ## [2026-09-11] autotest 修复：tc_function.py 硬编码旧包名前缀导致 FN-03/FN-04 全机型误报 FAIL
 
 **背景**：v1.0.1 pro 包在 3 台真机（MI9/P20/KSA-AL10）跑 L1 功能回归时，FN-03 书签、FN-04 全文搜索 6 例全挂（"阅读器菜单未出现/无书签入口"、"搜索页未打开"）。取证 dump 分析证实：FN-04 失败时刻搜索页其实已打开，`editSearchText`/`searchStart`/`searchInLibreryResult` 元素都在且可点击，只是 resource-id 前缀是 2026-09-07 重品牌后的新包名 `com.leestudio.howread.pro.reader:id/...`，而脚本硬编码的是旧包名 `com.howread.reader:id/...`——测试脚本没跟着包名迁移，非应用 bug。
@@ -27,6 +50,28 @@
 - 网络协议测试服务器**弃用 WSL 方案**：WSL2 为 NAT 虚拟网卡，真机（同网段）无法直连；Win10 19045 不支持 mirrored 模式，WSL2 无官方 bridged。已整体删除 WSL（unregister qwork + `wsl --uninstall` + 清除 `D:\VM\qwork\ext4.vhdx`），改由用户在 Ubuntu 22（192.168.50.111）上建测试虚拟机，VM 内配置 apache2 mod_dav（WebDAV :8765）/ openssh-server（SFTP :22）/ samba（SMB :445，min protocol SMB2），统一账号 howread/howread123。
 - 应用侧协议栈核实（`android/gradle/libs.versions.toml`）：WebDAV=sardine-android（Basic/Digest，URL 带端口，同步需 PROPFIND/GET/PUT/MKCOL + Range 探测）；SFTP=sshj 0.38（密码或私钥，端口可自定义）；SMB=jcifs-ng 2.1.10（要求 SMB2.10–3.1.1，host+port 分离输入、支持非 445 端口）；**无 FTP 客户端**。
 - 192.168.50.111 清理 3 件测试残留：`~/sftp_test_key/`（测试私钥）、`~/remotebooks/`（测试书，teskbook 已有同款）、`~/nul`（Windows 重定向残渣）；samba "llama data"（llama.cpp 用）、nginx :80、miniconda3 与本项目无关，保留未动。
+
+---
+
+## [2026-09-12] 网络协议测试环境建成：50.23 测试服务器三协议全通，真机验证 WebDAV/SMB/SFTP 浏览开书 + WebDAV 同步
+
+**做了什么**：为验证 App 的网络对接能力，搭建了独立的测试服务器（ubuntu22-test，192.168.50.23，与真机同网段），部署了三种协议的测试服务，并用真机（P20/SNE-AL00，HowRead Pro v1.3.0）逐一实测通过：
+
+- **WebDAV**（:8765，apache2 mod_dav，Basic 认证）：应用内添加服务器 → 浏览到 4 本测试书 → 打开 EPUB 流式阅读成功（封面正常渲染）。
+- **SMB**（:445，samba，share `testbooks`，SMB2 起）：添加服务器 → 浏览共享 → MOBI 整本取回并正常打开。
+- **SFTP**（:22，openssh-server）：添加服务器 → 浏览 books 目录 → PDF 打开正常（1/5 页渲染正确）。
+- **WebDAV 同步**：偏好里配置同步服务器后"立即同步"，提示 **同步完成：进度 ↑5 ↓0 · 书签 ↑0 ↓0**；服务器端出现标准结构 `HowRead/global/app-*.json`（7 个全局配置）+ `HowRead/books/<hash>.json`（4 本书进度），与同步功能的设计一致。
+
+**对用户意味着什么**：以后测"在线目录/网盘同步"类功能不再依赖外网服务，用 50.23 的测试服务器即可完整回归 WebDAV/SMB/SFTP 三条链路和进度同步；测试书、账号（howread/howread123）已就位，P20 上三个服务器条目也已配好可直接复用。
+
+**过程中发现/解决的点**：
+- 测试服务器搭建前评估并**放弃了 WSL 方案**（WSL2 是 NAT 网络，真机无法直连；Win10 不支持 mirrored 模式），WSL 已整体删除——与编译服务器（50.111）角色隔离，互不跳转。
+- P20 上 WebDAV/SMB/SFTP 入口显示为锁定（🔒置灰），原因是新设备没有"Pro 已解锁"标志；已在测试设备上解锁（debug 包可直接改本地标志），锁定机制本身工作正常。
+- SMB 首次测试报"认证失败"，通过服务器端日志（NT_STATUS_WRONG_PASSWORD）定位为测试脚本输密码多打一位（11 位 vs 10 位），修正后即通——服务端与客户端均无 bug。
+- 测试用 WebDAV 脚本（`test_webdav.py`）账密已对齐 autotest 配置（howread/howread123）并补上了此前缺失的密码校验（见 2026-09-11 条目）。
+- 本次按构建规范重新编译了 pro/fdroid × debug/release 全部四组 APK（v1.3.0），P20 已升级到 v1.3.0。
+
+**证据**：截图与 UI 转存见 HowRead 工作区 `tmp\debug\`（mi9_*/p20_* 系列，会话结束清理）。
 
 ---
 
@@ -2818,3 +2863,23 @@ iOS / Desktop 两个预留平台没有任何版本配置位。
 - 方案偏差备案（与《技术方案》v5.0 的既定取舍）：先块后书淘汰不做；EPUB DRM 不做主动检测；续传保持 Thread 不迁 WorkManager；FileMeta 不加 drm/onlineSupported 字段；进度主键维持 remote:// 路径。
 - 块大小分档会使既有缓存目录按新 blockSize 重建一次（meta.json 无 blockSize 字段即 wipe），一次性代价。
 - 测试脚手架已还原：服务器 ~/remote-books 删除，设备 /data/local/tmp 测试文件删除；MI9 书库中扫描入架的 7 本远程书与 demo.mobi 本地缓存副本为验证产物，保留供用户复核。
+
+## [2026-09-12] 1.3.2 远程书收尾：存储统一 / 断网离线阅读与删除 / 书架网络角标+缓存百分比 / Pro 功能默认启用
+
+**背景**：在线阅读 1.3.0 三轮迭代后，实际使用暴露出四个体验问题：① 走"下载后打开"的远程书会落到公共下载目录（Download/HowRead），"清空缓存"管不到它；② 手机断网后，书架里的远程书既打不开、连删除都不行（删除菜单根本弹不出来）；③ 书架上分不清哪本书是网络书；④ Pro 功能默认锁定，每次刷机验证都要先手工解锁，很麻烦。
+
+**改动**（对使用者的影响）：
+- **所有远程书的副本统一存进缓存目录**：无论是"下载后打开"还是高成本格式"整本取回"，副本现在都放在缓存区 `Cache/Remote/books/` 下（带版本标签），设置里"清空缓存"会把它们一并清掉，不再在公共下载目录里留下孤儿文件。历史已下载的旧文件不动的。
+- **断网也能读、也能删**：整本缓存过的远程书，断网（飞行模式/服务器不可达）后照常打开，阅读进度、书签都不受影响——数据直接从本机缓存供应，不碰网络；未整本缓存的远程书断网时明确提示打开失败（不再卡死）。删除也不再依赖网络：长按/菜单弹出删除确认，确认后同时清掉书架记录、阅读进度书签和本机缓存，服务器上的原文件不受影响。
+- **书架封面新增"网络书"角标**：远程书的封面左上角有一个云朵小圆标，云朵下方实时显示这本书已经缓存了多少（如 "35%"）；整本缓存完成显示 100%，从没打开过（无缓存）时只显示云朵。本地书没有这个角标。百分比在翻阅后会自动更新（回到书架即可看到）。
+- **Pro 功能默认启用（仅正式版 flavor）**：pro 包所有 Pro 能力（添加服务器、扫描入架、远程缓存配置等）开箱即用，方便验证测试；fdroid 版仍是无 Pro 的纯净版。注意：Pro 卡片上的"购买/退款"按钮在这个版本里只是摆设，等接入真实计费时恢复原逻辑。
+- **版本号升级 1.3.2**（内部版本号 7302）。
+
+**验证**（MI9 真机，测试服务器 192.168.50.23 SFTP）：
+- 添加服务器、扫描入架（新增 3 本）均免解锁直接可用（Pro 默认启用 ✓）；
+- 书架三种视图远程书封面有云朵角标：未读只显云朵、在线翻阅后显示缓存百分比、整本续传完成后显示 100%，本地书无角标 ✓；
+- 在线打开 epub 流式阅读后角标百分比增长到 100% ✓；
+- 高成本格式（mobi）弹"整本取回"确认，取回后副本确认落在 `Cache/Remote/books/`（带 .tag 版本文件），清空缓存可清掉 ✓；
+- 飞行模式下：杀进程冷启动后点开已整本缓存的远程书正常打开且进度保持（日志确认走了"离线从块缓存打开"路径）✓；长按远程书弹出删除确认，确认后书架记录消失、本机缓存同步清理 ✓。
+
+**产物**：`android/app/build/outputs/apk/{pro,fdroid}/debug/HowRead-*-v1.3.2-*.apk`（5 个 ABI 全量）。

@@ -44,12 +44,18 @@ public class BillingManager {
     /**
      * Whether the pro unlock (IAP) has been purchased. Hard false for every
      * non-pro flavor (fdroid has no pro features and no IAP by design).
+     *
+     * TEMPORARY (2026-09, v1.3.2): the pro flavor unlocks everything by
+     * default so the remote-reading features can be verified on real
+     * devices without the stub purchase. Restore the original
+     * {@code IapStub.UNLOCKED || AppSP.get().iapProUnlocked} logic when the
+     * real billing integration lands.
      */
     public static boolean isProUnlocked() {
         if (!AppsConfig.isProFlavor()) {
             return false;
         }
-        return IapStub.UNLOCKED || AppSP.get().iapProUnlocked;
+        return true;
     }
 
     /** Display name of the unlock channel (stub: local key; future: App Store / 小米 / 华为). */

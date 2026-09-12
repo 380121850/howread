@@ -56,11 +56,12 @@ public class BlockCacheStore {
         }
     };
 
+    private String versionTag = "";
     private boolean fullyCached;
     private boolean closed;
 
     private BlockCacheStore(File dir, long fileSize, RandomAccessFile data, byte[] bitmap, boolean fullyCached,
-                            int blockSize) {
+                            int blockSize, String versionTag) {
         this.dir = dir;
         this.fileSize = fileSize;
         this.blockCount = (int) ((fileSize + blockSize - 1) / blockSize);
@@ -68,6 +69,7 @@ public class BlockCacheStore {
         this.data = data;
         this.bitmap = bitmap;
         this.fullyCached = fullyCached;
+        this.versionTag = versionTag == null ? "" : versionTag;
     }
 
     public static File rootDir() {
@@ -106,7 +108,8 @@ public class BlockCacheStore {
                         data.close();
                         throw new IllegalStateException("bitmap truncated");
                     }
-                    return new BlockCacheStore(dir, fileSize, data, bitmap, fullyCached, blockSize);
+                    return new BlockCacheStore(dir, fileSize, data, bitmap, fullyCached, blockSize,
+                            storedTag);
                 }
             } catch (Exception e) {
                 LOG.w(e);
@@ -118,9 +121,101 @@ public class BlockCacheStore {
         RandomAccessFile data = new RandomAccessFile(dataF, "rw");
         data.setLength(fileSize);
         byte[] bitmap = new byte[blockCount];
-        BlockCacheStore store = new BlockCacheStore(dir, fileSize, data, bitmap, false, blockSize);
+        BlockCacheStore store = new BlockCacheStore(dir, fileSize, data, bitmap, false, blockSize, versionTag);
         store.persistMeta(versionTag);
         return store;
+    }
+
+    /**
+     * Reopens an existing cache from disk without any network round-trip.
+     * Returns null when the cache is absent or inconsistent (meta missing,
+     * bitmap truncated, data file gone, or a fullyCached flag not backed by
+     * a complete bitmap) — the caller falls back to the network path.
+     */
+    public static BlockCacheStore openExisting(String cacheKey) {
+        File dir = new File(rootDir(), cacheKey);
+        File dataF = new File(dir, "data.bin");
+        File bitmapF = new File(dir, "blocks.bin");
+        File metaF = new File(dir, "meta.json");
+        if (!dir.isDirectory() || !metaF.isFile() || !dataF.isFile() || !bitmapF.isFile()) {
+            return null;
+        }
+        try {
+            JSONObject m = new JSONObject(com.foobnix.android.utils.IO.readString(metaF));
+            long size = m.optLong("size", -1);
+            int blockSize = m.optInt("blockSize", BLOCK_SIZE);
+            boolean fullyCached = m.optBoolean("fullyCached", false);
+            if (size <= 0 || blockSize <= 0) {
+                return null;
+            }
+            int blockCount = (int) ((size + blockSize - 1) / blockSize);
+            if (bitmapF.length() < blockCount) {
+                return null;
+            }
+            byte[] bitmap = new byte[blockCount];
+            FileInputStream in = new FileInputStream(bitmapF);
+            int read = in.read(bitmap);
+            in.close();
+            if (read < blockCount) {
+                return null;
+            }
+            int cached = 0;
+            for (byte b : bitmap) {
+                if (b == 1) {
+                    cached++;
+                }
+            }
+            // a "complete" flag must be backed by a complete bitmap, else the
+            // offline open would hit a hole mid-book
+            if (fullyCached && cached < blockCount) {
+                return null;
+            }
+            RandomAccessFile data = new RandomAccessFile(dataF, "r");
+            return new BlockCacheStore(dir, size, data, bitmap, fullyCached, blockSize,
+                    m.optString("versionTag", ""));
+        } catch (Exception e) {
+            LOG.w(e);
+            return null;
+        }
+    }
+
+    /**
+     * Cached share of a remote book, 0..100, for the shelf badge. -1 when
+     * the book has no block cache at all (never opened online). Reads only
+     * the tiny meta.json + blocks.bin, never data.bin.
+     */
+    public static int cachedPercent(String remotePath) {
+        File dir = new File(rootDir(), RemoteBook.cacheKey(remotePath));
+        File metaF = new File(dir, "meta.json");
+        File bitmapF = new File(dir, "blocks.bin");
+        if (!metaF.isFile()) {
+            return -1;
+        }
+        try {
+            JSONObject m = new JSONObject(com.foobnix.android.utils.IO.readString(metaF));
+            if (m.optBoolean("fullyCached", false)) {
+                return 100;
+            }
+            long size = m.optLong("size", -1);
+            int blockSize = m.optInt("blockSize", BLOCK_SIZE);
+            if (size <= 0 || blockSize <= 0 || !bitmapF.isFile()) {
+                return -1;
+            }
+            int blockCount = (int) ((size + blockSize - 1) / blockSize);
+            byte[] bitmap = new byte[blockCount];
+            FileInputStream in = new FileInputStream(bitmapF);
+            int read = in.read(bitmap);
+            in.close();
+            long cached = 0;
+            for (int i = 0; i < read; i++) {
+                if (bitmap[i] == 1) {
+                    cached += Math.min(blockSize, size - (long) i * blockSize);
+                }
+            }
+            return (int) (cached * 100 / size);
+        } catch (Exception e) {
+            return -1;
+        }
     }
 
     /** @return the versionTag stored in the book's meta.json, or null when absent. */
@@ -136,7 +231,9 @@ public class BlockCacheStore {
         }
     }
 
-    private void persistMeta(String versionTag) {        try {
+    private void persistMeta(String versionTag) {
+        this.versionTag = versionTag == null ? "" : versionTag;
+        try {
             JSONObject m = new JSONObject();
             m.put("size", fileSize);
             m.put("versionTag", versionTag == null ? "" : versionTag);
@@ -158,6 +255,16 @@ public class BlockCacheStore {
 
     public int getBlockCount() {
         return blockCount;
+    }
+
+    /** Total size of the book (from meta.json when reopened offline). */
+    public long getFileSize() {
+        return fileSize;
+    }
+
+    /** Version fingerprint this cache belongs to (meta.json value). */
+    public String getVersionTag() {
+        return versionTag;
     }
 
     public boolean isFullyCached() {

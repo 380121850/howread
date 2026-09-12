@@ -228,6 +228,16 @@ public class DefaultListeners {
                 return true;
             }
 
+            if (com.foobnix.remote.RemoteBook.isRemotePath(result.getPath())) {
+                // long-press on a remote book: the exists() gate and the
+                // file-info dialog would both choke on the virtual path —
+                // offer the record+cache delete directly
+                com.foobnix.pdf.info.view.AlertDialogs.showDialog(a,
+                        a.getString(R.string.do_you_want_to_delete_) + " " + result.getTitle(),
+                        a.getString(R.string.delete), () -> deleteFile(a, searchAdapter, result));
+                return true;
+            }
+
             File file = new File(result.getPath());
 
             if (Clouds.isCloud(file.getPath()) && Clouds.isCacheFileExist(file.getPath())) {
@@ -266,7 +276,12 @@ public class DefaultListeners {
     @SuppressLint("NewApi")
     private static void deleteFile(final Activity a, final FileMetaAdapter searchAdapter, final FileMeta result) {
         boolean delete = false;
-        if (ExtUtils.isExteralSD(result.getPath())) {
+        if (com.foobnix.remote.RemoteBook.isRemotePath(result.getPath())) {
+            // remote book: no local File behind the path — drop the shelf
+            // record and the local cache, the server file is never touched
+            removeRemoteBook(a, searchAdapter, result);
+            return;
+        } else if (ExtUtils.isExteralSD(result.getPath())) {
             DocumentFile doc = DocumentFile.fromSingleUri(a, Uri.parse(result.getPath()));
             delete = doc.delete();
         } else if (Clouds.isCloud(result.getPath())) {
@@ -301,6 +316,41 @@ public class DefaultListeners {
                      .show();
             }
         }
+    }
+
+    /**
+     * Deletes a shelf entry of a remote book: DB record + bookmarks/progress
+     * + the local cache (block cache dir and the whole-book copy in
+     * Remote/books). Works offline — no server access of any kind.
+     */
+    private static void removeRemoteBook(final Activity a, final FileMetaAdapter searchAdapter, final FileMeta result) {
+        TempHolder.listHash++;
+        AppDB.get().delete(result);
+        Tags2.updateTagsDB();
+        try {
+            BookmarksData.get().removeByBook(result.getPath());
+        } catch (Exception e) {
+            LOG.e(e);
+        }
+        try {
+            String key = com.foobnix.remote.RemoteBook.cacheKey(result.getPath());
+            com.foobnix.remote.BlockCacheStore.clearBook(key);
+            com.foobnix.remote.RemoteSessionFactory.closeSession(result.getPath());
+            // whole-book copy + .tag: Remote/books/<key>.<ext>[.tag]
+            File books = new File(new File(com.foobnix.pdf.info.model.BookCSS.get().cachePath, "Remote"), "books");
+            File[] kids = books.listFiles();
+            if (kids != null) {
+                for (File k : kids) {
+                    if (k.getName().startsWith(key)) {
+                        k.delete();
+                    }
+                }
+            }
+        } catch (Exception e) {
+            LOG.e(e);
+        }
+        searchAdapter.getItemsList().remove(result);
+        searchAdapter.notifyDataSetChanged();
     }
 
     private static void removeSyncFile(final Activity a, final FileMetaAdapter searchAdapter, final FileMeta result) {
@@ -440,6 +490,16 @@ public class DefaultListeners {
                 }
 
             };
+
+            if (com.foobnix.remote.RemoteBook.isRemotePath(result.getPath())) {
+                // remote books have no local File behind the path (the
+                // exists() gate below would block the menu forever):
+                // offer a straight record+cache delete instead
+                com.foobnix.pdf.info.view.AlertDialogs.showDialog(a,
+                        a.getString(R.string.do_you_want_to_delete_) + " " + result.getTitle(),
+                        a.getString(R.string.delete), onDeleteAction);
+                return false;
+            }
 
             if (ExtUtils.isExteralSD(result.getPath())) {
                 ShareDialog.show(a, file, onDeleteAction, -1, null, null);

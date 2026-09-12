@@ -83,6 +83,30 @@ public class RemoteBookSession {
         return session;
     }
 
+    /**
+     * Opens a fully-cached book without touching the network (offline
+     * reading). Returns null when no complete block cache exists for the
+     * path — the caller then falls back to the network / error path.
+     */
+    public static RemoteBookSession openOffline(String remotePath) {
+        try {
+            String cacheKey = RemoteBook.cacheKey(remotePath);
+            BlockCacheStore cache = BlockCacheStore.openExisting(cacheKey);
+            if (cache == null || !cache.isFullyCached()) {
+                if (cache != null) {
+                    cache.close();
+                }
+                return null;
+            }
+            LOG.d("RemoteOffline open", remotePath);
+            return new RemoteBookSession(remotePath, new LocalBlockDataSource(cache), cache,
+                    cache.getFileSize(), cache.getVersionTag(), cacheKey);
+        } catch (Exception e) {
+            LOG.w(e);
+            return null;
+        }
+    }
+
     /** Page-based formats read large contiguous runs → bigger blocks/window. */
     public static boolean isPageFormat(String ext) {
         return "pdf".equals(ext) || "cbz".equals(ext) || "xps".equals(ext)
