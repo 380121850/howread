@@ -169,12 +169,13 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content">
 
+                        <!-- day/night photo swapped in code per theme (buildDrawerNavHeader) -->
                         <ImageView
                             android:id="@+id/drawerBanner"
                             android:layout_width="match_parent"
                             android:layout_height="170dip"
                             android:scaleType="centerCrop"
-                            android:src="@drawable/drawer_banner" />
+                            android:src="@drawable/drawer_banner_day" />
 
                         <!-- brand tagline, centered on the banner -->
                         <TextView

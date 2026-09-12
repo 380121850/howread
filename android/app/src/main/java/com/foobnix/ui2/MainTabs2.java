@@ -831,6 +831,10 @@ public class MainTabs2 extends AdsFragmentActivity {
             }
             drawer.setBackgroundColor(bg);
         }
+        ImageView banner = findViewById(R.id.drawerBanner);
+        if (banner != null) {
+            banner.setImageResource(drawerDarkTheme ? R.drawable.drawer_banner_night : R.drawable.drawer_banner_day);
+        }
         drawerIconColor = drawerDarkTheme ? Color.parseColor("#9e9e9e") : DRAWER_ICON_GRAY;
         drawerTextColor = drawerDarkTheme ? Color.parseColor("#e0e0e0") : Color.parseColor("#212121");
 
