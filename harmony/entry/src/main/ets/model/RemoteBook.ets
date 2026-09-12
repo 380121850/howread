@@ -1,22 +1,25 @@
 /**
  * Round 8: Online cache reading (port of Android com.foobnix.remote).
  *
- *remote://<type>/<serverId>/<encodedFileUrl> unified URI scheme; WebDAV
- * (HTTP Range) random-access source; two-level block cache (memory LRU +
- * disk data.bin/blocks.bin/meta.json); RemoteSession block assembly with
- * P2 prefetch and P3 whole-book filler; format tiering / DRM probe /
- * whole-book fetch (Android RemoteBookOpener) and the remote books store
- * (Android RemoteScanner) live here too.
- *
- * SMB/SFTP: the ArkTS ecosystem has no jcifs-ng/sshj equivalent, so this
- * round implements WebDAV only (pending).
+ *remote://<type>/<serverId>/<encodedFileUrl> unified URI scheme; random-access
+ * sources per protocol — WebDAV (HTTP Range), SMB (libsmb2 via native
+ * smbOpenAsync/smbReadAtAsync) and SFTP (libssh2 via native
+ * sftpConnectAsync/sftpReadAtAsync); two-level block cache (memory LRU + disk
+ * data.bin/blocks.bin/meta.json); RemoteSession block assembly with P2
+ * prefetch and P3 whole-book filler; format tiering / DRM probes (MOBI head +
+ * EPUB encryption.xml) / whole-book fetch (Android RemoteBookOpener) and the
+ * remote books store (Android RemoteScanner) live here too.
  */
 import http from '@ohos.net.http';
 import fs from '@ohos.file.fs';
 import util from '@ohos.util';
 import cryptoFramework from '@ohos.security.cryptoFramework';
 import preferences from '@ohos.data.preferences';
-import { DavServer, getDavServers } from './Servers';
+import {
+  smbOpenAsync, smbReadAtAsync, smbCloseAsync, smbListAsync,
+  sftpConnectAsync, sftpOpenAsync, sftpReadAtAsync, sftpListAsync, sftpHomeAsync, sftpCloseAsync
+} from 'libmupdf_napi.so';
+import { DavServer, getDavServers, SmbServer, getSmbServers, SftpServer, getSftpServers } from './Servers';
 import { ReaderSettings, loadSettings } from './Settings';
 
 const REMOTE_PREF_NAME = 'librera_remote';
@@ -65,6 +68,40 @@ export async function resolveWebDavServer(ctx: Context, serverId: string): Promi
   const servers: DavServer[] = await getDavServers(ctx);
   for (let i = 0; i < servers.length; i++) {
     const id: string = await serverIdOf(servers[i].url);
+    if (id === serverId) {
+      return servers[i];
+    }
+  }
+  return null;
+}
+
+/** Canonical host:port identity of an SMB server (serverId key). */
+export function smbHostPort(host: string, port: number): string {
+  return host + ':' + (port > 0 ? port : 445);
+}
+
+/** Canonical host:port identity of an SFTP server (serverId key). */
+export function sftpHostPort(host: string, port: number): string {
+  return host + ':' + (port > 0 ? port : 22);
+}
+
+/** Resolve the SMB server stored under the uri's serverId (key = host:port). */
+export async function resolveSmbServer(ctx: Context, serverId: string): Promise<SmbServer | null> {
+  const servers: SmbServer[] = await getSmbServers(ctx);
+  for (let i = 0; i < servers.length; i++) {
+    const id: string = await serverIdOf(smbHostPort(servers[i].host, servers[i].port));
+    if (id === serverId) {
+      return servers[i];
+    }
+  }
+  return null;
+}
+
+/** Resolve the SFTP server stored under the uri's serverId (key = host:port). */
+export async function resolveSftpServer(ctx: Context, serverId: string): Promise<SftpServer | null> {
+  const servers: SftpServer[] = await getSftpServers(ctx);
+  for (let i = 0; i < servers.length; i++) {
+    const id: string = await serverIdOf(sftpHostPort(servers[i].host, servers[i].port));
     if (id === serverId) {
       return servers[i];
     }
@@ -163,12 +200,20 @@ export async function loadRemoteCacheSettings(ctx: Context): Promise<RemoteCache
   }
 }
 
-/* ---- WebDAV random-access source (Android WebDavRangeDataSource) ---- */
+/* ---- Random-access sources (Android RemoteDataSource) ---- */
 
 export interface RemoteProbe {
   size: number;
   versionTag: string;
   supportsRange: boolean;
+}
+
+/** A protocol-agnostic random-access file source. */
+export interface RemoteFileSource {
+  probe(): Promise<RemoteProbe | null>;
+  readAt(offset: number, len: number): Promise<ArrayBuffer>;
+  /** release the underlying connection (no-op for WebDAV) */
+  close(): Promise<void>;
 }
 
 function respHeader(header: Object, name: string): string {
@@ -184,7 +229,7 @@ function respHeader(header: Object, name: string): string {
   return '';
 }
 
-export class WebDavFileSource {
+export class WebDavFileSource implements RemoteFileSource {
   private fileUrl: string;
   private user: string;
   private password: string;
@@ -312,6 +357,298 @@ export class WebDavFileSource {
       }
     }
     throw lastErr !== undefined ? lastErr : new Error('readAt failed');
+  }
+
+  async close(): Promise<void> {
+  }
+}
+
+/* ---- SMB random-access source (Android SmbDataSource via libsmb2) ---- */
+
+export class SmbFileSource implements RemoteFileSource {
+  private server: string;
+  private share: string;
+  private path: string;
+  private user: string;
+  private domain: string;
+  private password: string;
+  private handle: number = 0; /* 0 = not open */
+  private size: number = 0;
+
+  constructor(server: string, share: string, path: string, user: string, domain: string, password: string) {
+    this.server = server;
+    this.share = share;
+    this.path = path;
+    this.user = user;
+    this.domain = domain;
+    this.password = password;
+  }
+
+  /** Open the file + stat (SMB needs no Range probe; random reads are native). */
+  async probe(): Promise<RemoteProbe | null> {
+    try {
+      await this.close();
+      const res: string = await smbOpenAsync(this.server, this.share, this.path, this.user, this.domain, this.password);
+      const obj = JSON.parse(res) as Record<string, number>;
+      this.handle = obj.handle;
+      this.size = obj.size;
+      if (this.size <= 0) {
+        return null;
+      }
+      return { size: this.size, versionTag: `size-${this.size}-${obj.mtime}`, supportsRange: true };
+    } catch (e) {
+      this.handle = 0;
+      throw e as Error; /* auth/network classification lives in the error code */
+    }
+  }
+
+  async readAt(offset: number, len: number): Promise<ArrayBuffer> {
+    if (this.handle === 0) {
+      const p: RemoteProbe | null = await this.probe();
+      if (p === null) {
+        throw new Error('SMB_ERROR: cannot reopen file');
+      }
+    }
+    try {
+      return await smbReadAtAsync(this.handle, offset, len);
+    } catch (e) {
+      /* native already retried once on a fresh connection; last resort: full reopen */
+      const p: RemoteProbe | null = await this.probe();
+      if (p === null) {
+        throw e as Error;
+      }
+      return await smbReadAtAsync(this.handle, offset, len);
+    }
+  }
+
+  async close(): Promise<void> {
+    if (this.handle !== 0) {
+      const h: number = this.handle;
+      this.handle = 0;
+      try {
+        await smbCloseAsync(h);
+      } catch (e) { /* ignore */ }
+    }
+  }
+}
+
+/* ---- SFTP random-access source (Android SftpDataSource via libssh2) ---- */
+
+export class SftpFileSource implements RemoteFileSource {
+  private host: string;
+  private port: number;
+  private user: string;
+  private password: string;
+  private keyPath: string;
+  private keyPass: string;
+  private trustAll: boolean;
+  private expectFp: string;
+  /** TOFU: SHA-256 host key fingerprint from the most recent connect. */
+  fingerprint: string = '';
+  private handle: number = 0; /* 0 = not connected */
+  private size: number = 0;
+
+  constructor(host: string, port: number, user: string, password: string, keyPath: string,
+    keyPass: string, trustAll: boolean, expectFp: string) {
+    this.host = host;
+    this.port = port > 0 ? port : 22;
+    this.user = user;
+    this.password = password;
+    this.keyPath = keyPath;
+    this.keyPass = keyPass;
+    this.trustAll = trustAll;
+    this.expectFp = expectFp;
+  }
+
+  /** Connect + open the file + stat. Updates `fingerprint` for TOFU storage. */
+  async probe(): Promise<RemoteProbe | null> {
+    await this.close();
+    const res: string = await sftpConnectAsync(this.host, this.port, this.user, this.password,
+      this.keyPath, this.keyPass, this.trustAll, this.expectFp);
+    const conn = JSON.parse(res) as Record<string, ESObject>;
+    this.handle = conn['handle'] as number;
+    this.fingerprint = conn['fingerprint'] as string;
+    const st: string = await sftpOpenAsync(this.handle, this.pathOf());
+    const meta = JSON.parse(st) as Record<string, number>;
+    this.size = meta.size;
+    if (this.size <= 0) {
+      return null;
+    }
+    return { size: this.size, versionTag: `size-${this.size}-${meta.mtime}`, supportsRange: true };
+  }
+
+  /** The file path is carried in the uri (serverId/host identity aside);
+   * the caller re-creates the source per book, so openPath is set externally. */
+  openPath: string = '';
+
+  private pathOf(): string {
+    return this.openPath.length > 0 ? this.openPath : '/';
+  }
+
+  async readAt(offset: number, len: number): Promise<ArrayBuffer> {
+    if (this.handle === 0) {
+      const p: RemoteProbe | null = await this.probe();
+      if (p === null) {
+        throw new Error('SFTP_ERROR: cannot reopen file');
+      }
+    }
+    try {
+      return await sftpReadAtAsync(this.handle, offset, len);
+    } catch (e) {
+      const p: RemoteProbe | null = await this.probe();
+      if (p === null) {
+        throw e as Error;
+      }
+      return await sftpReadAtAsync(this.handle, offset, len);
+    }
+  }
+
+  async close(): Promise<void> {
+    if (this.handle !== 0) {
+      const h: number = this.handle;
+      this.handle = 0;
+      try {
+        await sftpCloseAsync(h);
+      } catch (e) { /* ignore */ }
+    }
+  }
+}
+
+/* ---- Directory listing over native clients (Android SmbClient/SftpClient) ---- */
+
+function listJsonToEntries(json: string): DavListEntry[] {
+  const raw = JSON.parse(json) as Array<Record<string, ESObject>>;
+  const out: DavListEntry[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    out.push({
+      name: raw[i]['name'] as string,
+      isDir: raw[i]['isDir'] as boolean,
+      size: raw[i]['size'] as number
+    });
+  }
+  out.sort((a: DavListEntry, b: DavListEntry): number => {
+    if (a.isDir !== b.isDir) {
+      return a.isDir ? -1 : 1;
+    }
+    return a.name.localeCompare(b.name);
+  });
+  return out;
+}
+
+/** List an SMB directory. Throws Error('SMB_AUTH: ..' | 'SMB_ERROR: ..'). */
+export async function smbListDir(server: string, share: string, path: string, user: string,
+  domain: string, password: string): Promise<DavListEntry[]> {
+  const json: string = await smbListAsync(server, share, path, user, domain, password);
+  return listJsonToEntries(json);
+}
+
+/** List an SFTP directory. Throws Error('SFTP_AUTH: ..' | 'SFTP_ERROR: ..'). */
+export async function sftpListDir(host: string, port: number, user: string, password: string,
+  keyPath: string, keyPass: string, trustAll: boolean, expectFp: string,
+  path: string): Promise<DavListEntry[]> {
+  const json: string = await sftpListAsync(host, port, user, password, keyPath, keyPass, trustAll, expectFp, path);
+  return listJsonToEntries(json);
+}
+
+/** One-shot connect to read the host key fingerprint (TOFU persist), then close. */
+export async function sftpProbeFingerprint(host: string, port: number, user: string, password: string,
+  keyPath: string, keyPass: string, trustAll: boolean, expectFp: string): Promise<string> {
+  const res: string = await sftpConnectAsync(host, port, user, password, keyPath, keyPass, trustAll, expectFp);
+  const conn = JSON.parse(res) as Record<string, ESObject>;
+  const fp: string = conn['fingerprint'] as string;
+  const h: number = conn['handle'] as number;
+  try {
+    await sftpCloseAsync(h);
+  } catch (e) { /* ignore */ }
+  return fp;
+}
+
+/** Resolve the user's home directory (absolute path) via a one-shot connection. */
+export async function sftpHomeOf(host: string, port: number, user: string, password: string,
+  keyPath: string, keyPass: string, trustAll: boolean, expectFp: string): Promise<string> {
+  const res: string = await sftpConnectAsync(host, port, user, password, keyPath, keyPass, trustAll, expectFp);
+  const conn = JSON.parse(res) as Record<string, ESObject>;
+  const h: number = conn['handle'] as number;
+  try {
+    return await sftpHomeAsync(h);
+  } finally {
+    try {
+      await sftpCloseAsync(h);
+    } catch (e) { /* ignore */ }
+  }
+}
+
+/* ---- EPUB DRM pre-probe (zip central directory -> META-INF/encryption.xml) ---- */
+
+function u16le(b: Uint8Array, off: number): number {
+  return b[off] | (b[off + 1] << 8);
+}
+
+function u32le(b: Uint8Array, off: number): number {
+  return (b[off] | (b[off + 1] << 8) | (b[off + 2] << 16) | (b[off + 3] << 24)) >>> 0;
+}
+
+/**
+ * Detect an encrypted EPUB by scanning the zip central directory (at the end
+ * of the file — the tech doc's tail-first strategy) for META-INF/encryption.xml.
+ * readAt(offset, len) must return up to len bytes; `size` is the remote file
+ * size. Returns false on any parse failure (treat as unencrypted, like Android).
+ */
+export async function epubIsEncrypted(readAt: (offset: number, len: number) => Promise<ArrayBuffer>,
+  size: number): Promise<boolean> {
+  if (size < 64) {
+    return false;
+  }
+  try {
+    const tailLen: number = Math.min(65536, size);
+    const tail: ArrayBuffer = await readAt(size - tailLen, tailLen);
+    const b: Uint8Array = new Uint8Array(tail);
+    /* locate the End Of Central Directory record (signature PK\5\6), scanning back */
+    let eocd = -1;
+    for (let i = b.length - 22; i >= 0; i--) {
+      if (b[i] === 0x50 && b[i + 1] === 0x4b && b[i + 2] === 0x05 && b[i + 3] === 0x06) {
+        eocd = i;
+        break;
+      }
+    }
+    if (eocd < 0) {
+      return false;
+    }
+    const cdOffset: number = u32le(b, eocd + 16);
+    const cdSize: number = u32le(b, eocd + 12);
+    if (cdOffset <= 0 || cdOffset >= size || cdSize <= 0) {
+      return false;
+    }
+    let cd: Uint8Array;
+    if (cdOffset >= size - tailLen) {
+      const base: number = size - tailLen;
+      cd = b.subarray(cdOffset - base, Math.min(b.length, cdOffset - base + cdSize));
+    } else {
+      const want: number = Math.min(cdSize, 4 * 1024 * 1024);
+      cd = new Uint8Array(await readAt(cdOffset, want));
+    }
+    /* walk central directory entries: sig PK\1\2, name at +46 */
+    let p = 0;
+    while (p + 46 <= cd.length) {
+      if (!(cd[p] === 0x50 && cd[p + 1] === 0x4b && cd[p + 2] === 0x01 && cd[p + 3] === 0x02)) {
+        break;
+      }
+      const nameLen: number = u16le(cd, p + 28);
+      if (p + 46 + nameLen > cd.length) {
+        break;
+      }
+      let name = '';
+      for (let i = 0; i < nameLen; i++) {
+        name += String.fromCharCode(cd[p + 46 + i]);
+      }
+      if (name.toLowerCase() === 'meta-inf/encryption.xml') {
+        return true;
+      }
+      p += 46 + nameLen + u16le(cd, p + 30) + u16le(cd, p + 32) + u16le(cd, p + 34);
+    }
+    return false;
+  } catch (e) {
+    return false;
   }
 }
 
@@ -713,7 +1050,7 @@ export class RemoteSession {
   ctx: Context;
   uri: string;
   cacheKey: string;
-  source: WebDavFileSource;
+  source: RemoteFileSource;
   settings: RemoteCacheSettings;
   store: BlockCacheStore;
   private closed: boolean = false;
@@ -722,7 +1059,7 @@ export class RemoteSession {
   private fillerGen: number = 0;
   onFillerProgress: ((percent: number) => void) | undefined = undefined;
 
-  constructor(ctx: Context, uri: string, cacheKey: string, source: WebDavFileSource,
+  constructor(ctx: Context, uri: string, cacheKey: string, source: RemoteFileSource,
     settings: RemoteCacheSettings) {
     this.ctx = ctx;
     this.uri = uri;
@@ -805,6 +1142,10 @@ export class RemoteSession {
     this.closed = true;
     this.stopFiller();
     this.store.close();
+    /* release SMB/SFTP connections (no-op for WebDAV) */
+    try {
+      this.source.close();
+    } catch (e) { /* ignore */ }
   }
 }
 

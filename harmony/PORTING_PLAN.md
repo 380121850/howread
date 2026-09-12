@@ -87,7 +87,16 @@
 2. ✅ **RemoteBook.ets**：remote://webdav/<serverId>/<url> URI；格式分级（直开 pdf/epub/cbz/xps/oxps、静默取回 txt/html/fb2/rtf、重格式确认下载 mobi 族/djvu/cbr/doc + MOBI DRM 头探测）；WebDAV Range 随机读源（Range 探测降级、ETag 版本戳、指数退避）；两级块缓存（内存 LRU 128 块/32MB + 磁盘 data.bin/blocks.bin/meta.json，256KB/1MB，版本变更失效）；P2 预取 + P3 小书整本续传；整本落地 Remote/books/；PROPFIND 递归扫描（任意命名空间前缀）；远程书目存储。
 3. ✅ **UI**：我的文件 WebDAV 文件行点击分流（在线优先/确认/下载）；远程书籍架（扫描 ⟳、云图标、大小、格式、缓存百分比徽标、长按删除）；偏好「在线阅读与缓存」组（3 开关 + 5 数值弹窗 + 用量 + 清空）；Reader remote:// 分支（加载遮罩、全操作异步化、批注编辑远程禁用提示）；库清理跳过远程书。
 4. ✅ **离线**：完全缓存的书零网络打开（openOffline 降级，服务器停机实测）；已缓存整本书重取回直接从缓存落地。
-5. ⏸ **待续**：SMB/SFTP 协议客户端（ArkTS 无 jcifs-ng/sshj 等价库）；OPDS 认证/分页；计费网络检测接入 wholeBookOnMetered；EPUB DRM 预探测。
+5. ✅ **SMB/SFTP/EPUB DRM 已在阶段 15b 完成（2026-09-12，见下）**。剩余待续：OPDS 认证/分页；计费网络检测接入 wholeBookOnMetered。
+
+### 阶段 15b（2026-09-12）：SMB/SFTP 自研 native 协议客户端 + EPUB DRM 预探测 ✅ 已完成（0.9.3 / versionCode 41）
+
+1. ✅ **native 协议客户端**：自研交叉编译 libsmb2-6.0（内置加密）+ libssh2 1.11.1（静态链 openssl 3.0.17）双 ABI（arm64-v8a/x86_64），vendored 到 Builder/，产物入 prebuilt/harmony/net/ + entry/libs/；新增 remote_net.cpp（9 个 NAPI 异步导出：smb/sftp 的 open/readAt/list/connect/home/close），每连接互斥 + 读失败重连重试一次（对齐安卓 SmbDataSource/SftpDataSource）。
+2. ✅ **ArkTS 数据源**：RemoteFileSource 接口化 + SmbFileSource/SftpFileSource；SFTP 主机密钥 TOFU（指纹持久化、变更拒绝）；SMB/SFTP 服务器存储（Servers.ets，字段对齐安卓 AddRemoteDialog：端口默认 445/22、share/domain/keyPath/keyPass/trustAll）。
+3. ✅ **UI**：SMB/SFTP 添加/编辑对话框 + 测试连接（区分认证/网络错误）+ 云盘浏览面板（netSection 2/3）+ 服务器行扫描；点击决策树抽成协议无关 remoteOpenCore，三协议共用；远程书架/角标复用。
+4. ✅ **EPUB DRM 预探测**：epubIsEncrypted 读尾部 64KB 解析 zip 中央目录查 META-INF/encryption.xml，检出即 toast 拒绝（不提供下载）。
+5. ✅ **验证**（模拟器 + 50.23 三协议服务器）：SFTP 测试连接/浏览/PDF 流式/MOBI 整本取回本地打开（76 页）/扫描 15 本入架/**断连（iptables）离线打开**；SMB 测试连接/浏览/PDF 流式；DRM epub 点击即拒；WebDAV 同包回归。双变体 8 件套已出。
+6. ⏸ **待真机/待续**：SFTP 私钥登录实测（字段与 native 分支已留）；SMB 域认证（DOMAIN\user）未搭域环境；OPDS 认证/分页；计费网络检测接入 wholeBookOnMetered。
 
 ### 阶段 14b（2026-09-09）：夜间/白天模式全 APP 生效修复（0.8.6 补丁）✅ 已完成
 

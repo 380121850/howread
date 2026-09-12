@@ -166,12 +166,18 @@
 
     <!-- network section (OPDS catalogs + WebDAV servers), filled in code;
          visible only in the "My files" root view, above the folder list -->
-    <LinearLayout
-        android:id="@+id/netSection"
+    <ScrollView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:visibility="gone" />
+        android:maxHeight="300dp">
+
+        <LinearLayout
+            android:id="@+id/netSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone" />
+    </ScrollView>
 
     <HorizontalScrollView
         android:layout_width="match_parent"
@@ -301,12 +307,18 @@
     <!-- search tools of the "My files" root view: below the library-folder
          list so the folders block (header + list) stays one visual unit;
          filled in code, toggled together with netSection -->
-    <LinearLayout
-        android:id="@+id/searchSection"
+    <ScrollView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:visibility="gone" />
+        android:maxHeight="100dp">
+
+        <LinearLayout
+            android:id="@+id/searchSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone" />
+    </ScrollView>
 
     <EditText
         android:id="@+id/editPath"

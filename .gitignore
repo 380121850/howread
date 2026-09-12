@@ -66,3 +66,10 @@ harmony/*.p12
 harmony/*.p7b
 harmony/*.cer
 harmony/*.csr
+
+# vendored net protocol libs (SMB/SFTP online reading): pristine upstream sources,
+# versions in prebuilt/harmony/net/VERSIONS.txt, re-fetch/rebuild via Builder/net-libs/
+# — same convention as /Builder/mupdf*
+/Builder/libsmb2/
+/Builder/libssh2/
+/Builder/openssl/

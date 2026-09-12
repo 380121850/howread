@@ -46,7 +46,8 @@ import { TextUtils } from '../model/TextUtils';
 import { loadSettings, saveSettings, THEME_NAMES, ReaderSettings } from '../model/Settings';
 import { startTtsBackgroundTask, stopTtsBackgroundTask, showTtsNotification, cancelTtsNotification, syncTtsCardState } from '../service/TtsService';
 import {
-  RemoteSession, WebDavFileSource, loadRemoteCacheSettings, parseRemoteUri, resolveWebDavServer,
+  RemoteSession, RemoteFileSource, WebDavFileSource, SmbFileSource, SftpFileSource,
+  loadRemoteCacheSettings, parseRemoteUri, resolveWebDavServer, resolveSmbServer, resolveSftpServer,
   fileExtOf, isDirectOpenExt, isPageFormatExt, mobiIsEncrypted, sha256Hex,
   BlockCacheStore, RemoteProbe
 } from '../model/RemoteBook';
@@ -711,17 +712,46 @@ struct Reader {
     try {
       const ctx = getContext(this);
       const parts = parseRemoteUri(uri);
-      if (parts === null || parts.type !== 'webdav') {
+      if (parts === null || (parts.type !== 'webdav' && parts.type !== 'smb' && parts.type !== 'sftp')) {
         throw new Error('bad remote uri');
       }
       const settings = await loadRemoteCacheSettings(ctx);
       this.remoteOpenMsg = '加载缓存...';
-      const server = await resolveWebDavServer(ctx, parts.serverId);
-      if (server === null) {
-        throw new Error('远程服务器配置不存在，请重新添加');
+      let source: RemoteFileSource;
+      if (parts.type === 'webdav') {
+        const server = await resolveWebDavServer(ctx, parts.serverId);
+        if (server === null) {
+          throw new Error('远程服务器配置不存在，请重新添加');
+        }
+        source = new WebDavFileSource(parts.fileUrl, server.user, server.password,
+          settings.retryCount, settings.retryIntervalMs);
+      } else if (parts.type === 'smb') {
+        /* parts.fileUrl = '<host>[:<port>]|<share>|<path-on-share>' */
+        const segs: string[] = parts.fileUrl.split('|');
+        if (segs.length < 3) {
+          throw new Error('bad smb uri');
+        }
+        const server = await resolveSmbServer(ctx, parts.serverId);
+        if (server === null) {
+          throw new Error('远程服务器配置不存在，请重新添加');
+        }
+        source = new SmbFileSource(segs[0], segs[1], segs[2], server.user, server.domain, server.password);
+      } else {
+        /* sftp: parts.fileUrl = '<host>[:<port>]|<absolute-path>' */
+        const segs: string[] = parts.fileUrl.split('|');
+        if (segs.length < 2) {
+          throw new Error('bad sftp uri');
+        }
+        const server = await resolveSftpServer(ctx, parts.serverId);
+        if (server === null) {
+          throw new Error('远程服务器配置不存在，请重新添加');
+        }
+        const hp: string[] = segs[0].split(':');
+        source = new SftpFileSource(hp[0], hp.length > 1 ? parseInt(hp[1], 10) : 22,
+          server.user, server.password, server.keyPath, server.keyPass,
+          server.trustAll, server.fingerprint);
+        (source as SftpFileSource).openPath = segs[1];
       }
-      const source = new WebDavFileSource(parts.fileUrl, server.user, server.password,
-        settings.retryCount, settings.retryIntervalMs);
       const session = new RemoteSession(ctx, uri, await sha256Hex(uri), source, settings);
       /* Round 8: fully-cached books open with zero network (Android openOffline);
        * otherwise a failed probe aborts the open */

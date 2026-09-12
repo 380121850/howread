@@ -42,6 +42,9 @@
 #include <utility>
 #include <vector>
 
+/* SMB/SFTP protocol clients live in remote_net.cpp (global scope). */
+napi_value RegisterRemoteNet(napi_env env, napi_value exports);
+
 namespace {
 
 /* PATH_MAX is not reliably exposed by the OHOS musl headers */
@@ -3461,6 +3464,7 @@ napi_value Init(napi_env env, napi_value exports)
         {"authenticateDocument", nullptr, AuthenticateDocument, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
+    RegisterRemoteNet(env, exports);
     return exports;
 }
 

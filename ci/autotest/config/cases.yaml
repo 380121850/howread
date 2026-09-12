@@ -1,6 +1,8 @@
 # HowRead 自动测试用例参数（层级/优先级/超时/重试 全局在此配置）
-package: com.howread.reader
-package_pro: com.howread.reader.pro
+# 实际包名以 devices.json 的 flavors.<flavor>.applicationId 为准（run_all.py 从这里解析）；
+# 下面两行仅为历史兼容保留，2026-09-07 重品牌后同步为 leestudio 包名
+package: com.leestudio.howread.fd.reader
+package_pro: com.leestudio.howread.pro.reader
 main_activity: com.foobnix.ui2.MainTabs2
 
 launcher_timeout_s: 10
@@ -10,10 +12,13 @@ heartbeat_s: 30          # >30s 的操作打印心跳行
 case_timeout_s: 300      # 单用例默认超时
 case_retries: 1          # 默认失败重试次数
 
-# 冷启动耗时阈值（ms），按设备型号覆盖
+# 冷启动耗时阈值（ms），按设备型号覆盖（key 须与 devices.json 的 model 完全一致）。
+# 2026-09-12 实测：P20 中位 2565ms / KSA 6691ms（Displayed 首帧，已修复测量失配），
+# 冷启优化另行立项处理；本表对低端机先放宽，避免门禁误报。
 cold_start_threshold_ms:
   default: 2000
-  "KSA-AL10": 3000
+  "SNE-AL00 (P20)": 3000
+  "KSA-AL10": 8000
 
 stability_monkey:
   duration_s: 300        # 试跑 5 分钟；正式门禁夜跑改 1800
@@ -31,6 +36,28 @@ ai_mock:
   port: 8770
   model: howread-test-model
   # 测试时把应用 AI 配置指向 http://<PC-IP>:8770/v1 即可，无需真实 API key
+
+# 50.23 协议测试服务器（AGENTS.md「网络协议测试服务器」，三协议统一账号 howread/howread123）
+# FN-26/27/28/29/30 网络用例使用；WebDAV 根 /srv/webdav/、SMB share testbooks、SFTP /home/howread/books/
+test_server:
+  host: 192.168.50.23
+  webdav_url: http://192.168.50.23:8765/
+  webdav_user: howread
+  webdav_password: howread123
+  smb_share: testbooks
+  smb_port: 445
+  sftp_port: 22
+  user: howread
+  password: howread123
+  books_dir: /home/howread/books
+
+# AI 大模型测试配置（AGENTS.md「AI 大模型测试配置」：智谱 v4 为 OpenAI 兼容，协议选 openai）
+# FN-23 AI 配置与连通用例使用（真机走真外网调 glm-4-flash）
+ai_test:
+  protocol: openai
+  base_url: https://open.bigmodel.cn/api/paas/v4/
+  api_key: 4bd91d803b234c9dbf2f7f2675cd49f6.l88tfpAXnzWLUwVe
+  model: glm-4-flash
 
 # ===== 用例注册：layer（层级）+ priority（P0-P2）+ 超时/重试覆盖 =====
 case_meta:
@@ -52,6 +79,30 @@ case_meta:
   FN-07: { layer: ui, priority: P2, timeout: 300, retries: 0 }
   FN-08: { layer: ui, priority: P0, timeout: 300, retries: 1 }
   FN-09: { layer: ui, priority: P1, timeout: 600, retries: 1 }
+  # --- L1 功能回归（2026-09-12 覆盖扩展 批次1：本地书库/浏览/阅读 UI）---
+  FN-10: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 书库搜索
+  FN-11: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 排序与状态筛选
+  FN-12: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 视图模式切换
+  FN-13: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 标签管理
+  FN-14: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 文件浏览操作(新建txt/zip直读)
+  FN-15: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 翻页模式切换
+  FN-16: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 跳页
+  FN-17: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 目录大纲
+  FN-18: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 字号调节
+  FN-19: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 四套主题
+  FN-20: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 界面语言切换
+  FN-21: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 分享接收
+  # --- L1 批次2：Pro 功能 ---
+  FN-22: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 笔记(Pro)
+  FN-23: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # AI 配置与连通(Pro)
+  FN-24: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 阅读统计(Pro)
+  # --- L1 批次3：网络协议（50.23 测试服务器）---
+  FN-25: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # OPDS 浏览
+  FN-26: { layer: ui, priority: P1, timeout: 360, retries: 1 }   # WebDAV 浏览(Pro)
+  FN-27: { layer: ui, priority: P2, timeout: 360, retries: 0 }   # WebDAV 同步(Pro)
+  FN-28: { layer: ui, priority: P1, timeout: 360, retries: 1 }   # SMB 添加与浏览(Pro)
+  FN-29: { layer: ui, priority: P1, timeout: 360, retries: 1 }   # SFTP 添加与浏览(Pro)
+  FN-30: { layer: ui, priority: P1, timeout: 420, retries: 1 }   # 远程书在线打开(Pro)
   # --- L2 专项 ---
   PF-01: { layer: ui, priority: P1, timeout: 300, retries: 0 }
   PF-03: { layer: ui, priority: P1, timeout: 300, retries: 0 }

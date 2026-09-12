@@ -25,14 +25,21 @@ def pf01_cold_start(dev, case_id, cfg=None, fixtures=None, runs=3):
                     break
                 time.sleep(0.2)
             time.sleep(2)
-            out = dev.shell("logcat -d | grep -E 'Displayed com.howread'")
+            # 包名必须动态取（2026-09-07 重品牌后 pro=com.leestudio.howread.pro.reader，
+            # 写死 com.howread 会 grep 不到 Displayed 行，静默退化成含 2s 固定 sleep 的墙钟计时）
+            out = dev.shell("logcat -d | grep -E 'Displayed %s'" % re.escape(dev.pkg))
             ms = None
             for line in out.splitlines():
-                m = re.search(r"Displayed [\w.]+/[\w.$]+ \+?(\d+)ms", line)
+                # 实际格式: "Displayed com.x.y/.Main: +903ms"（<1s）或 "+1s294ms"（≥1s，秒+毫秒）。
+                # 旧正则只认纯毫秒且漏了类名后的冒号 → 永远匹配不到 → 静默退化成墙钟计时。
+                m = re.search(r"Displayed [\w.]+/[\w.$]+:?\s*\+?(?:(\d+)s)?(\d+)ms", line)
                 if m:
-                    ms = int(m.group(1))
+                    secs = int(m.group(1)) if m.group(1) else 0
+                    ms = secs * 1000 + int(m.group(2))
             if ms is None:
+                # 兜底：墙钟计时（含 2s 固定 sleep 与 adb 往返，偏大），在备注里显式标注
                 ms = int((time.time() - t0) * 1000)
+                print("  [%s] 冷启动 #%d: %dms（墙钟兜底，未读到 Displayed 行）" % (dev.serial, i + 1, ms))
                 times.append(ms)
                 continue
             times.append(ms)

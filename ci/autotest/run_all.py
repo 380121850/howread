@@ -123,13 +123,17 @@ def case_list(level):
     raise ValueError("未知层级 " + level)
 
 
-def run_level(dev, level, apk_path, cfg, fixtures, run_dir):
+def run_level(dev, level, apk_path, cfg, fixtures, run_dir, case_filter=None):
     version = get_version(dev)
     dev.results.append(dict(case_id="ENV", name="版本确认", status="PASS", ms=0, attempts=1,
                             layer="env", priority="-",
                             note="versionName=%s pkg=%s" % (version, dev.pkg),
                             evidence=""))
     cases = case_list(level)
+    if case_filter:
+        want = set(c.strip().upper() for c in case_filter.split(",") if c.strip())
+        cases = [c for c in cases if c[0].upper() in want]
+        log("[%s] --cases 过滤: %d 例" % (dev.serial, len(cases)))
     dev.progress_total = len(cases)
     for cid, name, fn, kw in cases:
         kw = dict(kw)
@@ -159,6 +163,7 @@ def main():
     ap.add_argument("--avd", action="store_true", help="使用 AVD 模拟器（UI 层）")
     ap.add_argument("--flavor", default="pro", choices=["pro", "fdroid"])
     ap.add_argument("--apk", help="显式指定 APK 路径")
+    ap.add_argument("--cases", help="只跑指定用例（逗号分隔，如 FN-10,FN-12；ENV 版本确认保留）")
     ap.add_argument("--serial-exec", action="store_true", help="设备间串行执行（调试）")
     args = ap.parse_args()
 
@@ -210,7 +215,7 @@ def main():
             return dict(serial=meta["serial"], meta=meta, flavor=args.flavor,
                         version="?", results=dev.results)
         log("[%s] APK: %s" % (meta["serial"], apk))
-        ver = run_level(dev, args.level, apk, cases_cfg, fixtures, run_dir)
+        ver = run_level(dev, args.level, apk, cases_cfg, fixtures, run_dir, case_filter=args.cases)
         return dict(serial=meta["serial"], meta=meta, flavor=args.flavor, version=ver,
                     results=dev.results)
 

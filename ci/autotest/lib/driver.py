@@ -155,9 +155,19 @@ class Device:
         new = lines[self._logcat_lines:]
         self._logcat_lines = len(lines)
         joined = "\n".join(new)
-        if "FATAL EXCEPTION" in joined:
-            i = joined.find("FATAL EXCEPTION")
-            return "FATAL EXCEPTION:\n" + joined[i:i + 800]
+        # 系统 uiautomator dump 工具自身崩溃（EMUI 上 uia2 活跃时 "UiAutomationService
+        # already registered"）不是应用崩溃，须排除，否则会把工具崩溃误判为应用 FATAL。
+        tool_markers = ("com.android.commands.uiautomator", "com.android.uiautomator.core",
+                        "UiAutomationService", "UiAutomationShellWrapper", "DumpCommand")
+        idx = 0
+        while True:
+            i = joined.find("FATAL EXCEPTION", idx)
+            if i < 0:
+                break
+            block = joined[i:i + 900]
+            if not any(m in block for m in tool_markers):
+                return "FATAL EXCEPTION:\n" + block
+            idx = i + 1
         if re.search(r"ANR in %s" % re.escape(self.pkg), joined):
             i = joined.find("ANR in")
             return "ANR:\n" + joined[i:i + 500]

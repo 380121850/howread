@@ -42,6 +42,26 @@ def write_report(runs, out_path, meta=None):
                           c.get("evidence", "")))
         lines.append("")
 
+    # 通过用例截图索引：UI 类用例 PASS 时保存的截图作为确认依据（2026-09-12 覆盖扩展起约定）
+    pass_shots = []
+    for r in runs:
+        for c in r["results"]:
+            if c["status"] != "PASS":
+                continue
+            ev = os.path.join(os.path.dirname(out_path), "evidence", r["serial"], c["case_id"])
+            if not os.path.isdir(ev):
+                continue
+            shots = [f for f in sorted(os.listdir(ev)) if f.endswith(".png")]
+            if shots:
+                pass_shots.append((r, c, shots))
+    if pass_shots:
+        lines.append("## 通过用例截图索引（UI 确认依据）")
+        lines.append("")
+        for r, c, shots in pass_shots:
+            lines.append("- %s %s @%s: %s" % (c["case_id"], c["name"], r["serial"],
+                         ", ".join("`%s/%s/%s`" % (r["serial"], c["case_id"], s) for s in shots)))
+        lines.append("")
+
     fails = [(r, c) for r in runs for c in r["results"] if c["status"] not in ("PASS", "SKIP")]
     skips = [(r, c) for r in runs for c in r["results"] if c["status"] == "SKIP"]
     if fails:

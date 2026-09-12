@@ -26,7 +26,7 @@ import { initProfiles, listProfiles, createProfile, switchProfile, deleteProfile
 import { getTagList, addTagToBook, removeTagFromBook, getSeriesList } from '../model/Tags';
 import { getReadingStats, getDailyStats, getMonthlyStats, ReadingStatsData, DayStat, MonthStat } from '../model/ReadingStats';
 import { fetchOpds, OPDS_PRESETS, OpdsEntry } from '../model/Opds';
-import { OpdsServer, DavServer, getOpdsServers, saveOpdsServer, removeOpdsServer, getDavServers, saveDavServer, removeDavServer } from '../model/Servers';
+import { OpdsServer, DavServer, SmbServer, SftpServer, getOpdsServers, saveOpdsServer, removeOpdsServer, getDavServers, saveDavServer, removeDavServer, getSmbServers, saveSmbServer, removeSmbServer, getSftpServers, saveSftpServer, removeSftpServer } from '../model/Servers';
 import { SyncConfig, SyncLogEntry, SYNC_CONFLICTS, defaultSyncConfig, loadSyncConfig, saveSyncConfig, getSyncLog, runSync, testSyncConnection } from '../model/Sync';
 import { AiConfig, AiMessage, loadAiConfig, saveAiConfig, chatCompletion, listModels, testChat, aiConfigReady, AI_PROVIDERS, AI_PROVIDER_URLS } from '../model/AiClient';
 import { addNote, AiNote } from '../model/Notes';
@@ -42,9 +42,10 @@ import Want from '@ohos.app.ability.Want';
 import { BUILD_TIME } from '../model/BuildInfo';
 import { parseScanFormats } from '../model/LibrarySearch';
 import {
-  RemoteSession, WebDavFileSource, RemoteBookRec, DavListEntry, RemoteCacheSettings,
+  RemoteSession, RemoteFileSource, WebDavFileSource, SmbFileSource, SftpFileSource, RemoteBookRec, DavListEntry, RemoteCacheSettings, RemoteUriParts,
   loadRemoteCacheSettings, buildRemoteUri, parseRemoteUri, serverIdOf, sha256Hex,
-  resolveWebDavServer, webdavListDir, basicAuthHeader,
+  resolveWebDavServer, resolveSmbServer, resolveSftpServer, webdavListDir, basicAuthHeader,
+  smbListDir, sftpListDir, sftpProbeFingerprint, sftpHomeOf, smbHostPort, sftpHostPort, epubIsEncrypted,
   fileExtOf, isDirectOpenExt, isSimpleFetchExt, isHeavyExt,
   BlockCacheStore, cachedPercent, remoteCacheTotalBytes, clearRemoteCacheBook, clearRemoteCacheAll,
   fetchWholeBookToCache, materializeBook, mobiIsEncrypted, upsertRemoteBook, removeRemoteBook, getRemoteBooks
@@ -157,7 +158,7 @@ struct Index {
   @State drawerQuote: string = '';
   /** cached quote pool loaded once from rawfile/reading_quotes.txt */
   quotePool: string[] = [];
-  /** library tab: true → show only starred books */
+  /** library tab: true -> show only starred books */
   @State libStarFilter: boolean = false;
   /* ---- Phase 2: library search / status chips / sort / view modes / batch select ---- */
   /** library search query (title/author/tag) */
@@ -285,7 +286,7 @@ struct Index {
   @State aiTestOut: string = '';
   @State aiBusy: boolean = false;
   @State aiModels: string[] = [];
-  /** AI 简介 dialog */
+  /** AI 配置 dialog */
   @State showAiIntro: boolean = false;
   @State aiIntroBusy: boolean = false;
   @State aiIntroText: string = '';
@@ -333,6 +334,40 @@ struct Index {
   @State remoteNumMax: number = 99999;
   @State remoteCacheUsage: string = '';
 
+  /* ---- SMB/SFTP servers (native libsmb2 / libssh2 clients) ---- */
+  @State smbServers: SmbServer[] = [];
+  @State sftpServers: SftpServer[] = [];
+  /** SMB add/edit dialog */
+  @State showSmbEdit: boolean = false;
+  @State smbEditIdx: number = -1;
+  @State smbEditName: string = '';
+  @State smbEditHost: string = '';
+  @State smbEditPort: string = '';
+  @State smbEditShare: string = '';
+  @State smbEditDomain: string = '';
+  @State smbEditUser: string = '';
+  @State smbEditPass: string = '';
+  @State smbTestStatus: string = '';
+  /** SFTP add/edit dialog */
+  @State showSftpEdit: boolean = false;
+  @State sftpEditIdx: number = -1;
+  @State sftpEditName: string = '';
+  @State sftpEditHost: string = '';
+  @State sftpEditPort: string = '';
+  @State sftpEditUser: string = '';
+  @State sftpEditPass: string = '';
+  @State sftpEditKeyPath: string = '';
+  @State sftpEditKeyPass: string = '';
+  @State sftpEditTrustAll: boolean = false;
+  @State sftpTestStatus: string = '';
+  /** SMB/SFTP cloud browse panels (netSection 2 / 3) */
+  @State smbSelected: number = -1;
+  @State smbPath: string = '';
+  @State smbEntries: DavListEntry[] = [];
+  @State sftpSelected: number = -1;
+  @State sftpPath: string = '';
+  @State sftpEntries: DavListEntry[] = [];
+
   /* Round 6: resolve a string resource into a plain string */
   private L(r: Resource): string {
     return getContext(this).resourceManager.getStringSync(r);
@@ -374,6 +409,18 @@ struct Index {
       this.davServers = l;
       if (this.davSelected >= l.length) {
         this.davSelected = l.length - 1;
+      }
+    });
+    getSmbServers(getContext(this)).then((l: SmbServer[]) => {
+      this.smbServers = l;
+      if (this.smbSelected >= l.length) {
+        this.smbSelected = l.length - 1;
+      }
+    });
+    getSftpServers(getContext(this)).then((l: SftpServer[]) => {
+      this.sftpServers = l;
+      if (this.sftpSelected >= l.length) {
+        this.sftpSelected = l.length - 1;
       }
     });
   }
@@ -690,7 +737,7 @@ struct Index {
       const f = fs.openSync(target, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
       fs.writeSync(f.fd, JSON.stringify(payload));
       fs.closeSync(f);
-      this.backupText = `已导出 ${recents.length} 本记录 / ${bookmarks.length} 条书签 → ${target}`;
+      this.backupText = `已导出：${recents.length} 本书籍 / ${bookmarks.length} 条书签 → ${target}`;
       console.info(`[Index] Backup written: ${target}`);
     } catch (e) {
       this.backupText = this.L($r('app.string.common_export_failed'));
@@ -714,7 +761,7 @@ struct Index {
       await replaceRecentBooks(ctx, payload.recents);
       await replaceBookmarks(ctx, payload.bookmarks);
       await this.loadLibrary();
-      this.backupText = `已恢复设置 + ${payload.recents.length} 本记录 + ${payload.bookmarks.length} 条书签`;
+      this.backupText = `已恢复导入：${payload.recents.length} 本书籍 + ${payload.bookmarks.length} 条书签`;
       console.info(`[Index] Backup restored from ${target}`);
     } catch (e) {
       this.backupText = this.L($r('app.string.backup_restore_failed'));
@@ -1173,7 +1220,7 @@ struct Index {
       try {
         fs.mkdirSync(coversDir);
       } catch (e) {
-        /* already exists (2nd+ cover) — fine */
+        /* already exists (2nd+ cover) -> fine */
       }
       const safe = book.path.replace(/[\/\\:]/g, '_').substring(0, 60);
       const coverFile = coversDir + '/' + safe + '.png';
@@ -1459,6 +1506,14 @@ struct Index {
       // ---- WebDAV add/edit dialog (hr06) ----
       if (this.showDavEdit) {
         this.buildDavEditDialog()
+      }
+
+      // ---- SMB/SFTP add/edit dialogs ----
+      if (this.showSmbEdit) {
+        this.buildSmbEditDialog()
+      }
+      if (this.showSftpEdit) {
+        this.buildSftpEditDialog()
       }
 
       // ---- WebDAV 同步 dialog (hr09) ----
@@ -1809,7 +1864,7 @@ struct Index {
     .height('100%')
   }
 
-  /* ── Sprint J6: WebDAV cloud drive ─────────────────────────────── */
+  /* ====== Sprint J6: WebDAV cloud drive =============================================== */
   /** Full URL of the current WebDAV directory (root + webdavPath). */
   private webdavDirUrl(): string {
     let u = this.webdavUrl.replace(/\/+$/, '');
@@ -2107,9 +2162,7 @@ struct Index {
     if (this.webdavUrl.length === 0 || fileName.length === 0) {
       return;
     }
-    const ctx = getContext(this);
-    const ext: string = fileExtOf(fileName);
-    const settings = await loadRemoteCacheSettings(ctx);
+    const settings = await loadRemoteCacheSettings(getContext(this));
     const server: DavServer | undefined = this.davServers[this.davSelected];
     if (server === undefined) {
       this.webdavDownload(fileName);
@@ -2119,6 +2172,20 @@ struct Index {
     const uri: string = buildRemoteUri('webdav', await serverIdOf(this.webdavUrl), fileUrl);
     const source = new WebDavFileSource(fileUrl, server.user, server.password,
       settings.retryCount, settings.retryIntervalMs);
+    await this.remoteOpenCore(fileName, uri, source, settings, (): void => {
+      this.webdavDownload(fileName);
+    });
+  }
+
+  /** Protocol-agnostic tap decision tree (Android RemoteBookOpener.openOrDownload):
+   * heavy -> confirm + whole-book fetch; simple -> silent fetch; direct-open -> probe (+ EPUB DRM pre-probe) then stream; unknown -> download fallback. */
+  private async remoteOpenCore(fileName: string, uri: string, source: RemoteFileSource,
+    settings: RemoteCacheSettings, fallbackDownload: () => void): Promise<void> {
+    const ctx = getContext(this);
+    const ext: string = fileExtOf(fileName);
+    const fetchOpen = (): void => {
+      this.remoteFetchAndOpenSource(uri, fileName, settings, source);
+    };
 
     /* heavy formats: confirm then whole-book download (Android confirmHeavyFetch) */
     if (!settings.onlineFirst || !(isDirectOpenExt(ext) || isSimpleFetchExt(ext))) {
@@ -2138,7 +2205,7 @@ struct Index {
                 secondaryButton: {
                   value: '下载',
                   action: () => {
-                    this.webdavDownload(fileName);
+                    fallbackDownload();
                   }
                 }
               });
@@ -2156,24 +2223,36 @@ struct Index {
           secondaryButton: {
             value: '下载',
             action: () => {
-              this.remoteFetchAndOpen(uri, fileUrl, fileName, server, settings, false);
+              fetchOpen();
             }
           }
         });
         return;
       }
       /* unknown/other formats: plain download */
-      this.webdavDownload(fileName);
+      fallbackDownload();
       return;
     }
 
     /* simple fetch formats (txt/html/fb2/rtf): silent download then open */
     if (!isDirectOpenExt(ext)) {
-      this.remoteFetchAndOpen(uri, fileUrl, fileName, server, settings, false);
+      fetchOpen();
       return;
     }
 
-    /* direct-open formats: probe and stream (P0 first-open path) */
+    /* direct-open formats: EPUB DRM pre-probe, then probe and stream (P0) */
+    if (ext === 'epub') {
+      try {
+        const probe = await source.probe();
+        if (probe !== null && await epubIsEncrypted((off: number, want: number): Promise<ArrayBuffer> => {
+          return source.readAt(off, want);
+        }, probe.size)) {
+          promptAction.showToast({ message: '该书受 DRM 权限保护，不支持打开' });
+          return;
+        }
+      } catch (_e) { /* fall through to normal flow */ }
+    }
+
     this.webdavStatus = '正在探测远程文件...';
     const probe = await source.probe();
     if (probe === null) {
@@ -2182,7 +2261,7 @@ struct Index {
     }
     if (!probe.supportsRange) {
       /* server without Range support: degrade to whole-book download */
-      this.remoteFetchAndOpen(uri, fileUrl, fileName, server, settings, true);
+      this.remoteFetchAndOpenSource(uri, fileName, settings, source);
       return;
     }
     const cacheKey: string = await sha256Hex(uri);
@@ -2235,9 +2314,16 @@ struct Index {
   /** Whole-book fetch through the block cache, then open the local copy. */
   private async remoteFetchAndOpen(uri: string, fileUrl: string, fileName: string,
     server: DavServer, settings: RemoteCacheSettings, silent: boolean): Promise<void> {
-    const ctx = getContext(this);
     const source = new WebDavFileSource(fileUrl, server.user, server.password,
       settings.retryCount, settings.retryIntervalMs);
+    await this.remoteFetchAndOpenSource(uri, fileName, settings, source);
+    void silent;
+  }
+
+  /** Protocol-agnostic whole-book fetch (WebDAV/SMB/SFTP share this path). */
+  private async remoteFetchAndOpenSource(uri: string, fileName: string,
+    settings: RemoteCacheSettings, source: RemoteFileSource): Promise<void> {
+    const ctx = getContext(this);
     const ext: string = fileExtOf(fileName);
     const session = new RemoteSession(ctx, uri, await sha256Hex(uri), source, settings);
     try {
@@ -2291,6 +2377,7 @@ struct Index {
       this.remoteFetchName = '';
       const msg: string = e instanceof Error ? e.message : String(e);
       this.webdavStatus = `下载失败: ${fileName} ${msg}`;
+      console.error(`[Index] remote fetch FAILED: ${fileName}: ${msg}`);
       promptAction.showToast({ message: `下载失败：${msg}` });
     } finally {
       session.close();
@@ -2363,6 +2450,19 @@ struct Index {
     }
     const ctx = getContext(this);
     const settings = await loadRemoteCacheSettings(ctx);
+    if (parts.type === 'smb' || parts.type === 'sftp') {
+      if (settings.onlineFirst && isDirectOpenExt(rec.ext)) {
+        this.remoteOpenOnline(rec.title, rec.uri);
+        return;
+      }
+      const source = await this.buildSourceForUri(parts, settings);
+      if (source === null) {
+        promptAction.showToast({ message: '远程服务器配置不存在，请重新添加' });
+        return;
+      }
+      await this.remoteFetchAndOpenSource(rec.uri, rec.title, settings, source);
+      return;
+    }
     const server = await resolveWebDavServer(ctx, parts.serverId);
     if (server === null) {
       promptAction.showToast({ message: '远程服务器配置不存在，请重新添加' });
@@ -2372,7 +2472,40 @@ struct Index {
       this.remoteOpenOnline(rec.title, rec.uri);
       return;
     }
-    this.remoteFetchAndOpen(rec.uri, parts.fileUrl, rec.title, server, settings, false);
+    const source = new WebDavFileSource(parts.fileUrl, server.user, server.password,
+      settings.retryCount, settings.retryIntervalMs);
+    await this.remoteFetchAndOpenSource(rec.uri, rec.title, settings, source);
+  }
+
+  /** Build the protocol source for an SMB/SFTP remote uri (null when the
+   * server record is gone). fileUrl formats:
+   * smb: '<host>[:<port>]|<share>|<path>'  sftp: '<host>[:<port>]|<path>' */
+  private async buildSourceForUri(parts: RemoteUriParts, settings: RemoteCacheSettings): Promise<RemoteFileSource | null> {
+    const ctx = getContext(this);
+    const segs: string[] = parts.fileUrl.split('|');
+    if (parts.type === 'smb') {
+      if (segs.length < 3) {
+        return null;
+      }
+      const server = await resolveSmbServer(ctx, parts.serverId);
+      if (server === null) {
+        return null;
+      }
+      return new SmbFileSource(segs[0], segs[1], segs[2], server.user, server.domain, server.password);
+    }
+    if (segs.length < 2) {
+      return null;
+    }
+    const server = await resolveSftpServer(ctx, parts.serverId);
+    if (server === null) {
+      return null;
+    }
+    const hp: string[] = segs[0].split(':');
+    const src = new SftpFileSource(hp[0], hp.length > 1 ? parseInt(hp[1], 10) : 22,
+      server.user, server.password, server.keyPath, server.keyPass,
+      server.trustAll, server.fingerprint);
+    src.openPath = segs[1];
+    return src;
   }
 
   /** Long-press on a scanned remote book: delete record + cached blocks. */
@@ -2394,6 +2527,478 @@ struct Index {
         }
       }
     });
+  }
+
+  // ---- SMB / SFTP servers (native protocol clients) ----
+
+  private openSmbEdit(idx: number): void {
+    this.smbTestStatus = '';
+    if (idx >= 0 && idx < this.smbServers.length) {
+      const s = this.smbServers[idx];
+      this.smbEditName = s.name;
+      this.smbEditHost = s.host;
+      this.smbEditPort = String(s.port > 0 ? s.port : 445);
+      this.smbEditShare = s.share;
+      this.smbEditDomain = s.domain;
+      this.smbEditUser = s.user;
+      this.smbEditPass = s.password;
+      this.smbEditIdx = idx;
+    } else {
+      this.smbEditName = '';
+      this.smbEditHost = '';
+      this.smbEditPort = '445';
+      this.smbEditShare = '';
+      this.smbEditDomain = '';
+      this.smbEditUser = '';
+      this.smbEditPass = '';
+      this.smbEditIdx = -1;
+    }
+    this.showSmbEdit = true;
+  }
+
+  /** 测试连接 (Android AddRemoteDialog): auth vs network error shown. */
+  private smbTestConnect(): void {
+    const host: string = this.smbEditHost.trim();
+    const share: string = this.smbEditShare.trim();
+    if (host.length === 0 || share.length === 0) {
+      this.smbTestStatus = '请填写主机与共享名';
+      return;
+    }
+    this.smbTestStatus = '连接中...';
+    const hp: string = smbHostPort(host, parseInt(this.smbEditPort, 10) || 445);
+    smbListDir(hp, share, '', this.smbEditUser.trim(), this.smbEditDomain.trim(), this.smbEditPass)
+      .then((entries: DavListEntry[]) => {
+        this.smbTestStatus = `连接成功 (${entries.length} 项)`;
+      })
+      .catch((e: Error) => {
+        this.smbTestStatus = e.message.startsWith('SMB_AUTH') ? '认证失败：账号/密码/共享名错误' : `连接失败：${e.message}`;
+      });
+  }
+
+  private saveSmbEdit(): void {
+    const host: string = this.smbEditHost.trim();
+    if (host.length === 0) {
+      this.status = '请填写 SMB 主机地址';
+      return;
+    }
+    const original: string = this.smbEditIdx >= 0 && this.smbEditIdx < this.smbServers.length
+      ? this.smbServers[this.smbEditIdx].host : '';
+    const s: SmbServer = {
+      host: host,
+      port: parseInt(this.smbEditPort, 10) || 445,
+      share: this.smbEditShare.trim(),
+      domain: this.smbEditDomain.trim(),
+      name: this.smbEditName.trim().length > 0 ? this.smbEditName.trim() : host,
+      user: this.smbEditUser.trim(),
+      password: this.smbEditPass
+    };
+    saveSmbServer(getContext(this), s, original).then(() => {
+      this.showSmbEdit = false;
+      this.loadServers();
+      this.status = 'SMB 服务器已保存';
+    });
+  }
+
+  private deleteSmbServerAt(idx: number): void {
+    if (idx < 0 || idx >= this.smbServers.length) {
+      return;
+    }
+    const host = this.smbServers[idx].host;
+    removeSmbServer(getContext(this), host).then(() => {
+      if (this.smbSelected === idx) {
+        this.smbSelected = -1;
+      }
+      this.loadServers();
+      this.status = 'SMB 服务器已删除';
+    });
+  }
+
+  private openSftpEdit(idx: number): void {
+    this.sftpTestStatus = '';
+    if (idx >= 0 && idx < this.sftpServers.length) {
+      const s = this.sftpServers[idx];
+      this.sftpEditName = s.name;
+      this.sftpEditHost = s.host;
+      this.sftpEditPort = String(s.port > 0 ? s.port : 22);
+      this.sftpEditUser = s.user;
+      this.sftpEditPass = s.password;
+      this.sftpEditKeyPath = s.keyPath;
+      this.sftpEditKeyPass = s.keyPass;
+      this.sftpEditTrustAll = s.trustAll;
+      this.sftpEditIdx = idx;
+    } else {
+      this.sftpEditName = '';
+      this.sftpEditHost = '';
+      this.sftpEditPort = '22';
+      this.sftpEditUser = '';
+      this.sftpEditPass = '';
+      this.sftpEditKeyPath = '';
+      this.sftpEditKeyPass = '';
+      this.sftpEditTrustAll = false;
+      this.sftpEditIdx = -1;
+    }
+    this.showSftpEdit = true;
+  }
+
+  /** 测试连接 + TOFU: on first success store the host key fingerprint. */
+  private sftpTestConnect(): void {
+    const host: string = this.sftpEditHost.trim();
+    if (host.length === 0) {
+      this.sftpTestStatus = '请填写主机地址';
+      return;
+    }
+    this.sftpTestStatus = '连接中...';
+    const port: number = parseInt(this.sftpEditPort, 10) || 22;
+    const expectFp: string = this.sftpEditIdx >= 0 && this.sftpEditIdx < this.sftpServers.length
+      ? this.sftpServers[this.sftpEditIdx].fingerprint : '';
+    sftpListDir(host, port, this.sftpEditUser.trim(), this.sftpEditPass, this.sftpEditKeyPath.trim(),
+      this.sftpEditKeyPass, this.sftpEditTrustAll, expectFp, '/')
+      .then((entries: DavListEntry[]) => {
+        this.sftpTestStatus = `连接成功 (${entries.length} 项)`;
+        /* TOFU: persist the host key fingerprint on first successful connect */
+        sftpProbeFingerprint(host, port, this.sftpEditUser.trim(), this.sftpEditPass,
+          this.sftpEditKeyPath.trim(), this.sftpEditKeyPass, this.sftpEditTrustAll, expectFp)
+          .then((fp: string) => {
+            if (fp.length === 0 || this.sftpEditIdx < 0 || this.sftpEditIdx >= this.sftpServers.length) {
+              return;
+            }
+            const rec = this.sftpServers[this.sftpEditIdx];
+            if (fp !== rec.fingerprint) {
+              rec.fingerprint = fp;
+              saveSftpServer(getContext(this), rec, rec.host).then(() => {
+                this.loadServers();
+              });
+            }
+          })
+          .catch((_e: Error) => { /* fingerprint fetch is best-effort */ });
+      })
+      .catch((e: Error) => {
+        if (e.message.startsWith('SFTP_AUTH')) {
+          this.sftpTestStatus = '认证失败：账号/密码/私钥错误';
+        } else if (e.message.startsWith('SFTP_HOSTKEY_CHANGED')) {
+          this.sftpTestStatus = '主机密钥已变化，拒绝连接';
+        } else {
+          this.sftpTestStatus = `连接失败：${e.message}`;
+        }
+      });
+  }
+
+  private saveSftpEdit(): void {
+    const host: string = this.sftpEditHost.trim();
+    if (host.length === 0) {
+      this.status = '请填写 SFTP 主机地址';
+      return;
+    }
+    const original: string = this.sftpEditIdx >= 0 && this.sftpEditIdx < this.sftpServers.length
+      ? this.sftpServers[this.sftpEditIdx].host : '';
+    /* keep an already-stored host key fingerprint (TOFU) when editing; a brand
+     * new entry inherits the fingerprint recorded by 测试连接 for the same host */
+    let prevFp: string = '';
+    for (let i = 0; i < this.sftpServers.length; i++) {
+      const rec = this.sftpServers[i];
+      if ((original.length > 0 && rec.host === original) || rec.host === host) {
+        prevFp = rec.fingerprint;
+        if (original.length === 0) {
+          this.sftpEditIdx = i; /* replace the TOFU-seeded record instead of duplicating */
+        }
+        break;
+      }
+    }
+    const s: SftpServer = {
+      host: host,
+      port: parseInt(this.sftpEditPort, 10) || 22,
+      name: this.sftpEditName.trim().length > 0 ? this.sftpEditName.trim() : host,
+      user: this.sftpEditUser.trim(),
+      password: this.sftpEditPass,
+      keyPath: this.sftpEditKeyPath.trim(),
+      keyPass: this.sftpEditKeyPass,
+      trustAll: this.sftpEditTrustAll,
+      fingerprint: prevFp
+    };
+    saveSftpServer(getContext(this), s, original).then(() => {
+      this.showSftpEdit = false;
+      this.loadServers();
+      this.status = 'SFTP 服务器已保存';
+    });
+  }
+
+  private deleteSftpServerAt(idx: number): void {
+    if (idx < 0 || idx >= this.sftpServers.length) {
+      return;
+    }
+    const host = this.sftpServers[idx].host;
+    removeSftpServer(getContext(this), host).then(() => {
+      if (this.sftpSelected === idx) {
+        this.sftpSelected = -1;
+      }
+      this.loadServers();
+      this.status = 'SFTP 服务器已删除';
+    });
+  }
+
+  /** Panel subtitle helpers (avoid local declarations inside @Builder). */
+  private smbServerSubtitle(idx: number): string {
+    if (idx < 0 || idx >= this.smbServers.length) {
+      return '';
+    }
+    const s = this.smbServers[idx];
+    return `${s.name}（\\\\${s.host}\\${s.share}）`;
+  }
+
+  private sftpServerSubtitle(idx: number): string {
+    if (idx < 0 || idx >= this.sftpServers.length) {
+      return '';
+    }
+    const s = this.sftpServers[idx];
+    return `${s.name}（${s.host}:${s.port > 0 ? s.port : 22}）`;
+  }
+
+  /** Tap an SMB server row: open its browse panel (netSection 2). */
+  private smbConnectServer(idx: number): void {
+    this.smbSelected = idx;
+    this.smbPath = '';
+    this.netSection = 2;
+    this.activeOverlay = 2;
+    this.smbBrowse('');
+  }
+
+  /** List a directory of the selected SMB server (path relative to share). */
+  private smbBrowse(path: string): void {
+    if (this.smbSelected < 0 || this.smbSelected >= this.smbServers.length) {
+      return;
+    }
+    const s = this.smbServers[this.smbSelected];
+    this.webdavConnecting = true;
+    this.webdavStatus = '连接中...';
+    smbListDir(smbHostPort(s.host, s.port), s.share, path, s.user, s.domain, s.password)
+      .then((entries: DavListEntry[]) => {
+        this.smbEntries = entries;
+        this.smbPath = path;
+        this.webdavStatus = `已连接: ${entries.length} 项`;
+        this.webdavConnecting = false;
+      })
+      .catch((e: Error) => {
+        this.webdavStatus = e.message.startsWith('SMB_AUTH') ? '认证失败' : `连接失败：${e.message}`;
+        this.webdavConnecting = false;
+      });
+  }
+
+  private smbUp(): void {
+    const p: string = this.smbPath.replace(/\/+$/, '');
+    const cut: number = p.lastIndexOf('/');
+    this.smbBrowse(cut >= 0 ? p.substring(0, cut) : '');
+  }
+
+  /** Tap an SMB file row in the browse panel. */
+  private async remoteOpenOrDownloadSmb(fileName: string): Promise<void> {
+    if (this.smbSelected < 0 || this.smbSelected >= this.smbServers.length) {
+      return;
+    }
+    const s = this.smbServers[this.smbSelected];
+    const settings = await loadRemoteCacheSettings(getContext(this));
+    const relPath: string = (this.smbPath.length > 0 ? this.smbPath + '/' : '') + fileName;
+    const fileUrl: string = `${smbHostPort(s.host, s.port)}|${s.share}|${relPath}`;
+    const uri: string = buildRemoteUri('smb', await serverIdOf(smbHostPort(s.host, s.port)), fileUrl);
+    const source = new SmbFileSource(smbHostPort(s.host, s.port), s.share, relPath, s.user, s.domain, s.password);
+    await this.remoteOpenCore(fileName, uri, source, settings, (): void => {
+      AlertDialog.show({
+        title: '整本下载',
+        message: `${fileName} 需要整本下载后才能打开，是否继续？`,
+        primaryButton: { value: '取消', action: () => {} },
+        secondaryButton: { value: '下载', action: () => {
+          this.remoteFetchAndOpenSource(uri, fileName, settings, source);
+        } }
+      });
+    });
+  }
+
+  /** Recursively scan the selected SMB server into the remote-book shelf. */
+  private async remoteScanSmb(s: SmbServer): Promise<void> {
+    if (this.remoteScanBusy) {
+      return;
+    }
+    this.remoteScanBusy = true;
+    promptAction.showToast({ message: '正在扫描 SMB 目录...' });
+    try {
+      const ctx = getContext(this);
+      let added = 0;
+      const serverId: string = await serverIdOf(smbHostPort(s.host, s.port));
+      const queue: string[] = [''];
+      let dirsVisited = 0;
+      while (queue.length > 0 && dirsVisited < 200) {
+        const path: string = queue.shift() as string;
+        let entries: DavListEntry[];
+        try {
+          entries = await smbListDir(smbHostPort(s.host, s.port), s.share, path, s.user, s.domain, s.password);
+        } catch (_e) {
+          console.warn(`[Index] smb scan listing failed: ${path}`);
+          continue;
+        }
+        dirsVisited++;
+        for (let k = 0; k < entries.length; k++) {
+          const e: DavListEntry = entries[k];
+          if (e.isDir) {
+            queue.push(path.length > 0 ? path + '/' + e.name : e.name);
+            continue;
+          }
+          const ext: string = fileExtOf(e.name);
+          if (!isDirectOpenExt(ext) && !isSimpleFetchExt(ext) && !isHeavyExt(ext)) {
+            continue;
+          }
+          if (e.size <= 0) {
+            continue;
+          }
+          const fileUrl: string = `${smbHostPort(s.host, s.port)}|${s.share}|` +
+            (path.length > 0 ? path + '/' : '') + e.name;
+          await upsertRemoteBook(ctx, {
+            uri: buildRemoteUri('smb', serverId, fileUrl),
+            title: e.name,
+            size: e.size,
+            ext: ext,
+            serverName: s.name,
+            addedAt: new Date().toISOString()
+          });
+          added++;
+        }
+      }
+      await this.loadRemoteBooks();
+      promptAction.showToast({ message: `扫描完成：发现 ${added} 本书` });
+    } finally {
+      this.remoteScanBusy = false;
+    }
+  }
+
+  /** Tap an SFTP server row: open its browse panel (netSection 3). */
+  private sftpConnectServer(idx: number): void {
+    this.sftpSelected = idx;
+    this.sftpPath = '/';
+    this.netSection = 3;
+    this.activeOverlay = 2;
+    this.sftpBrowse('/');
+  }
+
+  /** List an SFTP directory of the selected server (absolute path). */
+  private sftpBrowse(path: string): void {
+    if (this.sftpSelected < 0 || this.sftpSelected >= this.sftpServers.length) {
+      return;
+    }
+    const s = this.sftpServers[this.sftpSelected];
+    this.webdavConnecting = true;
+    this.webdavStatus = '连接中...';
+    sftpListDir(s.host, s.port, s.user, s.password, s.keyPath, s.keyPass, s.trustAll, s.fingerprint, path)
+      .then((entries: DavListEntry[]) => {
+        this.sftpEntries = entries;
+        this.sftpPath = path;
+        this.webdavStatus = `已连接: ${entries.length} 项`;
+        this.webdavConnecting = false;
+      })
+      .catch((e: Error) => {
+        if (e.message.startsWith('SFTP_AUTH')) {
+          this.webdavStatus = '认证失败';
+        } else if (e.message.startsWith('SFTP_HOSTKEY_CHANGED')) {
+          this.webdavStatus = '主机密钥已变化，拒绝连接';
+        } else {
+          this.webdavStatus = `连接失败：${e.message}`;
+        }
+        this.webdavConnecting = false;
+      });
+  }
+
+  private sftpUp(): void {
+    const p: string = this.sftpPath.replace(/\/+$/, '');
+    const cut: number = p.lastIndexOf('/');
+    this.sftpBrowse(cut > 0 ? p.substring(0, cut) : '/');
+  }
+
+  /** Tap an SFTP file row in the browse panel. */
+  private async remoteOpenOrDownloadSftp(fileName: string): Promise<void> {
+    if (this.sftpSelected < 0 || this.sftpSelected >= this.sftpServers.length) {
+      return;
+    }
+    const s = this.sftpServers[this.sftpSelected];
+    const settings = await loadRemoteCacheSettings(getContext(this));
+    const path: string = (this.sftpPath === '/' ? '' : this.sftpPath) + '/' + fileName;
+    const fileUrl: string = `${sftpHostPort(s.host, s.port)}|${path}`;
+    const uri: string = buildRemoteUri('sftp', await serverIdOf(sftpHostPort(s.host, s.port)), fileUrl);
+    const source = new SftpFileSource(s.host, s.port, s.user, s.password, s.keyPath, s.keyPass,
+      s.trustAll, s.fingerprint);
+    source.openPath = path;
+    await this.remoteOpenCore(fileName, uri, source, settings, (): void => {
+      AlertDialog.show({
+        title: '整本下载',
+        message: `${fileName} 需要整本下载后才能打开，是否继续？`,
+        primaryButton: { value: '取消', action: () => {} },
+        secondaryButton: { value: '下载', action: () => {
+          this.remoteFetchAndOpenSource(uri, fileName, settings, source);
+        } }
+      });
+    });
+  }
+
+  /** Recursively scan the selected SFTP server into the remote-book shelf. */
+  private async remoteScanSftp(s: SftpServer): Promise<void> {
+    if (this.remoteScanBusy) {
+      return;
+    }
+    this.remoteScanBusy = true;
+    promptAction.showToast({ message: '正在扫描 SFTP 目录...' });
+    try {
+      const ctx = getContext(this);
+      let added = 0;
+      const serverId: string = await serverIdOf(sftpHostPort(s.host, s.port));
+      /* BFS with home-relative paths: the SFTP server resolves relative paths
+       * against the user's home ('' lists home), so no realpath round-trip is
+       * needed and the stored fileUrl stays directly openable (sftpOpenAsync
+       * resolves it the same way) */
+      const queue: string[] = [''];
+      let dirsVisited = 0;
+      while (queue.length > 0 && dirsVisited < 200) {
+        const path: string = queue.shift() as string;
+        let entries: DavListEntry[];
+        try {
+          entries = await sftpListDir(s.host, s.port, s.user, s.password, s.keyPath, s.keyPass,
+            s.trustAll, s.fingerprint, path);
+        } catch (e) {
+          const msg: string = e instanceof Error ? e.message : String(e);
+          console.warn(`[Index] sftp scan listing failed: ${path.length === 0 ? '~' : path}: ${msg}`);
+          continue;
+        }
+        dirsVisited++;
+        for (let k = 0; k < entries.length; k++) {
+          const e: DavListEntry = entries[k];
+          if (e.isDir) {
+            queue.push(path.length > 0 ? path + '/' + e.name : e.name);
+            continue;
+          }
+          const ext: string = fileExtOf(e.name);
+          if (!isDirectOpenExt(ext) && !isSimpleFetchExt(ext) && !isHeavyExt(ext)) {
+            continue;
+          }
+          if (e.size <= 0) {
+            continue;
+          }
+          const fileUrl: string = `${sftpHostPort(s.host, s.port)}|` +
+            (path.length > 0 ? path + '/' : '') + e.name;
+          await upsertRemoteBook(ctx, {
+            uri: buildRemoteUri('sftp', serverId, fileUrl),
+            title: e.name,
+            size: e.size,
+            ext: ext,
+            serverName: s.name,
+            addedAt: new Date().toISOString()
+          });
+          added++;
+        }
+      }
+      await this.loadRemoteBooks();
+      promptAction.showToast({ message: `扫描完成：发现 ${added} 本书` });
+    } catch (e) {
+      const msg: string = e instanceof Error ? e.message : String(e);
+      console.error(`[Index] sftp scan FAILED: ${msg}`);
+      promptAction.showToast({ message: `扫描失败：${msg}` });
+    } finally {
+      this.remoteScanBusy = false;
+    }
   }
 
   // ---- Phase 5: OPDS 网上书库 ----
@@ -2729,7 +3334,7 @@ struct Index {
     }
   }
 
-  /** Recompute the chart series for the active 周/月/年 range. */
+  /** Recompute the chart series for the active 统计周期 range. */
   updateChartData(): void {
     this.chartValues = this.getChartValues();
     this.chartLabels = this.getChartLabels();
@@ -2774,7 +3379,7 @@ struct Index {
     return m > 0 ? m : 1;
   }
 
-  /** Active chart series values for 周/月/年. */
+  /** Active chart series values for 阅读统计 */
   getChartValues(): number[] {
     const out: number[] = [];
     if (this.chartRange === 0) {
@@ -2793,7 +3398,7 @@ struct Index {
     return out;
   }
 
-  /** Active chart series labels for 周/月/年 (short). */
+  /** Active chart series labels for 阅读统计 (short). */
   getChartLabels(): string[] {
     const out: string[] = [];
     if (this.chartRange === 0) {
@@ -2962,7 +3567,7 @@ struct Index {
     })
   }
 
-  /** Group allBookmarks into one card per book (cover + title + 快速书签 + percent). */
+  /** Group allBookmarks into one card per book (cover + title + 最新书签 + percent). */
   private bookmarkCards(): BookmarkCard[] {
     const cards: BookmarkCard[] = [];
     for (let i = 0; i < this.allBookmarks.length; i++) {
@@ -3002,7 +3607,7 @@ struct Index {
   buildDashboardTab() {
     Scroll() {
       Column() {
-        /* 最近阅读: horizontal cover shelf */
+        /* 最近阅读 horizontal cover shelf */
         this.sectionHeader(this.L($r('app.string.sec_recent')), 0)
         Scroll() {
           Row({ space: 12 }) {
@@ -3133,7 +3738,7 @@ struct Index {
     .scrollBar(BarState.Off)
   }
 
-  /** 阅读统计 chart dialog (Android hr02): range tabs + bar chart + 确认. */
+  /** 阅读统计 chart dialog (Android hr02): range tabs + bar chart + 更多. */
   @Builder
   buildStatsChartDialog() {
     Stack({ alignContent: Alignment.Center }) {
@@ -3966,7 +4571,7 @@ struct Index {
     .width('100%').height('100%')
   }
 
-  /** hr19+hr17: AI 简介 — ask the model about the book, show + save as AI note. */
+  /** hr19+hr17: AI 问答: ask the model about the book, show + save as AI note. */
   private startAiIntro(): void {
     const book = this.libMenuBook();
     if (book === undefined) {
@@ -4915,7 +5520,7 @@ struct Index {
 
       Divider().color(this.isDark() ? '#3a3a3a' : '#e0e0e0')
 
-      /* bottom bar: 设置选项 / 软件说明 / 晚上模式 / 退出 (Round 7: prefs entry optional) */
+      /* bottom bar: 设置选项 / 关于说明 / 晚上模式 / 偏好 (Round 7: prefs entry optional) */
       Row() {
         if (this.settings.showPrefsInDrawer) {
           this.drawerBottomButton($r('app.media.ic_settings'), this.L($r('app.string.drawer_settings')), 0)
@@ -5064,7 +5669,7 @@ struct Index {
       .width('100%').padding({ left: 12, right: 6, top: 8 })
       Divider().color(this.divColor())
 
-      /* section toggle: OPDS 目录 / WebDAV 云盘 */
+      /* section toggle: OPDS 目录 / WebDAV 云盘 / SMB / SFTP */
       Row({ space: 8 }) {
         Button(this.netSection === 0 ? $r('app.string.opds_star_title') : $r('app.string.opds_title'))
           .fontSize(12).height(30).layoutWeight(1)
@@ -5080,13 +5685,31 @@ struct Index {
           .onClick(() => {
             this.netSection = 1;
           })
+        Button('SMB')
+          .fontSize(12).height(30).layoutWeight(1)
+          .backgroundColor(this.netSection === 2 ? this.thm() : this.chipBg())
+          .fontColor(this.netSection === 2 ? Color.White : this.txtPri())
+          .onClick(() => {
+            this.netSection = 2;
+          })
+        Button('SFTP')
+          .fontSize(12).height(30).layoutWeight(1)
+          .backgroundColor(this.netSection === 3 ? this.thm() : this.chipBg())
+          .fontColor(this.netSection === 3 ? Color.White : this.txtPri())
+          .onClick(() => {
+            this.netSection = 3;
+          })
       }
       .width('90%').margin({ top: 8 })
 
       if (this.netSection === 0) {
         this.buildOpdsPanel()
-      } else {
+      } else if (this.netSection === 1) {
         this.buildWebdavPanel()
+      } else if (this.netSection === 2) {
+        this.buildSmbPanel()
+      } else {
+        this.buildSftpPanel()
       }
     }
     .width('92%').height('86%')
@@ -5456,7 +6079,7 @@ struct Index {
             ForEach(this.getFilteredBookmarks(), (bm: Bookmark) => {
               Row() {
                 Column({ space: 2 }) {
-                  Text(bm.label.length > 0 ? bm.label : `第 ${bm.page + 1} 页`)
+                  Text(bm.label.length > 0 ? bm.label : `第${bm.page + 1} 页`)
                     .fontSize(13).fontColor(this.txtPri()).maxLines(1)
                   Text(bm.path.substring(bm.path.lastIndexOf('/') + 1))
                     .fontSize(11).fontColor(this.txtHint()).maxLines(1)
@@ -5464,7 +6087,7 @@ struct Index {
                 .layoutWeight(1)
                 .alignItems(HorizontalAlign.Start)
 
-                Text('✖')
+                Text('✕')
                   .fontSize(14).fontColor(this.txtFaint())
                   .margin({ right: 8 })
                   .onClick(() => {
@@ -5492,7 +6115,7 @@ struct Index {
     .padding({ top: 8 })
   }
 
-  /** My Files tab (Android BrowseFragment2): my-files: root (网络区 + 书库文件夹) or a folder browser. */
+  /** My Files tab (Android BrowseFragment2): my-files: root (网络书库 + 书库文件夹) or a folder browser. */
   @Builder
   buildBrowseTab() {
     Column({ space: 6 }) {
@@ -5782,7 +6405,7 @@ struct Index {
         Text(rec.title)
           .fontSize(15).fontColor(this.txtSec()).maxLines(1)
         Row({ space: 6 }) {
-          Text(rec.serverName.length > 0 ? rec.serverName : 'WebDAV')
+          Text(rec.serverName.length > 0 ? rec.serverName : '远程')
             .fontSize(11).fontColor(this.txtFaint())
           Text(this.fmtBytes(rec.size))
             .fontSize(11).fontColor(this.txtFaint())
@@ -6006,6 +6629,390 @@ struct Index {
     .width('100%').height('100%')
   }
 
+  /** SMB server row: edit/delete/scan; tap = browse panel (netSection 2). */
+  @Builder
+  browseSmbRow(s: SmbServer, idx: number) {
+    Row({ space: 12 }) {
+      Image($r('app.media.ic_cloud'))
+        .width(24).height(24).fillColor(this.thm())
+      Column({ space: 2 }) {
+        Text(s.name)
+          .fontSize(15).fontColor(this.txtSec()).maxLines(1)
+        Text(`SMB \\\\${s.host}\\${s.share}`)
+          .fontSize(11).fontColor(this.txtFaint()).maxLines(1)
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+      Image($r('app.media.ic_refresh'))
+        .width(20).height(20).fillColor(this.thm())
+        .onClick(() => {
+          this.remoteScanSmb(s);
+        })
+      Image($r('app.media.ic_pencil'))
+        .width(20).height(20).fillColor(this.thm())
+        .onClick(() => {
+          this.openSmbEdit(idx);
+        })
+      Image($r('app.media.ic_close'))
+        .width(20).height(20).fillColor(this.txtFaint())
+        .onClick(() => {
+          this.deleteSmbServerAt(idx);
+        })
+    }
+    .width('94%')
+    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+    .backgroundColor(this.cardBg())
+    .borderRadius(3)
+    .margin({ bottom: 8 })
+    .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
+    .onClick(() => {
+      this.smbConnectServer(idx);
+    })
+  }
+
+  /** SFTP server row: edit/delete/scan; tap = browse panel (netSection 3). */
+  @Builder
+  browseSftpRow(s: SftpServer, idx: number) {
+    Row({ space: 12 }) {
+      Image($r('app.media.ic_cloud'))
+        .width(24).height(24).fillColor(this.thm())
+      Column({ space: 2 }) {
+        Text(s.name)
+          .fontSize(15).fontColor(this.txtSec()).maxLines(1)
+        Text(`SFTP ${s.host}:${s.port > 0 ? s.port : 22}`)
+          .fontSize(11).fontColor(this.txtFaint()).maxLines(1)
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+      Image($r('app.media.ic_refresh'))
+        .width(20).height(20).fillColor(this.thm())
+        .onClick(() => {
+          this.remoteScanSftp(s);
+        })
+      Image($r('app.media.ic_pencil'))
+        .width(20).height(20).fillColor(this.thm())
+        .onClick(() => {
+          this.openSftpEdit(idx);
+        })
+      Image($r('app.media.ic_close'))
+        .width(20).height(20).fillColor(this.txtFaint())
+        .onClick(() => {
+          this.deleteSftpServerAt(idx);
+        })
+    }
+    .width('94%')
+    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+    .backgroundColor(this.cardBg())
+    .borderRadius(3)
+    .margin({ bottom: 8 })
+    .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
+    .onClick(() => {
+      this.sftpConnectServer(idx);
+    })
+  }
+
+  /** SMB add/edit dialog (Android AddRemoteDialog fields, port default 445). */
+  @Builder
+  buildSmbEditDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showSmbEdit = false;
+        })
+      Column({ space: 8 }) {
+        Text(this.smbEditIdx >= 0 ? '编辑 SMB 服务器' : '添加 SMB 服务器')
+          .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
+          .width('100%')
+        TextInput({ text: this.smbEditName, placeholder: '显示名（可选）' })
+          .fontSize(13).height(36).width('100%')
+          .onChange((v: string) => {
+            this.smbEditName = v;
+          })
+        Row({ space: 8 }) {
+          TextInput({ text: this.smbEditHost, placeholder: '主机 / IP' })
+            .fontSize(13).height(36).layoutWeight(1)
+            .onChange((v: string) => {
+              this.smbEditHost = v;
+            })
+          TextInput({ text: this.smbEditPort, placeholder: '445' })
+            .fontSize(13).height(36).width(72)
+            .type(InputType.Number)
+            .onChange((v: string) => {
+              this.smbEditPort = v;
+            })
+        }
+        .width('100%')
+        TextInput({ text: this.smbEditShare, placeholder: '共享名 (share)' })
+          .fontSize(13).height(36).width('100%')
+          .onChange((v: string) => {
+            this.smbEditShare = v;
+          })
+        TextInput({ text: this.smbEditDomain, placeholder: '域（可选）' })
+          .fontSize(13).height(36).width('100%')
+          .onChange((v: string) => {
+            this.smbEditDomain = v;
+          })
+        TextInput({ text: this.smbEditUser, placeholder: '账号（空 = guest）' })
+          .fontSize(13).height(36).width('100%')
+          .onChange((v: string) => {
+            this.smbEditUser = v;
+          })
+        TextInput({ text: this.smbEditPass, placeholder: '密码' })
+          .type(InputType.Password)
+          .fontSize(13).height(36).width('100%')
+          .onChange((v: string) => {
+            this.smbEditPass = v;
+          })
+        Text(this.smbTestStatus)
+          .fontSize(11).fontColor(this.txtMid()).width('100%')
+        Row({ space: 10 }) {
+          Button('测试连接')
+            .fontSize(13).height(34)
+            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+            .onClick(() => {
+              this.smbTestConnect();
+            })
+          Blank()
+          Button($r('app.string.common_close'))
+            .fontSize(13).height(34)
+            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+            .onClick(() => {
+              this.showSmbEdit = false;
+            })
+          Button(this.smbEditIdx >= 0 ? $r('app.string.common_save') : $r('app.string.common_add'))
+            .fontSize(13).height(34)
+            .backgroundColor(this.thm()).fontColor(Color.White)
+            .onClick(() => {
+              this.saveSmbEdit();
+            })
+        }
+        .width('100%')
+      }
+      .width('82%')
+      .padding(14)
+      .backgroundColor(this.cardBg())
+      .borderRadius(8)
+    }
+    .width('100%').height('100%')
+  }
+
+  /** SFTP add/edit dialog (key auth + trustAll, port default 22). */
+  @Builder
+  buildSftpEditDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showSftpEdit = false;
+        })
+      Column({ space: 8 }) {
+        Text(this.sftpEditIdx >= 0 ? '编辑 SFTP 服务器' : '添加 SFTP 服务器')
+          .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
+          .width('100%')
+        TextInput({ text: this.sftpEditName, placeholder: '显示名（可选）' })
+          .fontSize(13).height(36).width('100%')
+          .onChange((v: string) => {
+            this.sftpEditName = v;
+          })
+        Row({ space: 8 }) {
+          TextInput({ text: this.sftpEditHost, placeholder: '主机 / IP' })
+            .fontSize(13).height(36).layoutWeight(1)
+            .onChange((v: string) => {
+              this.sftpEditHost = v;
+            })
+          TextInput({ text: this.sftpEditPort, placeholder: '22' })
+            .fontSize(13).height(36).width(72)
+            .type(InputType.Number)
+            .onChange((v: string) => {
+              this.sftpEditPort = v;
+            })
+        }
+        .width('100%')
+        TextInput({ text: this.sftpEditUser, placeholder: '账号' })
+          .fontSize(13).height(36).width('100%')
+          .onChange((v: string) => {
+            this.sftpEditUser = v;
+          })
+        TextInput({ text: this.sftpEditPass, placeholder: '密码' })
+          .type(InputType.Password)
+          .fontSize(13).height(36).width('100%')
+          .onChange((v: string) => {
+            this.sftpEditPass = v;
+          })
+        TextInput({ text: this.sftpEditKeyPath, placeholder: '私钥路径（可选）' })
+          .fontSize(13).height(36).width('100%')
+          .onChange((v: string) => {
+            this.sftpEditKeyPath = v;
+          })
+        TextInput({ text: this.sftpEditKeyPass, placeholder: '私钥口令（可选）' })
+          .fontSize(13).height(36).width('100%')
+          .onChange((v: string) => {
+            this.sftpEditKeyPass = v;
+          })
+        Row({ space: 6 }) {
+          Checkbox({ name: 'sftpTrust' })
+            .width(18).height(18)
+            .selectedColor(this.thm())
+            .select(this.sftpEditTrustAll)
+            .onChange((v: boolean) => {
+              this.sftpEditTrustAll = v;
+            })
+          Text('信任任意主机密钥').fontSize(13).fontColor(this.txtPri())
+        }
+        .width('100%')
+        Text(this.sftpTestStatus)
+          .fontSize(11).fontColor(this.txtMid()).width('100%')
+        Row({ space: 10 }) {
+          Button('测试连接')
+            .fontSize(13).height(34)
+            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+            .onClick(() => {
+              this.sftpTestConnect();
+            })
+          Blank()
+          Button($r('app.string.common_close'))
+            .fontSize(13).height(34)
+            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+            .onClick(() => {
+              this.showSftpEdit = false;
+            })
+          Button(this.sftpEditIdx >= 0 ? $r('app.string.common_save') : $r('app.string.common_add'))
+            .fontSize(13).height(34)
+            .backgroundColor(this.thm()).fontColor(Color.White)
+            .onClick(() => {
+              this.saveSftpEdit();
+            })
+        }
+        .width('100%')
+      }
+      .width('82%')
+      .padding(14)
+      .backgroundColor(this.cardBg())
+      .borderRadius(8)
+    }
+    .width('100%').height('100%')
+  }
+
+  /** Shared remote directory/file listing (SMB netSection 2 / SFTP netSection 3). */
+  @Builder
+  remoteEntriesList(isSmb: boolean) {
+    List() {
+      ForEach(isSmb ? this.smbEntries : this.sftpEntries, (e: DavListEntry) => {
+        ListItem() {
+          Row({ space: 8 }) {
+            Text(e.isDir ? '\u{1F4C1}' : '\u{1F4C4}')
+              .fontSize(14)
+            Text(e.name)
+              .fontSize(13)
+              .layoutWeight(1)
+              .fontColor(e.isDir ? '#3949AB' : this.txtPri())
+              .maxLines(1)
+            if (!e.isDir) {
+              Text(this.fmtBytes(e.size))
+                .fontSize(10).fontColor(this.txtFaint())
+            }
+          }
+          .width('90%').padding({ top: 6, bottom: 6 })
+          .onClick(() => {
+            if (e.isDir) {
+              if (isSmb) {
+                this.smbBrowse(e.name.includes('/') ? e.name :
+                  (this.smbPath.length > 0 ? this.smbPath + '/' + e.name : e.name));
+              } else {
+                this.sftpBrowse(this.sftpPath === '/' ? '/' + e.name : this.sftpPath + '/' + e.name);
+              }
+            } else if (isSmb) {
+              this.remoteOpenOrDownloadSmb(e.name);
+            } else {
+              this.remoteOpenOrDownloadSftp(e.name);
+            }
+          })
+        }
+      }, (e: DavListEntry) => (isSmb ? 'smb_' + this.smbPath : 'sftp_' + this.sftpPath) + '_' + e.name)
+    }
+    .width('100%')
+    .layoutWeight(1)
+  }
+
+  /** SMB 云盘 panel (selected server directory browser). */
+  @Builder
+  buildSmbPanel() {
+    Column() {
+      Text('SMB 云盘')
+        .fontSize(13).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
+        .margin({ top: 10, bottom: 6 })
+      if (this.smbSelected < 0 || this.smbSelected >= this.smbServers.length) {
+        Text('请先在书库-我的文件中添加 SMB 服务器')
+          .fontSize(12).fontColor(this.txtFaint()).margin({ top: 20 })
+      } else {
+        Text(this.smbServerSubtitle(this.smbSelected))
+          .fontSize(11).fontColor(this.txtFaint()).margin({ bottom: 4 })
+        Text(this.webdavStatus)
+          .fontSize(12).fontColor(this.txtMid())
+          .width('90%').margin({ top: 4 }).textAlign(TextAlign.Center)
+        if (this.webdavProgress >= 0) {
+          Text(`Downloading ${this.webdavDownloading} ${this.webdavProgress}%`)
+            .fontSize(11).fontColor('#3949AB').width('90%')
+          Progress({ value: this.webdavProgress, total: 100 })
+            .width('90%').height(6).margin({ top: 4 })
+        }
+        if (this.smbPath.length > 0) {
+          Row() {
+            Text($r('app.string.dav_up')).fontSize(13).fontColor('#3949AB')
+            Text('/' + this.smbPath).fontSize(11).fontColor(this.txtHint()).margin({ left: 10 }).layoutWeight(1).maxLines(1)
+          }
+          .width('90%').padding({ top: 6, bottom: 6 })
+          .onClick(() => {
+            this.smbUp();
+          })
+        }
+        this.remoteEntriesList(true)
+      }
+    }
+    .width('100%').layoutWeight(1)
+  }
+
+  /** SFTP 云盘 panel (selected server directory browser). */
+  @Builder
+  buildSftpPanel() {
+    Column() {
+      Text('SFTP 云盘')
+        .fontSize(13).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
+        .margin({ top: 10, bottom: 6 })
+      if (this.sftpSelected < 0 || this.sftpSelected >= this.sftpServers.length) {
+        Text('请先在书库-我的文件中添加 SFTP 服务器')
+          .fontSize(12).fontColor(this.txtFaint()).margin({ top: 20 })
+      } else {
+        Text(this.sftpServerSubtitle(this.sftpSelected))
+          .fontSize(11).fontColor(this.txtFaint()).margin({ bottom: 4 })
+        Text(this.webdavStatus)
+          .fontSize(12).fontColor(this.txtMid())
+          .width('90%').margin({ top: 4 }).textAlign(TextAlign.Center)
+        if (this.webdavProgress >= 0) {
+          Text(`Downloading ${this.webdavDownloading} ${this.webdavProgress}%`)
+            .fontSize(11).fontColor('#3949AB').width('90%')
+          Progress({ value: this.webdavProgress, total: 100 })
+            .width('90%').height(6).margin({ top: 4 })
+        }
+        if (this.sftpPath.length > 0 && this.sftpPath !== '/') {
+          Row() {
+            Text($r('app.string.dav_up')).fontSize(13).fontColor('#3949AB')
+            Text(this.sftpPath).fontSize(11).fontColor(this.txtHint()).margin({ left: 10 }).layoutWeight(1).maxLines(1)
+          }
+          .width('90%').padding({ top: 6, bottom: 6 })
+          .onClick(() => {
+            this.sftpUp();
+          })
+        }
+        this.remoteEntriesList(false)
+      }
+    }
+    .width('100%').layoutWeight(1)
+  }
+
   /** Root entry row: leading icon + blue label (OPDS/WebDAV items, Android hr05). */
   @Builder
   browseEntryRow(icon: Resource, label: string) {
@@ -6076,13 +7083,72 @@ struct Index {
         ForEach(this.davServers, (s: DavServer, idx: number) => {
           this.browseDavRow(s, idx)
         }, (s: DavServer) => s.url)
+        Row({ space: 14 }) {
+          Image($r('app.media.ic_pencil'))
+            .width(22).height(22).fillColor(this.thm())
+          Text('添加 / 编辑 WebDAV 服务器')
+            .fontSize(14).fontColor(this.thm())
+        }
+        .width('94%')
+        .padding({ left: 12, right: 12, top: 8, bottom: 12 })
+        .onClick(() => {
+          this.openDavEdit(-1);
+        })
+
+        Divider().color(this.divColor()).margin({ top: 8 })
+
+        /* SMB servers (native libsmb2 client) */
+        this.browseSectionHeader('SMB', 0)
+        if (this.smbServers.length === 0) {
+          Text('暂无 SMB 服务器，点击下方添加（Windows 共享 / Samba）')
+            .fontSize(13).fontColor(this.txtFaint())
+            .width('94%').padding({ left: 12, bottom: 8 })
+        }
+        ForEach(this.smbServers, (s: SmbServer, idx: number) => {
+          this.browseSmbRow(s, idx)
+        }, (s: SmbServer) => s.host)
+        Row({ space: 14 }) {
+          Image($r('app.media.ic_pencil'))
+            .width(22).height(22).fillColor(this.thm())
+          Text('添加 / 编辑 SMB 服务器')
+            .fontSize(14).fontColor(this.thm())
+        }
+        .width('94%')
+        .padding({ left: 12, right: 12, top: 8, bottom: 12 })
+        .onClick(() => {
+          this.openSmbEdit(-1);
+        })
+
+        Divider().color(this.divColor()).margin({ top: 8 })
+
+        /* SFTP servers (native libssh2 client) */
+        this.browseSectionHeader('SFTP', 0)
+        if (this.sftpServers.length === 0) {
+          Text('暂无 SFTP 服务器，点击下方添加（SSH 文件服务器）')
+            .fontSize(13).fontColor(this.txtFaint())
+            .width('94%').padding({ left: 12, bottom: 8 })
+        }
+        ForEach(this.sftpServers, (s: SftpServer, idx: number) => {
+          this.browseSftpRow(s, idx)
+        }, (s: SftpServer) => s.host)
+        Row({ space: 14 }) {
+          Image($r('app.media.ic_pencil'))
+            .width(22).height(22).fillColor(this.thm())
+          Text('添加 / 编辑 SFTP 服务器')
+            .fontSize(14).fontColor(this.thm())
+        }
+        .width('94%')
+        .padding({ left: 12, right: 12, top: 8, bottom: 12 })
+        .onClick(() => {
+          this.openSftpEdit(-1);
+        })
 
         Divider().color(this.divColor()).margin({ top: 8 })
 
         /* Round 8: remote books (Android RemoteScanner bookshelf) */
         this.browseSectionHeader('远程书籍', 0)
         if (this.remoteBooks.length === 0) {
-          Text('暂无远程书籍，可在 WebDAV 服务器行点 ⚙ 扫描，或浏览目录在线打开')
+          Text('暂无远程书籍，可在服务器行点 ⚙ 扫描，或浏览目录在线打开（支持 WebDAV / SMB / SFTP）')
             .fontSize(12).fontColor(this.txtFaint())
             .width('94%').padding({ left: 12, bottom: 8 })
         }
@@ -6383,7 +7449,7 @@ struct Index {
     .padding({ left: 12, right: 12, top: 6, bottom: 6 })
   }
 
-  /** Round 8: numeric pref row (tap → input dialog, Android RemoteCacheDialog fields). */
+  /** Round 8: numeric pref row (tap -> input dialog, Android RemoteCacheDialog fields). */
   @Builder
   settingsNumRow(label: string, key: string, minV: number, maxV: number) {
     Row() {
@@ -6988,7 +8054,7 @@ struct Index {
         /* ================= 4b. 在线阅读与缓存 (Round 8, Android RemoteCacheDialog) ================= */
         this.settingsGroupBar('在线阅读与缓存', 'remote')
         if (this.groupExp['remote'] === true) {
-          this.settingsToggleRow('在线优先阅读', 'remoteOnlineFirst', '支持格式直接流式打开')
+          this.settingsToggleRow('在线优先阅读', 'remoteOnlineFirst', '直开格式直接流式打开')
           this.settingsToggleRow('仅 WiFi 预取', 'remotePrefetchWifiOnly', '')
           this.settingsToggleRow('计费网络允许整本缓存', 'remoteWholeBookOnMetered', '')
           this.settingsNumRow('缓存上限 (MB)', 'remoteCacheMaxMB', 50, 4096)
@@ -7369,7 +8435,7 @@ struct Index {
   private confirmRemoteNum(): void {
     const v: number = parseInt(this.remoteNumValue, 10);
     if (isNaN(v) || v < this.remoteNumMin || v > this.remoteNumMax) {
-      promptAction.showToast({ message: `请输入 ${this.remoteNumMin} - ${this.remoteNumMax} 之间的数值` });
+      promptAction.showToast({ message: `请输入${this.remoteNumMin} - ${this.remoteNumMax} 之间的数值` });
       return;
     }
     this.applyNumPref(this.remoteNumKey, v);
@@ -7950,7 +9016,7 @@ struct Index {
     return 'HowRead: v' + this.appVersion + ' build ' + BUILD_TIME;
   }
 
-  /** Modal overlay: about (软件说明, Android about_section.xml parity). */
+  /** Modal overlay: about (关于说明, Android about_section.xml parity). */
   @Builder
   buildAboutOverlay() {
     Column() {
@@ -8284,7 +9350,7 @@ struct Index {
             try {
               reflowable = isReflowable(h);
             } catch (e) {
-              /* not supported → fixed layout */
+              /* not supported -> fixed layout */
             }
             const r: RenderResult = renderPage(h, 0, 1.0);
             let chars = -1;

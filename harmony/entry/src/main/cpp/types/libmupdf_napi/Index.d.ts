@@ -175,3 +175,44 @@ export function openDocumentRemoteAsync(readerId: number, magic: string, size: n
  */
 export function docOpAsync(handle: ESObject, op: number, a?: number | string, b?: number, c?: number,
   s?: string): Promise<string>;
+
+/* ---- SMB/SFTP protocol clients (remote_net.cpp, libsmb2 / libssh2) ---- */
+
+/**
+ * Connect to an SMB share and open a file. server is 'host' or 'host:port'
+ * (default 445), share is the SMB share name, path is the file path inside
+ * the share (no leading slash). user/domain/password may be '' for guest.
+ * Resolves {"handle":N,"size":S,"mtime":M}.
+ * Rejects 'SMB_AUTH: ..' on auth failure, 'SMB_ERROR: ..' otherwise.
+ */
+export function smbOpenAsync(server: string, share: string, path: string, user: string,
+  domain: string, password: string): Promise<string>;
+/** Random-access read; resolves ArrayBuffer with up to len bytes (short = EOF). */
+export function smbReadAtAsync(handle: number, offset: number, len: number): Promise<ArrayBuffer>;
+/** Close and free the connection. */
+export function smbCloseAsync(handle: number): Promise<string>;
+/** List a directory (path may be '' for share root). Resolves [{"name","isDir","size"}...] JSON. */
+export function smbListAsync(server: string, share: string, path: string, user: string,
+  domain: string, password: string): Promise<string>;
+
+/**
+ * Connect + handshake + authenticate an SSH session. port defaults to 22 when
+ * <=0. keyPath non-empty switches to public-key auth with keyPass as
+ * passphrase. expectFp is the stored host key fingerprint (SHA-256, base64
+ * from libssh2_hostkey_hash); when non-empty and mismatched (and trustAll is
+ * false) rejects 'SFTP_HOSTKEY_CHANGED: <newFp>'. trustAll skips the check.
+ * Resolves {"handle":N,"fingerprint":".."} (store the fingerprint on first use).
+ */
+export function sftpConnectAsync(host: string, port: number, user: string, password: string,
+  keyPath: string, keyPass: string, trustAll: boolean, expectFp: string): Promise<string>;
+/** Open a file for reading; resolves {"size":S,"mtime":M}. */
+export function sftpOpenAsync(handle: number, path: string): Promise<string>;
+/** Random-access read; resolves ArrayBuffer with up to len bytes (short = EOF). */
+export function sftpReadAtAsync(handle: number, offset: number, len: number): Promise<ArrayBuffer>;
+/** One-shot connection + directory listing (path '' = home). Same args as sftpConnectAsync + path. */
+export function sftpListAsync(host: string, port: number, user: string, password: string,
+  keyPath: string, keyPass: string, trustAll: boolean, expectFp: string, path: string): Promise<string>;
+/** Resolve the connection's home directory (realpath of ".") as an absolute path. */
+export function sftpHomeAsync(handle: number): Promise<string>;
+/** Close and free the connection. */
+export function sftpCloseAsync(handle: number): Promise<string>;

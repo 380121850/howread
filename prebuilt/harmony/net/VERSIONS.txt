@@ -1,0 +1,5 @@
+openssl 3.0.17 (static, linked into libssh2/libsmb2)
+libssh2 1.11.1 (shared)
+libsmb2 libsmb2-6.0 (shared, internal crypto)
+toolchain: OHOS NDK llvm clang, ohos.toolchain.cmake
+Sat Sep 12 02:37:19 PM CST 2026

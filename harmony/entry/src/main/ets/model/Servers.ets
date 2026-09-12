@@ -20,9 +20,37 @@ export interface DavServer {
   trusted: boolean;
 }
 
+/** SMB server (Android RemoteServer TYPE_SMB parity). Identity = host:port. */
+export interface SmbServer {
+  host: string;
+  port: number;   /* default 445 */
+  share: string;
+  domain: string;
+  name: string;
+  user: string;
+  password: string;
+}
+
+/** SFTP server (Android RemoteServer TYPE_SFTP parity). Identity = host:port. */
+export interface SftpServer {
+  host: string;
+  port: number;   /* default 22 */
+  name: string;
+  user: string;
+  password: string;
+  keyPath: string;
+  keyPass: string;
+  /** trust any host key (skips the TOFU fingerprint check) */
+  trustAll: boolean;
+  /** TOFU: stored SHA-256 host key fingerprint ('' until first connect) */
+  fingerprint: string;
+}
+
 const PREF_NAME = 'librera_servers';
 const KEY_OPDS = 'opds';
 const KEY_DAV = 'dav';
+const KEY_SMB = 'smb';
+const KEY_SFTP = 'sftp';
 const KEY_SEEDED = 'seeded';
 
 let prefInstance: preferences.Preferences | undefined = undefined;
@@ -169,4 +197,100 @@ export async function removeDavServer(ctx: Context, url: string): Promise<void> 
   }
   await writeDav(ctx, kept);
   console.info('[Servers] dav removed: ' + url);
+}
+
+async function writeSmb(ctx: Context, list: SmbServer[]): Promise<void> {
+  try {
+    const prefs = await getPrefs(ctx);
+    await prefs.put(KEY_SMB, JSON.stringify(list));
+    await prefs.flush();
+  } catch (e) {
+    console.error('[Servers] write failed: ' + KEY_SMB);
+  }
+}
+
+async function writeSftp(ctx: Context, list: SftpServer[]): Promise<void> {
+  try {
+    const prefs = await getPrefs(ctx);
+    await prefs.put(KEY_SFTP, JSON.stringify(list));
+    await prefs.flush();
+  } catch (e) {
+    console.error('[Servers] write failed: ' + KEY_SFTP);
+  }
+}
+
+export async function getSmbServers(ctx: Context): Promise<SmbServer[]> {
+  const json: string = await readRaw(ctx, KEY_SMB);
+  const list: SmbServer[] = JSON.parse(json) as SmbServer[];
+  list.sort((a: SmbServer, b: SmbServer) => a.name.localeCompare(b.name));
+  return list;
+}
+
+export async function saveSmbServer(ctx: Context, server: SmbServer, originalHost: string): Promise<void> {
+  const json: string = await readRaw(ctx, KEY_SMB);
+  const list: SmbServer[] = JSON.parse(json) as SmbServer[];
+  let replaced = false;
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].host === originalHost) {
+      list[i] = server;
+      replaced = true;
+      break;
+    }
+  }
+  if (!replaced) {
+    list.push(server);
+  }
+  await writeSmb(ctx, list);
+  console.info('[Servers] smb saved: ' + server.name);
+}
+
+export async function removeSmbServer(ctx: Context, host: string): Promise<void> {
+  const json: string = await readRaw(ctx, KEY_SMB);
+  const list: SmbServer[] = JSON.parse(json) as SmbServer[];
+  const kept: SmbServer[] = [];
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].host !== host) {
+      kept.push(list[i]);
+    }
+  }
+  await writeSmb(ctx, kept);
+  console.info('[Servers] smb removed: ' + host);
+}
+
+export async function getSftpServers(ctx: Context): Promise<SftpServer[]> {
+  const json: string = await readRaw(ctx, KEY_SFTP);
+  const list: SftpServer[] = JSON.parse(json) as SftpServer[];
+  list.sort((a: SftpServer, b: SftpServer) => a.name.localeCompare(b.name));
+  return list;
+}
+
+export async function saveSftpServer(ctx: Context, server: SftpServer, originalHost: string): Promise<void> {
+  const json: string = await readRaw(ctx, KEY_SFTP);
+  const list: SftpServer[] = JSON.parse(json) as SftpServer[];
+  let replaced = false;
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].host === originalHost) {
+      list[i] = server;
+      replaced = true;
+      break;
+    }
+  }
+  if (!replaced) {
+    list.push(server);
+  }
+  await writeSftp(ctx, list);
+  console.info('[Servers] sftp saved: ' + server.name);
+}
+
+export async function removeSftpServer(ctx: Context, host: string): Promise<void> {
+  const json: string = await readRaw(ctx, KEY_SFTP);
+  const list: SftpServer[] = JSON.parse(json) as SftpServer[];
+  const kept: SftpServer[] = [];
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].host !== host) {
+      kept.push(list[i]);
+    }
+  }
+  await writeSftp(ctx, kept);
+  console.info('[Servers] sftp removed: ' + host);
 }
