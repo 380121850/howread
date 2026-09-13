@@ -128,6 +128,91 @@ public class FileInformationDialog {
         return TxtUtils.joinList("\n", res);
     }
 
+    /**
+     * Lightweight info dialog for a remote (remote://) book: DB metadata +
+     * the remote path, with the remote-aware delete action. No local-file
+     * parsing, no upload/edit shortcuts — the data lives on the server.
+     */
+    public static void showRemoteFileInfoDialog(final Activity a, final String remotePath,
+                                                final Runnable onDeleteAction) {
+        ADS.hideAdsTemp(a);
+        String title = "";
+        String author = "";
+        String ext = "";
+        String sizeTxt = "";
+        long pages = 0;
+        try {
+            FileMeta meta = AppDB.get().load(remotePath);
+            if (meta != null) {
+                title = TxtUtils.nullToEmpty(meta.getTitle());
+                author = TxtUtils.nullToEmpty(meta.getAuthor());
+                ext = TxtUtils.nullToEmpty(meta.getExt());
+                sizeTxt = TxtUtils.nullToEmpty(meta.getSizeTxt());
+                pages = meta.getPages() == null ? 0 : meta.getPages();
+            }
+        } catch (Exception e) {
+            com.foobnix.android.utils.LOG.e(e);
+        }
+        if (TxtUtils.isEmpty(title)) {
+            title = ExtUtils.getFileName(remotePath);
+        }
+        final String displayTitle = title;
+
+        final android.widget.LinearLayout box = new android.widget.LinearLayout(a);
+        box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        final int pad = (int) (16 * a.getResources().getDisplayMetrics().density + 0.5f);
+        box.setPadding(pad, pad, pad, pad);
+
+        final TextView titleView = new TextView(a);
+        titleView.setText(title);
+        titleView.setTextSize(16);
+        titleView.setTypeface(null, android.graphics.Typeface.BOLD);
+        box.addView(titleView);
+
+        final StringBuilder info = new StringBuilder();
+        if (TxtUtils.isNotEmpty(author)) {
+            info.append(author).append("\n");
+        }
+        if (TxtUtils.isNotEmpty(ext)) {
+            info.append(ext.toUpperCase());
+        }
+        if (TxtUtils.isNotEmpty(sizeTxt)) {
+            if (info.length() > 0 && info.charAt(info.length() - 1) != '\n') {
+                info.append("  ");
+            }
+            info.append(sizeTxt);
+        }
+        if (pages > 0) {
+            info.append(" (").append(pages).append("p)");
+        }
+        if (info.length() > 0) {
+            final TextView infoView = new TextView(a);
+            infoView.setText(info.toString());
+            box.addView(infoView);
+        }
+
+        final TextView pathView = new TextView(a);
+        pathView.setText(remotePath);
+        pathView.setTextIsSelectable(true);
+        pathView.setPadding(0, pad / 2, 0, 0);
+        box.addView(pathView);
+
+        final android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(a);
+        builder.setTitle(R.string.file_info);
+        builder.setView(box);
+        builder.setNegativeButton(R.string.close, null);
+        if (onDeleteAction != null) {
+            builder.setPositiveButton(R.string.delete, new android.content.DialogInterface.OnClickListener() {
+                @Override public void onClick(android.content.DialogInterface d, int w) {
+                    com.foobnix.pdf.info.view.AlertDialogs.showDialog(a,
+                            a.getString(R.string.do_you_want_to_delete_) + " " + displayTitle,
+                            a.getString(R.string.delete), onDeleteAction);
+                }
+            });
+        }
+        builder.show();
+    }
+
     public static void showFileInfoDialog(final Activity a, final File file, final Runnable onDeleteAction) {
         showFileInfoDialog(a, file, onDeleteAction, true);
     }

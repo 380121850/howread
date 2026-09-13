@@ -38,14 +38,28 @@ public class RemoteBookOpener {
                 && AppsConfig.isProFeaturesEnabled();
     }
 
-    /** The click handler used by the network pages. */
+    /** The click handler used by the network pages (no start position). */
     public static void openOrDownload(final Activity a, final String remotePath, final long sizeHint) {
+        openOrDownload(a, remotePath, sizeHint, 0f);
+    }
+
+    /** Callback receiving the fetched whole-book cache copy. */
+    public interface FileReady {
+        void onReady(File copy);
+    }
+
+    /**
+     * @param startPercent 0..1 position to land on after the open (bookmark
+     *                     jump); 0 keeps the default last-position restore
+     */
+    public static void openOrDownload(final Activity a, final String remotePath, final long sizeHint,
+                                      final float startPercent) {
         if (!canOnlineOpen(remotePath)) {
-            downloadAndOpen(a, remotePath, sizeHint);
+            downloadAndOpen(a, remotePath, sizeHint, startPercent);
             return;
         }
         if (RemoteBook.isDirectOpen(remotePath)) {
-            openOnline(a, remotePath, sizeHint);
+            openOnline(a, remotePath, sizeHint, startPercent);
             return;
         }
         String ext = RemoteBook.getExt(remotePath);
@@ -55,7 +69,7 @@ public class RemoteBookOpener {
             confirmUnsupportedFetch(a, remotePath, sizeHint);
         } else {
             // simple formats (TXT / FB2 / RTF / HTML): silent fetch
-            fetchToCacheAndOpen(a, remotePath, sizeHint);
+            fetchToCacheAndOpen(a, remotePath, sizeHint, startPercent);
         }
     }
 
@@ -85,7 +99,8 @@ public class RemoteBookOpener {
     }
 
     /** Online open through the chunk cache (Pro + direct-open formats). */
-    public static void openOnline(final Activity a, final String remotePath, final long sizeHint) {
+    public static void openOnline(final Activity a, final String remotePath, final long sizeHint,
+                                  final float startPercent) {
         if (!AppsConfig.isProFeaturesEnabled()) {
             PrefFragment2.proLockedToast(a);
             return;
@@ -145,7 +160,7 @@ public class RemoteBookOpener {
                 }
                 android.util.Log.i("REMOTE", "openOnline ok, launching viewer: " + remotePath);
                 ensureMeta(remotePath, session.size);
-                ExtUtils.showDocumentWithoutDialog2(a, Uri.parse(remotePath), 0, null);
+                ExtUtils.showDocumentWithoutDialog2(a, Uri.parse(remotePath), startPercent, null);
             }
 }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }
@@ -158,6 +173,33 @@ public class RemoteBookOpener {
      * reopens with zero network.
      */
     public static void fetchToCacheAndOpen(final Activity a, final String remotePath, final long sizeHint) {
+        fetchToCacheAndOpen(a, remotePath, sizeHint, 0f);
+    }
+
+    public static void fetchToCacheAndOpen(final Activity a, final String remotePath, final long sizeHint,
+                                           final float startPercent) {
+        fetchToCache(a, remotePath, sizeHint, new FileReady() {
+            @Override
+            public void onReady(File target) {
+                if (startPercent > 0f) {
+                    // bookmark jump: open at the marked position instead of
+                    // the last-read one
+                    ExtUtils.showDocumentWithoutDialog2(a, Uri.fromFile(target), startPercent, null);
+                } else {
+                    ExtUtils.openFile(a, AppDB.get().getOrCreate(target.getPath()));
+                }
+            }
+        });
+    }
+
+    /**
+     * Fetches the whole-book cache copy WITHOUT opening it and hands it to
+     * {@code onReady} on the UI thread (download failures toast instead).
+     * Powers menu actions that need a real local file on remote books
+     * (share / open with / edit).
+     */
+    public static void fetchToCache(final Activity a, final String remotePath, final long sizeHint,
+                                    final FileReady onReady) {
         final File target = cacheBookFile(remotePath);
         final File tagFile = new File(target.getPath() + ".tag");
         new AsyncTask() {
@@ -246,9 +288,11 @@ public class RemoteBookOpener {
                             : a.getString(R.string.remote_open_failed), Toast.LENGTH_LONG).show();
                     return;
                 }
-                android.util.Log.i("REMOTE", "fetchToCache done, open local copy: " + target);
+                android.util.Log.i("REMOTE", "fetchToCache done: " + target);
                 ensureMeta(remotePath, session == null ? 0 : session.size);
-                ExtUtils.openFile(a, AppDB.get().getOrCreate(target.getPath()));
+                if (onReady != null) {
+                    onReady.onReady(target);
+                }
             }
 }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }
@@ -300,7 +344,12 @@ public class RemoteBookOpener {
      * cache-managed since 1.3.2.
      */
     public static void downloadAndOpen(final Activity a, final String remotePath, final long sizeHint) {
-        fetchToCacheAndOpen(a, remotePath, sizeHint);
+        downloadAndOpen(a, remotePath, sizeHint, 0f);
+    }
+
+    public static void downloadAndOpen(final Activity a, final String remotePath, final long sizeHint,
+                                       final float startPercent) {
+        fetchToCacheAndOpen(a, remotePath, sizeHint, startPercent);
     }
 
     /** True when no usable network connection is available right now. */

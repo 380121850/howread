@@ -228,13 +228,12 @@ public class DefaultListeners {
                 return true;
             }
 
-            if (com.foobnix.remote.RemoteBook.isRemotePath(result.getPath())) {
-                // long-press on a remote book: the exists() gate and the
-                // file-info dialog would both choke on the virtual path —
-                // offer the record+cache delete directly
-                com.foobnix.pdf.info.view.AlertDialogs.showDialog(a,
-                        a.getString(R.string.do_you_want_to_delete_) + " " + result.getTitle(),
-                        a.getString(R.string.delete), () -> deleteFile(a, searchAdapter, result));
+            if (com.foobnix.remote.RemoteBook.isRemotePathLoose(result.getPath())) {
+                // long-press on a remote book: the file info comes from the
+                // DB record (the exists() gate would reject the virtual path)
+                FileInformationDialog.showRemoteFileInfoDialog(a,
+                        com.foobnix.remote.RemoteBook.fixCollapsed(result.getPath()),
+                        () -> deleteFile(a, searchAdapter, result));
                 return true;
             }
 
@@ -496,13 +495,11 @@ public class DefaultListeners {
 
             };
 
-            if (com.foobnix.remote.RemoteBook.isRemotePath(result.getPath())) {
-                // remote books have no local File behind the path (the
-                // exists() gate below would block the menu forever):
-                // offer a straight record+cache delete instead
-                com.foobnix.pdf.info.view.AlertDialogs.showDialog(a,
-                        a.getString(R.string.do_you_want_to_delete_) + " " + result.getTitle(),
-                        a.getString(R.string.delete), onDeleteAction);
+            if (com.foobnix.remote.RemoteBook.isRemotePathLoose(result.getPath())) {
+                // remote book: the FULL menu with remote-aware actions
+                // (ShareDialog normalizes the virtual path itself; the old
+                // delete-only shortcut hid every other action)
+                ShareDialog.show(a, file, onDeleteAction, -1, null, null);
                 return false;
             }
 

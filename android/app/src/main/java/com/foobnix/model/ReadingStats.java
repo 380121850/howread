@@ -38,6 +38,7 @@ public final class ReadingStats {
 
     public static void onResume() {
         resumeAt = SystemClock.elapsedRealtime();
+        rollDayIfNeeded();
     }
 
     /** Count one page turn. No-op outside an active reading session, which
@@ -69,11 +70,7 @@ public final class ReadingStats {
         AppSP sp = AppSP.get();
         sp.readTimeMs += delta;
 
-        String key = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
-        if (!key.equals(sp.readDayKey)) {
-            sp.readDayKey = key;
-            sp.readDayMs = 0;
-        }
+        rollDayIfNeeded();
         sp.readDayMs += delta;
 
         sp.readPages += pendingFlips;
@@ -81,6 +78,32 @@ public final class ReadingStats {
 
         addBucket(sp, "readMonthlyJson", "yyyy-MM", delta, 13);
         addBucket(sp, "readDailyJson", "yyyy-MM-dd", delta, 40);
+    }
+
+    /** Local calendar day key the today-counter is keyed by ("yyyy-MM-dd"). */
+    private static String dayKey() {
+        return new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
+    }
+
+    /** Resets the today counter when the calendar day changed. Runs at
+     * session START as well as at the end — otherwise everything that
+     * happened before the first session-end of a day (or a foreign "today"
+     * value merged in by sync) kept showing under the previous day's total. */
+    private static void rollDayIfNeeded() {
+        AppSP sp = AppSP.get();
+        String key = dayKey();
+        if (!key.equals(sp.readDayKey)) {
+            sp.readDayKey = key;
+            sp.readDayMs = 0;
+        }
+    }
+
+    /** Today's reading time, validated against the day key at read time: a
+     * stale key (device off over midnight, merged from another device) reads
+     * as 0 instead of showing a historical total as "today". */
+    public static long currentDayMs() {
+        AppSP sp = AppSP.get();
+        return dayKey().equals(sp.readDayKey) ? sp.readDayMs : 0;
     }
 
     /**

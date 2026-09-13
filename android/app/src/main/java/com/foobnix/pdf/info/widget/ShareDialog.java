@@ -255,19 +255,27 @@ public class ShareDialog {
             return;
         }
 
-        if (!ExtUtils.isExteralSD(file.getPath()) && ExtUtils.isNotValidFile(file)) {
+        // remote books: the File is only a carrier — its path collapses
+        // "remote://" to "remote:/", so every DB/path operation keys on the
+        // fixed string and file-backed actions fetch the cached copy first
+        final boolean isRemote = com.foobnix.remote.RemoteBook.isRemotePathLoose(file.getPath());
+        final String opPath = isRemote
+                ? com.foobnix.remote.RemoteBook.fixCollapsed(file.getPath())
+                : file.getPath();
+
+        if (!isRemote && !ExtUtils.isExteralSD(opPath) && ExtUtils.isNotValidFile(file)) {
             Toast.makeText(a, R.string.file_not_found, Toast.LENGTH_LONG)
                  .show();
             return;
         }
-        final boolean isPDF = BookType.PDF.is(file.getPath());
+        final boolean isPDF = BookType.PDF.is(opPath);
         final boolean isLibrary = false;// a instanceof MainTabs2 ? false :
         // true;
         final boolean isMainTabs = a instanceof MainTabs2;
 
         List<String> items = new ArrayList<String>();
 
-        final boolean isTxt = BookType.TXT.is(file.getPath());
+        final boolean isTxt = BookType.TXT.is(opPath);
         if (isTxt) {
             items.add(a.getString(R.string.edit));
         }
@@ -306,14 +314,15 @@ public class ShareDialog {
         items.add(iconText(a, "➥", R.string.send_file));
 
         boolean canDelete1 =
-                ExtUtils.isExteralSD(file.getPath()) || Clouds.isCloud(file.getPath()) ? true : file.canWrite();
-        final boolean isShowInfo = !ExtUtils.isExteralSD(file.getPath());
+                isRemote ? true
+                         : ExtUtils.isExteralSD(opPath) || Clouds.isCloud(opPath) ? true : file.canWrite();
+        final boolean isShowInfo = !ExtUtils.isExteralSD(opPath);
 
         final boolean isRemovedFromLibrary = AppData.get()
                                                     .getAllExcluded()
-                                                    .contains(new SimpleMeta(file.getPath()));
+                                                    .contains(new SimpleMeta(opPath));
 
-        if (file.getPath()
+        if (opPath
                 .contains(AppProfile.PROFILE_PREFIX)) {
             canDelete1 = false;
         }
@@ -331,7 +340,7 @@ public class ShareDialog {
             }
         }
 
-        if (AppsConfig.isCloudsEnable) {
+        if (AppsConfig.isCloudsEnable && !isRemote) {
             items.add(a.getString(R.string.upload_to_cloud));
         }
         final boolean isPlaylist = file.getName()
@@ -360,6 +369,17 @@ public class ShareDialog {
                 int i = 0;
 
                 if (isTxt && which == i++) {
+                    if (isRemote) {
+                        // remote book: fetch the cached copy, then edit it
+                        com.foobnix.remote.RemoteBookOpener.fetchToCache(a, opPath, 0, copy ->
+                                AlertDialogs.editFileTxt(a, copy, AppProfile.DOWNLOADS_DIR, new StringResponse() {
+                                    @Override public boolean onResultRecive(String string) {
+                                        ExtUtils.openFile(a, new FileMeta(string));
+                                        return false;
+                                    }
+                                }));
+                        return;
+                    }
                     AlertDialogs.editFileTxt(a, file, AppProfile.DOWNLOADS_DIR, new StringResponse() {
                         @Override public boolean onResultRecive(String string) {
                             if ((a instanceof HorizontalViewActivity || a instanceof VerticalViewActivity) && dc != null) {
@@ -391,9 +411,15 @@ public class ShareDialog {
                             } else {
                                 AppSP.get().readingMode = AppState.READING_MODE_SCROLL;
                             }
-                            ExtUtils.showDocumentWithoutDialog(a, file, a.getIntent()
-                                                                         .getStringExtra(
-                                                                                 DocumentController.EXTRA_PLAYLIST));
+                            if (isRemote) {
+                                // reopen through the remote pipeline (the
+                                // mode switch was persisted above)
+                                ExtUtils.openFile(a, new FileMeta(opPath));
+                            } else {
+                                ExtUtils.showDocumentWithoutDialog(a, file, a.getIntent()
+                                                                             .getStringExtra(
+                                                                                     DocumentController.EXTRA_PLAYLIST));
+                            }
 
                         }
                     });
@@ -421,13 +447,25 @@ public class ShareDialog {
 
                         @Override public void run() {
                             AppSP.get().readingMode = AppState.READING_MODE_MUSICIAN;
-                            ExtUtils.showDocumentWithoutDialog(a, file, a.getIntent()
-                                                                         .getStringExtra(
-                                                                                 DocumentController.EXTRA_PLAYLIST));
+                            if (isRemote) {
+                                // reopen through the remote pipeline (the
+                                // mode switch was persisted above)
+                                ExtUtils.openFile(a, new FileMeta(opPath));
+                            } else {
+                                ExtUtils.showDocumentWithoutDialog(a, file, a.getIntent()
+                                                                             .getStringExtra(
+                                                                                     DocumentController.EXTRA_PLAYLIST));
+                            }
                         }
                     });
                 }
                 if (isPDF && which == i++) {
+                    if (isRemote) {
+                        // the reflow pipeline needs a real local file
+                        com.foobnix.remote.RemoteBookOpener.fetchToCache(a, opPath, 0, copy ->
+                                ExtUtils.openPDFInTextReflow(a, copy, page + 1, dc));
+                        return;
+                    }
                     ExtUtils.openPDFInTextReflow(a, file, page + 1, dc);
                 }
                 if (dc != null && which == i++) {
@@ -437,16 +475,39 @@ public class ShareDialog {
                     }
                     DialogSpeedRead.show(a, dc);
                 } else if (which == i++) {
-                    ExtUtils.openWith(a, file);
+                    if (isRemote) {
+                        // hand other apps the cached copy, not the virtual path
+                        com.foobnix.remote.RemoteBookOpener.fetchToCache(a, opPath, 0, copy ->
+                                ExtUtils.openWith(a, copy));
+                    } else {
+                        ExtUtils.openWith(a, file);
+                    }
                 } else if (which == i++) {
-                    ExtUtils.sendFileTo(a, file);
+                    if (isRemote) {
+                        // share the cached copy
+                        com.foobnix.remote.RemoteBookOpener.fetchToCache(a, opPath, 0, copy ->
+                                ExtUtils.sendFileTo(a, copy));
+                    } else {
+                        ExtUtils.sendFileTo(a, file);
+                    }
                 } else if (isMainTabs && canDelete && which == i++) {
+                    if (isRemote) {
+                        // remote delete: shelf record + local cache only (the
+                        // server file is never touched); the action comes from
+                        // the caller and is remote-aware there
+                        if (onDeleteAction != null) {
+                            AlertDialogs.showDialog(a,
+                                    a.getString(R.string.do_you_want_to_delete_) + " " + ExtUtils.getFileName(opPath),
+                                    a.getString(R.string.delete), onDeleteAction);
+                        }
+                        return;
+                    }
                     FileInformationDialog.dialogDelete(a, file, onDeleteAction);
                 } else if (isMainTabs && which == i++) {
                     if (isRemovedFromLibrary) {
 
                         FileMeta load = AppDB.get()
-                                             .load(file.getPath());
+                                             .load(opPath);
                         if (load != null) {
                             load.setIsSearchBook(true);
                             AppDB.get()
@@ -457,7 +518,7 @@ public class ShareDialog {
 
                     } else {
                         FileMeta load = AppDB.get()
-                                             .load(file.getPath());
+                                             .load(opPath);
                         if (load != null) {
                             load.setIsSearchBook(false);
                             load.setIsStar(false);
@@ -482,17 +543,17 @@ public class ShareDialog {
                 } else if (!isPlaylist && which == i++) {
                     DialogsPlaylist.showPlaylistsDialog(a, null, file);
                 } else if (isMainTabs && which == i++) {
-                    BookStateStore.markRead(file.getPath());
+                    BookStateStore.markRead(opPath);
                     Toast.makeText(a, R.string.moon_state_applied, Toast.LENGTH_SHORT).show();
                     EventBus.getDefault()
                             .post(new UpdateAllFragments());
                 } else if (isMainTabs && which == i++) {
-                    BookStateStore.markUnread(file.getPath());
+                    BookStateStore.markUnread(opPath);
                     Toast.makeText(a, R.string.moon_state_applied, Toast.LENGTH_SHORT).show();
                     EventBus.getDefault()
                             .post(new UpdateAllFragments());
                 } else if (isMainTabs && which == i++) {
-                    BookStateStore.markReading(file.getPath());
+                    BookStateStore.markReading(opPath);
                     Toast.makeText(a, R.string.moon_state_applied, Toast.LENGTH_SHORT).show();
                     EventBus.getDefault()
                             .post(new UpdateAllFragments());
@@ -501,7 +562,12 @@ public class ShareDialog {
                     // (AI intro is added BEFORE 文件信息 in the list)
                     showAiIntro(a, file);
                 } else if (isShowInfo && which == i++) {
-                    FileInformationDialog.showFileInfoDialog(a, file, onDeleteAction);
+                    if (isRemote) {
+                        // remote book: info from the DB record (no local file)
+                        FileInformationDialog.showRemoteFileInfoDialog(a, opPath, onDeleteAction);
+                    } else {
+                        FileInformationDialog.showFileInfoDialog(a, file, onDeleteAction);
+                    }
                 }
 
             }
@@ -539,11 +605,15 @@ public class ShareDialog {
             return;
         }
 
+        // remote books: key everything on the canonical path (File collapses
+        // "remote://" to "remote:/", which misses every DB lookup)
+        final String bookPath = com.foobnix.remote.RemoteBook.fixCollapsed(file.getPath());
+
         String title = "";
         String author = "";
         String notes = "";
         try {
-            FileMeta meta = AppDB.get().load(file.getPath());
+            FileMeta meta = AppDB.get().load(bookPath);
             if (meta != null) {
                 title = TxtUtils.nullToEmpty(meta.getTitle()).trim();
                 author = TxtUtils.nullToEmpty(meta.getAuthor()).trim();
@@ -554,17 +624,17 @@ public class ShareDialog {
         }
         if (TxtUtils.isEmpty(notes)) {
             try {
-                notes = TxtUtils.nullToEmpty(FileMetaCore.getBookOverview(file.getPath())).trim();
+                notes = TxtUtils.nullToEmpty(FileMetaCore.getBookOverview(bookPath)).trim();
             } catch (Exception e) {
                 LOG.e(e);
             }
         }
         if (TxtUtils.isEmpty(title)) {
-            title = ExtUtils.getFileName(file.getPath());
+            title = ExtUtils.getFileName(bookPath);
         }
 
         final String metaLine = a.getString(R.string.ai_intro_meta_line, title, author, notes);
-        final String prompt = a.getString(R.string.ai_intro_prompt, ExtUtils.getFileName(file.getPath()), metaLine);
+        final String prompt = a.getString(R.string.ai_intro_prompt, ExtUtils.getFileName(bookPath), metaLine);
 
         final TextView replyView = new TextView(a);
         replyView.setTextIsSelectable(true);
@@ -582,8 +652,8 @@ public class ShareDialog {
                 .setPositiveButton(R.string.save_as_note, new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface d, int which) {
                         AppBookmark note = new AppBookmark();
-                        note.setPath(file.getPath());
-                        note.text = ExtUtils.getFileName(file.getPath());
+                        note.setPath(bookPath);
+                        note.text = ExtUtils.getFileName(bookPath);
                         note.aiAnswer = replyView.getText().toString().trim();
                         note.isAiNote = true;
                         note.p = 0;

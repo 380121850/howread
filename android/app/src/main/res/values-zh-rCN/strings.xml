@@ -921,6 +921,7 @@
     <string name="remote_download_and_open">下载后打开</string>
     <string name="moon_net_section_smb">SMB (Pro)</string>
     <string name="moon_net_section_sftp">SFTP (Pro)</string>
+    <string name="moon_lib_remote_folders">远程目录 (Pro)</string>
     <string name="remote_add_smb">添加 SMB 服务器</string>
     <string name="remote_add_sftp">添加 SFTP 服务器</string>
     <string name="remote_host_hint">主机或 IP</string>

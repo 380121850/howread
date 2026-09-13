@@ -29,6 +29,25 @@ public class RemoteBook {
         return path != null && path.startsWith(PREFIX);
     }
 
+    /**
+     * Restores the canonical form of a remote path that passed through
+     * {@code new File(...)}: File collapses "remote://a/b" to "remote:/a/b",
+     * which breaks every prefix check. Non-remote paths pass through
+     * unchanged.
+     */
+    public static String fixCollapsed(String path) {
+        if (path != null && path.startsWith("remote:/") && !path.startsWith(PREFIX)) {
+            return PREFIX + path.substring("remote:/".length());
+        }
+        return path;
+    }
+
+    /** True for both the canonical "remote://…" and the File-collapsed
+     * "remote:/…" form of a remote path. */
+    public static boolean isRemotePathLoose(String path) {
+        return path != null && path.startsWith("remote:/");
+    }
+
     public static String build(String type, String serverId, String remotePath) {
         String p = remotePath == null ? "" : remotePath;
         while (p.startsWith("/")) {

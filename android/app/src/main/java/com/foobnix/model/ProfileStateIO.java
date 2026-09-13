@@ -86,12 +86,21 @@ public class ProfileStateIO {
         }
     }
 
+    /** Local calendar day key shared with {@link ReadingStats} ("yyyy-MM-dd"). */
+    private static String todayKey() {
+        return new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(new java.util.Date());
+    }
+
     /** Write one stats object into the AppSP fields (max of both sides). */
     static void applyStats(LinkedJSONObject o) {
         AppSP sp = AppSP.get();
         sp.readTimeMs = Math.max(sp.readTimeMs, o.optLong("readTimeMs", 0));
         sp.readPages = Math.max(sp.readPages, o.optLong("readPages", 0));
-        if (o.optLong(K_DAY_MS, 0) > sp.readDayMs) {
+        // "today" only merges when the source device's day key matches THIS
+        // device's calendar day — a stale key would otherwise put a historic
+        // total under 今日阅读 (the per-day buckets below stay the source of
+        // truth for history)
+        if (todayKey().equals(o.optString(K_DAY_KEY, "")) && o.optLong(K_DAY_MS, 0) > sp.readDayMs) {
             sp.readDayMs = o.optLong(K_DAY_MS, 0);
             sp.readDayKey = o.optString(K_DAY_KEY, sp.readDayKey);
         }

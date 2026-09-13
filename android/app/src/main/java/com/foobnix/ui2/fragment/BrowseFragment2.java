@@ -1339,7 +1339,8 @@ import java.util.Map;
         for (final WebDavServer srv : WebDavStore.load()) {
             netSection.addView(netListItem(R.drawable.glyphicons_544_cloud, srv.title, new OnClickListener() {
                 @Override public void onClick(View v) {
-                    ((MainTabs2) a).openNetworkPage(true, srv.url, srv.title);
+                    // enter at the configured start folder ("" = server root)
+                    ((MainTabs2) a).openNetworkPage(true, srv.startUrl(), srv.title);
                 }
             }, new OnClickListener() {
                 @Override public void onClick(View v) {

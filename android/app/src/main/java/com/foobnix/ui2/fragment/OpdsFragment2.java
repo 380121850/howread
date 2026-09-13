@@ -259,8 +259,22 @@ public class OpdsFragment2 extends UIFragment<Entry> {
             @Override
             public boolean onResultRecive(WebDavItem item) {
                 if (isRoot() && item.isServer) {
-                    WebDavServer srv = new WebDavServer(item.href, item.name);
-                    srv.appState = item.appState;
+                    // resolve the STORED server (root url + start dir):
+                    // item.href may point at the start folder, and the edit
+                    // dialog must never save that back as the server url
+                    WebDavServer srv = null;
+                    if (TxtUtils.isNotEmpty(item.appState)) {
+                        for (WebDavServer s : WebDavStore.load()) {
+                            if (item.appState.equals(s.appState)) {
+                                srv = s;
+                                break;
+                            }
+                        }
+                    }
+                    if (srv == null) {
+                        srv = new WebDavServer(item.href, item.name);
+                        srv.appState = item.appState;
+                    }
                     AddWebDavDialog.showDialog(getActivity(), new Runnable() {
 
                         @Override
@@ -847,7 +861,9 @@ public class OpdsFragment2 extends UIFragment<Entry> {
             currentServerUrl = item.href;
             webDavMode = true;
             netType = com.foobnix.remote.RemoteBook.getType(item.href);
-            url = item.href;
+            // honour the server's configured start folder ("" = server root)
+            WebDavServer startSrv = WebDavStore.findForUrl(item.href);
+            url = startSrv != null ? startSrv.startUrl() : item.href;
             stack.push(url);
             populate();
         } else if (item.isDir) {
@@ -879,12 +895,18 @@ public class OpdsFragment2 extends UIFragment<Entry> {
                 return null;
             }
             String root = WebDavStore.trimSlash(srv.url);
+            // with a startDir configured, browse hrefs start at root+startDir:
+            // strip that base so the remote:// identity matches the scanner's
+            String base = srv.startUrl();
             String href = item.href;
-            if (TxtUtils.isEmpty(href) || !href.startsWith(root)) {
-                return null;
+            if (TxtUtils.isEmpty(href) || !href.startsWith(base)) {
+                if (TxtUtils.isEmpty(href) || !href.startsWith(root)) {
+                    return null;
+                }
+                base = root;
             }
             // Uri.decode (NOT URLDecoder) keeps "+" intact, only %XX expands
-            String path = Uri.decode(href.substring(root.length()));
+            String path = Uri.decode(href.substring(base.length()));
             String id = com.foobnix.remote.RemoteSessionFactory.webdavId(srv.url);
             return com.foobnix.remote.RemoteBook.build(com.foobnix.remote.RemoteBook.TYPE_WEBDAV, id, path);
         } catch (Exception e) {

@@ -54,7 +54,10 @@ public class ListBoxHelper {
                 try {
                     final String text = editText.getText().toString();
                     if (text != null && !text.trim().equals("")) {
-                        final AppBookmark bookmark = new AppBookmark(controller.getCurrentBook().getPath(),
+                        // keep the raw remote:// form (File collapses it to
+                        // "remote:/", which no remote check would recognize)
+                        final AppBookmark bookmark = new AppBookmark(
+                                com.foobnix.remote.RemoteBook.fixCollapsed(controller.getCurrentBook().getPath()),
                                                                      text,
                                                                      controller.getPercentage());
                         bookmark.isF = isFloat.isChecked();
@@ -92,7 +95,8 @@ public class ListBoxHelper {
     }
 
     public static void addBookmark(DocumentController controller, String text) {
-        final AppBookmark bookmark = new AppBookmark(controller.getCurrentBook().getPath(),
+        final AppBookmark bookmark = new AppBookmark(
+                com.foobnix.remote.RemoteBook.fixCollapsed(controller.getCurrentBook().getPath()),
                                                      text,
                                                      controller.getPercentage());
         BookmarksData.get().add(bookmark);

@@ -2211,17 +2211,41 @@ public class DocumentWrapperUI {
 
         @Override
         public void onClick(final View v) {
-            ShareDialog.show(a, dc.getCurrentBook(), new Runnable() {
-
-                @Override
-                public void run() {
-                    if (dc.getCurrentBook().delete()) {
+            final Runnable onDelete;
+            if (com.foobnix.remote.RemoteBook.isRemotePathLoose(dc.getCurrentBook().getPath())) {
+                onDelete = new Runnable() {
+                    @Override
+                    public void run() {
+                        // remote book: drop the shelf record + the local
+                        // cache (the server file is never touched)
+                        final String path = com.foobnix.remote.RemoteBook.fixCollapsed(dc.getCurrentBook().getPath());
                         TempHolder.listHash++;
-                        AppDB.get().deleteBy(dc.getCurrentBook().getPath());
+                        com.foobnix.dao2.FileMeta meta = AppDB.get().load(path);
+                        if (meta != null) {
+                            AppDB.get().delete(meta);
+                        }
+                        try {
+                            com.foobnix.remote.BlockCacheStore.clearBook(com.foobnix.remote.RemoteBook.cacheKey(path));
+                            com.foobnix.remote.RemoteSessionFactory.closeSession(path);
+                        } catch (Exception e) {
+                            LOG.w(e);
+                        }
                         dc.getActivity().finish();
                     }
-                }
-            }, dc.getCurentPage() - 1, dc, new Runnable() {
+                };
+            } else {
+                onDelete = new Runnable() {
+                    @Override
+                    public void run() {
+                        if (dc.getCurrentBook().delete()) {
+                            TempHolder.listHash++;
+                            AppDB.get().deleteBy(dc.getCurrentBook().getPath());
+                            dc.getActivity().finish();
+                        }
+                    }
+                };
+            }
+            ShareDialog.show(a, dc.getCurrentBook(), onDelete, dc.getCurentPage() - 1, dc, new Runnable() {
 
                 @Override
                 public void run() {

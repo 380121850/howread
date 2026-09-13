@@ -8,6 +8,7 @@ import android.text.InputType;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.EditText;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import com.foobnix.android.utils.AsyncTasks;
@@ -40,14 +41,19 @@ public class AddWebDavDialog {
         final EditText name = (EditText) dialog.findViewById(R.id.name);
         final EditText login = (EditText) dialog.findViewById(R.id.login);
         final EditText password = (EditText) dialog.findViewById(R.id.password);
+        final EditText startDir = (EditText) dialog.findViewById(R.id.startDir);
         password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         final android.widget.CheckBox trustCerts = (android.widget.CheckBox) dialog.findViewById(R.id.trustCerts);
+        final TextView testBtn = (TextView) dialog.findViewById(R.id.remoteTestBtn);
+        final TextView browseBtn = (TextView) dialog.findViewById(R.id.remoteBrowseBtn);
+        final TextView testResult = (TextView) dialog.findViewById(R.id.remoteTestResult);
         final MyProgressBar progress = (MyProgressBar) dialog.findViewById(R.id.MyProgressBarAddWebDav);
 
         final String editAppState = edit == null ? null : edit.appState;
         if (edit != null) {
             url.setText(edit.url);
             name.setText(edit.title);
+            startDir.setText(edit.startDir);
             String[] creds = WebDavCredentials.load(a, edit.url);
             if (creds != null) {
                 login.setText(creds[0]);
@@ -78,6 +84,57 @@ public class AddWebDavDialog {
         final AlertDialog infoDialog = builder.create();
         infoDialog.show();
 
+        // 测试连接: verify the URL + credentials before the server is saved
+        final AsyncTask[] testTask = new AsyncTask[1];
+        testBtn.setOnClickListener(v -> {
+            if (testTask[0] != null && AsyncTasks.isRunning(testTask[0])) {
+                AsyncTasks.toastPleaseWait(a);
+                return;
+            }
+            final String feedUrl = url.getText().toString().trim();
+            final String loginText = login.getText().toString().trim();
+            final String passwordText = password.getText().toString().trim();
+            final boolean trustAll = trustCerts != null && trustCerts.isChecked();
+            if (TxtUtils.isEmpty(feedUrl) || "http://".equals(feedUrl)) {
+                Toast.makeText(a, R.string.incorrect_value, Toast.LENGTH_SHORT).show();
+                return;
+            }
+            progress.setVisibility(View.VISIBLE);
+            testResult.setVisibility(View.GONE);
+            testTask[0] = new AsyncTask() {
+                @Override
+                protected Object doInBackground(Object... params) {
+                    return WebDavClient.list(feedUrl, loginText, passwordText, trustAll);
+                }
+
+                @Override
+                protected void onPostExecute(Object result) {
+                    progress.setVisibility(View.GONE);
+                    testResult.setVisibility(View.VISIBLE);
+                    if (result != null) {
+                        testResult.setText(a.getString(R.string.remote_test_ok));
+                    } else {
+                        testResult.setText(a.getString(webdavErrorText()));
+                    }
+                }
+            }.execute();
+        });
+
+        // 浏览目录: pick the start folder below the server root
+        browseBtn.setOnClickListener(v -> {
+            final String feedUrl = WebDavStore.trimSlash(url.getText().toString().trim());
+            final String loginText = login.getText().toString().trim();
+            final String passwordText = password.getText().toString().trim();
+            final boolean trustAll = trustCerts != null && trustCerts.isChecked();
+            if (TxtUtils.isEmpty(feedUrl) || "http://".equals(feedUrl)) {
+                Toast.makeText(a, R.string.incorrect_value, Toast.LENGTH_SHORT).show();
+                return;
+            }
+            com.foobnix.remote.RemoteDirPicker.showWebDav(a, feedUrl, loginText, passwordText, trustAll,
+                    startDir.getText().toString().trim(),
+                    pickedDir -> startDir.setText(pickedDir == null ? "" : pickedDir));
+        });
+
         final boolean[] force = {false};
         infoDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
             AsyncTask asyncTask;
@@ -94,7 +151,8 @@ public class AddWebDavDialog {
                     return;
                 }
                 if (force[0]) {
-                    save(a, feedUrl, title, loginText, passwordText, trustAll, editAppState, onRefresh, infoDialog);
+                    save(a, feedUrl, title, loginText, passwordText, trustAll, editAppState, onRefresh, infoDialog,
+                            startDir.getText().toString().trim());
                     return;
                 }
                 if (AsyncTasks.isRunning(asyncTask)) {
@@ -112,7 +170,8 @@ public class AddWebDavDialog {
                     protected void onPostExecute(Object result) {
                         progress.setVisibility(View.GONE);
                         if (result != null) {
-                            save(a, feedUrl, title, loginText, passwordText, trustAll, editAppState, onRefresh, infoDialog);
+                            save(a, feedUrl, title, loginText, passwordText, trustAll, editAppState, onRefresh, infoDialog,
+                            startDir.getText().toString().trim());
                         } else {
                             force[0] = true;
                             infoDialog.getButton(AlertDialog.BUTTON_POSITIVE).setText(R.string.add_anyway);
@@ -135,13 +194,29 @@ public class AddWebDavDialog {
         });
     }
 
+    /** Toast/error resource for the last {@link WebDavClient} failure kind. */
+    private static int webdavErrorText() {
+        String kind = WebDavClient.lastError;
+        if ("auth".equals(kind)) {
+            return R.string.webdav_auth_failed;
+        }
+        if ("ssl".equals(kind)) {
+            return R.string.webdav_err_ssl;
+        }
+        if ("network".equals(kind)) {
+            return R.string.webdav_err_network;
+        }
+        return R.string.webdav_connect_failed;
+    }
+
     private static void save(Activity a, String url, String title, String login, String password, boolean trustAll,
-                             String editAppState, Runnable onRefresh, AlertDialog dialog) {
+                             String editAppState, Runnable onRefresh, AlertDialog dialog, String startDir) {
         if (editAppState != null) {
             AppState.get().allWebDavLinks = AppState.get().allWebDavLinks.replace(editAppState, "");
         }
-        WebDavServer s = new WebDavServer(url, TxtUtils.isNotEmpty(title) ? title : url);
-        s.appState = WebDavServer.buildLine(url, s.title);
+        WebDavServer s = new WebDavServer(url, TxtUtils.isNotEmpty(title) ? title : url,
+                TxtUtils.isEmpty(startDir) ? "" : startDir.trim());
+        s.appState = WebDavServer.buildLine(url, s.title, s.startDir);
         WebDavStore.add(s);
         WebDavCredentials.save(a, url, login, password);
         WebDavCredentials.saveTrust(a, url, trustAll);

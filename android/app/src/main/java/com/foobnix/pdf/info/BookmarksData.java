@@ -110,7 +110,10 @@ public class BookmarksData {
             final AppBookmark next = iterator.next();
 
             if (AppState.get().isShowOnlyAvailabeBooks) {
-                if (!new File(next.getPath()).isFile()) {
+                // remote books live on the server: never hide their
+                // bookmarks/notes behind the local-file check
+                if (!com.foobnix.remote.RemoteBook.isRemotePathLoose(next.getPath())
+                        && !new File(next.getPath()).isFile()) {
                     iterator.remove();
                     continue;
                 }
@@ -411,6 +414,10 @@ public class BookmarksData {
             boolean changed = false;
             for (Map.Entry<String, List<AppBookmark>> e : byPath.entrySet()) {
                 String p = e.getKey();
+                // remote book: existence is server-side, never prune here
+                if (com.foobnix.remote.RemoteBook.isRemotePathLoose(p)) {
+                    continue;
+                }
                 File f = new File(p);
                 if (f.isFile() || !ExtUtils.isMounted(f)) {
                     continue; // book exists, or storage unavailable: don't guess

@@ -174,4 +174,118 @@ public class RemoteDirPicker {
         c.trustAll = s.trustAll;
         return c;
     }
+
+    /** Callback for the WebDAV start-folder picker. */
+    public interface WebDavCallback {
+        void onPicked(String dir);
+    }
+
+    /**
+     * WebDAV start-folder picker: navigates the server below {@code
+     * serverRoot} (credentials passed explicitly, works before the server is
+     * saved). {@code startAt} is the pre-existing start dir to open first.
+     */
+    public static void showWebDav(final Activity a, final String serverRoot, final String user,
+                                  final String password, final boolean trustAll, final String startAt,
+                                  final WebDavCallback cb) {
+        final LinearLayout root = new LinearLayout(a);
+        root.setOrientation(LinearLayout.VERTICAL);
+        final ListView list = new ListView(a);
+        root.addView(list, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        final MyProgressBar progress = new MyProgressBar(a);
+        progress.setVisibility(View.GONE);
+        root.addView(progress, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        final ArrayAdapter<String> adapter = new ArrayAdapter<String>(a, android.R.layout.simple_list_item_1);
+        list.setAdapter(adapter);
+
+        final AlertDialog.Builder builder = new AlertDialog.Builder(a);
+        builder.setView(root);
+        builder.setTitle(R.string.remote_pick_dir_title);
+        builder.setPositiveButton(R.string.remote_pick_here, null);
+        builder.setNeutralButton(R.string.remote_up, null);
+        builder.setNegativeButton(R.string.close, null);
+        final AlertDialog dialog = builder.create();
+        dialog.show();
+
+        // navigation state: rel = path below the server root ("" = root)
+        final String[] rel = {normalizeRel(startAt)};
+        final boolean[] loading = {false};
+
+        final Runnable navigate = () -> {
+            if (loading[0]) {
+                return;
+            }
+            dialog.setTitle("/" + rel[0]);
+            progress.setVisibility(View.VISIBLE);
+            loading[0] = true;
+            final String target = rel[0].isEmpty() ? serverRoot : serverRoot + "/" + rel[0];
+            new AsyncTask() {
+                List<WebDavItem> res;
+
+                @Override
+                protected Object doInBackground(Object[] params) {
+                    res = com.foobnix.webdav.WebDavClient.list(target, user, password, trustAll);
+                    return null;
+                }
+
+                @Override
+                protected void onPostExecute(Object o) {
+                    loading[0] = false;
+                    progress.setVisibility(View.GONE);
+                    adapter.clear();
+                    if (res == null) {
+                        boolean auth = "auth".equals(com.foobnix.webdav.WebDavClient.lastError);
+                        Toast.makeText(a, auth ? R.string.webdav_auth_failed
+                                : R.string.webdav_connect_failed, Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    int dirs = 0;
+                    for (WebDavItem it : res) {
+                        if (it.isDir) {
+                            adapter.add(it.name);
+                            dirs++;
+                        }
+                    }
+                    if (dirs == 0) {
+                        Toast.makeText(a, R.string.remote_no_subdirs, Toast.LENGTH_SHORT).show();
+                    }
+                }
+            }.execute();
+        };
+
+        list.setOnItemClickListener((parent, view, pos, id) -> {
+            String name = adapter.getItem(pos);
+            if (name == null) {
+                return;
+            }
+            rel[0] = rel[0].isEmpty() ? name : rel[0] + "/" + name;
+            navigate.run();
+        });
+
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            cb.onPicked(rel[0]);
+            dialog.dismiss();
+        });
+        dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
+            int i = rel[0].lastIndexOf('/');
+            rel[0] = i < 0 ? "" : rel[0].substring(0, i);
+            navigate.run();
+        });
+
+        navigate.run();
+    }
+
+    private static String normalizeRel(String startAt) {
+        String d = startAt == null ? "" : startAt.trim();
+        while (d.startsWith("/")) {
+            d = d.substring(1);
+        }
+        while (d.endsWith("/")) {
+            d = d.substring(0, d.length() - 1);
+        }
+        return d;
+    }
 }

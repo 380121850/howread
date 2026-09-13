@@ -314,9 +314,12 @@ public class ExtUtils {
     }
 
     public static void openFile(Activity a, FileMeta meta) {
-        if (meta != null && com.foobnix.remote.RemoteBook.isRemotePath(meta.getPath())) {
+        if (meta != null && com.foobnix.remote.RemoteBook.isRemotePathLoose(meta.getPath())) {
             // remote book: route through the online-open / download pipeline
-            com.foobnix.remote.RemoteBookOpener.openOrDownload(a, meta.getPath(), meta.getSize() == null ? 0 : meta.getSize());
+            // (accept the File-collapsed form; normalize before routing)
+            com.foobnix.remote.RemoteBookOpener.openOrDownload(a,
+                    com.foobnix.remote.RemoteBook.fixCollapsed(meta.getPath()),
+                    meta.getSize() == null ? 0 : meta.getSize());
             return;
         }
         File file = new File(meta.getPath());
@@ -657,6 +660,11 @@ public class ExtUtils {
         if (Clouds.isCloud(file.getPath())) {
             return true;
         }
+        // remote books live on the server; accept the canonical "remote://"
+        // and the File-collapsed "remote:/" form — no local file check
+        if (com.foobnix.remote.RemoteBook.isRemotePathLoose(file.getPath())) {
+            return true;
+        }
 
         if (file.isFile()) {
             return true;
@@ -672,6 +680,10 @@ public class ExtUtils {
             return false;
         }
         if (Clouds.isCloud(path)) {
+            return true;
+        }
+        // check the raw string BEFORE new File() collapses "remote://" away
+        if (com.foobnix.remote.RemoteBook.isRemotePathLoose(path)) {
             return true;
         }
         return doifFileExists(c, new File(path));
@@ -764,9 +776,11 @@ public class ExtUtils {
         if (Clouds.isCloud(file.getPath())) {
             return true;
         }
-        if (com.foobnix.remote.RemoteBook.isRemotePath(file.getPath())) {
-            // remote books live on the server; reachability is checked when
-            // the chunk-cache session is opened
+        // remote books live on the server; reachability is checked when
+        // the chunk-cache session is opened. The File-collapsed "remote:/"
+        // form must pass too — new File("remote://…") destroys the "//",
+        // which used to fail this gate and kill the whole "…" menu
+        if (com.foobnix.remote.RemoteBook.isRemotePathLoose(file.getPath())) {
             return true;
         }
         return file != null && file.isFile();

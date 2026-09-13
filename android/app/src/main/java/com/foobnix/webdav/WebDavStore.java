@@ -32,7 +32,7 @@ public class WebDavStore {
                 if (TxtUtils.isEmpty(title)) {
                     title = url;
                 }
-                WebDavServer s = new WebDavServer(url, title);
+                WebDavServer s = new WebDavServer(url, title, it.length > 2 ? it[2].trim() : "");
                 s.appState = line + ";";
                 res.add(s);
             }

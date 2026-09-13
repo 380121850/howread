@@ -71,6 +71,7 @@ import org.librera.JSONArray;
 import org.librera.LinkedJSONObject;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -108,6 +109,44 @@ public class PrefDialogs {
         list.setAdapter(recentAdapter);
         root.addView(list, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
+        // --- 远程目录: configured SMB / SFTP / WebDAV servers as checkbox
+        // rows, default unchecked; ticking them scans the server into the
+        // shelf on 搜索 (one shared progress dialog). Nothing configured →
+        // the whole section stays hidden. (Pro, like the rest of the remote UI)
+        final LinearLayout remoteBox = new LinearLayout(a);
+        remoteBox.setOrientation(LinearLayout.VERTICAL);
+        if (AppsConfig.isProFeaturesEnabled()) {
+            final List<com.foobnix.remote.RemoteServer> allSmb =
+                    com.foobnix.remote.RemoteStore.load(com.foobnix.remote.RemoteBook.TYPE_SMB);
+            final List<com.foobnix.remote.RemoteServer> allSftp =
+                    com.foobnix.remote.RemoteStore.load(com.foobnix.remote.RemoteBook.TYPE_SFTP);
+            final List<com.foobnix.webdav.WebDavServer> allWebDav = com.foobnix.webdav.WebDavStore.load();
+            if (!allSmb.isEmpty() || !allSftp.isEmpty() || !allWebDav.isEmpty()) {
+                final TextView remoteHeader = new TextView(a);
+                remoteHeader.setText(R.string.moon_lib_remote_folders);
+                remoteHeader.setTypeface(null, android.graphics.Typeface.BOLD);
+                remoteHeader.setPadding(Dips.DP_5, Dips.DP_5, Dips.DP_5, 0);
+                remoteBox.addView(remoteHeader);
+            }
+            final android.content.SharedPreferences sel =
+                    a.getSharedPreferences("remoteScanSel", android.content.Context.MODE_PRIVATE);
+            for (final com.foobnix.remote.RemoteServer srv : allSmb) {
+                remoteBox.addView(remoteScanRow(a, sel, "smb:" + srv.id,
+                        srv.title + " · " + (TxtUtils.isEmpty(srv.startDir) ? "/" : srv.startDir)));
+            }
+            for (final com.foobnix.remote.RemoteServer srv : allSftp) {
+                remoteBox.addView(remoteScanRow(a, sel, "sftp:" + srv.id,
+                        srv.title + " · " + (TxtUtils.isEmpty(srv.startDir) ? "/" : srv.startDir)));
+            }
+            for (final com.foobnix.webdav.WebDavServer srv : allWebDav) {
+                remoteBox.addView(remoteScanRow(a, sel, "webdav:" + srv.url, srv.title + " · " + srv.startUrl()));
+            }
+        }
+        if (remoteBox.getChildCount() > 0) {
+            root.addView(remoteBox, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT));
+        }
+
         final LinearLayout addRow = new LinearLayout(a);
         addRow.setOrientation(LinearLayout.HORIZONTAL);
         addRow.setPadding(Dips.DP_5, Dips.DP_5, Dips.DP_5, Dips.DP_5);
@@ -132,6 +171,7 @@ public class PrefDialogs {
             @Override
             public void onClick(DialogInterface dialog, int id) {
                 onScan.run();
+                scanCheckedRemoteServers(a);
             }
         });
 
@@ -263,6 +303,49 @@ public class PrefDialogs {
             }
             a.runOnUiThread(() -> recentAdapter.setCounts(counts));
         });
+    }
+
+    /** One checkbox row of the 远程目录 section; the checked state persists
+     * in its own SharedPreferences ("remoteScanSel"), default unchecked. */
+    private static android.widget.CheckBox remoteScanRow(final FragmentActivity a,
+                                                         final android.content.SharedPreferences sel,
+                                                         final String key, final String label) {
+        final android.widget.CheckBox box = new android.widget.CheckBox(a);
+        box.setText(label);
+        box.setChecked(sel.getBoolean(key, false));
+        box.setOnCheckedChangeListener((buttonView, isChecked) -> sel.edit().putBoolean(key, isChecked).commit());
+        return box;
+    }
+
+    /** Scans every ticked 远程目录 row into the shelf (one shared progress
+     * dialog; the whole section is Pro-gated like the rest of the remote UI). */
+    private static void scanCheckedRemoteServers(final FragmentActivity a) {
+        if (!AppsConfig.isProFeaturesEnabled()) {
+            return;
+        }
+        final android.content.SharedPreferences sel =
+                a.getSharedPreferences("remoteScanSel", android.content.Context.MODE_PRIVATE);
+        final List<com.foobnix.remote.RemoteServer> servers = new ArrayList<com.foobnix.remote.RemoteServer>();
+        final List<com.foobnix.webdav.WebDavServer> webdav = new ArrayList<com.foobnix.webdav.WebDavServer>();
+        for (final com.foobnix.remote.RemoteServer s : com.foobnix.remote.RemoteStore.load(com.foobnix.remote.RemoteBook.TYPE_SMB)) {
+            if (sel.getBoolean("smb:" + s.id, false)) {
+                servers.add(s);
+            }
+        }
+        for (final com.foobnix.remote.RemoteServer s : com.foobnix.remote.RemoteStore.load(com.foobnix.remote.RemoteBook.TYPE_SFTP)) {
+            if (sel.getBoolean("sftp:" + s.id, false)) {
+                servers.add(s);
+            }
+        }
+        for (final com.foobnix.webdav.WebDavServer s : com.foobnix.webdav.WebDavStore.load()) {
+            if (sel.getBoolean("webdav:" + s.url, false)) {
+                webdav.add(s);
+            }
+        }
+        if (servers.isEmpty() && webdav.isEmpty()) {
+            return;
+        }
+        com.foobnix.remote.RemoteScanner.scanAll(a, servers, webdav);
     }
 
     public static void importDialog(final FragmentActivity activity) {

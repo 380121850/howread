@@ -29,6 +29,7 @@ import com.foobnix.model.AppData;
 import com.foobnix.model.AppSP;
 import com.foobnix.model.AppState;
 import com.foobnix.model.BookStateStore;
+import com.foobnix.model.ReadingStats;
 import com.foobnix.opds.Entry;
 import com.foobnix.pdf.info.BookmarksData;
 import com.foobnix.pdf.info.Clouds;
@@ -39,6 +40,9 @@ import com.foobnix.pdf.info.TintUtil;
 import com.foobnix.pdf.info.model.BookCSS;
 import com.foobnix.pdf.info.wrapper.UITab;
 import com.foobnix.pdf.info.view.MonthlyBarsView;
+import com.foobnix.remote.RemoteBook;
+import com.foobnix.remote.RemoteServer;
+import com.foobnix.remote.RemoteStore;
 import com.foobnix.ui2.AppDB;
 import com.foobnix.ui2.AppRecycleAdapter;
 import com.foobnix.ui2.MainTabs2;
@@ -246,13 +250,36 @@ public class DashboardFragment2 extends UIFragment<FileMeta> {
         }
 
         // the sources actually configured in 我的文件: every added WebDAV
-        // server opens its own network page …
+        // server opens its own network page (from its configured start
+        // folder) …
         for (final WebDavServer srv : WebDavStore.load()) {
             addSource(row, srv.title, R.drawable.glyphicons_544_cloud, Color.parseColor("#80cbc4"), new Runnable() {
                 @Override
                 public void run() {
                     if (a instanceof MainTabs2) {
-                        ((MainTabs2) a).openNetworkPage(true, srv.url, srv.title);
+                        ((MainTabs2) a).openNetworkPage(true, srv.startUrl(), srv.title);
+                    }
+                }
+            });
+        }
+        // … followed by the configured SMB / SFTP servers (the same entries
+        // the network page lists; tapping opens the same detached network page)
+        for (final RemoteServer srv : RemoteStore.load(RemoteBook.TYPE_SMB)) {
+            addSource(row, srv.title, R.drawable.glyphicons_544_cloud, Color.parseColor("#7986cb"), new Runnable() {
+                @Override
+                public void run() {
+                    if (a instanceof MainTabs2) {
+                        ((MainTabs2) a).openNetworkPage(true, srv.browseRoot(), srv.title);
+                    }
+                }
+            });
+        }
+        for (final RemoteServer srv : RemoteStore.load(RemoteBook.TYPE_SFTP)) {
+            addSource(row, srv.title, R.drawable.glyphicons_544_cloud, Color.parseColor("#7986cb"), new Runnable() {
+                @Override
+                public void run() {
+                    if (a instanceof MainTabs2) {
+                        ((MainTabs2) a).openNetworkPage(true, srv.browseRoot(), srv.title);
                     }
                 }
             });
@@ -485,7 +512,9 @@ public class DashboardFragment2 extends UIFragment<FileMeta> {
             LOG.e(e);
         }
         readTimeMs = AppSP.get().readTimeMs;
-        readDayMs = AppSP.get().readDayMs;
+        // validated against the stored day key: a stale key (a new day, or a
+        // historic total merged in from another device) must not show as 今日
+        readDayMs = ReadingStats.currentDayMs();
         readPages = AppSP.get().readPages;
 
         return new ArrayList<FileMeta>();

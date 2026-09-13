@@ -351,8 +351,23 @@ public class BookmarksFragment2 extends UIFragment<AppBookmark> {
                 showNoteDialog(result);
             } else if (TxtUtils.isNotEmpty(text) || AppState.get().bookmarksMode == AppState.BOOKMARK_MODE_BY_DATE) {
                 // Clicking a regular bookmark: open the book at that page
-                if (ExtUtils.doifFileExists(getContext(), result.getPath())) {
-                    final File file = new File(result.getPath());
+                final String rawPath = com.foobnix.remote.RemoteBook.fixCollapsed(result.getPath());
+                if (com.foobnix.remote.RemoteBook.isRemotePath(rawPath)) {
+                    // remote book: online open / cache fetch, landing on the
+                    // bookmark's position instead of the last-read one
+                    long sizeHint = 0;
+                    try {
+                        FileMeta meta = AppDB.get().load(rawPath);
+                        if (meta != null && meta.getSize() != null) {
+                            sizeHint = meta.getSize();
+                        }
+                    } catch (Exception e) {
+                        LOG.e(e);
+                    }
+                    com.foobnix.remote.RemoteBookOpener.openOrDownload(getActivity(), rawPath, sizeHint,
+                            result.getPercent());
+                } else if (ExtUtils.doifFileExists(getContext(), rawPath)) {
+                    final File file = new File(rawPath);
                     ExtUtils.showDocumentWithoutDialog2(getActivity(), Uri.fromFile(file), result.getPercent(), null);
                 }
             } else {

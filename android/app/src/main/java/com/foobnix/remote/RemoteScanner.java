@@ -63,7 +63,7 @@ public class RemoteScanner {
         final RemoteScanner scanner = new RemoteScanner();
         final AlertDialog progress = scanner.progressDialog(a);
         final Thread worker = new Thread(() -> {
-            String root = com.foobnix.webdav.WebDavStore.trimSlash(srv.url);
+            String root = srv.startUrl();
             Deque<String> dirs = new ArrayDeque<String>();
             dirs.add(root);
             String[] creds = WebDavCredentials.load(a, srv.url);
@@ -73,6 +73,58 @@ public class RemoteScanner {
             scanner.finish(a, progress, srv.title);
         }, "RemoteScanner");
         scanner.start(progress, worker);
+    }
+
+    /**
+     * Scans several servers sequentially under ONE progress dialog — used by
+     * the shelf 刷新书库 dialog where the user ticks whole servers to scan.
+     */
+    public static void scanAll(final Activity a, final List<RemoteServer> servers,
+                               final List<WebDavServer> webdavServers) {
+        final RemoteScanner scanner = new RemoteScanner();
+        final AlertDialog progress = scanner.progressDialog(a);
+        final Thread worker = new Thread(() -> {
+            for (final RemoteServer srv : servers) {
+                if (scanner.cancelled) {
+                    return;
+                }
+                String start = srv.startDir == null ? "" : srv.startDir;
+                Deque<String> dirs = new ArrayDeque<String>();
+                dirs.add(start.startsWith("/") ? start : "/" + start);
+                scanner.walk(a, srv.getTypeStored(), srv.id, dirs, dirs.peekFirst(), srv, null, null, false);
+            }
+            for (final WebDavServer srv : webdavServers) {
+                if (scanner.cancelled) {
+                    return;
+                }
+                String root = srv.startUrl();
+                Deque<String> dirs = new ArrayDeque<String>();
+                dirs.add(root);
+                String[] creds = WebDavCredentials.load(a, srv.url);
+                scanner.walk(a, RemoteBook.TYPE_WEBDAV, RemoteSessionFactory.webdavId(srv.url),
+                        dirs, root, null, creds == null ? "" : creds[0], creds == null ? "" : creds[1],
+                        WebDavCredentials.isTrustAll(a, srv.url));
+            }
+            scanner.finish(a, progress, joinTitles(servers, webdavServers));
+        }, "RemoteScanner");
+        scanner.start(progress, worker);
+    }
+
+    private static String joinTitles(List<RemoteServer> servers, List<WebDavServer> webdavServers) {
+        StringBuilder sb = new StringBuilder();
+        for (RemoteServer s : servers) {
+            if (sb.length() > 0) {
+                sb.append(", ");
+            }
+            sb.append(s.title);
+        }
+        for (WebDavServer s : webdavServers) {
+            if (sb.length() > 0) {
+                sb.append(", ");
+            }
+            sb.append(s.title);
+        }
+        return sb.toString();
     }
 
     private void start(final AlertDialog progress, final Thread worker) {
