@@ -122,6 +122,12 @@ case_meta:
   FN-46: { layer: ui, priority: P1, timeout: 600, retries: 0 }   # 断网离线阅读
   FN-47: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # fdroid Pro 门禁探针
   FN-48: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 退出确认对话框
+  FN-49: { layer: ui, priority: P2, timeout: 360, retries: 1 }   # 音量键翻页(§7)
+  FN-50: { layer: ui, priority: P2, timeout: 360, retries: 1 }   # 双击动作(§7)
+  FN-51: { layer: ui, priority: P2, timeout: 360, retries: 1 }   # 点按分区手势(§7)
+  FN-52: { layer: ui, priority: P2, timeout: 360, retries: 1 }   # 选词菜单(§13)
+  FN-53: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 速读 RSVP(§16)
+  FN-54: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 更新日志入口(§16)
   # --- L2 专项 ---
   PF-01: { layer: ui, priority: P1, timeout: 300, retries: 0 }
   PF-03: { layer: ui, priority: P1, timeout: 300, retries: 0 }

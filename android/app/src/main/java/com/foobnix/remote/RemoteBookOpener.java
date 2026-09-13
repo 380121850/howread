@@ -102,11 +102,15 @@ public class RemoteBookOpener {
 
             @Override
             protected Object doInBackground(Object[] objects) {
+                android.util.Log.i("REMOTE", "openOnline probe " + remotePath);
                 try {
                     session = RemoteSessionFactory.obtain(remotePath);
+                    android.util.Log.i("REMOTE", "openOnline probe ok size=" + session.size
+                            + " range=" + session.isRangeSupported());
                 } catch (Exception e) {
                     LOG.e(e);
                     error = e.getMessage();
+                    android.util.Log.i("REMOTE", "openOnline probe failed: " + error);
                 }
                 return null;
             }
@@ -114,12 +118,14 @@ public class RemoteBookOpener {
             @Override
             protected void onPostExecute(Object o) {
                 if (session == null) {
+                    android.util.Log.i("REMOTE", "openOnline session null, offer download fallback");
                     offerDownloadFallback(a, remotePath, sizeHint, error);
                     return;
                 }
                 if (!session.isRangeSupported()) {
                     // server ignores Range headers: no real random access —
                     // degrade to a full fetch instead of skipping (§6.5)
+                    android.util.Log.i("REMOTE", "openOnline range unsupported, full fetch");
                     fetchToCacheAndOpen(a, remotePath, sizeHint);
                     return;
                 }
@@ -137,10 +143,11 @@ public class RemoteBookOpener {
                             .show();
                     return;
                 }
+                android.util.Log.i("REMOTE", "openOnline ok, launching viewer: " + remotePath);
                 ensureMeta(remotePath, session.size);
                 ExtUtils.showDocumentWithoutDialog2(a, Uri.parse(remotePath), 0, null);
             }
-        }.execute();
+}.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }
 
     /**
@@ -171,6 +178,7 @@ public class RemoteBookOpener {
                         return null;
                     }
                     session = RemoteSessionFactory.open(remotePath);
+                    android.util.Log.i("REMOTE", "fetchToCache start " + remotePath + " size=" + session.size);
                     if (isCopyCurrent(target, tagFile, session)) {
                         done = true;
                         return null;
@@ -197,6 +205,7 @@ public class RemoteBookOpener {
                 } catch (Exception e) {
                     LOG.e(e);
                     error = e.getMessage();
+                    android.util.Log.i("REMOTE", "fetchToCache failed: " + error);
                     if (target.isFile() && target.length() > 0 && tagFile.isFile()) {
                         // server unreachable but an older complete copy
                         // exists: open it instead of reporting failure
@@ -222,14 +231,16 @@ public class RemoteBookOpener {
             @Override
             protected void onPostExecute(Object o) {
                 if (!done) {
+                    android.util.Log.i("REMOTE", "fetchToCache failed toast: " + error);
                     Toast.makeText(a, TxtUtils.isNotEmpty(error) ? error
                             : a.getString(R.string.remote_open_failed), Toast.LENGTH_LONG).show();
                     return;
                 }
+                android.util.Log.i("REMOTE", "fetchToCache done, open local copy: " + target);
                 ensureMeta(remotePath, session == null ? 0 : session.size);
                 ExtUtils.openFile(a, AppDB.get().getOrCreate(target.getPath()));
             }
-        }.execute();
+}.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }
 
     /** True when the cache-dir copy matches the remote size and versionTag. */

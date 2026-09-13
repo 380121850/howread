@@ -341,6 +341,10 @@ class Device:
         self.shell("input keyevent KEYCODE_WAKEUP")
         time.sleep(0.8)
         self.shell("settings put global stay_on_while_plugged_in 7")
+        # 久置后设备会重锁(MIUI/EMUI 实测),wm dismiss-keyguard 解不开滑动锁——
+        # 先发 MENU 键(82)滑开锁屏再补 dismiss-keyguard(已解锁时无害)
+        self.shell("input keyevent 82")
+        time.sleep(0.5)
         self.shell("wm dismiss-keyguard")
         time.sleep(0.5)
 
@@ -352,6 +356,12 @@ class Device:
                     or self.exists_text("最近阅读") or self.exists_text("Recent")
                     or self.click_desc("首页")):
                 return True
+            # "打开应用继续阅读"开启时,冷启动会把阅读器盖在主界面上:
+            # 检测到阅读器在前台则 back 退出,避免主界面永远等不到
+            top = self.shell("dumpsys activity activities | grep mResumedActivity")
+            if "ViewActivity" in top or "TTSActivity" in top:
+                self.d.press("back")
+                time.sleep(1.5)
             time.sleep(0.5)
         return False
 
@@ -360,6 +370,10 @@ class Device:
                      "android.permission.WRITE_EXTERNAL_STORAGE"):
             self.shell("pm grant %s %s" % (self.pkg, perm))
         self.shell("appops set %s MANAGE_EXTERNAL_STORAGE allow" % self.pkg)
+        # MIUI/EMUI PowerKeeper 会在阅读器前台时强杀应用(FN-30/46/49/51"静默退出"真凶,
+        # 2026-09-13 events 缓冲实锤:Force stopping ... from process:<powerkeeper>),
+        # 加电池优化白名单后 3/3 稳定存活
+        self.shell("dumpsys deviceidle whitelist +%s" % self.pkg)
 
     def handle_first_run_dialogs(self):
         handled = False
@@ -495,8 +509,8 @@ class Device:
             out = self.shell("logcat -d -t 2000")
             with open(path, "w", encoding="utf-8", errors="replace") as f:
                 f.write(out)
-        except Exception:
-            pass
+        except Exception as e:
+            log("⚠ save_logcat 失败 %s@%s: %s" % (case_id, tag, e))
         return path
 
     # ---------- 用例执行骨架：进度 + 超时 + 重试 ----------
@@ -520,6 +534,11 @@ class Device:
         except Exception as e:
             self.screenshot(case_id, "fail_" + name)
             self.save_dump(case_id, "fail_" + name)
+            self.save_logcat(case_id, "fail_logcat")
+            crash = self.scan_crash()
+            if crash:
+                self.screenshot(case_id, "crash_" + name)
+                raise TestFail("步骤 %s 异常: %s | crash: %s" % (name, e, crash[:300])) from e
             raise TestFail("步骤 %s 异常: %s" % (name, e)) from e
         finally:
             _ = time.time() - t0
@@ -559,6 +578,7 @@ class Device:
             try:
                 self.screenshot(case_id, "timeout")
                 self.save_dump(case_id, "timeout_dump")
+                self.save_logcat(case_id, "timeout_logcat")
                 self.d.app_stop(self.pkg)
                 self._sync_logcat()
             except Exception:

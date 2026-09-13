@@ -25,13 +25,64 @@ ROOT = r"Z:\opt\librera\LibreraReader\ci\autotest"
 TMP_DIR = r"Z:\opt\Workspace\HowRead\tmp\debug"
 
 
+def _dismiss_system_dialogs(dev):
+    """清掉抢占前台的系统弹窗.典型:华为「USB 连接方式」——USB 口接触不良重枚举时
+    会反复弹出,盖住半个屏幕导致 wait_home/点击全挂(KSA 踩坑 2026-09-13)."""
+    try:
+        xml = dev.d.dump_hierarchy()
+    except Exception:
+        return
+    if "USB 连接方式" in xml or "USB connection" in xml or "Use USB to" in xml:
+        cancel = dev.d(text="取消")
+        if cancel.exists:
+            cancel.click()
+        else:
+            dev.d.press("back")
+        time.sleep(1.5)
+
+
 def _ensure_home(dev):
     dev.wake_unlock()  # 长跑中 MIUI 会熄屏,熄屏期间 u2/点击/截图全部失效(真机踩坑 2026-09-13)
+    # MIUI/EMUI PowerKeeper 会在应用前台时强杀(FN-30/46/49/51"静默退出"真凶,
+    # events 实锤:Force stopping ... from process:<powerkeeper>);白名单幂等,每次兜底
+    dev.shell("dumpsys deviceidle whitelist +%s" % dev.pkg)
     dev.start_app(cold=True)
+    _dismiss_system_dialogs(dev)
     dev.handle_first_run_dialogs()
     if not dev.wait_home(10):
-        raise AssertionError("主界面 10s 未就绪")
+        # 低端机(如 KSA/Android9)冷启后残留的阅读器任务可能抢在前台——back 退出阅读器再等
+        ok = False
+        for _ in range(3):
+            dev.d.press("back")
+            time.sleep(1.5)
+            _dismiss_system_dialogs(dev)
+            if dev.wait_home(8):
+                ok = True
+                break
+        if not ok:
+            raise AssertionError("主界面 10s 未就绪(back 兜底 3 轮仍失败)")
     time.sleep(1)
+
+
+def _browse_dl_row(dev):
+    """「我的文件」页找 Download 行;找不到时先点书库文件夹卡片兜底.
+    真出厂态(--reset 删外部状态后)区块页没有文件列表、也没有 Download 行,
+    只有一张默认书夹卡片(/storage/emulated/0,按末段显示为"0")——点它进入
+    /sdcard 根浏览页,Download 行就在那里(真出厂态踩坑 2026-09-13).
+    返回可点击的 Download 行,找不到返回 None."""
+    dl = dev.d(text="Download")
+    if not dl.exists:
+        dl = dev.d(textContains="Download")
+    if dl.exists:
+        return dl
+    card = dev.d(descriptionStartsWith="文件夹")
+    if card.exists:
+        card.click()
+        time.sleep(2.5)
+        dl = dev.d(text="Download")
+        if not dl.exists:
+            dl = dev.d(textContains="Download")
+    return dl if dl.exists else None
 
 
 def _goto_browse_download(dev, case_id):
@@ -41,10 +92,8 @@ def _goto_browse_download(dev, case_id):
     if not (dev.click_desc("我的文件") or dev.click_text("我的文件")):
         raise AssertionError("我的文件 Tab 不可达")
     time.sleep(2)
-    dl = dev.d(text="Download")
-    if not dl.exists:
-        dl = dev.d(textContains="Download")
-    if dl.exists:
+    dl = _browse_dl_row(dev)
+    if dl is not None:
         dl.click()
         time.sleep(2.5)
 
@@ -391,10 +440,8 @@ def fn04_search(dev, case_id, cfg=None, fixtures=None):
         # 先在根视图找入口(MI9 实测根视图才响应),找不到就滚动揭示(P20 搜索区在屏幕外)
         opened = _reveal_search_entry(dev)
         if not opened:
-            dl = dev.d(text="Download")
-            if not dl.exists:
-                dl = dev.d(textContains="Download")
-            if dl.exists:
+            dl = _browse_dl_row(dev)
+            if dl is not None:
                 dl.click()
                 time.sleep(2)
                 opened = _reveal_search_entry(dev)
@@ -531,13 +578,42 @@ def fn07_tts(dev, case_id, cfg=None, fixtures=None):
             if tts_btn is None:
                 dev.save_dump(case_id, "no_tts_btn")
                 raise TestSkip("TTS 入口(textToSpeach)不可见(Book 模式下仍不可见,待勘探)")
-            tts_btn.click()
-            time.sleep(2.5)
-            if not _safe_exists(dev, dev.d(resourceId=_rid(dev, "ttsActive"))) \
-                    and not _safe_exists(dev, dev.d(resourceId=_rid(dev, "ttsPlay"))):
+            clicked = False
+            for _ in range(3):
+                try:
+                    tts_btn.click()
+                    clicked = True
+                    break
+                except Exception:
+                    # 取到按钮与点击之间工具条可能被翻转/隐藏(首启 showHelp 的
+                    # hideShow、自动隐藏),重新展开再取(2026-09-13 出厂态踩坑)
+                    time.sleep(1.5)
+                    _reader_show_toolbar(dev)
+                    tts_btn = _reader_toolbar_btn(dev, "textToSpeach", desc_kws=("文字转语音", "TTS"))
+                    if tts_btn is None:
+                        break
+            if not clicked:
+                dev.save_dump(case_id, "no_tts_btn")
+                raise TestSkip("TTS 入口(textToSpeach)不可见(Book 模式下仍不可见,待勘探)")
+            # 对话框可能慢开(TTS 初始化),首开翻转期点击可能落空/误点——
+            # 轮询确认,未开则重取按钮补点(2026-09-13 出厂态实测:误判时截图里对话框其实已开)
+            dialog = False
+            for _ in range(5):
+                time.sleep(2)
+                if _safe_exists(dev, dev.d(resourceId=_rid(dev, "ttsActive"))) \
+                        or _safe_exists(dev, dev.d(resourceId=_rid(dev, "ttsPlay"))):
+                    dialog = True
+                    break
+                tb = _reader_toolbar_btn(dev, "textToSpeach", desc_kws=("文字转语音", "TTS"))
+                if tb is not None:
+                    try:
+                        tb.click()
+                    except Exception:
+                        pass
+            _snap(dev, case_id, "tts_dialog")
+            if not dialog:
                 dev.save_dump(case_id, "no_tts_dialog")
                 raise AssertionError("TTS 对话框(dialogTextToSpeech)未出现")
-            _snap(dev, case_id, "tts_dialog")
         with dev.step(case_id, "start_tts"):
             play = dev.d(resourceId=_rid(dev, "ttsPlay"))
             if not play.exists:
@@ -641,10 +717,8 @@ def _open_reader_warm(dev, case_id, keyword):
     if not (dev.click_desc("我的文件") or dev.click_text("我的文件")):
         raise AssertionError("我的文件 Tab 不可达")
     time.sleep(2)
-    dl = dev.d(text="Download")
-    if not dl.exists:
-        dl = dev.d(textContains="Download")
-    if dl.exists:
+    dl = _browse_dl_row(dev)
+    if dl is not None:
         dl.click()
         time.sleep(2.5)
     book = _find_text_scrolled(dev, keyword, max_swipes=6)
@@ -1453,30 +1527,59 @@ def _open_server_dir(dev, title, verify_keywords, timeout=25):
 _HORZ_TOOLBAR_DESCS = ("目录", "前往页面", "文字转语音", "书签", "单页", "Contents")
 
 
+# 工具条"已显示"的判定元素:顶栏/按钮行自身节点,只在按钮行显示时才存在于视图树.
+# 页脚 pagesCountIndicator 受 isShowToolBar 常显控制,与顶栏按钮行(中央点按切换)
+# 是两条独立可见性——开书时"页脚可见"≠"工具条已显示".--reset 出厂态回归踩坑
+# (2026-09-13):开书页脚可见但按钮行全隐藏(FN-17 dump 只剩 pannelBookTitle+
+# pagesCountIndicator),旧谓词把页脚当"已显示"不再点中央展开,工具条类用例整批
+# SKIP.旧注释"pagesCountIndicator 必须计入"的本意(水平模式别把已显示的工具条
+# 当隐藏)由 imageToolbar 等与语言无关的 id 覆盖,更可靠(FN-50/51 的 bar_state
+# 早已用它作顶栏标记).
+_BAR_IDS = ("currentSeek", "currentPageIndex", "imageToolbar",
+            "goToPage1Top", "textToSpeachTop", "imageMenuArrow",
+            "onDocDontext", "thumbnail", "textToSpeach")
+
+
+def _reader_bar_visible(dev):
+    for rid in _BAR_IDS:
+        try:
+            if dev.d(resourceId=_rid(dev, rid)).exists:
+                return True
+        except Exception:
+            continue
+    for kw in _HORZ_TOOLBAR_DESCS:
+        try:
+            if dev.d(descriptionContains=kw).exists:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _reader_show_toolbar(dev):
     """阅读器内确保工具条可见(幂等:已显示则不再点--点屏幕中央是"切换",
     已显示时点一下反而隐藏,FN-17/18 首跑即因此找不到按钮).
-    水平(Book)模式的工具条按钮以 content-desc 呈现(目录/前往页面/文字转语音...),
-    无 currentSeek/currentPageIndex——只按垂直 id 判断会误判隐藏,点中心反而把
-    已显示的工具条藏掉(真机踩坑 2026-09-13)."""
-    def visible():
-        if dev.d(resourceId=_rid(dev, "currentSeek")).exists \
-                or dev.d(resourceId=_rid(dev, "currentPageIndex")).exists:
-            return True
-        for kw in _HORZ_TOOLBAR_DESCS:
-            try:
-                if dev.d(descriptionContains=kw).exists:
-                    return True
-            except Exception:
-                continue
-        return False
-
-    if visible():
+    "已显示"按 _reader_bar_visible 判定(顶栏/按钮行自身元素,见其注释)."""
+    if _reader_bar_visible(dev):
         return True
     w, h = dev.d.window_size()
     dev.d.click(int(0.5 * w), int(0.5 * h))
     time.sleep(2)
-    return visible()
+    return _reader_bar_visible(dev)
+
+
+def _reader_ui_visible(dev):
+    """工具条可见性判断,同 _reader_bar_visible(顶栏/按钮行自身元素)."""
+    return _reader_bar_visible(dev)
+
+
+def _reader_alive(dev):
+    """阅读器是否仍在前台(本 fork 存在阅读器静默退出的间歇性问题,FN-49/51 实测)."""
+    try:
+        top = dev.shell("dumpsys activity activities | grep mResumedActivity")
+        return "ViewActivity" in top or "TTSActivity" in top
+    except Exception:
+        return False
 
 
 def _reader_toolbar_btn(dev, rid_name, expand_first=True, desc_kws=()):
@@ -1839,10 +1942,8 @@ def fn14_browse_ops(dev, case_id, cfg=None, fixtures=None):
         _ensure_home(dev)
         if not _browse_root(dev):
             raise AssertionError("我的文件根视图不可达")
-        dl = dev.d(text="Download")
-        if not dl.exists:
-            dl = dev.d(textContains="Download")
-        if not dl.exists:
+        dl = _browse_dl_row(dev)
+        if dl is None:
             raise AssertionError("Download 文件夹不可见")
         dl.click()
         time.sleep(2.5)
@@ -2392,21 +2493,29 @@ def fn22_notes(dev, case_id, cfg=None, fixtures=None):
         _open_reader(dev, case_id, fixtures, "epub")
         time.sleep(2)
         w, h = dev.d.window_size()
-        # 长按正文选中一个词,松开触发 dialogSelectText 弹层
-        dev.d.long_click(int(0.5 * w), int(0.45 * h))
-        time.sleep(2.5)
+        # 长按正文选中一个词,松开触发 dialogSelectText 弹层.
+        # 出厂态(--reset 删外部状态)开书停在第 1 页=封面图,长按封面选不中文本——
+        # 没有弹层就翻下一页(右分区 tap)再长按,最多试 3 页(2026-09-13 定位)
         note_btn = None
-        for kw in ("添加批注便签", "批注便签", "便签"):
-            el = dev.d(textContains=kw)
-            if el.exists:
-                note_btn = el
+        for _attempt in range(3):
+            dev.d.long_click(int(0.5 * w), int(0.45 * h))
+            time.sleep(2.5)
+            for kw in ("添加批注便签", "批注便签", "便签"):
+                el = dev.d(textContains=kw)
+                if el.exists:
+                    note_btn = el
+                    break
+            if note_btn is not None:
                 break
-        if note_btn is None:
             xml = dev.d.dump_hierarchy()
-            if "批注" not in xml and "笔记" not in xml:
-                dev.save_dump(case_id, "no_selection_popup")
-                raise TestSkip("长按选择后未出现文本操作弹层(选择手势待勘探)")
-            note_btn = dev.d(textContains="笔记")
+            if "批注" in xml or "笔记" in xml:
+                note_btn = dev.d(textContains="笔记")
+                break
+            dev.d.click(int(0.93 * w), int(0.5 * h))
+            time.sleep(2.5)
+        if note_btn is None:
+            dev.save_dump(case_id, "no_selection_popup")
+            raise TestSkip("长按选择后未出现文本操作弹层(选择手势待勘探)")
         if note_btn is None or not note_btn.exists:
             dev.save_dump(case_id, "no_note_btn")
             raise TestSkip("文本操作弹层无[添加批注便签]入口")
@@ -2780,6 +2889,12 @@ def fn30_remote_open(dev, case_id, cfg=None, fixtures=None):
         time.sleep(1.5)
         dev.page_turn(forward=True, verify=False)
         after = _wait_page_change(dev, before, timeout=12)
+        if not after and before and before[0] >= before[1]:
+            # 书已停在最后一页(此前运行把进度推到末页):向前翻页无效属预期,
+            # 改为向后翻页验证翻页能力
+            dev.page_turn(forward=False, verify=False)
+            time.sleep(1.5)
+            after = _wait_page_change(dev, before, timeout=12)
         _snap(dev, case_id, "remote_turned")
         if not after:
             dev.save_dump(case_id, "remote_no_turn")
@@ -3104,10 +3219,8 @@ def fn33_hidden_files(dev, case_id, cfg=None, fixtures=None):
             _ensure_home(dev)
             if not _browse_root(dev):
                 raise AssertionError("我的文件根视图不可达")
-            dl = dev.d(text="Download")
-            if not dl.exists:
-                dl = dev.d(textContains="Download")
-            if dl.exists:
+            dl = _browse_dl_row(dev)
+            if dl is not None:
                 dl.click()
                 time.sleep(2.5)
         with dev.step(case_id, "toggle_show_hidden"):
@@ -3154,10 +3267,8 @@ def fn33_hidden_files(dev, case_id, cfg=None, fixtures=None):
             if not ok:
                 dev.save_dump(case_id, "root_not_ready")
                 raise AssertionError("开关后我的文件根视图未就绪")
-            dl = dev.d(text="Download")
-            if not dl.exists:
-                dl = dev.d(textContains="Download")
-            if dl.exists:
+            dl = _browse_dl_row(dev)
+            if dl is not None:
                 dl.click()
                 time.sleep(2.5)
             el = _find_text_scrolled(dev, ".autotest_hidden", max_swipes=4)
@@ -3578,7 +3689,10 @@ def fn42_stats_detail(dev, case_id, cfg=None, fixtures=None):
     with dev.step(case_id, "open_stats_detail"):
         _ensure_home(dev)
         stat = None
-        for rid in ("statTotal", "statHours", "statToday"):
+        # 只有 statHours 打开"月度阅读"对话框(showMonthlyReading → MonthlyBarsView
+        # + 周月年切换);statTotal 点击是 openLibraryWithFilter("") 跳书库列表,
+        # statToday 无点击行为——点错卡会停在书库页导致断言失败(2026-09-13 定位)
+        for rid in ("statHours",):
             el = dev.d(resourceId=_rid(dev, rid))
             if el.exists:
                 stat = el
@@ -3588,7 +3702,7 @@ def fn42_stats_detail(dev, case_id, cfg=None, fixtures=None):
                 w, h = dev.d.window_size()
                 dev.d.swipe(0.5 * w, 0.7 * h, 0.5 * w, 0.3 * h, 0.3)
                 time.sleep(1.2)
-                for rid in ("statTotal", "statHours", "statToday"):
+                for rid in ("statHours",):
                     el = dev.d(resourceId=_rid(dev, rid))
                     if el.exists:
                         stat = el
@@ -3766,6 +3880,12 @@ def fn46_offline_reading(dev, case_id, cfg=None, fixtures=None):
                     book = el
                     break
             if book is None:
+                # 首页"最近阅读"封面项无文字标签(dashboard_cover_item 只有封面+进度徽标),
+                # textContains 必然落空;降级点击行内第一个封面(最新一本,即刚读过的远程书)
+                row = dev.d(resourceId=_rid(dev, "recentRow"))
+                if row.exists and row.child(index=0).exists:
+                    book = row.child(index=0)
+            if book is None:
                 dev.save_dump(case_id, "offline_no_recent_book")
                 raise AssertionError("最近阅读无远程书条目")
             book.click()
@@ -3789,6 +3909,12 @@ def fn46_offline_reading(dev, case_id, cfg=None, fixtures=None):
             dev.page_turn(forward=True, verify=False)
             time.sleep(1.5)
             after = _wait_page_change(dev, before, timeout=10)
+            if not after and before and before[0] >= before[1]:
+                # 书已停在最后一页(此前运行把进度推到末页):向前翻页无效属预期,
+                # 改为向后翻页验证离线翻页能力
+                dev.page_turn(forward=False, verify=False)
+                time.sleep(1.5)
+                after = _wait_page_change(dev, before, timeout=10)
             _snap(dev, case_id, "offline_turned")
             if not after:
                 dev.save_dump(case_id, "offline_no_turn")
@@ -3850,6 +3976,390 @@ def fn48_exit_confirm(dev, case_id, cfg=None, fixtures=None):
         time.sleep(1.5)
 
 
+# ======================================================================
+# 2026-09-13 覆盖补全第 2 批:FN-49 ~ FN-54
+# (音量键翻页/双击动作/点按分区/选词菜单/速读 RSVP/更新日志;
+#  密码锁/手绘标注/指纹锁/CloudRail/小组件/OPDS 下载按用户指示本期不做)
+# ======================================================================
+
+def _intent_open_pdf(dev, case_id, fixtures):
+    """intent 直开 big25.pdf 并等进阅读器.
+    (不用书名关键词检索:big25 textContains 会同时命中 PDF 基准书与 TXT 基准书
+    "Bench25",FN-49/51 首版开错书即因此失败;TXT 在第 1 页测回翻方向永远不动.)"""
+    if not dev.open_book_via_intent(fixtures["device_pdf_path"]):
+        dev.save_dump(case_id, "intent_open_failed")
+        raise AssertionError("big25.pdf intent 打开失败")
+    time.sleep(2)
+
+
+def _reader_page_ready(dev, case_id, min_page=3, tries=6):
+    """读页码并保证离开书首(边界页上'回翻方向'的操作永远不动,断言会误报).
+    返回页码;拿不到页码返回 None."""
+    before = _reader_page_or_none(dev)
+    for _ in range(tries):
+        if before is not None and before[0] >= min_page:
+            return before
+        if before is not None:
+            # 太靠前:用右分区前进几页
+            w, h = dev.d.window_size()
+            dev.d.click(int(0.93 * w), int(0.5 * h))
+            time.sleep(2)
+        else:
+            _reader_show_toolbar(dev)
+        before = _reader_page_or_none(dev)
+    if before is not None and before[0] < min_page:
+        dev.save_dump(case_id, "page_at_boundary")
+    return before
+
+
+def fn49_volume_keys(dev, case_id, cfg=None, fixtures=None):
+    """音量键翻页(§7):isUseVolumeKeys 默认开(垂直走 DocumentWrapperUI.dispatchKeyEventDown,
+    水平走 HorizontalViewActivity.onKeyDown).真机探针结论(2026-09-13):
+    ①intent 直开 big25.pdf 后音量键双向翻页稳定可靠(4→3→4 实测);
+    ②本 fork 小屏 isReverseKeys=True,VOLUME_UP=回翻/VOLUME_DOWN=下翻(与常量表相反);
+    ③本 fork 存在阅读器静默退出的间歇性问题(volume_back 步骤后 app 退到桌面,无崩溃日志),
+    故每步前校验存活、阅读器死亡则重开书重做(最多 3 轮)."""
+    for attempt in range(3):
+        with dev.step(case_id, "open_book"):
+            _ensure_home(dev)
+            _intent_open_pdf(dev, case_id, fixtures)
+            if not _reader_alive(dev):
+                time.sleep(3)
+                _intent_open_pdf(dev, case_id, fixtures)
+            _reader_show_toolbar(dev)
+            before = _reader_page_ready(dev, case_id)
+            if before is None:
+                if attempt == 2:
+                    dev.save_dump(case_id, "no_page_num")
+                    raise AssertionError("读不到当前页码(3 轮均失败)")
+                continue
+        with dev.step(case_id, "volume_turn"):
+            dev.shell("input keyevent 24")  # KEYCODE_VOLUME_UP
+            time.sleep(2.5)
+            after = _wait_page_change(dev, before, timeout=12)
+            if not after and _reader_alive(dev):
+                dev.shell("input keyevent 24")  # MIUI 音量条偶发抢首发,重试一次
+                time.sleep(2.5)
+                after = _wait_page_change(dev, before, timeout=12)
+            _snap(dev, case_id, "after_volume_up")
+            if not after:
+                if not _reader_alive(dev):
+                    print("  [%s] 阅读器静默退出(第 %d 轮),重开书重试" % (dev.serial, attempt + 1))
+                    continue
+                if attempt == 2:
+                    dev.save_dump(case_id, "volume_no_turn")
+                    raise AssertionError("音量上键未翻页(before=%s)" % (before,))
+                continue
+        with dev.step(case_id, "volume_back"):
+            if not _reader_alive(dev):
+                print("  [%s] 阅读器静默退出(第 %d 轮),重开书重试" % (dev.serial, attempt + 1))
+                continue
+            dev.shell("input keyevent 25")  # KEYCODE_VOLUME_DOWN → 反方向
+            time.sleep(2.5)
+            back = _wait_page_change(dev, after, timeout=12)
+            if not back and not _reader_alive(dev):
+                print("  [%s] 阅读器静默退出(第 %d 轮),重开书重试" % (dev.serial, attempt + 1))
+                continue
+            _snap(dev, case_id, "after_volume_down")
+            if not back:
+                if attempt == 2:
+                    dev.save_dump(case_id, "volume_down_no_turn")
+                    raise AssertionError("音量下键未翻页(after=%s)" % (after,))
+                continue
+            print("  [%s] 音量键方向: 上键 %s→%s, 下键 %s→%s"
+                  % (dev.serial, before, after, after, back))
+        with dev.step(case_id, "exit"):
+            _exit_reader(dev, case_id)
+        return
+    raise AssertionError("音量键翻页 3 轮未完成(阅读器间歇性退出/页码不可读)")
+
+
+def fn50_double_click(dev, case_id, cfg=None, fixtures=None):
+    """双击动作(§7):doubleClickAction1 默认 SHOW_HIDE_UI——双击屏幕中央切换 UI
+    (PageImaveView/DocumentWrapperUI 双击分发).u2 双击偶发被拆成两次单击
+    (各自切换→净效果为零),失败时换连击方式重试;水平模式中央双击只切顶栏
+    (页脚常驻),断言用「顶栏+页脚」组合状态(与 FN-51 同法)."""
+    def bar_state():
+        top_bar = dev.d(resourceId=_rid(dev, "imageToolbar")).exists
+        footer = dev.d(resourceId=_rid(dev, "pagesCountIndicator")).exists \
+            or dev.d(resourceId=_rid(dev, "currentSeek")).exists \
+            or dev.d(resourceId=_rid(dev, "currentPageIndex")).exists
+        return (top_bar, footer)
+
+    w, h = dev.d.window_size()
+    cx, cy = int(0.5 * w), int(0.5 * h)
+    with dev.step(case_id, "open_book"):
+        _open_reader(dev, case_id, fixtures, "epub")
+        _reader_show_toolbar(dev)
+        _snap(dev, case_id, "ui_before")
+        if not _reader_ui_visible(dev):
+            raise AssertionError("初始工具条不可见")
+    with dev.step(case_id, "double_tap_toggle"):
+        s0 = bar_state()
+        toggled = False
+        for attempt in range(3):
+            if attempt == 0:
+                dev.d.double_click(cx, cy)
+            elif attempt == 1:
+                dev.d.click(cx, cy)
+                time.sleep(0.08)
+                dev.d.click(cx, cy)
+            else:
+                dev.shell("input tap %d %d && input tap %d %d" % (cx, cy, cx, cy))
+            time.sleep(2)
+            if bar_state() != s0:
+                toggled = True
+                break
+            # 双击可能被拆成两次单击(切换两次=回到原态),重试
+        _snap(dev, case_id, "ui_after_double_tap")
+        if not toggled:
+            dev.save_dump(case_id, "double_tap_no_toggle")
+            raise AssertionError("双击后 UI 状态未翻转(3 种连击方式均无效)")
+    with dev.step(case_id, "restore"):
+        # 双击还原 UI,保证退出后状态一致
+        if not _reader_ui_visible(dev):
+            dev.d.double_click(cx, cy)
+            time.sleep(2)
+    with dev.step(case_id, "exit"):
+        _exit_reader(dev, case_id)
+
+
+def fn51_tap_zones(dev, case_id, cfg=None, fixtures=None):
+    """点按分区手势(§7):tapzoneSize 默认 25%(ClickUtils 边界=屏幕*tapzoneSize/100),
+    右分区=下一页、左分区=上一页(tapZoneLeft/Right 默认 PREV/NEXT),中央 tap=翻转 UI.
+    真机探针结论(2026-09-13):intent 直开 big25.pdf 后分区 tap 稳定可靠;
+    阅读器存在静默退出的间歇性问题,每步前校验存活、死亡则重开书重做(最多 3 轮)."""
+    for attempt in range(3):
+        with dev.step(case_id, "open_book"):
+            _ensure_home(dev)
+            _intent_open_pdf(dev, case_id, fixtures)
+            if not _reader_alive(dev):
+                time.sleep(3)
+                _intent_open_pdf(dev, case_id, fixtures)
+            _reader_show_toolbar(dev)
+            before = _reader_page_ready(dev, case_id)
+            if before is None:
+                if attempt == 2:
+                    dev.save_dump(case_id, "no_page_num")
+                    raise AssertionError("读不到当前页码(3 轮均失败)")
+                continue
+        with dev.step(case_id, "right_zone_turn"):
+            w, h = dev.d.window_size()
+            dev.d.click(int(0.93 * w), int(0.5 * h))
+            after = _wait_page_change(dev, before, timeout=12)
+            _snap(dev, case_id, "right_zone_next")
+            if not after:
+                if not _reader_alive(dev):
+                    print("  [%s] 阅读器静默退出(第 %d 轮),重开书重试" % (dev.serial, attempt + 1))
+                    continue
+                if attempt == 2:
+                    dev.save_dump(case_id, "right_zone_no_turn")
+                    raise AssertionError("右分区 tap 未翻页(before=%s)" % (before,))
+                continue
+        with dev.step(case_id, "left_zone_back"):
+            if not _reader_alive(dev):
+                print("  [%s] 阅读器静默退出(第 %d 轮),重开书重试" % (dev.serial, attempt + 1))
+                continue
+            w, h = dev.d.window_size()
+            dev.d.click(int(0.07 * w), int(0.5 * h))
+            back = _wait_page_change(dev, after, timeout=12)
+            if not back and not _reader_alive(dev):
+                print("  [%s] 阅读器静默退出(第 %d 轮),重开书重试" % (dev.serial, attempt + 1))
+                continue
+            _snap(dev, case_id, "left_zone_prev")
+            if not back:
+                if attempt == 2:
+                    dev.save_dump(case_id, "left_zone_no_turn")
+                    raise AssertionError("左分区 tap 未翻页(after=%s)" % (after,))
+                continue
+            print("  [%s] 分区方向: 右 %s→%s, 左 %s→%s"
+                  % (dev.serial, before, after, after, back))
+        with dev.step(case_id, "center_toggle_ui"):
+            if not _reader_alive(dev):
+                print("  [%s] 阅读器静默退出(第 %d 轮),重开书重试" % (dev.serial, attempt + 1))
+                continue
+
+            def bar_state():
+                # 水平模式中央 tap 只切换顶栏(页脚页码常驻),断言用「顶栏+页脚」组合状态
+                top_bar = dev.d(resourceId=_rid(dev, "imageToolbar")).exists
+                footer = dev.d(resourceId=_rid(dev, "pagesCountIndicator")).exists \
+                    or dev.d(resourceId=_rid(dev, "currentSeek")).exists \
+                    or dev.d(resourceId=_rid(dev, "currentPageIndex")).exists
+                return (top_bar, footer)
+
+            _reader_show_toolbar(dev)
+            s0 = bar_state()
+            w, h = dev.d.window_size()
+            dev.d.click(int(0.5 * w), int(0.5 * h))
+            time.sleep(2)
+            s1 = bar_state()
+            _snap(dev, case_id, "center_toggled")
+            if s1 == s0:
+                if attempt == 2:
+                    dev.save_dump(case_id, "center_no_toggle")
+                    raise AssertionError("中央 tap 未切换 UI(状态 %s → %s)" % (s0, s1))
+                continue
+            # 还原 UI 再退出
+            if not bar_state()[0] and not bar_state()[1]:
+                dev.d.click(int(0.5 * w), int(0.5 * h))
+                time.sleep(2)
+        with dev.step(case_id, "exit"):
+            _exit_reader(dev, case_id)
+        return
+    raise AssertionError("点按分区手势 3 轮未完成(阅读器间歇性退出/页码不可读)")
+
+
+def fn52_select_text_menu(dev, case_id, cfg=None, fixtures=None):
+    """选词菜单(§13):阅读器长按正文 → dialogSelectText 弹出(加入书签/分享/复制/
+    搜索/发送给AI/笔记/词典行).只断言菜单出现,不点击外链项(会跳出应用).
+    isRememberDictionary 默认 False,长按走菜单而非直接跳词典(DocumentWrapperUI.onLongPress)."""
+    with dev.step(case_id, "open_book"):
+        _open_reader(dev, case_id, fixtures, "epub")
+        time.sleep(1)
+    with dev.step(case_id, "long_press_text"):
+        w, h = dev.d.window_size()
+        hits = None
+        for fx, fy in ((0.5, 0.45), (0.4, 0.55), (0.6, 0.35), (0.5, 0.6)):
+            dev.d.long_click(int(fx * w), int(fy * h))
+            time.sleep(2)
+            xml = dev.d.dump_hierarchy()
+            found = [k for k in ("复制", "分享", "笔记", "书签", "词典", "翻译",
+                                 "发送给AI", "Copy", "Share", "Note") if k in xml]
+            if len(found) >= 2:
+                hits = found
+                break
+            # 收起可能残留的文本选择光标再换点重试
+            dev.d.press("back")
+            time.sleep(1)
+        _snap(dev, case_id, "select_menu")
+        if hits is None:
+            dev.save_dump(case_id, "no_select_menu")
+            raise AssertionError("长按正文未弹出选词菜单(4 个落点均失败)")
+        print("  [%s] 选词菜单命中: %s" % (dev.serial, hits))
+    with dev.step(case_id, "close_menu"):
+        dev.d.press("back")
+        time.sleep(1)
+    with dev.step(case_id, "exit"):
+        _exit_reader(dev, case_id)
+
+
+def fn53_speed_read(dev, case_id, cfg=None, fixtures=None):
+    """速读(RSVP,§16):阅读器菜单(bookMenu/modeName)→ ShareDialog
+    「▶▶ 快速阅读 (RSVP)」→ DialogSpeedRead 词闪对话框 textWord 元素可见 → 退出.
+    菜单入口仅水平(Book)模式有(与跳页/TTS 同族);垂直模式 epub 无该入口,
+    如实 SKIP(不切模式绕行:实验证明模式切换+热开书路径本身不稳,MI9 直开即过)."""
+    with dev.step(case_id, "open_book"):
+        _open_reader(dev, case_id, fixtures, "epub")
+        _reader_show_toolbar(dev)
+    with dev.step(case_id, "open_book_menu"):
+        # epub 打开后底栏(含 bookMenu)要数秒才渲染完——轮询+中央点击兜底约 20s
+        bm = None
+        w, h = dev.d.window_size()
+        for i in range(10):
+            bm = dev.d(resourceId=_rid(dev, "bookMenu"))
+            if not bm.exists:
+                bm = dev.d(resourceId=_rid(dev, "modeName"))
+            if not bm.exists:
+                try:
+                    el = dev.d(description="菜单")
+                    if el.exists:
+                        bm = el
+                except Exception:
+                    pass
+            if bm.exists:
+                break
+            dev.d.click(int(0.5 * w), int(0.5 * h))  # 中央 tap 切换 UI(渲染期可能被吞)
+            time.sleep(2)
+        if not bm.exists:
+            dev.save_dump(case_id, "no_book_menu")
+            raise TestSkip("阅读器菜单入口(bookMenu/modeName/desc 菜单)不可见")
+        bm.click()
+        time.sleep(2)
+        item = dev.d(textContains="快速阅读")
+        if not item.exists:
+            item = dev.d(textContains="RSVP")
+        if not item.exists:
+            dev.save_dump(case_id, "no_speed_read_item")
+            dev.d.press("back")
+            time.sleep(1)
+            raise AssertionError("书籍菜单无[快速阅读 (RSVP)]项")
+        _snap(dev, case_id, "share_dialog")
+    with dev.step(case_id, "verify_rsvp_dialog"):
+        item.click()
+        time.sleep(2.5)
+        word = dev.d(resourceId=_rid(dev, "textWord"))
+        speed = dev.d(resourceId=_rid(dev, "fastReadSpeed"))
+        if not word.exists and not speed.exists:
+            dev.save_dump(case_id, "no_rsvp_dialog")
+            raise AssertionError("速读对话框(textWord/fastReadSpeed)未出现")
+        _snap(dev, case_id, "rsvp_dialog")
+    with dev.step(case_id, "exit"):
+        dev.d.press("back")  # 关闭速读对话框
+        time.sleep(1)
+        _exit_reader(dev, case_id)
+
+
+def fn54_whats_new(dev, case_id, cfg=None, fixtures=None):
+    """What's New 更新日志(§16):偏好 → 底部[软件说明]行 → 对话框[更新日志]
+    (AboutSectionBinder.whatIsNew → AndroidWhatsNew.show2 → 外部浏览器打开
+    CHANGES.md).断言:点击后离开应用前台(浏览器/选择器);无浏览器跳转则 SKIP."""
+    def resumed():
+        try:
+            return dev.shell("dumpsys activity activities | grep mResumedActivity")
+        except Exception:
+            return ""
+
+    with dev.step(case_id, "open_about_dialog"):
+        _ensure_home(dev)
+        _goto_tab_or_fail(dev, "偏好")
+        row = None
+        for kw in ("软件说明", "About"):
+            el = _find_text_scrolled(dev, kw, max_swipes=10)
+            if el is not None:
+                row = el
+                break
+        if row is None:
+            dev.save_dump(case_id, "no_about_row")
+            raise AssertionError("偏好页未找到[软件说明]行")
+        row.click()
+        time.sleep(2)
+        if not dev.dump_has_text("更新日志") and not dev.dump_has_text("What is new"):
+            dev.save_dump(case_id, "no_about_dialog")
+            raise AssertionError("软件说明对话框未出现")
+        _snap(dev, case_id, "about_dialog")
+    with dev.step(case_id, "open_whats_new"):
+        link = dev.d(textContains="更新日志")
+        if not link.exists:
+            link = dev.d(textContains="What is new")
+        if not link.exists:
+            dev.save_dump(case_id, "no_whats_new_link")
+            raise AssertionError("软件说明对话框无[更新日志]行")
+        link.click()
+        time.sleep(3)
+        left, top = False, ""
+        for _ in range(6):
+            top = resumed()
+            if dev.pkg not in top:
+                left = True
+                break
+            time.sleep(2)
+        _snap(dev, case_id, "after_whats_new_click")
+        if not left:
+            dev.save_dump(case_id, "still_in_app")
+            raise TestSkip("更新日志未跳转出应用(设备无浏览器/未配置打开方式)")
+        print("  [%s] 更新日志跳转: %s" % (dev.serial, top.strip()[:120]))
+    with dev.step(case_id, "return_app"):
+        for _ in range(3):
+            dev.d.press("back")
+            time.sleep(1)
+            if dev.pkg in resumed():
+                break
+        if dev.pkg not in resumed():
+            dev.start_app()
+            if not dev.wait_home(10):
+                raise AssertionError("返回应用后主界面未就绪")
+
+
 ALL = [
     ("FN-08", "intent 打开", fn08_intent_open, None),
     ("FN-09", "多格式开书", fn09_multi_format, None),
@@ -3902,4 +4412,10 @@ ALL = [
     ("FN-46", "断网离线阅读", fn46_offline_reading, None),
     ("FN-47", "fdroid Pro 门禁", fn47_fdroid_pro_gate, None),
     ("FN-48", "退出确认对话框", fn48_exit_confirm, None),
+    ("FN-49", "音量键翻页", fn49_volume_keys, None),
+    ("FN-50", "双击动作", fn50_double_click, None),
+    ("FN-51", "点按分区手势", fn51_tap_zones, None),
+    ("FN-52", "选词菜单", fn52_select_text_menu, None),
+    ("FN-53", "速读 RSVP", fn53_speed_read, None),
+    ("FN-54", "更新日志入口", fn54_whats_new, None),
 ]

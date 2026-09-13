@@ -147,7 +147,9 @@ public class RemoteBookSession {
                 if (block == null) {
                     block = fetchBlock(idx);
                     if (block == null) {
-                        break; // EOF / source failure
+                        // a null block is a source failure, not EOF: report it
+                        // instead of feeding MuPDF a silently truncated document
+                        throw new IOException("Remote block read failed at offset " + pos);
                     }
                 }
                 int n = Math.min(want, block.length - inOff);

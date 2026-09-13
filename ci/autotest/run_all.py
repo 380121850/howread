@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
@@ -102,6 +103,103 @@ def get_version(dev):
     return "?"
 
 
+def apk_version(apk_path):
+    """从 APK 文件名解析版本号：HowRead-Pro-v1.3.2-arm64.apk → 1.3.2。"""
+    import re
+    m = re.search(r"-v(\d+(?:\.\d+)+)", os.path.basename(apk_path))
+    return m.group(1) if m else None
+
+
+# 最小 AppTemp.xml(iapProUnlocked=true)的 base64——run-as 多层 shell 转义下
+# 只有 base64 能安全写入含引号的 XML(printf 实测必坏,2026-09-13)
+_APPTMP_UNLOCKED_B64 = (
+    "PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiPz4K"
+    "PHJlc291cmNlcz4KICA8Ym9vbGVhbiBuYW1lPSJpYXBQcm9VbmxvY2tlZCIg"
+    "dmFsdWU9InRydWUiIC8+CjwvcmVzb3VyY2VzPgo="
+)
+
+
+def ensure_pro_unlocked(dev, flavor):
+    """pro 包新装/清数据后 Pro 功能锁(iapProUnlocked=false)会挡住全部 Pro 用例
+    (FN-22/23/26~30/43/44)——debug 包用 run-as 改 AppTemp.xml 自动解锁(幂等)。
+    刚 pm clear 后 AppTemp.xml 还不存在(应用首次运行才生成)——先冷启一次让它落盘。
+    sed 用无引号写法 /iapProUnlocked/s/false/true/(只作用于该键所在行),
+    带引号的 s/// 在 adb→sh→run-as 多层转义下必坏(2026-09-13 实测)。"""
+    if flavor != "pro":
+        return
+
+    def _check():
+        """True=已解锁;False=存在且为 false;None=文件/键不存在。"""
+        try:
+            out = dev.shell("run-as %s grep iapProUnlocked shared_prefs/AppTemp.xml" % dev.pkg)
+        except Exception:
+            return None
+        if "value=\"true\"" in out:
+            return True
+        if "iapProUnlocked" in out:
+            return False
+        return None
+
+    if _check() is True:
+        return
+    if _check() is False:
+        # 文件存在且键为 false → 无引号 sed 翻 true
+        dev.shell("run-as %s sh -c 'sed -i /iapProUnlocked/s/false/true/ shared_prefs/AppTemp.xml'" % dev.pkg)
+    else:
+        # 文件/键不存在(pm clear 后常态;SDK30 权限已预授时应用首启不触发 save(),键永不落盘)
+        # → 直接创建含 iapProUnlocked=true 的最小 AppTemp.xml
+        # (SharedPreferences 对缺失键回退字段默认值,单键文件比无文件更安全)
+        # 用 base64 写入:printf 的引号在 adb→sh→run-as 多层转义下必坏(2026-09-13 实测);
+        # pm clear 后 shared_prefs/ 目录整个不存在,须先 mkdir -p
+        dev.shell("run-as %s sh -c 'mkdir -p shared_prefs && echo %s | base64 -d > shared_prefs/AppTemp.xml'"
+                  % (dev.pkg, _APPTMP_UNLOCKED_B64))
+    if _check() is True:
+        log("[%s] Pro 解锁已自动写入(iapProUnlocked=true)" % dev.serial)
+    else:
+        log("[%s] ⚠ Pro 解锁写入失败,Pro 用例可能整体 FAIL" % dev.serial)
+
+
+def prepare_device(dev, flavor, apk, args, fixtures):
+    """轮次前置：保证设备上的包 == 待测 APK（检视结论 2026-09-13：
+    此前 L1 从不装包，设备跑旧版本时整轮结果对的是旧代码且无任何告警）。
+    --reset: pm clear 清数据 + 删外部状态(profile.HowRead) + 重装 + 授权 + Pro 解锁 + 重推基准书（全量回归金标准，
+             代价：三协议凭据需一次性重新入库，网络用例首轮多 ~3 分钟）
+    --no-install: 跳过安装（快速单用例调试，版本不一致只告警）"""
+    installed = get_version(dev)
+    apk_ver = apk_version(apk)
+    if args.reset:
+        log("[%s] --reset: 清除应用数据并重装 %s (installed=%s apk=%s)" %
+            (dev.serial, apk, installed, apk_ver or "?"))
+        dev.shell("pm clear %s" % dev.pkg)
+        # AppState 的唯一持久化在外部存储 profile.HowRead/<机型>/app-State.json
+        # (AppState.load 只读它,内部无副本),pm clear 清不掉;不删则首启原样恢复
+        # 旧配置(浏览目录/书库文件夹/远程条目),复位形同虚设——KSA 全量回归
+        # FN-02/07/14/16/34 踩坑(2026-09-13)
+        dev.shell("rm -rf /sdcard/HowRead/profile.HowRead")
+        ok, msg = dev.install(apk)
+        if not ok:
+            raise RuntimeError("--reset 重装失败: " + msg)
+        dev.grant_setup()
+        ensure_pro_unlocked(dev, flavor)
+        push_fixtures(dev, fixtures)
+        return
+    if args.no_install:
+        if apk_ver and installed and apk_ver != installed:
+            log("[%s] ⚠ --no-install: 设备版本 %s ≠ 待测 APK 版本 %s（结果对应旧版本!）" %
+                (dev.serial, installed, apk_ver))
+        return
+    if apk_ver and installed and apk_ver != installed:
+        log("[%s] 设备版本 %s ≠ 待测 APK 版本 %s → 自动升级安装" %
+            (dev.serial, installed, apk_ver))
+        ok, msg = dev.install(apk)
+        if not ok:
+            raise RuntimeError("升级安装失败: " + msg)
+        dev.grant_setup()
+        ensure_pro_unlocked(dev, flavor)
+    else:
+        log("[%s] 设备版本 %s 与待测 APK 一致,跳过安装" % (dev.serial, installed))
+
+
 def push_fixtures(dev, fixtures):
     for key in ("pdf", "epub"):
         src = fixtures[key]
@@ -171,7 +269,14 @@ def main():
     ap.add_argument("--apk", help="显式指定 APK 路径")
     ap.add_argument("--cases", help="只跑指定用例（逗号分隔，如 FN-10,FN-12；ENV 版本确认保留）")
     ap.add_argument("--serial-exec", action="store_true", help="设备间串行执行（调试）")
+    ap.add_argument("--reset", action="store_true",
+                    help="轮次前 pm clear 清数据 + 重装 + 授权 + Pro 解锁 + 重推基准书（全量回归金标准；"
+                         "三协议凭据需一次性重新入库，网络用例首轮多 ~3 分钟）")
+    ap.add_argument("--no-install", action="store_true",
+                    help="跳过安装（快速单用例调试；设备版本与待测 APK 不一致时仅告警）")
     args = ap.parse_args()
+    if args.reset and args.no_install:
+        ap.error("--reset 与 --no-install 互斥")
 
     devices_cfg = json.load(open(os.path.join(CFG_DIR, "devices.json"), encoding="utf-8"))
     cases_cfg = load_yaml(os.path.join(CFG_DIR, "cases.yaml"))
@@ -221,6 +326,7 @@ def main():
             return dict(serial=meta["serial"], meta=meta, flavor=args.flavor,
                         version="?", results=dev.results)
         log("[%s] APK: %s" % (meta["serial"], apk))
+        prepare_device(dev, args.flavor, apk, args, fixtures)
         ver = run_level(dev, args.level, apk, cases_cfg, fixtures, run_dir, case_filter=args.cases)
         return dict(serial=meta["serial"], meta=meta, flavor=args.flavor, version=ver,
                     results=dev.results)

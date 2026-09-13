@@ -413,7 +413,8 @@ public class AppData {
         for (SimpleMeta it : recent) {
             SimpleMeta s = SimpleMeta.SyncSimpleMeta(it);
 
-            if (!new File(s.getPath()).isFile()) {
+            if (!com.foobnix.remote.RemoteBook.isRemotePath(s.getPath())
+                    && !new File(s.getPath()).isFile()) {
                 LOG.d("getAllRecent can't find file", s.getPath());
                 continue;
             }

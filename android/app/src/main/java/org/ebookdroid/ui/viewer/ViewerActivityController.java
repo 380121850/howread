@@ -790,6 +790,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                 LOG.d("onPostExecute");
                 android.util.Log.i("BENCH", "load-end " + (android.os.SystemClock.elapsedRealtime() - benchT0) + "ms");
                 if (TempHolder.get().loadingCancelled.get()) {
+                    android.util.Log.i("REMOTE", "load cancelled-gate trips, silent close: " + m_fileName);
                     super.onPostExecute(result);
                     closeActivity(null);
                     return;

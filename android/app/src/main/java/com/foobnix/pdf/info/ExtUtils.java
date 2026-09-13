@@ -783,6 +783,12 @@ public class ExtUtils {
 
     public static boolean isValidFile(final Uri uri) {
         LOG.d("getScheme()", uri);
+        // remote:// URIs lose their scheme in uri.getPath() (parsed as an
+        // authority + path), so the remote check must run on the raw string —
+        // otherwise book-mode opens silently reject every remote book
+        if (uri != null && com.foobnix.remote.RemoteBook.isRemotePath(String.valueOf(uri))) {
+            return true;
+        }
         return uri != null && ("content".equals(uri.getScheme()) || isValidFile(uri.getPath()));
     }
 
@@ -1009,7 +1015,9 @@ public class ExtUtils {
         }
         intent.setData(checkPlaylisturi(uri, intent, playlist));
 
+        android.util.Log.i("REMOTE", "showDocumentInner startActivity " + uri);
         c.startActivity(intent);
+        android.util.Log.i("REMOTE", "showDocumentInner startActivity returned");
     }
 
     public static Uri checkPlaylisturi(Uri uri, Intent intent, String playlist) {
@@ -1032,7 +1040,8 @@ public class ExtUtils {
             Toast.makeText(c, R.string.file_not_found, Toast.LENGTH_LONG).show();
             return;
         }
-        if (!isValidFile(uri)) {
+        if (!isValidFile(uri) && !com.foobnix.remote.RemoteBook.isRemotePath(String.valueOf(uri))) {
+            android.util.Log.i("REMOTE", "openHorizontalView rejected: " + uri);
             Toast.makeText(c, R.string.file_not_found, Toast.LENGTH_LONG).show();
             return;
         }
@@ -1052,6 +1061,7 @@ public class ExtUtils {
         if (percent > 0f) {
             Intents.putFloat(intent, DocumentController.EXTRA_PERCENT, percent);
         }
+        android.util.Log.i("REMOTE", "openHorizontalView startActivity " + uri);
         c.startActivity(intent);
 
         // FileMetaDB.get().addRecent(file.getPath());

@@ -136,7 +136,8 @@ public class BlockCacheStore {
                 long storedSize = m.optLong("size", -1);
                 int storedBlockSize = m.optInt("blockSize", BLOCK_SIZE);
                 if (storedTag.equals(versionTag) && storedSize == fileSize && storedBlockSize == blockSize
-                        && bitmapF.isFile() && bitmapF.length() >= blockCount) {
+                        && bitmapF.isFile() && bitmapF.length() >= blockCount
+                        && dataF.isFile() && dataF.length() == fileSize) {
                     fullyCached = m.optBoolean("fullyCached", false);
                     RandomAccessFile data = new RandomAccessFile(dataF, "rw");
                     byte[] bitmap = new byte[blockCount];
