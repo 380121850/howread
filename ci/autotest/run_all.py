@@ -159,6 +159,12 @@ def ensure_pro_unlocked(dev, flavor):
         log("[%s] ⚠ Pro 解锁写入失败,Pro 用例可能整体 FAIL" % dev.serial)
 
 
+def heal_transient_state(dev):
+    """AppTemp 持久化脏状态治愈(2026-09-13): isLocked=true 禁用拖拽翻页且跨运行残留
+    (误点锁定钮即写盘,pm clear 才能清)——无引号 sed 复位 false;文件不存在则静默跳过。"""
+    dev.shell("run-as %s sh -c 'sed -i /isLocked/s/true/false/ shared_prefs/AppTemp.xml' || true" % dev.pkg)
+
+
 def prepare_device(dev, flavor, apk, args, fixtures):
     """轮次前置：保证设备上的包 == 待测 APK（检视结论 2026-09-13：
     此前 L1 从不装包，设备跑旧版本时整轮结果对的是旧代码且无任何告警）。
@@ -183,6 +189,8 @@ def prepare_device(dev, flavor, apk, args, fixtures):
         ensure_pro_unlocked(dev, flavor)
         push_fixtures(dev, fixtures)
         return
+    heal_transient_state(dev)
+    ensure_pro_unlocked(dev, flavor)
     if args.no_install:
         if apk_ver and installed and apk_ver != installed:
             log("[%s] ⚠ --no-install: 设备版本 %s ≠ 待测 APK 版本 %s（结果对应旧版本!）" %

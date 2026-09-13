@@ -176,6 +176,21 @@
 - **根因**：`statTotal` 的点击是 `openLibraryWithFilter("")` 跳书库列表，`statToday` 无点击行为；只有 `statHours → showMonthlyReading()`（MonthlyBarsView + 周月年切换）。旧用例按 (statTotal, statHours, statToday) 顺序点中 statTotal。
 - **规避**：fn42 只找 statHours。
 
+### 31. 热态开书后文档异步渲染,工具条元素延迟挂上（2026-09-13 实测）
+- **现象**：warm-open 后立即找 bookPref/prefTop/currentSeek 全部不存在（"请稍候…"转圈、页面空白），固定短睡后依旧。
+- **根因**：`_open_reader_warm` 只等 ViewActivity 出现,文档渲染是异步的——EPUB/PDF 大文件要数秒到数十秒,工具条 id 在渲染完成后才挂进视图树。
+- **规避**：对阅读器内任何元素的查找用**轮询等待**（40s 上限 + 2.5s 间隔）,不要"打开→固定睡→单次查找"。
+
+### 32. 目录跳转:选章必须跳过当前章,跳转判定要用指示器完整文本（2026-09-13 双机踩坑）
+- **现象**：点章节行后断言"页码未变化"整批 FAIL——截图里其实**跳转成功了**。
+- **根因**：①kw 列表首选 CHAPTER II 恰是常驻当前章(目录高亮行),点击当前章是 no-op；②每章章内页码都是「1 ∕ N」,用数字对 (1,N) 比较恒等；③指示器**完整文本**含章节名（「CHAPTER II…– 1 ∕ 17」→「CHAPTER III…– 1 / 17」）,跨章必变；垂直模式顶栏章节副标题（R.id.chapter）同理。
+- **规避**：选章前读当前章上下文（chapter 副标题+指示器文本）,kw 命中当前章就顺延到下一候选;变化判定用完整文本,不用数字对。
+
+### 33. EMUI 键盘顶起对话框后,预取坐标全废;应用内导出 chooser 可自动化（2026-09-13 定位）
+- **现象**：SMB/SFTP 添加对话框在 KSA 上"凭据入库未成功"（MI9 同代码 PASS）；导出用例误判 SAF 不可自动化。
+- **根因**：①「添加」按钮坐标取自**键盘弹出前**的 dump,EMUI 键盘弹出顶起对话框后旧坐标点空（WebDAV 分支因"先收键盘+按文本重找"幸免）;②导出走的是**应用内** chooser（ChooserDialogFragment TYPE_CREATE_FILE,预填文件名）,不是系统 SAF。
+- **规避**：密码键入后 `_dismiss_keyboard` → 重 dump 重算确认键坐标再点;导出用例直接点 exportButton → chooser 确认键 → find zip 落盘。
+
 ---
 
 ## 五、升格为 AGENTS.md 规则的建议分级（2026-09-13 已裁决：A 级全进）
