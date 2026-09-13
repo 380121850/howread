@@ -130,6 +130,12 @@ def run_level(dev, level, apk_path, cfg, fixtures, run_dir, case_filter=None):
                             note="versionName=%s pkg=%s" % (version, dev.pkg),
                             evidence=""))
     cases = case_list(level)
+    # 用例级禁用开关:cases.yaml case_meta.<ID>.enabled=false 的用例不执行(如 FN-25 外网依赖)
+    meta = (cfg or {}).get("case_meta") or {}
+    disabled = [c[0] for c in cases if not (meta.get(c[0]) or {}).get("enabled", True)]
+    if disabled:
+        log("[%s] 禁用用例(enabled=false): %s" % (dev.serial, ",".join(disabled)))
+        cases = [c for c in cases if c[0] not in disabled]
     if case_filter:
         want = set(c.strip().upper() for c in case_filter.split(",") if c.strip())
         cases = [c for c in cases if c[0].upper() in want]

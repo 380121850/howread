@@ -97,12 +97,31 @@ case_meta:
   FN-23: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # AI 配置与连通(Pro)
   FN-24: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 阅读统计(Pro)
   # --- L1 批次3：网络协议（50.23 测试服务器）---
-  FN-25: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # OPDS 浏览
+  FN-25: { layer: ui, priority: P1, timeout: 300, retries: 1, enabled: false }   # OPDS 浏览(2026-09-13 暂禁用:Gutenberg 源依赖外网,真机常无法访问;启用内网 OPDS 源后再开)
   FN-26: { layer: ui, priority: P1, timeout: 360, retries: 1 }   # WebDAV 浏览(Pro)
   FN-27: { layer: ui, priority: P2, timeout: 360, retries: 0 }   # WebDAV 同步(Pro)
   FN-28: { layer: ui, priority: P1, timeout: 360, retries: 1 }   # SMB 添加与浏览(Pro)
   FN-29: { layer: ui, priority: P1, timeout: 360, retries: 1 }   # SFTP 添加与浏览(Pro)
   FN-30: { layer: ui, priority: P1, timeout: 420, retries: 1 }   # 远程书在线打开(Pro)
+  # --- L1 批次4:覆盖补全(2026-09-13,高可行项,见 docs/COVERAGE.md 缺口表)---
+  FN-31: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 抽屉菜单遍历
+  FN-32: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 收藏列表页
+  FN-33: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 文件浏览隐藏文件开关
+  FN-34: { layer: ui, priority: P1, timeout: 360, retries: 1 }   # 阅读页锁定/解锁
+  FN-35: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 对比度/亮度弹窗
+  FN-36: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 蓝光滤镜弹窗
+  FN-37: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 文件信息对话框
+  FN-38: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 标记已读/未读
+  FN-39: { layer: ui, priority: P1, timeout: 360, retries: 1 }   # 行距调节
+  FN-40: { layer: ui, priority: P2, timeout: 360, retries: 0 }   # 页码格式切换
+  FN-41: { layer: ui, priority: P2, timeout: 360, retries: 0 }   # 进度条/状态栏位置
+  FN-42: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 阅读统计详情
+  FN-43: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 在线阅读设置页
+  FN-44: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # WebDAV 同步定时器
+  FN-45: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 设置备份导出
+  FN-46: { layer: ui, priority: P1, timeout: 600, retries: 0 }   # 断网离线阅读
+  FN-47: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # fdroid Pro 门禁探针
+  FN-48: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 退出确认对话框
   # --- L2 专项 ---
   PF-01: { layer: ui, priority: P1, timeout: 300, retries: 0 }
   PF-03: { layer: ui, priority: P1, timeout: 300, retries: 0 }

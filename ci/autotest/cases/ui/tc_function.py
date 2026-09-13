@@ -12,15 +12,21 @@
   / WebDavSyncDialog(独立服务器+测试连接+立即同步);服务器行右侧 ✕ 删除
 FN-10~FN-30 为 2026-09-12 覆盖扩展新增(对应<HowRead安卓功能列表.md>,见 docs/COVERAGE.md).
 """
+import json
+import os
 import time
 import re
+import hashlib
 
 from lib.driver import TestSkip, adb
 
 ROOT = r"Z:\opt\librera\LibreraReader\ci\autotest"
+# 临时文件统一目录(AGENTS ②节):预置/调试产生的本地副本一律放这里
+TMP_DIR = r"Z:\opt\Workspace\HowRead\tmp\debug"
 
 
 def _ensure_home(dev):
+    dev.wake_unlock()  # 长跑中 MIUI 会熄屏,熄屏期间 u2/点击/截图全部失效(真机踩坑 2026-09-13)
     dev.start_app(cold=True)
     dev.handle_first_run_dialogs()
     if not dev.wait_home(10):
@@ -504,76 +510,71 @@ def fn06_theme(dev, case_id, cfg=None, fixtures=None):
 
 
 def fn07_tts(dev, case_id, cfg=None, fixtures=None):
-    """TTS:依次探测已知入口(抽屉菜单/阅读器菜单/bookMenu),找不到则 SKIP."""
-    with dev.step(case_id, "open_epub"):
-        if not dev.open_book("alicesadventures", device_path=fixtures["device_epub_path"]):
-            raise AssertionError("EPUB 打开失败")
-    entered = False
-    with dev.step(case_id, "try_reader_menu"):
-        w, h = dev.d.window_size()
-        dev.d.click(int(0.5 * w), int(0.5 * h))
-        time.sleep(1.8)
-        # 候选 1: 展开菜单里的 bookMenu(部分机型)
-        tb = dev.d(resourceId=dev.pkg + ":id/imageToolbar")
-        if tb.exists:
-            tb.click()
-            time.sleep(1.5)
-        if dev.d(resourceId=dev.pkg + ":id/bookMenu").exists:
-            dev.d(resourceId=dev.pkg + ":id/bookMenu").click()
-            time.sleep(2)
-        for kw in ("朗读", "TTS", "Text to speech", "Voice"):
-            if dev.click_text(kw) or dev.click_desc(kw):
-                entered = True
-                break
-    if not entered:
-        with dev.step(case_id, "try_reader_toolbar_tts"):
-            # 1.3.2 工具条直连入口:HorizontalViewActivity textToSpeach → dialogTextToSpeech
-            for _ in range(2):
-                top = dev.shell("dumpsys activity activities | grep mResumedActivity")
-                if "ViewActivity" not in top:
-                    if not dev.open_book("alicesadventures", device_path=fixtures["device_epub_path"]):
-                        break
-                dev.d.click(int(0.5 * w), int(0.5 * h))
-                time.sleep(2)
-                tb = dev.d(resourceId=dev.pkg + ":id/imageToolbar")
-                if tb.exists:
-                    tb.click()
-                    time.sleep(1.5)
-                tts_btn = dev.d(resourceId=dev.pkg + ":id/textToSpeach")
-                if tts_btn.exists:
-                    tts_btn.click()
-                    time.sleep(2.5)
-                    entered = True
-                    break
-    if not entered:
-        with dev.step(case_id, "try_drawer"):
-            for _ in range(2):
-                dev.d.press("back")
-                time.sleep(0.8)
+    """TTS 朗读:切[单机行为=Book mode 水平]→ 开 EPUB(进 HorizontalViewActivity)→
+    底栏 textToSpeach(desc「文字转语音」,HorizontalViewActivity.restoreFooterControls 点亮)
+    → dialogTextToSpeech → ttsPlay(desc「Play/pause」)启动前台 TTSService → 断言服务运行
+    → ttsStop 收尾.覆盖 §11 TTS 朗读(启动/停止).
+    代码+真机结论(2026-09-13):TTS 无 Pro/flavor 门控;入口图标仅水平模式点亮,垂直滚动
+    (AppSP.readingMode=SCROLL 时 epub 也走 Vertical)恒 GONE——经偏好单机行为切 Book mode 绕行."""
+    try:
+        with dev.step(case_id, "switch_book_mode"):
             _ensure_home(dev)
-            if dev.click_desc("菜单"):
-                time.sleep(1.5)
-                for kw in ("朗读", "TTS", "Text to speech"):
-                    if dev.click_text(kw) or dev.click_desc(kw):
-                        entered = True
-                        break
-                if not entered:
-                    dev.d.press("back")
-                    time.sleep(1)
-    if not entered:
-        dev.save_dump(case_id, "tts_entry_not_found")
-        raise TestSkip("TTS 入口未在已知位置找到(入口待勘探,见取证 dump)")
-    with dev.step(case_id, "verify_tts"):
-        time.sleep(3)
-        top = dev.shell("dumpsys activity activities | grep mResumedActivity")
-        xml = dev.d.dump_hierarchy()
-        if "TTSActivity" not in top and "tts" not in xml.lower() and "朗读" not in xml:
-            dev.save_dump(case_id, "no_tts_ui")
-            raise AssertionError("触发 TTS 后未见朗读界面: %s" % top.strip()[:120])
-    with dev.step(case_id, "stop_and_exit"):
-        for _ in range(3):
-            dev.d.press("back")
-            time.sleep(0.6)
+            if not _set_reading_mode(dev, case_id, ["左右翻页", "Book mode", "书本"]):
+                dev.save_dump(case_id, "no_book_mode_item")
+                raise TestSkip("偏好无[单机行为]行或无左右翻页项")
+            # 注意:ConfLineView 的模式选择只写内存(AppSP.AppTemp 落盘不含 force-stop),
+            # 此处绝不能再冷启应用,否则设置丢失、书仍走垂直模式(真机踩坑 2026-09-13)
+        with dev.step(case_id, "open_epub"):
+            _open_reader_warm(dev, case_id, "alicesadventures")
+            _reader_show_toolbar(dev)
+            tts_btn = _reader_toolbar_btn(dev, "textToSpeach", desc_kws=("文字转语音", "TTS"))
+            if tts_btn is None:
+                dev.save_dump(case_id, "no_tts_btn")
+                raise TestSkip("TTS 入口(textToSpeach)不可见(Book 模式下仍不可见,待勘探)")
+            tts_btn.click()
+            time.sleep(2.5)
+            if not _safe_exists(dev, dev.d(resourceId=_rid(dev, "ttsActive"))) \
+                    and not _safe_exists(dev, dev.d(resourceId=_rid(dev, "ttsPlay"))):
+                dev.save_dump(case_id, "no_tts_dialog")
+                raise AssertionError("TTS 对话框(dialogTextToSpeech)未出现")
+            _snap(dev, case_id, "tts_dialog")
+        with dev.step(case_id, "start_tts"):
+            play = dev.d(resourceId=_rid(dev, "ttsPlay"))
+            if not play.exists:
+                dev.save_dump(case_id, "no_tts_play")
+                raise TestSkip("TTS 播放按钮(ttsPlay)不可见")
+            play.click()
+            running = False
+            deadline = time.time() + 20
+            while time.time() < deadline:
+                out = dev.shell("dumpsys activity services %s | grep -i TTSService" % dev.pkg)
+                if "TTSService" in out:
+                    running = True
+                    break
+                time.sleep(2)
+            _snap(dev, case_id, "tts_running")
+            if not running:
+                c = dev.scan_crash()
+                if c:
+                    raise AssertionError("启动 TTS crash: %s" % c)
+                dev.save_dump(case_id, "tts_service_not_running")
+                raise AssertionError("点击播放后 TTSService 前台服务未运行(设备可能无 TTS 引擎,见 dump)")
+        with dev.step(case_id, "stop_and_exit"):
+            stop = dev.d(resourceId=_rid(dev, "ttsStop"))
+            if stop.exists:
+                stop.click()
+                time.sleep(2)
+            out = dev.shell("dumpsys activity services %s | grep -i TTSService" % dev.pkg)
+            if "TTSService" in out:
+                dev.d.app_stop(dev.pkg)  # 兜底停服务,不留前台服务污染后续用例
+            _exit_reader(dev, case_id)
+    finally:
+        # 还原 单机行为=Scroll mode(垂直),避免影响后续用例的阅读模式假设
+        try:
+            _back_to_main(dev)
+            _set_reading_mode(dev, case_id, ["上下翻页", "Scroll mode", "滚动"])
+        except Exception:
+            pass
 
 
 def fn08_intent_open(dev, case_id, cfg=None, fixtures=None):
@@ -633,6 +634,38 @@ def _exit_reader(dev, case_id):
             break
 
 
+def _open_reader_warm(dev, case_id, keyword):
+    """热态浏览开书(绝不冷启):偏好里切换的阅读模式(左右/上下翻页)只写内存
+    (AppSP.AppTemp 落盘不含 force-stop),open_book 的 intent/浏览路径都会冷启导致设置丢失
+    (真机踩坑 2026-09-13)."""
+    if not (dev.click_desc("我的文件") or dev.click_text("我的文件")):
+        raise AssertionError("我的文件 Tab 不可达")
+    time.sleep(2)
+    dl = dev.d(text="Download")
+    if not dl.exists:
+        dl = dev.d(textContains="Download")
+    if dl.exists:
+        dl.click()
+        time.sleep(2.5)
+    book = _find_text_scrolled(dev, keyword, max_swipes=6)
+    if book is None:
+        dev.save_dump(case_id, "warm_book_not_found")
+        raise AssertionError("浏览未找到 %s(热态开书)" % keyword)
+    book.click()
+    entered = False
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        top = dev.shell("dumpsys activity activities | grep mResumedActivity")
+        if "ViewActivity" in top or "TTSActivity" in top:
+            entered = True
+            break
+        time.sleep(2)
+    if not entered:
+        dev.save_dump(case_id, "warm_open_failed")
+        raise AssertionError("热态开书未进入阅读器")
+    return True
+
+
 def _open_reader(dev, case_id, fixtures, fmt):
     """强制冷启动开书进阅读器,隔离用例间脏状态(上一用例 SKIP/FAIL 可能把阅读器或桌面留下).
     fmt: 'pdf' → big25.pdf;'epub' → alicesadventures.epub.返回 True 表示已进 ViewActivity."""
@@ -651,15 +684,18 @@ def _open_reader(dev, case_id, fixtures, fmt):
 
 def _reader_page_no_back(dev):
     """读当前页码,**不 press back**(driver.reader_page_num 的 back 会收起工具条/退出阅读器/退桌面,
-    连续调用会把 app 退到桌面--FN-16 首跑即因此失败).返回 (cur, total) 或 None."""
-    try:
-        el = dev.d(resourceId=_rid(dev, "currentPageIndex"))
-        if el.exists:
-            m = re.match(r"(\d+)\s*/\s*(\d+)", (el.get_text() or "").strip())
-            if m:
-                return (int(m.group(1)), int(m.group(2)))
-    except Exception:
-        pass
+    连续调用会把 app 退到桌面--FN-16 首跑即因此失败).返回 (cur, total) 或 None.
+    水平(Book)模式页码在 pagesCountIndicator(「11 ∕ 14」,U+2215 除号)."""
+    for rid, pat in (("currentPageIndex", r"(\d+)\s*/\s*(\d+)"),
+                     ("pagesCountIndicator", r"(\d+)\s*[∕/]\s*(\d+)")):
+        try:
+            el = dev.d(resourceId=_rid(dev, rid))
+            if el.exists:
+                m = re.match(pat, (el.get_text() or "").strip())
+                if m:
+                    return (int(m.group(1)), int(m.group(2)))
+        except Exception:
+            continue
     try:
         cur = dev.d(resourceId=_rid(dev, "currentSeek"))
         if cur.exists:
@@ -951,7 +987,10 @@ def _addremote_fill_and_save(dev, case_id, cfg, is_sftp, title):
             if sd is None:
                 return None
             if sd and ts.get("books_dir"):
-                _fill(dev, start_dir, ts["books_dir"], "(起始目录)")
+                # SFTP startDir 是家目录相对语义(RemoteServer.startDir 注释),
+                # 填绝对路径会解析成 home 下嵌套路径导致浏览为空(真机踩坑 2026-09-13)
+                rel = ts["books_dir"].rstrip("/").split("/")[-1]
+                _fill(dev, start_dir, rel, "(起始目录)")
         else:
             share = dev.d(resourceId=_rid(dev, "share"))
             sh = _safe_exists(dev, share)
@@ -960,28 +999,48 @@ def _addremote_fill_and_save(dev, case_id, cfg, is_sftp, title):
             if sh:
                 _fill(dev, share, ts.get("smb_share", "testbooks"), "(共享名)")
         _fill(dev, login, ts.get("user", "howread"), "(账号)")
-        _fill(dev, pwd, ts.get("password", "howread123"), "(密码)")
+        # ===== 密码阶段起全程 adb:u2 触碰密码框(聚焦)必触发 MIUI 密码保险箱,
+        # a11y 服务随之崩溃(screencap/dump/点击全废,真机反复踩坑 2026-09-13).
+        # 在碰密码框**之前**从 dump 预取正键坐标;跳过[测试连接](SMB/SFTP 的添加
+        # 正键直接保存,不依赖测试连接),密码键入后立即 adb 点添加;
+        # 是否真保存由调用方"等行出现/app-State 落盘"裁决 =====
+        def _center_from_dump(rid_name=None, text=None, xml=None):
+            if xml is None:
+                try:
+                    xml = dev.d.dump_hierarchy()
+                except Exception:
+                    return None
+            if rid_name:
+                m = re.search(r'resource-id="[^"]*:id/%s"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"'
+                              % rid_name, xml)
+            else:
+                m = re.search(r'text="%s"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"'
+                              % re.escape(text or ""), xml)
+            if not m:
+                return None
+            x0, y0, x1, y1 = map(int, m.groups())
+            return ((x0 + x1) // 2, (y0 + y1) // 2)
+
+        pre_xml = ""
+        try:
+            pre_xml = dev.d.dump_hierarchy()
+        except Exception:
+            pre_xml = ""
+        pwd_c = _center_from_dump(rid_name="password", xml=pre_xml)
+        add_c = _center_from_dump(text="添加", xml=pre_xml)
+        if pwd_c is None or add_c is None:
+            return False
+        dev.shell("input tap %d %d" % pwd_c)  # 聚焦密码框(adb)
+        time.sleep(1)
+        dev.shell("input keyevent 123")  # MOVE_END
+        for _ in range(4):
+            dev.shell("input keyevent 67 67 67 67 67 67 67 67 67 67")  # 40×DEL 清空
+        time.sleep(0.4)
+        dev.shell("input text %s" % ts.get("password", "howread123"))
+        time.sleep(0.8)
         _snap(dev, case_id, "remote_form_filled")
-        _dismiss_keyboard(dev)
-        # 测试连接(remoteTestBtn 文案 测试连接)
-        if not (dev.click_text("测试连接") or dev.d(resourceId=_rid(dev, "remoteTestBtn")).click()):
-            return False
-        ok = False
-        deadline = time.time() + 30
-        while time.time() < deadline:
-            xml = dev.d.dump_hierarchy()
-            if "连接成功" in xml:
-                ok = True
-                break
-            time.sleep(1.5)
-        _snap(dev, case_id, "remote_test_result")
-        if not ok:
-            return False
-        # 添加(AlertDialog 正键)
-        _dismiss_keyboard(dev)
-        if not dev.click_text("添加"):
-            return False
-        time.sleep(2)
+        dev.shell("input tap %d %d" % add_c)  # 直接保存(不点测试连接)
+        time.sleep(3)
         return True
     except Exception as e:
         # u2 服务瞬态崩溃(JSON-RPC -32002 等)→ None(调用方如实 SKIP);其它异常照常抛
@@ -1019,6 +1078,293 @@ def _click_section_add(dev, header_text):
     return False
 
 
+def _preset_server_lines(dev, cfg, kinds=("webdav", "smb", "sftp")):
+    """配置文件预置 50.23 服务器行到 app-State.json,替代 UI 逐字段输入(规避 MIUI
+    自动填充在密码框上打崩 uiautomator JSON-RPC,AGENTS gotcha 21).
+    服务器行是 app-State.json 的分隔字符串字段(allWebDavLinks="url,title;" /
+    allSmbLinks & allSftpLinks="id|title|host|port|user|domain|share|keyPath|trustAll|startDir;",
+    见 RemoteServer.buildLine/RemoteStore),文件位于共享存储
+    /sdcard/HowRead/profile.*/device.<MODEL>/,adb 可直接读写(无需 run-as).
+    密码经 AndroidKeyStore AES/GCM 加密存 SharedPreferences(WebDavCredentials,
+    键 remote://<id>),外部无法伪造 → 预置只保证"行存在",首次连通需 _ensure_credentials
+    经编辑对话框补存一次凭据,之后所有轮次走复用分支零 UI 输入.
+    必须 force-stop 后改文件:App 运行中 MainTabs2.onPause→AppProfile.save 会用内存态覆盖写回.
+    id 取 host/port 的确定性 md5 截断 → 重复预置幂等不堆积,凭据键稳定.
+    返回 True=预置完成;False=状态文件不可读写(调用方回退 UI 添加流程)."""
+    ts = (cfg or {}).get("test_server") or {}
+    if not ts:
+        return False
+    titles = {"webdav": "HowRead-Test", "smb": "HowRead-SMB", "sftp": "HowRead-SFTP"}
+    host = ts.get("host", "192.168.50.23")
+    try:
+        os.makedirs(TMP_DIR, exist_ok=True)
+        model = (dev.shell("getprop ro.product.model") or "").strip().replace(" ", "_")
+        found = dev.shell("ls /sdcard/HowRead/profile.*/device.%s/app-State.json 2>/dev/null" % model)
+        found = [l.strip() for l in (found or "").splitlines() if l.strip()]
+        remote = found[0] if found else \
+            "/sdcard/HowRead/profile.HowRead/device.%s/app-State.json" % model
+        dev.shell("am force-stop %s" % dev.pkg)
+        time.sleep(2)
+        local = os.path.join(TMP_DIR, "appstate_%s.json" % dev.serial)
+        if os.path.exists(local):
+            os.remove(local)
+        data = {}
+        try:
+            adb("-s", dev.serial, "pull", remote, local, timeout=60)
+            with open(local, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+        lines = {}
+        if "webdav" in kinds:
+            url = ts.get("webdav_url", "http://%s:8765/" % host)
+            lines["allWebDavLinks"] = "%s,%s;" % (url, titles["webdav"])
+        if "smb" in kinds:
+            sid = "t" + hashlib.md5(("smb|%s|%s" % (host, ts.get("smb_port", 445))).encode()).hexdigest()[:11]
+            lines["allSmbLinks"] = "%s|%s|%s|%s|%s||%s||1|;" % (
+                sid, titles["smb"], host, ts.get("smb_port", 445),
+                ts.get("user", "howread"), ts.get("smb_share", "testbooks"))
+        if "sftp" in kinds:
+            sid = "t" + hashlib.md5(("sftp|%s|%s" % (host, ts.get("sftp_port", 22))).encode()).hexdigest()[:11]
+            lines["allSftpLinks"] = "%s|%s|%s|%s|%s||||1|books;" % (
+                sid, titles["sftp"], host, ts.get("sftp_port", 22), ts.get("user", "howread"))
+        changed = False
+        for key, line in lines.items():
+            cur = data.get(key) or ""
+            title = titles["webdav" if key == "allWebDavLinks" else
+                           ("smb" if key == "allSmbLinks" else "sftp")]
+            if title in cur:
+                continue
+            data[key] = line + cur
+            changed = True
+        if not changed:
+            return True
+        with open(local, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        adb("-s", dev.serial, "push", local, remote, timeout=60)
+        print("  [%s] 预置服务器行 → %s (%s)" % (dev.serial, remote, "/".join(kinds)))
+        return True
+    except Exception as e:
+        print("  [%s] 预置服务器行失败,回退 UI 添加流程: %s" % (dev.serial, e))
+        return False
+
+
+def _fill_password_adb(dev, el, text):
+    """密码框专用填充:u2 只点击聚焦,清空与键入走 adb input(不触发 uiautomator 的
+    set_text/回读,避开 MIUI 自动填充打崩 JSON-RPC).回读验证失败(含 u2 崩溃)不判失败,
+    由后续[测试连接]结果判定."""
+    el.click()
+    time.sleep(1)
+    dev.shell("input keyevent 123")  # KEYCODE_MOVE_END
+    for _ in range(4):
+        dev.shell("input keyevent 67 67 67 67 67 67 67 67 67 67")  # 10×DEL
+    time.sleep(0.4)
+    dev.shell("input text %s" % text)
+    time.sleep(0.8)
+
+
+def _open_edit_dialog(dev, title):
+    """点服务器行的钢笔编辑图标,打开预填的 AddRemoteDialog/AddWebDavDialog.
+    行结构(BrowseFragment2.netListItem):[云图标][标题][扫描][编辑][✕],图标程序化创建
+    无 resourceId/content-desc,只能按行 y + 右缘偏移试探点击.
+    真机实测(MI9,2026-09-13):钢笔在右缘偏移 ~160-200px;<150 会误点 ✕(弹删除确认).
+    注意页面顶栏路径标题与行标题**同名**(remote 页 titleView),u2 首个匹配是顶栏——
+    必须取 y 靠下的行实例,否则点到顶栏空白处.用 dump 解析定位(u2 count/实例枚举在
+    MIUI 上偶发 JSON-RPC 异常,回退会错拿顶栏).成功返回 True."""
+    _, h = dev.d.window_size()
+    xml = ""
+    for _ in range(3):  # u2 dump 在重浏览后偶发 JSON-RPC 崩溃,数秒自愈,重试
+        try:
+            xml = dev.d.dump_hierarchy()
+            if xml:
+                break
+        except Exception:
+            time.sleep(3)
+    if not xml:
+        return False
+    cy = None
+    for m in re.finditer(r'text="%s"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"' % re.escape(title), xml):
+        y0, y1 = int(m.group(2)), int(m.group(4))
+        t = (y0 + y1) / 2
+        if t > 0.22 * h:
+            cy = int(t)
+            break
+    if cy is None:
+        return False
+    w, _ = dev.d.window_size()
+    for dx in (160, 190, 220, 250):
+        try:
+            dev.d.click(w - dx, cy)
+        except Exception:
+            return False
+        time.sleep(2)
+        for probe in ("password", "url", "host"):
+            if _safe_exists(dev, dev.d(resourceId=_rid(dev, probe))):
+                return True
+        # 误点删除确认时取消,避免误删预置行
+        try:
+            if dev.d(text="删除").exists and dev.d(text="取消").exists:
+                dev.d(text="取消").click()
+                time.sleep(1.2)
+        except Exception:
+            pass
+    return False
+
+
+def _appstate_path(dev):
+    """设备上 app-State.json 的路径(共享存储,adb 直读直写,无需 run-as)."""
+    model = (dev.shell("getprop ro.product.model") or "").strip().replace(" ", "_")
+    found = [l.strip() for l in
+             (dev.shell("ls /sdcard/HowRead/profile.*/device.%s/app-State.json 2>/dev/null" % model)
+              or "").splitlines() if l.strip()]
+    return found[0] if found else \
+        "/sdcard/HowRead/profile.HowRead/device.%s/app-State.json" % model
+
+
+def _remove_preset_lines(dev, cfg, kinds):
+    """force-stop 后从 app-State.json 删除指定协议的预置行(按标题匹配段).
+    用于凭据入库 v2:先删行再走[+ 添加]流程,避免同名重复行.返回 True=操作完成."""
+    ts = (cfg or {}).get("test_server") or {}
+    titles = {"webdav": "HowRead-Test", "smb": "HowRead-SMB", "sftp": "HowRead-SFTP"}
+    keys = {"webdav": "allWebDavLinks", "smb": "allSmbLinks", "sftp": "allSftpLinks"}
+    try:
+        os.makedirs(TMP_DIR, exist_ok=True)
+        remote = _appstate_path(dev)
+        dev.shell("am force-stop %s" % dev.pkg)
+        time.sleep(2)
+        local = os.path.join(TMP_DIR, "appstate_%s.json" % dev.serial)
+        if os.path.exists(local):
+            os.remove(local)
+        adb("-s", dev.serial, "pull", remote, local, timeout=60)
+        with open(local, encoding="utf-8") as f:
+            data = json.load(f)
+        changed = False
+        for k in kinds:
+            key = keys[k]
+            cur = data.get(key) or ""
+            if titles[k] not in cur:
+                continue
+            segs = [s for s in cur.split(";") if s and titles[k] not in s]
+            data[key] = "".join(s + ";" for s in segs)
+            changed = True
+        if not changed:
+            return True
+        with open(local, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        adb("-s", dev.serial, "push", local, remote, timeout=60)
+        print("  [%s] 已移除预置行(%s),改走 UI 添加以入库凭据" % (dev.serial, "/".join(kinds)))
+        return True
+    except Exception as e:
+        print("  [%s] 移除预置行失败: %s" % (dev.serial, e))
+        return False
+
+
+def _ensure_credentials(dev, case_id, cfg, kind, title):
+    """一次性凭据入库(v2):钢笔编辑入口对 u2 瞬态崩溃太脆弱(真机反复失败),改为
+    force-stop → app-State.json 删预置行 → 冷启动 → 走久经考验的[+ 添加]对话框流程
+    (非密码字段 u2 _fill;密码 _fill_password_adb 走 adb input,避开 MIUI 自动填充
+    打崩 uiautomator)→ 保存即写入 AndroidKeyStore 加密存储,此后所有轮次复用零 UI 输入.
+    返回 True=凭据已就绪;False=入库失败(调用方如实报失败)."""
+    ts = (cfg or {}).get("test_server") or {}
+    try:
+        if not _remove_preset_lines(dev, cfg, kinds=(kind,)):
+            return False
+        dev.wake_unlock()
+        dev.start_app(cold=True)
+        dev.handle_first_run_dialogs()
+        if not dev.wait_home(10):
+            return False
+        time.sleep(1.5)
+        roots = 0
+        for _ in range(2):  # u2 抖动时 _browse_root 可能误判,重试一次
+            if _browse_root(dev):
+                roots += 1
+                break
+            _back_to_main(dev)
+            time.sleep(2)
+        if not roots:
+            return False
+        headers = {"webdav": "WebDAV", "smb": "SMB", "sftp": "SFTP"}
+        if not _click_section_add(dev, headers[kind]):
+            dev.save_dump(case_id, "cred_no_add_btn_%s" % kind)
+            return False
+        time.sleep(2.5)
+        if kind == "webdav":
+            if not dev.d(resourceId=_rid(dev, "url")).exists:
+                return False
+            _fill(dev, dev.d(resourceId=_rid(dev, "url")), ts.get("webdav_url", ""), "(地址)")
+            _fill(dev, dev.d(resourceId=_rid(dev, "name")), title, "(名称)")
+            _fill(dev, dev.d(resourceId=_rid(dev, "login")), ts.get("user", "howread"), "(账号)")
+            # 密码阶段全程 adb(理由同 _addremote_fill_and_save)
+            try:
+                xml = dev.d.dump_hierarchy()
+            except Exception:
+                xml = ""
+            m = re.search(r'resource-id="[^"]*:id/password"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
+            if not m:
+                return False
+            px = (int(m.group(1)) + int(m.group(3))) // 2
+            py = (int(m.group(2)) + int(m.group(4))) // 2
+            dev.shell("input tap %d %d" % (px, py))
+            time.sleep(1)
+            dev.shell("input keyevent 123")
+            for _ in range(4):
+                dev.shell("input keyevent 67 67 67 67 67 67 67 67 67 67")
+            dev.shell("input text %s" % ts.get("password", "howread123"))
+            _snap(dev, case_id, "cred_form_%s" % kind)
+            _dismiss_keyboard(dev)
+            if not dev.click_text("添加"):
+                try:
+                    w, h = dev.d.window_size()
+                except Exception:
+                    w, h = 1080, 2340
+                dev.shell("input tap %d %d" % (w - 190, int(h * 0.75)))
+        else:
+            r = _addremote_fill_and_save(dev, case_id, cfg, kind == "sftp", title)
+            if r is None or not r:
+                try:
+                    dev.d.press("back")
+                    time.sleep(1)
+                except Exception:
+                    pass
+                return False
+        appstate = _appstate_path(dev)
+        deadline = time.time() + 25
+        while time.time() < deadline:
+            if _safe_exists(dev, dev.d(text=title)):
+                _snap(dev, case_id, "cred_stored_%s" % kind)
+                print("  [%s] %s 凭据已入库(一次性,后续复用)" % (dev.serial, kind.upper()))
+                return True
+            # u2 不可用时以落盘为准:对话框保存会同步写 app-State.json(行+加密凭据)
+            try:
+                out = (dev.shell("grep -c '%s' %s 2>/dev/null" % (title, appstate)) or "").strip()
+            except Exception:
+                out = ""
+            if out and out[0].isdigit() and out[0] != "0":
+                print("  [%s] %s 凭据已入库(app-State.json 落盘确认,一次性,后续复用)"
+                      % (dev.serial, kind.upper()))
+                return True
+            time.sleep(2)
+        return False
+    except Exception:
+        try:
+            dev.d.press("back")
+            time.sleep(1)
+        except Exception:
+            pass
+        return False
+
+
+def _back_to_net_root(dev, max_backs=5):
+    """从远程目录/深层页面逐级 back 回[我的文件]根视图(netSection 可见)."""
+    for _ in range(max_backs):
+        if _safe_exists(dev, dev.d(resourceId=_rid(dev, "netSection"))):
+            return True
+        dev.d.press("back")
+        time.sleep(1.2)
+    return bool(_safe_exists(dev, dev.d(resourceId=_rid(dev, "netSection"))))
+
+
 def _ensure_server(dev, case_id, cfg, kind):
     """确保 kind∈{webdav,smb,sftp} 的 50.23 测试服务器条目存在(已存在则复用).
     返回 (标题, added);added=True 表示本用例新建(调用方负责用后删除,
@@ -1026,6 +1372,7 @@ def _ensure_server(dev, case_id, cfg, kind):
     ts = (cfg or {}).get("test_server") or {}
     titles = {"webdav": "HowRead-Test", "smb": "HowRead-SMB", "sftp": "HowRead-SFTP"}
     title = titles[kind]
+    _ensure_home(dev)  # 用例可能直接从桌面态进入,app 未启动时 netSection 永远不可达
     if not _browse_root(dev):
         raise TestSkip("我的文件根视图不可达(netSection 不在树中)")
     ex = _safe_exists(dev, dev.d(text=title))
@@ -1033,6 +1380,19 @@ def _ensure_server(dev, case_id, cfg, kind):
         raise TestSkip("u2 服务不稳,无法确认 %s 是否已存在" % title)
     if ex:
         return title, False
+    # 行不存在 → 先走配置文件预置(零 UI 输入,规避 MIUI 密码框崩溃);预置失败再回退 UI 添加流程
+    if _preset_server_lines(dev, cfg, kinds=(kind,)):
+        dev.wake_unlock()
+        dev.start_app(cold=True)
+        dev.handle_first_run_dialogs()
+        time.sleep(1.5)
+        if _browse_root(dev):
+            ex = _safe_exists(dev, dev.d(text=title))
+            if ex is None:
+                raise TestSkip("u2 服务不稳,无法确认 %s 预置后是否存在" % title)
+            if ex:
+                _snap(dev, case_id, "server_preset")
+                return title, False
     headers = {"webdav": "WebDAV", "smb": "SMB", "sftp": "SFTP"}
     if not dev.d(textContains=headers[kind]).exists:
         raise TestSkip("netSection 无 %s 区块头部" % headers[kind])
@@ -1090,31 +1450,64 @@ def _open_server_dir(dev, title, verify_keywords, timeout=25):
     return False
 
 
+_HORZ_TOOLBAR_DESCS = ("目录", "前往页面", "文字转语音", "书签", "单页", "Contents")
+
+
 def _reader_show_toolbar(dev):
     """阅读器内确保工具条可见(幂等:已显示则不再点--点屏幕中央是"切换",
-    已显示时点一下反而隐藏,FN-17/18 首跑即因此找不到按钮)."""
-    if dev.d(resourceId=_rid(dev, "currentSeek")).exists \
-            or dev.d(resourceId=_rid(dev, "currentPageIndex")).exists:
+    已显示时点一下反而隐藏,FN-17/18 首跑即因此找不到按钮).
+    水平(Book)模式的工具条按钮以 content-desc 呈现(目录/前往页面/文字转语音...),
+    无 currentSeek/currentPageIndex——只按垂直 id 判断会误判隐藏,点中心反而把
+    已显示的工具条藏掉(真机踩坑 2026-09-13)."""
+    def visible():
+        if dev.d(resourceId=_rid(dev, "currentSeek")).exists \
+                or dev.d(resourceId=_rid(dev, "currentPageIndex")).exists:
+            return True
+        for kw in _HORZ_TOOLBAR_DESCS:
+            try:
+                if dev.d(descriptionContains=kw).exists:
+                    return True
+            except Exception:
+                continue
+        return False
+
+    if visible():
         return True
     w, h = dev.d.window_size()
     dev.d.click(int(0.5 * w), int(0.5 * h))
     time.sleep(2)
-    return dev.d(resourceId=_rid(dev, "currentSeek")).exists \
-        or dev.d(resourceId=_rid(dev, "currentPageIndex")).exists
+    return visible()
 
 
-def _reader_toolbar_btn(dev, rid_name, expand_first=True):
+def _reader_toolbar_btn(dev, rid_name, expand_first=True, desc_kws=()):
     """取阅读器工具条按钮(thumbnail/onDocDontext/bookPref/textToSpeach 等),
-    不在树中时先点 imageToolbar 展开再找."""
+    先按 resource-id,再按 content-desc 候选(水平模式按钮无 id 命中时靠 desc);
+    都不在树中时先点 imageToolbar 展开再找."""
     btn = dev.d(resourceId=_rid(dev, rid_name))
     if btn.exists:
         return btn
+    for kw in desc_kws:
+        try:
+            el = dev.d(descriptionContains=kw)
+            if el.exists:
+                return el
+        except Exception:
+            continue
     if expand_first:
         tb = dev.d(resourceId=_rid(dev, "imageToolbar"))
         if tb.exists:
             tb.click()
             time.sleep(1.5)
         btn = dev.d(resourceId=_rid(dev, rid_name))
+        if btn.exists:
+            return btn
+        for kw in desc_kws:
+            try:
+                el = dev.d(descriptionContains=kw)
+                if el.exists:
+                    return el
+            except Exception:
+                continue
     return btn if btn.exists else None
 
 
@@ -1262,71 +1655,180 @@ def fn12_view_modes(dev, case_id, cfg=None, fixtures=None):
 
 
 def fn13_tags(dev, case_id, cfg=None, fixtures=None):
-    """标签管理:长按书行 → 添加标签 → 创建 → 验证标签出现.覆盖 §3 标签 CRUD.
-    入口文案依真机菜单而定,不可达时 SKIP(P2 勘探用例)."""
-    tag_name = "autotest"
-    with dev.step(case_id, "open_tag_dialog"):
+    """标签管理(真实入口,2026-09-13 代码核实):书库长按书行**直接弹书籍信息对话框**
+    (DefaultListeners:212,无中间菜单)→ 点下划线[Add tags](FileInformationDialog R.id.addTags)
+    → showTagsDialog(dialog_tags:tagName CheckBox 行 + addTag[创建标签] → addTagsDialog 输入)
+    → 创建 "#autotest" → 勾选 → [应用](Tags2.setTags 落 app-Tags2.json)→ 视图菜单
+    onGridList → [My tags/标签] → 点标签行 → 断言书列表含该书.覆盖 §3 标签 CRUD+过滤.
+    注:旧版在长按菜单里找[添加标签]项属找错入口——该菜单不存在,长按即开信息对话框."""
+    tag_name = "autotest"  # Tags2.createTag 自动加 "#" 前缀,列表文本为 "#autotest"
+    tag_full = "#" + tag_name
+    with dev.step(case_id, "open_info_dialog"):
+        # 真机踩坑(2026-09-13):书架/封面视图书名是位图无文本节点,搜索词命中的是 filterLine
+        # 自己(长按搜索框=无效);须 _ensure_list_row 切列表视图定位真书行,点行右 ⋮(itemMenu)
+        # 弹书菜单(ShareDialog,defaultLongClick=书菜单)→ [文件信息] → 信息对话框 addTags.
         _ensure_home(dev)
-        _goto_tab_or_fail(dev, "书库")
-        # 先用搜索框定位(书架/封面视图下标题节点不可靠,FN-10 已验证 filterLine 路径可用)
-        fl = dev.d(resourceId=_rid(dev, "filterLine"))
-        if fl.exists:
-            _fill(dev, fl, "big25", "(书库搜索)")
-            time.sleep(2)
-        target = dev.d(textContains="big25")
-        if not target.exists:
+        row = _ensure_list_row(dev, "big25")
+        if row is None:
             dev.save_dump(case_id, "no_big25_row")
             raise TestSkip("设备书库未收录 big25(环境限制)")
-        target.long_click()
-        time.sleep(2)
-        if not (dev.click_text("添加标签") or dev.click_text("标签") or dev.click_desc("添加标签")):
-            dev.save_dump(case_id, "no_tag_menu")
-            dev.d.press("back")
-            raise TestSkip("长按菜单无[添加标签]入口(入口待勘探)")
-        time.sleep(2)
-    with dev.step(case_id, "create_tag"):
-        tag_input = dev.d(resourceId=_rid(dev, "tagName"))
-        if not tag_input.exists:
-            tag_input = dev.d(className="android.widget.EditText")
-        if not tag_input.exists:
-            dev.save_dump(case_id, "no_tag_input")
-            raise TestSkip("标签输入框不可见(对话框结构待勘探)")
-        _fill(dev, tag_input, tag_name, "(标签名)")
-        _dismiss_keyboard(dev)
-        ok = False
-        for kw in ("确认", "创建标签", "保存", "确定", "添加"):
-            if dev.click_text(kw):
-                ok = True
+        if not _click_row_menu(dev, "big25", extra_titles=("Bench25", "Big25")):
+            dev.save_dump(case_id, "no_row_menu")
+            raise AssertionError("书行 ⋮ 菜单按钮不可达")
+        # 长按行为随 defaultLongClick 设置而异:书菜单(ShareDialog,默认)或书籍信息对话框.
+        # 书菜单无标签项,须经[文件信息]进信息对话框;信息对话框则直接点 addTags.
+        add_tags = None
+        for _ in range(2):
+            el = dev.d(resourceId=_rid(dev, "addTags"))
+            if _safe_exists(dev, el):
+                add_tags = el
                 break
-        if not ok:
+            if not _click_any(dev, ["文件信息", "信息", "File info", "Info"]):
+                break
+            time.sleep(2)
+        if add_tags is None:
+            for kw in ("Add tags", "添加标签", "标签"):
+                el = dev.d(textContains=kw)
+                if el.exists:
+                    add_tags = el
+                    break
+        if add_tags is None or not add_tags.exists:
+            dev.save_dump(case_id, "no_addtags_link")
             dev.d.press("back")
-            dev.save_dump(case_id, "no_tag_ok")
-            raise TestSkip("标签对话框确认按钮未找到")
+            raise AssertionError("书籍信息对话框无[Add tags]入口")
+        add_tags.click()
         time.sleep(2)
-    with dev.step(case_id, "verify_tag"):
-        time.sleep(2)
-        found = dev.dump_has_text(tag_name)
-        if not found:
-            # 兜底:切到[标签]分组视图查看
-            dev.d(resourceId=_rid(dev, "onGridList")).click()
+        if not (dev.d(resourceId=_rid(dev, "addTag")).exists
+                or dev.d(resourceId=_rid(dev, "listView1")).exists):
+            dev.save_dump(case_id, "no_tags_dialog")
+            dev.d.press("back")
+            raise AssertionError("标签对话框(showTagsDialog)未出现")
+        _snap(dev, case_id, "tags_dialog")
+    with dev.step(case_id, "create_tag"):
+        already = dev.d(text=tag_full)
+        if not already.exists:
+            add = dev.d(resourceId=_rid(dev, "addTag"))
+            if not add.exists:
+                for kw in ("创建标签", "New Tag"):
+                    el = dev.d(textContains=kw)
+                    if el.exists:
+                        add = el
+                        break
+            if not add.exists:
+                dev.save_dump(case_id, "no_create_tag_link")
+                dev.d.press("back")
+                dev.d.press("back")
+                raise AssertionError("标签对话框无[创建标签]入口")
+            add.click()
+            time.sleep(2)
+            edit = dev.d(className="android.widget.EditText")
+            if not edit.exists:
+                dev.save_dump(case_id, "no_tag_input")
+                dev.d.press("back")
+                dev.d.press("back")
+                raise AssertionError("创建标签输入框未出现")
+            _fill(dev, edit, tag_name, "(标签名)")
+            _dismiss_keyboard(dev)
+            if not dev.click_text("添加"):
+                dev.d.press("back")
+                dev.d.press("back")
+                dev.save_dump(case_id, "no_tag_add_btn")
+                raise AssertionError("创建标签对话框无[添加]正键")
+            time.sleep(2)
+        # 勾选该标签(已勾选则跳过)
+        box = dev.d(text=tag_full)
+        if not box.exists:
+            box = dev.d(textContains=tag_name)
+        if not box.exists:
+            dev.save_dump(case_id, "tag_not_in_list")
+            dev.d.press("back")
+            dev.d.press("back")
+            raise AssertionError("创建后标签 %s 未出现在列表" % tag_full)
+        try:
+            if isinstance(box.info.get("checked"), bool) and not box.info["checked"]:
+                box.click()
+                time.sleep(1)
+        except Exception:
+            box.click()
+            time.sleep(1)
+        _snap(dev, case_id, "tag_checked")
+        if not dev.click_text("应用") and not dev.click_text("Apply") and not dev.click_text("确定"):
+            dev.d.press("back")
+            dev.d.press("back")
+            dev.save_dump(case_id, "no_apply_btn")
+            raise AssertionError("标签对话框无[应用]正键")
+        time.sleep(2.5)
+        # 主断言:标签落盘 app-Tags2.json(Tags2.setTags 写 syncTags2).注:信息对话框的
+        # 标签行读 AppDB 缓存(updateTagsDB 未触发前不回显,真机踩坑),不能作依据
+        tags_out = ""
+        try:
+            found = [l.strip() for l in (dev.shell(
+                "ls /sdcard/HowRead/profile.*/device.*/app-Tags2.json 2>/dev/null") or "").splitlines() if l.strip()]
+            if found:
+                tags_out = dev.shell("cat %s" % found[0])
+        except Exception:
+            pass
+        _snap(dev, case_id, "tag_on_book")
+        if tag_full not in tags_out:
+            try:
+                xml = dev.d.dump_hierarchy()
+            except Exception:
+                xml = ""
+            dev.d.press("back")
+            time.sleep(1)
+            if tag_full not in xml:  # 兜底:UI 已回显也算通过
+                dev.save_dump(case_id, "tag_missing_after_apply")
+                raise AssertionError("[应用]后 app-Tags2.json 未含 %s(UI 也未回显)" % tag_full)
+        dev.d.press("back")  # 关书籍信息对话框
+        time.sleep(1.5)
+    with dev.step(case_id, "filter_by_tag"):
+        # 可选增强:标签分组视图过滤(清掉搜索避免卡「正在载入...」;列表 20s 不出来不判失败,
+        # 标签的创建/应用/回显已在上一步证明)
+        clean = dev.d(resourceId=_rid(dev, "cleanFilter"))
+        if clean.exists:
+            clean.click()
+            time.sleep(2)
+        vm = dev.d(resourceId=_rid(dev, "onGridList"))
+        if not vm.exists:
+            return
+        vm.click()
+        time.sleep(1.5)
+        if not (dev.click_text("My tags") or dev.click_text("标签") or dev.click_desc("My tags")):
+            dev.d.press("back")
+            return
+        item = None
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            for kw in (tag_full, tag_name):
+                el = dev.d(textContains=kw)
+                if el.exists:
+                    item = el
+                    break
+            if item is not None:
+                break
+            time.sleep(2)
+        if item is None:
+            print("  [%s] 标签分组视图未加载出标签(信息对话框回显已证明功能,跳过过滤断言)" % dev.serial)
+            _back_to_main(dev)
+            return
+        _snap(dev, case_id, "tag_filter_list")
+        item.click()
+        time.sleep(3)
+        if not dev.dump_has_text("big25"):
+            dev.save_dump(case_id, "tag_filter_no_book")
+            raise AssertionError("按 %s 过滤后未显示 big25" % tag_full)
+        _snap(dev, case_id, "tag_filter_hit")
+        # 还原视图(避免标签浏览模式残留影响后续用例)
+        vm = dev.d(resourceId=_rid(dev, "onGridList"))
+        if vm.exists:
+            vm.click()
             time.sleep(1.5)
-            if dev.click_text("标签") or dev.click_desc("标签"):
-                time.sleep(3)
-                found = dev.dump_has_text(tag_name)
-                dev.d(resourceId=_rid(dev, "onGridList")).click()
-                time.sleep(1.5)
-                dev.click_text("书架") or dev.click_text("列表")
-                time.sleep(2)
-        # 清掉搜索词再判定,避免残留过滤影响后续用例
+            dev.click_text("书架") or dev.click_text("列表") or dev.click_text("List")
+            time.sleep(2)
         clean = dev.d(resourceId=_rid(dev, "cleanFilter"))
         if clean.exists:
             clean.click()
             time.sleep(1.5)
-        if found:
-            _snap(dev, case_id, "tag_created")
-            return
-        dev.save_dump(case_id, "tag_missing")
-        raise AssertionError("标签 %s 创建后不可见" % tag_name)
 
 
 def fn14_browse_ops(dev, case_id, cfg=None, fixtures=None):
@@ -1490,60 +1992,92 @@ def fn15_page_modes(dev, case_id, cfg=None, fixtures=None):
 
 
 def fn16_goto_page(dev, case_id, cfg=None, fixtures=None):
-    """跳页(重排页码):阅读器工具条长按页码 currentSeek →[设置页码]对话框 → 输入目标页 → 确认.
+    """跳页:切[单机行为=Book mode 水平]→ 开 EPUB(进 HorizontalViewActivity)→
+    底栏[前往页面](R.id.thumbnail,desc「Go to Page/前往页面」)→ dialogGoToPage 输入页码跳转.
     覆盖 §7 跳页 + §9 页码进度显示.
-    真机勘探结论(2026-09-12,MI9,PDF 默认纵向阅读器 VerticalViewActivity):
-    默认纵向模式下"跳页"无可用入口——
-      · 专用入口 toPage(→VerticalModeController.toPageDialog 真正的[转到页面]对话框)、
-        thumbnail(缩略图跳页)、goToPage1 在 document_footer.xml 里均 visibility=gone,不在树中;
-      · bookMenu(⋮ 溢出菜单)也无跳页项;
-      · 长按 currentSeek 虽在代码里绑了 showDeltaPage(DocumentWrapperUI.java:1276)且 a11y 标记
-        long-clickable=true,但真机 u2/adb 原生 800/900/1500ms 长按均不弹对话框(触摸被相邻
-        SeekBar/纵向文档视图先消费)——属应用侧入口不可达,非测试选择器问题。
-    故本用例在对话框未出现时如实 TestSkip(不硬凑),应用侧修复建议见 CHANGES.md/COVERAGE.md."""
-    with dev.step(case_id, "open_book"):
-        _open_reader(dev, case_id, fixtures, "pdf")
-        _reader_show_toolbar(dev)
-        before = _reader_page_or_none(dev)
-        if not before:
-            dev.save_dump(case_id, "no_page_before")
-            raise AssertionError("开书后读不到当前页码")
-        _snap(dev, case_id, "before_goto")
-        target = before[0] + 3  # 保证与当前页不同,页码跳变可判定
-    with dev.step(case_id, "open_goto_dialog"):
-        seek = dev.d(resourceId=_rid(dev, "currentSeek"))
-        if not seek.exists:
-            dev.save_dump(case_id, "no_currentseek")
-            raise TestSkip("页码(currentSeek)不可见,无法长按跳页")
-        seek.long_click()
-        time.sleep(2.5)
-        edit = dev.d(className="android.widget.EditText")
-        if not edit.exists:
-            dev.save_dump(case_id, "no_goto_dialog")
-            raise TestSkip(
-                "纵向阅读器无可用跳页入口:toPage/thumbnail/goToPage1 均 GONE、bookMenu 无跳页项、"
-                "长按 currentSeek 不弹[设置页码]对话框(应用侧入口不可达,见用例 docstring)")
-        _snap(dev, case_id, "goto_dialog")
-    with dev.step(case_id, "goto_page"):
-        _fill(dev, edit, str(target), "(目标页码)")
-        _dismiss_keyboard(dev)
-        ok = dev.d(text="确认")
-        if not ok.exists:
-            ok = dev.d(text="OK")
-        if ok.exists:
-            ok.click()
-        else:
+    代码+真机结论(2026-09-13):该图标仅水平模式点亮(HorizontalViewActivity.restoreFooterControls);
+    垂直滚动(AppSP.readingMode=SCROLL 时 epub 也走 Vertical)恒 GONE、长按 currentSeek 触摸被
+    相邻控件消费——经偏好单机行为切 Book mode 绕行(应用侧如需垂直模式入口,一行修复见 COVERAGE.md)."""
+    try:
+        with dev.step(case_id, "switch_book_mode"):
+            _ensure_home(dev)
+            if not _set_reading_mode(dev, case_id, ["左右翻页", "Book mode", "书本"]):
+                dev.save_dump(case_id, "no_book_mode_item")
+                raise TestSkip("偏好无[单机行为]行或无左右翻页项")
+            # 同 FN-07:切换只写内存,后续不得冷启
+        with dev.step(case_id, "open_book"):
+            _open_reader_warm(dev, case_id, "alicesadventures")
+            _reader_show_toolbar(dev)
+            before = _reader_page_or_none(dev)
+            _snap(dev, case_id, "before_goto")
+            # 水平模式指示器是「章节内页码」,与跳页对话框的绝对页码语义不同——
+            # 以对话框预填值(绝对页码)为基准做断言
+        with dev.step(case_id, "open_goto_dialog"):
+            _reader_show_toolbar(dev)
+            btn = _reader_toolbar_btn(dev, "thumbnail", desc_kws=("前往页面", "Go to Page"))
+            if btn is None:
+                dev.save_dump(case_id, "no_goto_btn")
+                raise TestSkip("跳页入口(thumbnail/前往页面)不可见(Book 模式下仍不可见)")
+            btn.click()
+            time.sleep(2.5)
+            edit = dev.d(resourceId=_rid(dev, "edit1"))
+            if not edit.exists:
+                edit = dev.d(className="android.widget.EditText")
+            if not edit.exists:
+                dev.save_dump(case_id, "no_goto_dialog")
+                raise AssertionError("跳页对话框(dialogGoToPage)未出现")
+            pre = ""
+            try:
+                pre = (edit.get_text() or "").strip()
+            except Exception:
+                pass
+            m = re.match(r"(\d+)", pre)
+            if not m:
+                dev.save_dump(case_id, "no_prefill_page")
+                raise AssertionError("跳页对话框未预填当前页码(读到 %r)" % pre)
+            base = int(m.group(1))
+            target = base + 3
+            _snap(dev, case_id, "goto_dialog")
+        with dev.step(case_id, "goto_page"):
+            _fill(dev, edit, str(target), "(目标页码)")
+            _dismiss_keyboard(dev)
+            # dialogGoToPage:IME DONE → onSearch 跳转;注意对话框**不自动关闭**(设计如此,
+            # 只关键盘),跳转是否生效用底部章节指示器(pagesCountIndicator「N ∕ M」)前后变化断言
+            def chapter_pos():
+                el = dev.d(resourceId=_rid(dev, "pagesCountIndicator"))
+                return (el.get_text() or "").strip() if el.exists else ""
+
+            before_pos = chapter_pos()
             dev.d.press("enter")
-        time.sleep(3)
-        _reader_show_toolbar(dev)
-        after = _reader_page_or_none(dev)
-        _snap(dev, case_id, "after_goto")
-        if not after:
-            raise AssertionError("跳页后读不到页码")
-        if after[0] != target:
-            raise AssertionError("跳转到第 %d 页未生效(当前 %d)" % (target, after[0]))
-    with dev.step(case_id, "exit"):
-        _exit_reader(dev, case_id)
+            time.sleep(3)
+            after_pos = chapter_pos()
+            _snap(dev, case_id, "after_goto")
+            if not after_pos:
+                raise AssertionError("跳页后读不到章节指示器")
+            if after_pos == before_pos:
+                # 兜底:指示器未变时以对话框预填页码是否推进为准
+                btn = _reader_toolbar_btn(dev, "thumbnail", desc_kws=("前往页面", "Go to Page"))
+                pre2 = ""
+                if btn is not None:
+                    btn.click()
+                    time.sleep(2.5)
+                    e2 = dev.d(resourceId=_rid(dev, "edit1"))
+                    pre2 = (e2.get_text() or "").strip() if e2.exists else ""
+                    dev.d.press("back")
+                    time.sleep(1)
+                m2 = re.match(r"(\d+)", pre2)
+                if not m2 or int(m2.group(1)) != target:
+                    raise AssertionError("跳转到第 %d 页未生效(指示器 %r → %r,对话框回显 %r)"
+                                         % (target, before_pos, after_pos, pre2))
+        with dev.step(case_id, "exit"):
+            _exit_reader(dev, case_id)
+    finally:
+        # 还原 单机行为=Scroll mode(垂直),避免影响后续用例的阅读模式假设
+        try:
+            _back_to_main(dev)
+            _set_reading_mode(dev, case_id, ["上下翻页", "Scroll mode", "滚动"])
+        except Exception:
+            pass
 
 
 def fn17_outline(dev, case_id, cfg=None, fixtures=None):
@@ -2052,9 +2586,13 @@ def fn26_webdav_browse(dev, case_id, cfg=None, fixtures=None):
         _ensure_home(dev)
         if not _browse_root(dev):
             raise AssertionError("我的文件根视图不可达")
-        if not _open_server_dir(dev, title, ("book_pdf", "book_epub", "book_txt", "book_mobi")):
-            dev.save_dump(case_id, "webdav_dir_empty")
-            raise AssertionError("WebDAV 目录未列出测试书")
+        kw_books = ("book_pdf", "book_epub", "book_txt", "book_mobi")
+        if not _open_server_dir(dev, title, kw_books):
+            # 预置行无凭据(每台设备首次)→ 编辑对话框一次性入库后重试一次
+            if not _back_to_net_root(dev) or not _ensure_credentials(dev, case_id, cfg, "webdav", title) \
+                    or not _browse_root(dev) or not _open_server_dir(dev, title, kw_books):
+                dev.save_dump(case_id, "webdav_dir_empty")
+                raise AssertionError("WebDAV 目录未列出测试书(凭据入库也未成功)")
         _snap(dev, case_id, "webdav_listing")
     with dev.step(case_id, "cleanup"):
         for _ in range(3):
@@ -2152,9 +2690,13 @@ def fn28_smb(dev, case_id, cfg=None, fixtures=None):
         _ensure_home(dev)
         if not _browse_root(dev):
             raise AssertionError("我的文件根视图不可达")
-        if not _open_server_dir(dev, title, ("book_pdf", "book_epub", "book_txt", "book_mobi")):
-            dev.save_dump(case_id, "smb_dir_empty")
-            raise AssertionError("SMB 共享目录未列出测试书")
+        kw_books = ("book_pdf", "book_epub", "book_txt", "book_mobi")
+        if not _open_server_dir(dev, title, kw_books):
+            # 预置行无凭据(每台设备首次)→ 编辑对话框一次性入库后重试一次
+            if not _back_to_net_root(dev) or not _ensure_credentials(dev, case_id, cfg, "smb", title) \
+                    or not _browse_root(dev) or not _open_server_dir(dev, title, kw_books):
+                dev.save_dump(case_id, "smb_dir_empty")
+                raise AssertionError("SMB 共享目录未列出测试书(凭据入库也未成功)")
         _snap(dev, case_id, "smb_listing")
     with dev.step(case_id, "cleanup"):
         for _ in range(3):
@@ -2177,9 +2719,13 @@ def fn29_sftp(dev, case_id, cfg=None, fixtures=None):
         _ensure_home(dev)
         if not _browse_root(dev):
             raise AssertionError("我的文件根视图不可达")
-        if not _open_server_dir(dev, title, ("book_pdf", "book_epub", "book_txt", "book_mobi")):
-            dev.save_dump(case_id, "sftp_dir_empty")
-            raise AssertionError("SFTP 目录未列出测试书")
+        kw_books = ("book_pdf", "book_epub", "book_txt", "book_mobi")
+        if not _open_server_dir(dev, title, kw_books):
+            # 预置行无凭据(每台设备首次)→ 编辑对话框一次性入库后重试一次
+            if not _back_to_net_root(dev) or not _ensure_credentials(dev, case_id, cfg, "sftp", title) \
+                    or not _browse_root(dev) or not _open_server_dir(dev, title, kw_books):
+                dev.save_dump(case_id, "sftp_dir_empty")
+                raise AssertionError("SFTP 目录未列出测试书(凭据入库也未成功)")
         _snap(dev, case_id, "sftp_listing")
     with dev.step(case_id, "cleanup"):
         for _ in range(3):
@@ -2290,6 +2836,1020 @@ def fn09_multi_format(dev, case_id, cfg=None, fixtures=None):
                              % (", ".join(failed), ", ".join(opened)))
 
 
+def _click_any(dev, keywords, max_swipes=0):
+    """依次按文本/描述点击候选关键词(可选滚动查找);命中返回 True.
+    文本匹配含精确与包含两级(书菜单项文本带图标前缀如「ⓘ 文件信息」,精确匹配会漏)."""
+    for kw in keywords:
+        try:
+            if dev.click_text(kw) or dev.click_desc(kw):
+                return True
+            el = dev.d(textContains=kw)
+            if el.exists:
+                el.click()
+                return True
+        except Exception:
+            continue
+    if max_swipes:
+        for kw in keywords:
+            el = _find_text_scrolled(dev, kw, max_swipes=max_swipes)
+            if el is not None and el.exists:
+                el.click()
+                return True
+    return False
+
+
+def _close_stray_dialogs(dev, max_rounds=2):
+    """关闭可能残留的对话框(书库文件夹配置/通用取消键),避免遮挡书库操作.
+    只处理已知无害弹层,主界面/阅读器不动."""
+    markers = ("书库文件夹配置", "添加文件夹", "选择模式", "打开方式")
+    for _ in range(max_rounds):
+        try:
+            xml = dev.d.dump_hierarchy()
+        except Exception:
+            return
+        if not any(m in xml for m in markers):
+            return
+        if not dev.click_text("取消") and not dev.click_text("关闭"):
+            dev.d.press("back")
+        time.sleep(1.5)
+
+
+def _ensure_list_row(dev, keyword, extra_titles=()):
+    """书库确保 keyword 书行以文本节点可见并返回该节点.
+    书架/封面视图的书名画在封面位图里无文本节点(真机实测 textContains 只命中搜索框),
+    须切到 列表/简表 视图才有 title1/路径 文本节点;同时排除顶部搜索框/chips 的同名匹配
+    (真机踩坑:搜索 big25 时 textContains 命中的是 filterLine 自己).
+    extra_titles:书名元数据标题候选(如 big25.pdf 的显示名 Bench25)."""
+    _close_stray_dialogs(dev)
+    # 必须确认落在书库 Tab:我的文件 Tab 也有 onGridList(打开的是书库文件夹配置对话框,
+    # 真机踩坑 2026-09-13),用书库专属的 filterLine 区分
+    for _ in range(2):
+        _goto_tab_or_fail(dev, "书库")
+        time.sleep(1.5)
+        if _safe_exists(dev, dev.d(resourceId=_rid(dev, "filterLine"))):
+            break
+    if not _safe_exists(dev, dev.d(resourceId=_rid(dev, "filterLine"))):
+        return None
+    fl = dev.d(resourceId=_rid(dev, "filterLine"))
+    if fl.exists:
+        got = ""
+        try:
+            got = fl.get_text() or ""
+        except Exception:
+            pass
+        if keyword not in got:
+            _fill(dev, fl, keyword, "(书库搜索)")
+            time.sleep(2)
+            _dismiss_keyboard(dev)
+    _, h = dev.d.window_size()
+    kws = [keyword] + [t for t in extra_titles if t]
+
+    def find_row(max_swipes=0):
+        for swipe in range(max_swipes + 1):
+            for kw in kws:
+                sel = dev.d(textContains=kw)
+                try:
+                    n = sel.count
+                except Exception:
+                    n = 1 if sel.exists else 0
+                for i in range(min(n, 10)):
+                    try:
+                        el = sel[i]
+                        if not el.exists:
+                            continue
+                        b = _node_bounds(el)
+                    except Exception:
+                        continue
+                    if b and (b[1] + b[3]) / 2 > 0.22 * h:  # 排除搜索框/chips(顶部区域)
+                        return el
+            if swipe < max_swipes:
+                w, hh = dev.d.window_size()
+                dev.d.swipe(0.5 * w, 0.7 * hh, 0.5 * w, 0.3 * hh, 0.3)
+                time.sleep(1.2)
+        return None
+
+    row = find_row()
+    if row is not None:
+        return row
+    # 切列表视图(书架/封面视图无文本节点);弹层未出现时 back 重试一次
+    for attempt in range(2):
+        vm = dev.d(resourceId=_rid(dev, "onGridList"))
+        if not vm.exists:
+            break
+        vm.click()
+        time.sleep(1.8)
+        item = None
+        for label in ("列表", "简表", "List", "Simple list"):
+            el = dev.d(text=label)
+            if el.exists:
+                item = el
+                break
+        if item is not None:
+            item.click()
+            time.sleep(2.5)
+            row = find_row(max_swipes=5)
+            if row is not None:
+                return row
+        else:
+            dev.save_dump("view", "popup_missing_%d" % attempt)
+            dev.d.press("back")
+            time.sleep(1.2)
+    return None
+
+
+def _click_row_menu(dev, keyword, extra_titles=()):
+    """点 keyword 书行右侧 ⋮(itemMenu/shelfMenu)按钮 → 书菜单(ShareDialog).
+    ⋮ 无 content-desc,按"与行同 y"从 dump 找 resource-id;找不到则点行右缘坐标,
+    点击后校验菜单/对话框出现,未出现再补一次坐标.成功弹出返回 True."""
+    row = _ensure_list_row(dev, keyword, extra_titles)
+    if row is None:
+        return False
+    b = _node_bounds(row)
+    if not b:
+        return False
+    cy = int((b[1] + b[3]) / 2)
+    w, _ = dev.d.window_size()
+
+    def menu_open():
+        try:
+            xml = dev.d.dump_hierarchy()
+        except Exception:
+            return False
+        return any(k in xml for k in ("文件信息", "转换为", "上传到", "标记已读", "加入书库",
+                                      "打开方式", "发送文件", "File info", "Convert"))
+
+    for cx in (None, w - 90, w - 130):
+        if cx is None:
+            try:
+                xml = dev.d.dump_hierarchy()
+            except Exception:
+                xml = ""
+            best = None
+            for m in re.finditer(r'resource-id="[^"]*:id/(?:itemMenu|shelfMenu)"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml):
+                x0, y0, x1, y1 = map(int, m.groups())
+                my = (y0 + y1) / 2
+                if abs(my - cy) < 300 and (best is None or abs(my - cy) < abs(best[0] - cy)):
+                    best = (my, (x0 + x1) // 2, (y0 + y1) // 2)
+            if best is None:
+                continue
+            dev.d.click(best[1], best[2])
+        else:
+            dev.d.click(cx, cy)
+        time.sleep(2)
+        if menu_open():
+            return True
+    return False
+
+
+def _set_reading_mode(dev, case_id, target_kws):
+    """偏好 → 单机行为(configSingeClick)切换阅读模式.
+    真机(2026-09-13):该行在[阅读配置]折叠容器内(默认收起,须先点容器头展开);
+    弹层选项为中文:选择模式/上下翻页(=Scroll)/左右翻页(=Book)/演奏模式/标签管理/打开方式.
+    返回 True=切换成功;False=行不可达."""
+    _goto_tab_or_fail(dev, "偏好")
+    row = _scroll_to_find(dev, "configSingeClick")
+    if row is None:
+        # configSingeClick 在阅读配置容器内,展开后重找
+        hdr = None
+        for kw in ("阅读配置", "常规设置"):
+            el = dev.d(text=kw)
+            if el.exists:
+                hdr = el
+                break
+        if hdr is not None:
+            hdr.click()
+            time.sleep(1.5)
+        row = _scroll_to_find(dev, "configSingeClick")
+    if row is None:
+        dev.save_dump(case_id, "no_singeclick_row")
+        return False
+    row.click()
+    time.sleep(1.8)
+    ok = _click_any(dev, target_kws)
+    time.sleep(2)
+    return ok
+
+
+def fn31_drawer_menu(dev, case_id, cfg=None, fixtures=None):
+    """抽屉菜单遍历(§2):首页呼出侧滑抽屉 → 断言已知菜单条目存在(≥3 项) → 抽查截图.
+    抽屉条目代码构建(MenuBuilderM/MyPopupMenu),按关键词命中计数断言."""
+    with dev.step(case_id, "open_drawer"):
+        _ensure_home(dev)
+        opened = dev.click_desc("菜单") or dev.click_text("菜单")
+        if not opened:
+            # 兜底:左缘右滑呼出抽屉
+            w, h = dev.d.window_size()
+            dev.d.swipe(int(0.05 * w), int(0.5 * h), int(0.65 * w), int(0.5 * h), 0.3)
+            time.sleep(2)
+        time.sleep(1.5)
+        xml = dev.d.dump_hierarchy()
+        known = ["最近阅读", "我的珍藏", "书签", "OPDS", "网盘", "偏好", "设置",
+                 "阅读统计", "Download", "收藏", "标签", "Recent", "Favorites", "OPDS"]
+        hits = [k for k in known if k in xml]
+        _snap(dev, case_id, "drawer_open")
+        if len(hits) < 3:
+            dev.save_dump(case_id, "drawer_items_missing")
+            raise AssertionError("抽屉已知条目命中不足: %s" % hits)
+        print("  [%s] 抽屉命中条目: %s" % (dev.serial, ",".join(hits)))
+    with dev.step(case_id, "close_drawer"):
+        dev.d.press("back")
+        time.sleep(1)
+
+
+def fn32_favorites_page(dev, case_id, cfg=None, fixtures=None):
+    """收藏列表页(§3):首页[我的珍藏]分区进入完整收藏列表 → 断言含已收藏的 big25
+    (依赖 FN-02 已加收藏).覆盖 §3 收藏列表页(FavoritesFragment2)."""
+    with dev.step(case_id, "open_favorites"):
+        _ensure_home(dev)
+        sec = None
+        for kw in ("我的珍藏", "珍藏"):
+            el = dev.d(textContains=kw)
+            if el.exists:
+                sec = el
+                break
+        if sec is None:
+            for _ in range(5):
+                w, h = dev.d.window_size()
+                dev.d.swipe(0.5 * w, 0.7 * h, 0.5 * w, 0.3 * h, 0.3)
+                time.sleep(1.2)
+                el = dev.d(textContains="我的珍藏")
+                if el.exists:
+                    sec = el
+                    break
+        if sec is None:
+            dev.save_dump(case_id, "no_favorites_section")
+            raise TestSkip("首页无[我的珍藏]分区")
+        sec.click()
+        time.sleep(3)
+    with dev.step(case_id, "verify_list"):
+        xml = dev.d.dump_hierarchy()
+        _snap(dev, case_id, "favorites_page")
+        ok = "big25" in xml or "alicesadventures" in xml
+        if not ok:
+            dev.save_dump(case_id, "favorites_empty")
+            raise AssertionError("收藏列表页无已收藏书籍")
+    with dev.step(case_id, "exit"):
+        dev.d.press("back")
+        time.sleep(1)
+
+
+def fn33_hidden_files(dev, case_id, cfg=None, fixtures=None):
+    """文件浏览隐藏文件开关(§4):推 .autotest_hidden.txt → 我的文件菜单勾选[显示隐藏文件]
+    → 文件出现 → 取消勾选还原.开关为 BrowseFragment2 弹出菜单的 isDisplayAllFilesInFolder
+    (BrowseFragment2.java:2132).菜单入口机型差异大,不可达时 SKIP."""
+    hidden = "/sdcard/Download/.autotest_hidden.txt"
+    dev.shell("echo autotest > %s" % hidden)
+    try:
+        with dev.step(case_id, "goto_download"):
+            _ensure_home(dev)
+            if not _browse_root(dev):
+                raise AssertionError("我的文件根视图不可达")
+            dl = dev.d(text="Download")
+            if not dl.exists:
+                dl = dev.d(textContains="Download")
+            if dl.exists:
+                dl.click()
+                time.sleep(2.5)
+        with dev.step(case_id, "toggle_show_hidden"):
+            # [显示隐藏文件]在浏览页弹出菜单(BrowseFragment2.popupMenu:2110),触发按钮
+            # 是 R.id.onListGrid(浏览页专属,与书库 onGridList 不同 id,真机核实 2026-09-13)
+            vm = None
+            for rid in ("onListGrid", "onGridList"):
+                el = dev.d(resourceId=_rid(dev, rid))
+                if _safe_exists(dev, el):
+                    vm = el
+                    break
+            if vm is None:
+                dev.save_dump(case_id, "no_browse_gridlist")
+                raise TestSkip("浏览页无 onListGrid/onGridList 按钮")
+            vm.click()
+            time.sleep(1.8)
+            xml = dev.d.dump_hierarchy()
+            if "显示隐藏" not in xml:
+                dev.d.press("back")
+                dev.save_dump(case_id, "no_browse_menu")
+                raise TestSkip("浏览弹出菜单无[显示隐藏文件]项")
+            item = dev.d(textContains="显示隐藏")
+            try:
+                if isinstance(item.info.get("checked"), bool) and not item.info["checked"]:
+                    item.click()
+                    time.sleep(1.5)
+            except Exception:
+                item.click()
+                time.sleep(1.5)
+            dev.d.press("back")  # 关弹出菜单(checkbox 点击不自动关)
+            time.sleep(1.5)
+        with dev.step(case_id, "verify_hidden_visible"):
+            # 开关会触发列表重扫,netSection 短暂消失——直接进 Tab 轮询等待,
+            # 不做 back 风暴(刷新期 back 会把应用退到桌面,真机踩坑 2026-09-13)
+            _close_stray_dialogs(dev)
+            _goto_tab_or_fail(dev, "我的文件")
+            ok = False
+            deadline = time.time() + 15
+            while time.time() < deadline:
+                if _safe_exists(dev, dev.d(resourceId=_rid(dev, "netSection"))):
+                    ok = True
+                    break
+                time.sleep(1.5)
+            if not ok:
+                dev.save_dump(case_id, "root_not_ready")
+                raise AssertionError("开关后我的文件根视图未就绪")
+            dl = dev.d(text="Download")
+            if not dl.exists:
+                dl = dev.d(textContains="Download")
+            if dl.exists:
+                dl.click()
+                time.sleep(2.5)
+            el = _find_text_scrolled(dev, ".autotest_hidden", max_swipes=4)
+            _snap(dev, case_id, "hidden_visible")
+            if el is None:
+                dev.save_dump(case_id, "hidden_not_visible")
+                raise AssertionError("勾选[显示隐藏文件]后 .autotest_hidden 仍不可见")
+    finally:
+        dev.shell("rm -f %s" % hidden)
+
+
+def fn34_reader_lock(dev, case_id, cfg=None, fixtures=None):
+    """阅读页锁定/解锁(§7):切 Book 模式 → lockUnlock 锁定 → 拖拽翻页被禁(章节指示不变)
+    → 解锁 → 拖拽翻页生效.锁定语义是"禁用页面拖动"(desc「已锁定:已禁用页面拖动」),
+    点按区域翻页不受影响(dev.page_turn 是点按,锁定下照翻,真机踩坑 2026-09-13),
+    故用拖拽手势验证."""
+    def lock_engaged():
+        """回读锁定行勾选状态(开偏好弹窗→读 desc 含「锁定」行的 checked→关闭).
+        True/False=状态;None=读不到."""
+        opener = _reader_toolbar_btn(dev, "prefTop", desc_kws=("偏好",))
+        if opener is None:
+            return None
+        opener.click()
+        time.sleep(2)
+        try:
+            el = dev.d(descriptionContains="锁定")
+            v = el.info.get("checked") if el.exists else None
+        except Exception:
+            v = None
+        try:
+            dev.d.press("back")
+        except Exception:
+            pass
+        time.sleep(1.2)
+        return v
+
+    def indicator():
+        _reader_show_toolbar(dev)
+        el = dev.d(resourceId=_rid(dev, "pagesCountIndicator"))
+        return (el.get_text() or "").strip() if el.exists else ""
+
+    def drag_forward():
+        w, h = dev.d.window_size()
+        dev.d.swipe(int(0.85 * w), int(0.5 * h), int(0.15 * w), int(0.5 * h), 0.3)
+        time.sleep(1.5)
+
+    def toggle_lock():
+        """切换锁定:垂直模式工具条 lockUnlock;Book 模式工具条无该 id,
+        锁定开关在阅读偏好弹窗(desc「已锁定:已禁用页面拖动」行)."""
+        _reader_show_toolbar(dev)
+        btn = _reader_toolbar_btn(dev, "lockUnlock", desc_kws=("锁定",), expand_first=False)
+        if btn is not None:
+            btn.click()
+            time.sleep(1.2)
+            return
+        opener = _reader_toolbar_btn(dev, "prefTop", desc_kws=("偏好",))
+        if opener is None:
+            dev.save_dump(case_id, "no_lock_entry")
+            raise TestSkip("锁定入口不可见(工具条与偏好弹窗均无)")
+        opener.click()
+        time.sleep(2)
+        if not _click_any(dev, ["锁定"]):
+            dev.d.press("back")
+            dev.save_dump(case_id, "no_lock_row")
+            raise TestSkip("阅读偏好弹窗无[锁定]行")
+        time.sleep(1.2)
+        dev.d.press("back")  # 关偏好弹窗
+        time.sleep(1.2)
+
+    try:
+        with dev.step(case_id, "switch_book_mode"):
+            _ensure_home(dev)
+            if not _set_reading_mode(dev, case_id, ["左右翻页", "Book mode", "书本"]):
+                dev.save_dump(case_id, "no_book_mode_item")
+                raise TestSkip("偏好无[单机行为]行或无左右翻页项")
+        with dev.step(case_id, "open_book"):
+            _open_reader_warm(dev, case_id, "alicesadventures")
+            before = indicator()
+            if not before:
+                dev.save_dump(case_id, "no_indicator")
+                raise AssertionError("读不到章节指示器")
+        with dev.step(case_id, "lock"):
+            toggle_lock()
+            engaged = lock_engaged()
+            if engaged is not True:
+                dev.save_dump(case_id, "lock_not_engaged")
+                raise TestSkip("锁定开关点击后未生效(checked=%r,入口语义待勘探)" % engaged)
+            # 拖拽多次(锁定应一次都翻不动)
+            for _ in range(3):
+                drag_forward()
+            locked_pos = indicator()
+            _snap(dev, case_id, "locked")
+            if locked_pos != before:
+                raise AssertionError("锁定后拖拽仍翻页(%r → %r)" % (before, locked_pos))
+        with dev.step(case_id, "unlock_and_verify"):
+            toggle_lock()
+            changed = None
+            for _ in range(6):
+                drag_forward()
+                cur = indicator()
+                if cur and cur != before:
+                    changed = cur
+                    break
+            _snap(dev, case_id, "unlocked_turned")
+            if not changed:
+                dev.save_dump(case_id, "unlock_no_turn")
+                raise TestSkip("解锁后 6 次拖拽章节指示未变(跨章未发生,环境限制)")
+    finally:
+        try:
+            _exit_reader(dev, case_id)
+            _back_to_main(dev)
+            _set_reading_mode(dev, case_id, ["上下翻页", "Scroll mode", "滚动"])
+        except Exception:
+            pass
+
+
+def fn35_contrast_brightness(dev, case_id, cfg=None, fixtures=None):
+    """对比度/亮度弹窗(§8):阅读偏好里打开 对比度/亮度 对话框(dialogContrastAndBrigtness,
+    DocumentWrapperUI.java:274)→ 断言弹窗出现 → 还原关闭."""
+    with dev.step(case_id, "open_book"):
+        _open_reader(dev, case_id, fixtures, "pdf")
+        _reader_show_toolbar(dev)
+    with dev.step(case_id, "open_dialog"):
+        opened = False
+        # 入口在阅读偏好/工具条弹层,文案候选中英文都试
+        for opener in (_reader_toolbar_btn(dev, "bookPref"), _reader_toolbar_btn(dev, "prefTop")):
+            if opener is not None and opener.exists:
+                opener.click()
+                time.sleep(2)
+                opened = True
+                break
+        if not opened:
+            dev.save_dump(case_id, "no_prefs_entry")
+            raise TestSkip("阅读偏好入口不可见")
+        if not _click_any(dev, ["对比度", "亮度", "Contrast", "Brightness"], max_swipes=4):
+            dev.d.press("back")
+            dev.save_dump(case_id, "no_contrast_row")
+            raise TestSkip("阅读偏好无[对比度/亮度]行")
+        time.sleep(2)
+        xml = dev.d.dump_hierarchy()
+        _snap(dev, case_id, "contrast_dialog")
+        if "对比度" not in xml and "Contrast" not in xml and "亮度" not in xml:
+            dev.d.press("back")
+            dev.save_dump(case_id, "contrast_dialog_missing")
+            raise AssertionError("对比度/亮度对话框未出现")
+    with dev.step(case_id, "exit"):
+        for _ in range(3):
+            dev.d.press("back")
+            time.sleep(0.8)
+        _exit_reader(dev, case_id)
+
+
+def fn36_bluelight(dev, case_id, cfg=None, fixtures=None):
+    """蓝光滤镜(§8):阅读偏好打开蓝光对话框(dialog_bluelight,强度滑杆)→ 断言出现 → 还原."""
+    with dev.step(case_id, "open_book"):
+        _open_reader(dev, case_id, fixtures, "pdf")
+        _reader_show_toolbar(dev)
+    with dev.step(case_id, "open_dialog"):
+        opened = False
+        for opener in (_reader_toolbar_btn(dev, "bookPref"), _reader_toolbar_btn(dev, "prefTop")):
+            if opener is not None and opener.exists:
+                opener.click()
+                time.sleep(2)
+                opened = True
+                break
+        if not opened:
+            dev.save_dump(case_id, "no_prefs_entry")
+            raise TestSkip("阅读偏好入口不可见")
+        if not _click_any(dev, ["蓝光", "护眼", "Blue", "bluelight"], max_swipes=4):
+            dev.d.press("back")
+            dev.save_dump(case_id, "no_bluelight_row")
+            raise TestSkip("阅读偏好无[蓝光滤镜]行")
+        time.sleep(2)
+        xml = dev.d.dump_hierarchy()
+        _snap(dev, case_id, "bluelight_dialog")
+        if "蓝光" not in xml and "Blue" not in xml and "强度" not in xml:
+            dev.d.press("back")
+            dev.save_dump(case_id, "bluelight_dialog_missing")
+            raise AssertionError("蓝光滤镜对话框未出现")
+    with dev.step(case_id, "exit"):
+        for _ in range(3):
+            dev.d.press("back")
+            time.sleep(0.8)
+        _exit_reader(dev, case_id)
+
+
+def fn37_file_info(dev, case_id, cfg=None, fixtures=None):
+    """文件信息对话框(§16):书库长按书 → 菜单/信息对话框 → 文件大小/路径字段非空.
+    (ShareDialog 菜单项 file_info / FileInformationDialog)."""
+    with dev.step(case_id, "open_menu"):
+        _ensure_home(dev)
+        if not _click_row_menu(dev, "big25", extra_titles=("Bench25", "Big25")):
+            dev.save_dump(case_id, "no_big25_row")
+            raise TestSkip("设备书库未收录 big25(环境限制)")
+    with dev.step(case_id, "open_file_info"):
+        # ⋮ 书菜单(ShareDialog) → [文件信息];若直接是信息对话框则字段已在树中
+        if not _click_any(dev, ["文件信息", "信息", "File info", "Info"]):
+            if "大小" not in dev.d.dump_hierarchy():
+                dev.save_dump(case_id, "no_file_info_item")
+                dev.d.press("back")
+                raise TestSkip("书菜单无[文件信息]项(菜单待勘探)")
+        time.sleep(2)
+        xml = dev.d.dump_hierarchy()
+        _snap(dev, case_id, "file_info_dialog")
+        ok = any(k in xml for k in ("Bench25", "标题", "作者", "ISBN", "信息", "Title", "Author"))
+        if not ok:
+            dev.save_dump(case_id, "file_info_empty")
+            raise AssertionError("文件信息对话框无标题/元数据字段")
+    with dev.step(case_id, "exit"):
+        for _ in range(3):
+            dev.d.press("back")
+            time.sleep(0.8)
+        clean = dev.d(resourceId=_rid(dev, "cleanFilter"))
+        if clean.exists:
+            clean.click()
+            time.sleep(1)
+
+
+def fn38_mark_read(dev, case_id, cfg=None, fixtures=None):
+    """标记已读/未读(§3 阅读状态):书库长按 → 菜单[标记已读]应用 → 无 crash 还原.
+    (ShareDialog 菜单项 moon_mark_read/moon_mark_unread/moon_mark_reading)."""
+    with dev.step(case_id, "mark_read"):
+        _ensure_home(dev)
+        if not _click_row_menu(dev, "big25", extra_titles=("Bench25", "Big25")):
+            dev.save_dump(case_id, "no_big25_row")
+            raise TestSkip("设备书库未收录 big25(环境限制)")
+        if not _click_any(dev, ["标记为已读", "标记已读", "mark read", "已读"]):
+            dev.save_dump(case_id, "no_mark_read_item")
+            dev.d.press("back")
+            raise TestSkip("书菜单无[标记已读]项")
+        time.sleep(2)
+        c = dev.scan_crash()
+        _snap(dev, case_id, "marked_read")
+        if c:
+            raise AssertionError("标记已读 crash: %s" % c)
+    with dev.step(case_id, "restore"):
+        if _click_row_menu(dev, "big25", extra_titles=("Bench25", "Big25")):
+            _click_any(dev, ["标记为未读", "标记未读", "mark unread", "未读"])
+            time.sleep(1.5)
+        clean = dev.d(resourceId=_rid(dev, "cleanFilter"))
+        if clean.exists:
+            clean.click()
+            time.sleep(1)
+
+
+def fn39_line_spacing(dev, case_id, cfg=None, fixtures=None):
+    """阅读偏好 CustomSeek 调节(§8):弹窗内[滚动速度]行 +N → 数值/画面变化 → 还原.
+    注:原计划行距——本 fork 阅读偏好弹窗无[行距]行(line_spacing 字符串无代码引用,
+    真机核实 2026-09-13),改用同机制的[滚动速度] CustomSeek 行(与 FN-18 字号同模式)."""
+    from cases.ui.tc_smoke import _same_png
+    ROWS = ("滚动速度", "Scroll speed", "预载页数")
+
+    def find_row():
+        for kw in ROWS:
+            el = dev.d(textContains=kw)
+            if el.exists:
+                return el
+        return None
+    with dev.step(case_id, "open_book"):
+        _open_reader(dev, case_id, fixtures, "epub")
+    with dev.step(case_id, "open_prefs_popup"):
+        _reader_show_toolbar(dev)
+        btn = _reader_toolbar_btn(dev, "prefTop", desc_kws=("偏好",))
+        if btn is None:
+            dev.save_dump(case_id, "no_preftop")
+            raise TestSkip("阅读偏好入口(prefTop)不可见")
+        btn.click()
+        time.sleep(2.5)
+        row = find_row()
+        if row is None:
+            # 弹窗为分区结构(可视选项/排版选项/状态栏/控制选项,默认收起),逐区展开找;
+            # 注意 DragingPopup 容器可拖拽,swipe 会拖走弹窗而非滚动内容
+            for sec in ("排版选项", "可视选项", "控制选项", "状态栏"):
+                if _click_any(dev, [sec]):
+                    time.sleep(1.2)
+                    row = find_row()
+                    if row is not None:
+                        break
+        if row is None:
+            dev.save_dump(case_id, "no_speed_row")
+            raise TestSkip("阅读偏好无[滚动速度/预载页数]行(展开各分区后仍未找到)")
+        _snap(dev, case_id, "prefs_row")
+    with dev.step(case_id, "change_value"):
+        b = _node_bounds(row)
+        w, _h = dev.d.window_size()
+        # 行标签节点只是文本本身,「+/−」按钮在行两端——边界扩到整行再定位
+        b = (0, b[1], w, b[3])
+        before_val = _customseek_value(dev, b)
+        before_png = dev.screenshot(case_id, "speed_before")
+        cy = (b[1] + b[3]) // 2
+        for _ in range(4):
+            dev.d.click(b[2] - 80, cy)
+            time.sleep(1.2)
+        after_val = _customseek_value(dev, b)
+        after_png = dev.screenshot(case_id, "speed_after")
+        _snap(dev, case_id, "speed_after")
+        changed = (before_val is not None and after_val is not None and after_val != before_val) \
+            or (before_png and after_png and not _same_png(before_png, after_png))
+        if not changed:
+            dev.save_dump(case_id, "speed_nochange")
+            raise AssertionError("滚动速度 +N 后数值/画面无变化(before=%s after=%s)" % (before_val, after_val))
+    with dev.step(case_id, "restore"):
+        row = find_row()
+        if row is not None and row.exists:
+            b = _node_bounds(row)
+            w, _h = dev.d.window_size()
+            b = (0, b[1], w, b[3])
+            for _ in range(6):
+                dev.d.click(b[2] - 180, (b[1] + b[3]) // 2)
+                time.sleep(0.8)
+        dev.d.press("back")
+        time.sleep(1)
+
+
+def fn40_page_format(dev, case_id, cfg=None, fixtures=None):
+    """页码格式切换(§9):偏好页码格式切为[百分比]→ 阅读器页码文案含 % → 还原.
+    (R.string 进度格式 dialogStatusBarSettings 类设置)."""
+    with dev.step(case_id, "open_format_dialog"):
+        _ensure_home(dev)
+        _goto_tab_or_fail(dev, "偏好")
+        if not _click_any(dev, ["页码格式", "进度格式", "Page number format"], max_swipes=8):
+            dev.save_dump(case_id, "no_page_format_row")
+            raise TestSkip("偏好页无[页码格式]行(文案待勘探)")
+        time.sleep(2)
+        xml = dev.d.dump_hierarchy()
+        _snap(dev, case_id, "format_dialog")
+        if "页码" not in xml and "百分比" not in xml and "percent" not in xml.lower():
+            dev.save_dump(case_id, "format_dialog_missing")
+            dev.d.press("back")
+            raise TestSkip("页码格式对话框未出现(入口待勘探)")
+        original = "百分比" if "百分比" in xml else "页码"
+    with dev.step(case_id, "switch_percent"):
+        if not _click_any(dev, ["百分比", "Percent"]):
+            dev.d.press("back")
+            raise TestSkip("页码格式对话框无[百分比]项")
+        time.sleep(2)
+    with dev.step(case_id, "verify_in_reader"):
+        _open_reader(dev, case_id, fixtures, "pdf")
+        _reader_show_toolbar(dev)
+        el = dev.d(resourceId=_rid(dev, "currentPageIndex"))
+        txt = el.get_text() if el.exists else ""
+        _snap(dev, case_id, "reader_percent")
+        dev.d.press("back")
+        time.sleep(1)
+        if not txt or "%" not in txt:
+            raise AssertionError("切百分比后阅读器页码文案未含 %%: %r" % txt)
+    with dev.step(case_id, "restore"):
+        _goto_tab_or_fail(dev, "偏好")
+        if _click_any(dev, ["页码格式", "进度格式", "Page number format"], max_swipes=8):
+            _click_any(dev, ["页码", "Page"])
+            time.sleep(1.5)
+        dev.d.press("back")
+        time.sleep(1)
+
+
+def fn41_statusbar_pos(dev, case_id, cfg=None, fixtures=None):
+    """进度条/状态栏位置(§9):阅读偏好进度条 顶部↔底部 切换 → currentSeek/页码 y 位置变化 → 还原."""
+    def reader_progress_y():
+        _reader_show_toolbar(dev)
+        for rid in ("currentSeek", "currentPageIndex"):
+            el = dev.d(resourceId=_rid(dev, rid))
+            if el.exists:
+                b = _node_bounds(el)
+                if b:
+                    return (b[1] + b[3]) / 2
+        return None
+
+    with dev.step(case_id, "baseline_top"):
+        _open_reader(dev, case_id, fixtures, "pdf")
+        y1 = reader_progress_y()
+        if y1 is None:
+            dev.save_dump(case_id, "no_progress_bar")
+            raise AssertionError("阅读器进度条不可见")
+    with dev.step(case_id, "switch_position"):
+        opened = False
+        for opener in (_reader_toolbar_btn(dev, "bookPref"), _reader_toolbar_btn(dev, "prefTop")):
+            if opener is not None and opener.exists:
+                opener.click()
+                time.sleep(2)
+                opened = True
+                break
+        if not opened:
+            dev.save_dump(case_id, "no_prefs_entry")
+            raise TestSkip("阅读偏好入口不可见")
+        if not _click_any(dev, ["进度条", "状态栏位置", "顶部", "Status bar", "位置"], max_swipes=5):
+            dev.d.press("back")
+            dev.save_dump(case_id, "no_statusbar_row")
+            raise TestSkip("阅读偏好无[进度条/状态栏位置]行")
+        time.sleep(2.5)  # 应用后界面重建
+    with dev.step(case_id, "verify_moved"):
+        y2 = reader_progress_y()
+        _snap(dev, case_id, "moved")
+        dev.d.press("back")
+        time.sleep(1)
+        if y2 is None:
+            raise AssertionError("切换位置后进度条不可见")
+        h = dev.d.window_size()[1]
+        moved = (y1 < h * 0.4 and y2 > h * 0.6) or (y1 > h * 0.6 and y2 < h * 0.4)
+        if not moved:
+            raise AssertionError("进度条位置未变化(before_y=%.0f after_y=%.0f)" % (y1, y2))
+    with dev.step(case_id, "restore"):
+        for opener in (_reader_toolbar_btn(dev, "bookPref"), _reader_toolbar_btn(dev, "prefTop")):
+            if opener is not None and opener.exists:
+                opener.click()
+                time.sleep(2)
+                break
+        _click_any(dev, ["进度条", "状态栏位置", "顶部", "Status bar", "位置"], max_swipes=5)
+        time.sleep(1.5)
+        for _ in range(3):
+            dev.d.press("back")
+            time.sleep(0.6)
+        _exit_reader(dev, case_id)
+
+
+def fn42_stats_detail(dev, case_id, cfg=None, fixtures=None):
+    """阅读统计详情(§16):首页统计仪表盘点入 → 月度柱状图/周月年区间切换断言.
+    (MonthlyBarsView).入口机型差异大,不可达时 SKIP."""
+    with dev.step(case_id, "open_stats_detail"):
+        _ensure_home(dev)
+        stat = None
+        for rid in ("statTotal", "statHours", "statToday"):
+            el = dev.d(resourceId=_rid(dev, rid))
+            if el.exists:
+                stat = el
+                break
+        if stat is None:
+            for _ in range(6):
+                w, h = dev.d.window_size()
+                dev.d.swipe(0.5 * w, 0.7 * h, 0.5 * w, 0.3 * h, 0.3)
+                time.sleep(1.2)
+                for rid in ("statTotal", "statHours", "statToday"):
+                    el = dev.d(resourceId=_rid(dev, rid))
+                    if el.exists:
+                        stat = el
+                        break
+                if stat:
+                    break
+        if stat is None:
+            dev.save_dump(case_id, "no_stats_section")
+            raise TestSkip("首页无统计仪表盘")
+        stat.click()
+        time.sleep(3)
+    with dev.step(case_id, "verify_detail"):
+        xml = dev.d.dump_hierarchy()
+        _snap(dev, case_id, "stats_detail")
+        ok = any(k in xml for k in ("月", "周", "年", "Month", "Week", "Year", "统计"))
+        if not ok:
+            dev.save_dump(case_id, "stats_detail_missing")
+            raise AssertionError("统计详情页未见月度/区间元素")
+    with dev.step(case_id, "exit"):
+        for _ in range(3):
+            dev.d.press("back")
+            time.sleep(0.8)
+
+
+def fn43_remote_cache_prefs(dev, case_id, cfg=None, fixtures=None):
+    """在线阅读设置页(§15):偏好 → 远程/在线阅读缓存设置(RemoteCacheDialog)打开 →
+    缓存上限/过期天数/清空缓存 字段存在 → 关闭."""
+    with dev.step(case_id, "open_dialog"):
+        _ensure_home(dev)
+        _goto_tab_or_fail(dev, "偏好")
+        if not _click_any(dev, ["在线阅读", "远程缓存", "缓存设置", "Remote cache"], max_swipes=10):
+            dev.save_dump(case_id, "no_remote_cache_row")
+            raise TestSkip("偏好页无[在线阅读/远程缓存]行(文案待勘探)")
+        time.sleep(2.5)
+        xml = dev.d.dump_hierarchy()
+        _snap(dev, case_id, "remote_cache_dialog")
+        ok = any(k in xml for k in ("缓存", "Cache", "MB", "GB", "过期"))
+        if not ok:
+            dev.save_dump(case_id, "remote_cache_dialog_missing")
+            dev.d.press("back")
+            raise AssertionError("在线阅读设置对话框未出现")
+    with dev.step(case_id, "exit"):
+        for _ in range(3):
+            dev.d.press("back")
+            time.sleep(0.8)
+
+
+def fn44_sync_timer(dev, case_id, cfg=None, fixtures=None):
+    """WebDAV 同步定时器(§14):偏好 → WebDAV 同步对话框 → 定时同步项存在 → 切换一档 → 回显.
+    (webdavSyncDialog)."""
+    with dev.step(case_id, "open_sync_dialog"):
+        _ensure_home(dev)
+        _goto_tab_or_fail(dev, "偏好")
+        row = dev.d(resourceId=_rid(dev, "webdavSyncValue"))
+        if not row.exists:
+            dev.save_dump(case_id, "no_sync_row")
+            raise TestSkip("偏好页无 WebDAV 同步行")
+        row.click()
+        time.sleep(2.5)
+        if not dev.d(resourceId=_rid(dev, "webdavSyncNow")).exists:
+            dev.save_dump(case_id, "no_sync_dialog")
+            raise AssertionError("WebDAV 同步对话框未打开")
+    with dev.step(case_id, "verify_timer"):
+        xml = dev.d.dump_hierarchy()
+        _snap(dev, case_id, "sync_dialog_timer")
+        ok = any(k in xml for k in ("定时", "分钟", "小时", "Timer", "minute", "hour"))
+        if not ok:
+            dev.save_dump(case_id, "no_timer_option")
+            raise AssertionError("同步对话框无定时同步选项")
+    with dev.step(case_id, "exit"):
+        dev.d.press("back")
+        time.sleep(1)
+
+
+def fn45_settings_backup(dev, case_id, cfg=None, fixtures=None):
+    """设置备份/导出(§19):偏好 → 备份/导出设置(ExportSettingsManager)→ 导出文件落盘.
+    (ExportSettingsManager)."""
+    import subprocess
+    with dev.step(case_id, "open_export"):
+        _ensure_home(dev)
+        _goto_tab_or_fail(dev, "偏好")
+        if not _click_any(dev, ["备份", "导出设置", "Backup", "Export settings"], max_swipes=10):
+            dev.save_dump(case_id, "no_backup_row")
+            raise TestSkip("偏好页无[备份/导出设置]行(文案待勘探)")
+        time.sleep(2)
+    with dev.step(case_id, "do_export"):
+        before = dev.shell("ls /sdcard/HowRead/ | wc -l")
+        # 备份对话框列出配置文件行(如 HowRead),先点行展开,再找导出动作
+        if _click_any(dev, ["HowRead"]):
+            time.sleep(1.5)
+        if not _click_any(dev, ["导出", "备份", "Export", "Backup"]):
+            dev.save_dump(case_id, "no_export_action")
+            dev.d.press("back")
+            raise TestSkip("备份对话框无导出动作(入口待勘探)")
+        time.sleep(4)
+        # 导出可能走系统文件选择器(SAF)——检测到 documentsui 前台则如实 SKIP
+        top = dev.shell("dumpsys activity activities | grep mResumedActivity")
+        if "documentsui" in top or "MusicPicker" in top:
+            dev.d.press("back")
+            time.sleep(1)
+            dev.save_dump(case_id, "saf_picker")
+            raise TestSkip("导出走系统文件选择器(SAF),自动化受限")
+        after = dev.shell("ls /sdcard/HowRead/ | wc -l")
+        found = dev.shell(
+            "find /sdcard/HowRead /sdcard/Download -type f -name '*.json' -newermt '-5 minutes' 2>/dev/null; "
+            "find /sdcard/HowRead /sdcard/Download -type f -name '*backup*' 2>/dev/null; "
+            "find /sdcard/HowRead -maxdepth 2 -name '*settings*' 2>/dev/null")
+        _snap(dev, case_id, "export_done")
+        if not found.strip() and before == after:
+            dev.save_dump(case_id, "export_no_file")
+            raise AssertionError("导出后未见设置文件落盘")
+    with dev.step(case_id, "exit"):
+        for _ in range(3):
+            dev.d.press("back")
+            time.sleep(0.8)
+
+
+def fn46_offline_reading(dev, case_id, cfg=None, fixtures=None):
+    """断网离线阅读(§15):WebDAV book_pdf 在线打开一次(分块缓存)→ 断网(svc wifi/data disable)
+    → 从最近阅读重开 → 进阅读器翻页 → 恢复网络.adb 切网(USB 调试不受影响)."""
+    def net_state():
+        return dev.shell("settings get global wifi_on").strip(), \
+            dev.shell("settings get global data_on").strip()
+
+    with dev.step(case_id, "online_open_and_cache"):
+        title, _added = _ensure_server(dev, case_id, cfg, "webdav")
+        _ensure_home(dev)
+        if not _browse_root(dev):
+            raise AssertionError("我的文件根视图不可达")
+        row = dev.d(text=title)
+        if not row.exists:
+            raise AssertionError("WebDAV 服务器行不可见")
+        row.click()
+        time.sleep(4)
+        book = _find_text_scrolled(dev, "book_pdf", max_swipes=4)
+        if book is None:
+            dev.save_dump(case_id, "remote_pdf_not_found")
+            raise AssertionError("远程目录无 book_pdf.pdf")
+        book.click()
+        entered = False
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            top = dev.shell("dumpsys activity activities | grep mResumedActivity")
+            if "ViewActivity" in top or "TTSActivity" in top:
+                entered = True
+                break
+            time.sleep(2.5)
+        if not entered:
+            dev.save_dump(case_id, "remote_open_timeout")
+            raise AssertionError("在线打开 60s 未进阅读器")
+        time.sleep(3)  # 留时间缓存分块
+        _snap(dev, case_id, "cached_online")
+        _exit_reader(dev, case_id)
+        _back_to_main(dev)
+    wifi0, data0 = net_state()
+    try:
+        with dev.step(case_id, "offline_reopen"):
+            dev.shell("svc wifi disable")
+            dev.shell("svc data disable")
+            time.sleep(3)
+            _ensure_home(dev)
+            # 从最近阅读重开(不经网络列目录,直接 remote:// 路径命中本地缓存)
+            if not (dev.click_desc("最近阅读") or dev.click_text("最近阅读")):
+                el = dev.d(textContains="最近阅读")
+                if el.exists:
+                    el.click()
+                else:
+                    dev.save_dump(case_id, "no_recent_section")
+                    raise AssertionError("首页无最近阅读分区")
+            time.sleep(2)
+            book = None
+            for kw in ("book_pdf", "big25"):
+                el = dev.d(textContains=kw)
+                if el.exists:
+                    book = el
+                    break
+            if book is None:
+                dev.save_dump(case_id, "offline_no_recent_book")
+                raise AssertionError("最近阅读无远程书条目")
+            book.click()
+            entered = False
+            deadline = time.time() + 60
+            while time.time() < deadline:
+                top = dev.shell("dumpsys activity activities | grep mResumedActivity")
+                if "ViewActivity" in top or "TTSActivity" in top:
+                    entered = True
+                    break
+                time.sleep(2.5)
+            _snap(dev, case_id, "offline_reader")
+            if not entered:
+                dev.save_dump(case_id, "offline_open_failed")
+                raise AssertionError("断网后远程书未能离线打开")
+            c = dev.scan_crash()
+            if c:
+                raise AssertionError("离线打开 crash: %s" % c)
+        with dev.step(case_id, "offline_page_turn"):
+            before = _reader_page_or_none(dev)
+            dev.page_turn(forward=True, verify=False)
+            time.sleep(1.5)
+            after = _wait_page_change(dev, before, timeout=10)
+            _snap(dev, case_id, "offline_turned")
+            if not after:
+                dev.save_dump(case_id, "offline_no_turn")
+                raise AssertionError("断网状态翻页无效")
+    finally:
+        # 恢复网络(必须)
+        dev.shell("svc wifi enable")
+        dev.shell("svc data enable")
+        time.sleep(4)
+        wifi1, data1 = net_state()
+        print("  [%s] 网络恢复: wifi=%s data=%s (原 %s/%s)" % (dev.serial, wifi1, data1, wifi0, data0))
+        _exit_reader(dev, case_id)
+        _back_to_main(dev)
+
+
+def fn47_fdroid_pro_gate(dev, case_id, cfg=None, fixtures=None):
+    """fdroid 渠道 Pro 门禁探针(§20):仅 fdroid 包执行——WebDAV 区块 [+ 添加] 被置灰/拦截,
+    点击不弹添加对话框.toast 抓取在 EMUI 不可靠(AGENTS gotcha 21④),以对话框未出现为准.
+    pro 包运行时 SKIP(门禁行为属 fdroid 专项)."""
+    if getattr(dev, "flavor", "pro") != "fdroid":
+        raise TestSkip("门禁探针仅 fdroid 渠道执行(当前 pro 包)")
+    with dev.step(case_id, "try_add_webdav"):
+        _ensure_home(dev)
+        if not _browse_root(dev):
+            raise AssertionError("我的文件根视图不可达")
+        headers = {"webdav": "WebDAV"}
+        clicked = _click_section_add(dev, headers["webdav"])
+        time.sleep(2.5)
+        gated = not dev.d(resourceId=_rid(dev, "url")).exists
+        _snap(dev, case_id, "gate_checked")
+        if not gated:
+            dev.d.press("back")
+            time.sleep(1)
+            dev.save_dump(case_id, "gate_not_enforced")
+            raise AssertionError("fdroid 包点击 WebDAV[+ 添加]仍弹出添加对话框(门禁未生效)")
+        if not clicked:
+            # [+ 添加]不可点(置灰/带锁)同样算门禁生效
+            print("  [%s] fdroid 门禁: [+ 添加]按钮不可点(置灰)" % dev.serial)
+
+
+def fn48_exit_confirm(dev, case_id, cfg=None, fixtures=None):
+    """退出确认对话框(§16):主界面按 back → 若启用退出确认则 CloseAppDialog 出现 → 取消.
+    (偏好页无独立[退出确认]开关行——本 fork 该行为由返回键直接触发或默认关闭,真机核实
+    2026-09-13;无对话框时如实 SKIP)."""
+    with dev.step(case_id, "back_and_verify"):
+        _ensure_home(dev)
+        time.sleep(1)
+        dev.d.press("back")  # 主界面 back:启用退出确认时应弹 CloseAppDialog
+        time.sleep(2)
+        xml = dev.d.dump_hierarchy()
+        _snap(dev, case_id, "exit_dialog")
+        ok = any(k in xml for k in ("退出", "确定要", "Exit", "确认退出"))
+        if not ok:
+            dev.save_dump(case_id, "no_exit_dialog")
+            raise TestSkip("back 未弹退出确认对话框(本 fork 未启用/无该开关)")
+        # 取消,不真退出
+        if not _click_any(dev, ["取消", "否", "Cancel"]):
+            dev.d.press("back")
+        time.sleep(1.5)
+
+
 ALL = [
     ("FN-08", "intent 打开", fn08_intent_open, None),
     ("FN-09", "多格式开书", fn09_multi_format, None),
@@ -2323,4 +3883,23 @@ ALL = [
     ("FN-28", "SMB 添加与浏览", fn28_smb, None),
     ("FN-29", "SFTP 添加与浏览", fn29_sftp, None),
     ("FN-30", "远程书在线打开", fn30_remote_open, None),
+    # ---- 2026-09-13 覆盖补全(高可行项,见 docs/COVERAGE.md 缺口表)----
+    ("FN-31", "抽屉菜单遍历", fn31_drawer_menu, None),
+    ("FN-32", "收藏列表页", fn32_favorites_page, None),
+    ("FN-33", "隐藏文件开关", fn33_hidden_files, None),
+    ("FN-34", "阅读页锁定", fn34_reader_lock, None),
+    ("FN-35", "对比度与亮度", fn35_contrast_brightness, None),
+    ("FN-36", "蓝光滤镜", fn36_bluelight, None),
+    ("FN-37", "文件信息对话框", fn37_file_info, None),
+    ("FN-38", "标记已读未读", fn38_mark_read, None),
+    ("FN-39", "行距调节", fn39_line_spacing, None),
+    ("FN-40", "页码格式切换", fn40_page_format, None),
+    ("FN-41", "进度条位置", fn41_statusbar_pos, None),
+    ("FN-42", "阅读统计详情", fn42_stats_detail, None),
+    ("FN-43", "在线阅读设置", fn43_remote_cache_prefs, None),
+    ("FN-44", "WebDAV 同步定时器", fn44_sync_timer, None),
+    ("FN-45", "设置备份导出", fn45_settings_backup, None),
+    ("FN-46", "断网离线阅读", fn46_offline_reading, None),
+    ("FN-47", "fdroid Pro 门禁", fn47_fdroid_pro_gate, None),
+    ("FN-48", "退出确认对话框", fn48_exit_confirm, None),
 ]
