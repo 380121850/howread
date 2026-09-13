@@ -57,6 +57,12 @@ public class SmbDataSource implements RemoteDataSource {
     @Override
     public int readAt(long offset, byte[] buffer, int off, int len) throws IOException {
         synchronized (readLock) {
+            if (raf == null && !reopenQuiet()) {
+                // a previous reopen failed: dereferencing raf here used to
+                // escape as a bare NullPointerException instead of the
+                // IOException the session layer can classify
+                throw new IOException("SMB handle closed");
+            }
             try {
                 if (offset >= size) {
                     return 0;

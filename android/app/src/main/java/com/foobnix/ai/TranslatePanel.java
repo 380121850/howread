@@ -94,6 +94,9 @@ public class TranslatePanel {
     }
 
     public void dismiss() {
+        // removing the view is not enough: stop the background translation
+        // thread so it stops spending API quota for a dead panel
+        AiTranslator.cancel();
         try {
             host.removeView(panel);
         } catch (Exception ignored) {

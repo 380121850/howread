@@ -86,6 +86,16 @@ import java.util.List;
     CodecDocument cache;
     String path;
     int wh;
+
+    /**
+     * Orientation-safe layout key: the previous w+h sum collided across
+     * rotation (1080+1920 == 1920+1080) and TTS kept the document laid out
+     * for the old orientation — the same bug fixed in MuPdfDocument
+     * getPageCountSafe.
+     */
+    private static int layoutKey(int w, int h) {
+        return w * 31 + h;
+    }
     int emptyPageCount = 0;
     final OnAudioFocusChangeListener listener = new OnAudioFocusChangeListener() {
         @Override public void onAudioFocusChange(int focusChange) {
@@ -581,7 +591,7 @@ import java.util.List;
         try {
 
             if (AppSP.get().lastBookPath != null && AppSP.get().lastBookPath.equals(
-                    path) && cache != null && wh == AppSP.get().lastBookWidth + AppSP.get().lastBookHeight) {
+                    path) && cache != null && wh == layoutKey(AppSP.get().lastBookWidth, AppSP.get().lastBookHeight)) {
                 LOG.d(TAG, "CodecDocument from cache", AppSP.get().lastBookPath);
                 return cache;
             }
@@ -597,7 +607,7 @@ import java.util.List;
                 return null;
             }
             cache.getPageCount(AppSP.get().lastBookWidth, AppSP.get().lastBookHeight, BookCSS.get().fontSizeSp);
-            wh = AppSP.get().lastBookWidth + AppSP.get().lastBookHeight;
+            wh = layoutKey(AppSP.get().lastBookWidth, AppSP.get().lastBookHeight);
             LOG.d(TAG, "CodecDocument new", AppSP.get().lastBookPath, AppSP.get().lastBookWidth,
                     AppSP.get().lastBookHeight);
             return cache;

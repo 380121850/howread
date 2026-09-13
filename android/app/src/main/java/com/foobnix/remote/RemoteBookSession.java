@@ -55,6 +55,9 @@ public class RemoteBookSession {
         this.size = size;
         this.versionTag = versionTag;
         this.cacheKey = cacheKey;
+        // book-level cache eviction must never delete this session's cache
+        // while the book is open
+        BlockCacheStore.pinKey(cacheKey);
     }
 
     /**
@@ -293,7 +296,9 @@ public class RemoteBookSession {
      * &lt; 5MB fills on any network, 5MB..threshold only when the user
      * allows metered networks, above the threshold never.
      */
-    private void maybeStartFiller() {
+    private synchronized void maybeStartFiller() {
+        // synchronized: readAt runs on multiple MuPDF threads — without the
+        // monitor two filler threads could start and duplicate the download
         if (cancelled || filler != null || cache.isFullyCached()) {
             return;
         }
@@ -306,12 +311,20 @@ public class RemoteBookSession {
             return;
         }
         filler = new Thread(() -> {
+            boolean capped = false;
             for (long i = 0; i < cache.getBlockCount(); i++) {
                 if (cancelled) {
                     return;
                 }
-                if (cache.hasBlock(i) || cache.cachedBytes() + cache.getBlockSize() > BlockCacheStore.PER_BOOK_LIMIT) {
+                if (cache.hasBlock(i)) {
                     continue;
+                }
+                if (cache.cachedBytes() + cache.getBlockSize() > BlockCacheStore.PER_BOOK_LIMIT) {
+                    // per-book disk cap: stop WITHOUT marking fullyCached —
+                    // a fake 100% badge made offline opens fail with a
+                    // network error
+                    capped = true;
+                    break;
                 }
                 waitIfForegroundBusy();
                 if (cancelled) {
@@ -331,8 +344,10 @@ public class RemoteBookSession {
                     return;
                 }
             }
-            cache.setFullyCached(versionTag);
-            LOG.d("RemoteFiller done", remotePath);
+            if (!capped) {
+                cache.setFullyCached(versionTag);
+            }
+            LOG.d("RemoteFiller done", remotePath, "capped=" + capped);
         }, "RemoteFiller");
         filler.setDaemon(true);
         filler.setPriority(Thread.MIN_PRIORITY);
@@ -378,6 +393,7 @@ public class RemoteBookSession {
         if (filler != null) {
             filler.interrupt();
         }
+        BlockCacheStore.unpinKey(cacheKey);
         cache.close();
         try {
             source.close();

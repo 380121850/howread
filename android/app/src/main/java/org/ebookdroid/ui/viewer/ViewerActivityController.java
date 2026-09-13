@@ -347,6 +347,14 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
         phase2Gen.incrementAndGet();
         final boolean finishing = getManagedComponent().isFinishing();
         if (finishing) {
+            // unsubscribe the gesture detector from the process-wide EventBus:
+            // switchDocumentController (the only other destroyGestures call
+            // site) never runs on a normal close, so every Back exit used to
+            // leak the whole activity view graph
+            final IViewController cur = ctrl.get();
+            if (cur instanceof org.ebookdroid.core.AbstractViewController) {
+                ((org.ebookdroid.core.AbstractViewController) cur).destroyGestures();
+            }
             getManagedComponent().view.onDestroy();
             if (documentModel != null) {
                 documentModel.recycle();

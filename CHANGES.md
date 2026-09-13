@@ -5,6 +5,40 @@
 
 ---
 
+## [2026-09-13] 代码检视修复：安卓端 12 类隐藏 BUG（7 个 P1 + 5 个 P2，19 文件 39 处补丁）
+
+**做了什么（用户视角）**：
+- 对安卓端代码做了一轮系统性检视（重点：2026-09 的远程阅读（WebDAV/SMB/SFTP 直读）子系统、AI 翻译、阅读核心、书库 UI），确认并修复 12 类隐藏 BUG：
+  1. **仪表盘"阅读速度"恒显 0.0**：翻页计数在提交前被清零，阅读页数永远不增长（ReadingStats）。修复后翻页数与速度从此有真实数据。
+  2. **书库 5 种分组视图整页空白**：作者/系列/分类/语言/出版社视图打开后空白且无任何报错——新加的空书库提示在分组模式下碰到空数据抛异常被静默吞掉（SearchFragment2）。修复后视图正常出书。
+  3. **弱网下远程书本地副本被损坏**：重新下载远程书时先截断本地旧完整副本，若中途断网，半截文件会被当成好书打开（RemoteBookOpener）。现改为"先写临时文件、完整下载后原子改名"，旧副本永不被破坏。
+  4. **书名含 % 的文件导致崩溃/扫描卡死**：SMB/SFTP 扫描对原始路径做 URL 解码，名字里带 %（如"进度50%完成.pdf"）会崩溃主线程或让扫描进度框永不消失（RemoteScanner）。已改为不解码原始名、解析失败回退原名。
+  5. **WebDAV 降级读取可能渲染乱码**：服务器不支持断点续传（Range）时，定位失败会从错误位置读数据且不报错（WebDavRangeDataSource）。现在定位失败直接报错重试，绝不再给渲染层错位数据。
+  6. **退出阅读器内存泄漏（两处）**：按返回键/Home 退出时不注销进程级事件监听，每开/关一本书泄漏一整个界面（AdvGuestureDetector/DocumentWrapperUI）。长时间连续阅读不再越用越卡。
+  7. **"清除所有收藏"清不干净**：误清的是"最近阅读"里的收藏标记，最近没读过的收藏不受影响（AppDB）。现在真正清空全部收藏。
+  8. **横竖屏切换后 TTS 页码错位**：旋转后 TTS 复用旧排版文档，朗读位置与屏幕显示对不上（TTSService）。已修复。
+  9. **AI 翻译原生崩溃窗口与配额浪费**：翻译后台线程使用共享页面句柄，恰逢关书/双语模式重启时会原生崩溃（HorizontalModeController/VerticalModeController）；关闭翻译面板后后台线程继续偷偷调用 API 烧配额（TranslatePanel/AiTranslator）。现在改用独立页面句柄 + 面板关闭即停止翻译。
+  10. **关书瞬间的原生崩溃窗口**：翻页渲染进行到一半时关书，渲染线程可能访问已释放的原生文档（DecodeServiceBase）。现在关书会等待在飞渲染完成（上限 3 秒）再释放文档。
+  11. **远程书缓存三类问题**：缓存空间自动清理可能删掉**正在阅读**那本书的缓存；小书自动整本填充被单本上限截断时书架徽标误显"100% 已缓存"，离线打开反而失败；SFTP 连接失败泄漏连接、SMB 重连失败后报错类型不对（BlockCacheStore/RemoteBookSession/SftpDataSource/SmbDataSource）。
+  12. **Gemini 协议"拉取模型列表"后全部请求 404**：列表返回的模型名带了多余的 "models/" 前缀（AiClient）。现在从列表选择的模型可直接使用。
+- Pro 门控保持现状（v1.3.2 验证期临时全解锁不变，待真实计费接入时恢复）。
+
+**对使用者的影响**：远程阅读、AI 翻译、TTS 朗读、书库管理这些常用路径上的偶发崩溃、数据损坏、内存泄漏与"功能静默失效"得到集中清理；阅读统计首次拥有真实翻页数据。需重新安装 APK 生效（共改动 19 个源文件，全部有"改前备份"可回退）。
+
+**验证**（编译服务器 ubuntu22，2026-09-13）：
+- 编译：`:app:compileProDebugJavaWithJavac` 通过（仅存量 deprecation 警告，无新增告警）；
+- 单测：`:app:testProDebugUnitTest` 全部通过；
+- 构建：全量四包成功（pro/fdroid × debug/release，v1.3.2，arm64/arm/x86_64/x86/uni 全 ABI），位于 `android/app/build/outputs/apk/`。
+- 真机冒烟建议（装 pro debug）：①读几页后仪表盘阅读速度 > 0；②书库切"作者/分类"视图正常出书；③WebDAV/SMB 打开含 % 文件名的书不崩溃；④AI 翻译面板关闭后抓包/日志确认不再有 AI 请求。
+
+**内部佐证（辅助）**：
+- 19 文件：ReadingStats、SearchFragment2、RemoteBookOpener、RemoteScanner、WebDavRangeDataSource、ViewerActivityController、DocumentWrapperUI、AppDB、TTSService、HorizontalModeController、VerticalModeController、AiTranslator、TranslatePanel、SftpDataSource、SmbDataSource、BlockCacheStore、RemoteBookSession、AiClient、DecodeServiceBase。
+- 改前完整备份：`tmp/debug/backup_0913/`（回滚参考；补丁脚本 `tmp/scripts/patch_review_fixes_0913.py` 两阶段校验、全对才落盘）。
+- 检视发现但按约定本轮不动：AI 层结构性问题（AI 请求走进程级串行 AsyncTask 且无取消、AiConfigDialog.savedLocal 静态串台、AiClient.lastError 静态竞态、API key 经"命名配置"明文进入 app-State.json 并被 WebDAV 同步、AppState.save 哈希未忽略 @IgnoreHashCode 字段）——建议后续单独排期处理。
+
+---
+
+
 ## [2026-09-13] 测试前置条件检视与加固：每轮自动核对/安装 APK + --reset 出厂态重置 + 坑点 A 级规则入 AGENTS.md（纯测试侧与规则侧，不改应用）
 
 **做了什么（用户视角）**：

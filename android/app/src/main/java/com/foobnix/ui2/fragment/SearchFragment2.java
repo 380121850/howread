@@ -1200,7 +1200,7 @@ public class SearchFragment2 extends UIFragment<FileMeta> {
 
         if (emptyLibraryHint != null) {
             boolean noQuery = TxtUtils.isEmpty(searchEditText.getText().toString().trim());
-            emptyLibraryHint.setVisibility(TxtUtils.visibleIf(items.isEmpty() && noQuery
+            emptyLibraryHint.setVisibility(TxtUtils.visibleIf(items != null && items.isEmpty() && noQuery
                     && TxtUtils.isEmpty(selectedReadState)));
         }
 

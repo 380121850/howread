@@ -82,8 +82,8 @@ public class SftpDataSource implements RemoteDataSource {
                 }
             });
         }
-        ssh.connect(host, port);
         try {
+            ssh.connect(host, port);
             if (!keyPath.isEmpty()) {
                 PKCS8KeyFile kf = new PKCS8KeyFile();
                 if (keyPass.isEmpty()) {
@@ -97,8 +97,10 @@ public class SftpDataSource implements RemoteDataSource {
                 ssh.authPassword(user, password);
             }
         } catch (Exception e) {
+            // covers ssh.connect() too: an exception there used to abandon
+            // the constructed client — one leaked connection per retry
             disconnectQuiet();
-            throw new IOException("SFTP auth failed: " + e.getMessage(), e);
+            throw new IOException("SFTP connect/auth failed: " + e.getMessage(), e);
         }
         sftp = ssh.newSFTPClient();
         // SFTP paths are home-relative ("/" = the login home)

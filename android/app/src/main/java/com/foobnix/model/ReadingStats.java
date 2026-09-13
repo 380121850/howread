@@ -59,7 +59,6 @@ public final class ReadingStats {
         }
         long delta = SystemClock.elapsedRealtime() - resumeAt;
         resumeAt = 0;
-        pendingFlips = 0;
 
         // PRO feature gate: locked builds keep the recorded history but stop
         // accumulating new time/pages

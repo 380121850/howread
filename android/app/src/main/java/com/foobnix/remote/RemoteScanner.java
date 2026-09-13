@@ -164,9 +164,26 @@ public class RemoteScanner {
     /** remote:// path (after the server id) of one file. */
     private String webdavRelative(String type, String rootDir, String dir, String name) {
         if (RemoteBook.TYPE_WEBDAV.equals(type)) {
-            return Uri.decode(dir.substring(rootDir.length())) + "/" + name;
+            return safeDecode(dir.substring(rootDir.length())) + "/" + name;
         }
         return join(dir, name);
+    }
+
+    /**
+     * Decodes percent-encoded WebDAV paths. Raw SMB/SFTP names and malformed
+     * sequences ('%' not followed by two hex digits — common in Chinese file
+     * names) pass through unchanged instead of throwing: Uri.decode used to
+     * kill the scan thread / crash the UI thread on such names.
+     */
+    private static String safeDecode(String s) {
+        if (s == null || s.indexOf('%') < 0) {
+            return s;
+        }
+        try {
+            return Uri.decode(s);
+        } catch (Exception e) {
+            return s;
+        }
     }
 
     private void showProgress(final String dir) {
@@ -175,7 +192,7 @@ public class RemoteScanner {
         }
         activity.runOnUiThread(() -> {
             if (progressView != null) {
-                progressView.setText(Uri.decode(dir));
+                progressView.setText(safeDecode(dir));
             }
         });
     }

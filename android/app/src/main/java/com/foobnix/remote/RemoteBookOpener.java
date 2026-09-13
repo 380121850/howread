@@ -183,10 +183,14 @@ public class RemoteBookOpener {
                         done = true;
                         return null;
                     }
+                    // copy into a temp file first: the previous complete copy
+                    // must never be truncated by a failed re-download (a
+                    // stale .tag would then "resurrect" the partial file)
+                    File part = new File(target.getPath() + ".part");
                     target.getParentFile().mkdirs();
                     FileOutputStream out = null;
                     try {
-                        out = new FileOutputStream(target);
+                        out = new FileOutputStream(part);
                         CachingRemoteInputStream in = new CachingRemoteInputStream(session);
                         byte[] buf = new byte[64 * 1024];
                         int n;
@@ -201,14 +205,20 @@ public class RemoteBookOpener {
                     java.io.FileWriter tw = new java.io.FileWriter(tagFile);
                     tw.write(session.versionTag == null ? "" : session.versionTag);
                     tw.close();
+                    if (!part.renameTo(target)) {
+                        part.delete();
+                        throw new java.io.IOException("cannot move the downloaded copy into place");
+                    }
                     done = true;
                 } catch (Exception e) {
                     LOG.e(e);
                     error = e.getMessage();
                     android.util.Log.i("REMOTE", "fetchToCache failed: " + error);
+                    new File(target.getPath() + ".part").delete();
                     if (target.isFile() && target.length() > 0 && tagFile.isFile()) {
                         // server unreachable but an older complete copy
-                        // exists: open it instead of reporting failure
+                        // exists (untouched: this attempt wrote to .part):
+                        // open it instead of reporting failure
                         done = true;
                     } else {
                         // remove a partial copy so a retry starts clean

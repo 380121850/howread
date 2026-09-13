@@ -389,6 +389,11 @@ public class DocumentWrapperUI {
         }
     };
 
+    /** true between the constructor's register() and unregisterBus():
+     * onDestroy runs on every exit path (Back/Home), not just the close
+     * button, and greenrobot throws on double unregister. */
+    private boolean eventBusRegistered;
+
     public DocumentWrapperUI(final DocumentController controller) {
         AppState.get().annotationDrawColor = "";
         AppState.get().editWith = AppState.EDIT_NONE;
@@ -397,7 +402,20 @@ public class DocumentWrapperUI {
         controller.setUi(this);
 
         EventBus.getDefault().register(this);
+        eventBusRegistered = true;
 
+    }
+
+    /** Idempotent EventBus unsubscribe (greenrobot throws otherwise). */
+    private void unregisterBus() {
+        if (eventBusRegistered) {
+            eventBusRegistered = false;
+            try {
+                EventBus.getDefault().unregister(this);
+            } catch (Exception e) {
+                LOG.w(e);
+            }
+        }
     }
 
     public static boolean isCJK(int ch) {
@@ -693,7 +711,7 @@ public class DocumentWrapperUI {
     }
 
     public void closeAndRunList() {
-        EventBus.getDefault().unregister(this);
+        unregisterBus();
 
         if (handler != null) {
             handler.removeCallbacksAndMessages(null);
@@ -2161,6 +2179,9 @@ public class DocumentWrapperUI {
 
     public void onDestroy() {
         LOG.d("DocumentWrapperUI", "onDestroy");
+        // Back/Home/recents-swipe exits never pass through closeAndRunList:
+        // without this the wrapper (holding the reader activity) leaked
+        unregisterBus();
         handlerTimer.removeCallbacksAndMessages(null);
         handler.removeCallbacksAndMessages(null);
 

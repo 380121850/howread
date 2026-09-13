@@ -321,15 +321,29 @@ public abstract class HorizontalModeController extends DocumentController {
 
     @Override public String[] getPageParagraphs(int page) {
         try {
-            if (codeDocument == null) {
+            if (codeDocument == null || codeDocument.isRecycled()) {
                 return null;
             }
-            CodecPage cp = codeDocument.getPage(page);
-            if (cp instanceof MuPdfPage && !cp.isRecycled()) {
-                // Use the page HTML (working getPageAsHtml native) and split it
-                // into paragraphs. MuPdfPage.text() has no native impl in the
-                // prebuilt libMuPDF.so, so it throws UnsatisfiedLinkError.
-                return com.foobnix.ai.AiTranslator.htmlToParagraphs(cp.getPageHTML());
+            // owned page: recycled here, so it must not be the shared cache
+            // instance other threads may still be rendering (same pattern as
+            // getPageText above) — a background AI thread holding the shared
+            // page across a document recycle crashed natively
+            CodecPage cp = codeDocument.getOwnedPage(page);
+            if (cp == null) {
+                return null;
+            }
+            try {
+                if (cp.isRecycled() || codeDocument.isRecycled()) {
+                    return null;
+                }
+                if (cp instanceof MuPdfPage) {
+                    // Use the page HTML (working getPageAsHtml native) and split it
+                    // into paragraphs. MuPdfPage.text() has no native impl in the
+                    // prebuilt libMuPDF.so, so it throws UnsatisfiedLinkError.
+                    return com.foobnix.ai.AiTranslator.htmlToParagraphs(cp.getPageHTML());
+                }
+            } finally {
+                cp.recycle();
             }
         } catch (Exception e) {
             LOG.e(e);

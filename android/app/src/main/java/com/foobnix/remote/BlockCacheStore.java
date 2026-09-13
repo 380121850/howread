@@ -116,6 +116,26 @@ public class BlockCacheStore {
     }
 
     /**
+     * Cache keys of sessions currently open: book-level LRU eviction must
+     * never delete the cache of a book being read (its data.bin handle would
+     * keep writing into an unlinked file and the session's cache would
+     * silently vanish). */
+    private static final java.util.Set<String> pinnedKeys =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<String, Boolean>());
+
+    public static void pinKey(String cacheKey) {
+        if (cacheKey != null) {
+            pinnedKeys.add(cacheKey);
+        }
+    }
+
+    public static void unpinKey(String cacheKey) {
+        if (cacheKey != null) {
+            pinnedKeys.remove(cacheKey);
+        }
+    }
+
+    /**
      * Opens (or creates) the cache for one book version. When the stored
      * versionTag differs from {@code versionTag} — or the stored block size
      * differs from {@code blockSize} — the old directory is wiped.
@@ -148,6 +168,7 @@ public class BlockCacheStore {
                         data.close();
                         throw new IllegalStateException("bitmap truncated");
                     }
+                    dir.setLastModified(System.currentTimeMillis()); // fresh LRU signal on open
                     return new BlockCacheStore(dir, fileSize, data, bitmap, fullyCached, blockSize,
                             storedTag);
                 }
@@ -158,6 +179,7 @@ public class BlockCacheStore {
             com.foobnix.ext.CacheZipUtils.deleteDir(dir);
         }
         dir.mkdirs();
+        dir.setLastModified(System.currentTimeMillis()); // fresh LRU signal on open
         RandomAccessFile data = new RandomAccessFile(dataF, "rw");
         data.setLength(fileSize);
         byte[] bitmap = new byte[blockCount];
@@ -210,6 +232,7 @@ public class BlockCacheStore {
             if (fullyCached && cached < blockCount) {
                 return null;
             }
+            dir.setLastModified(System.currentTimeMillis()); // fresh LRU signal on open
             RandomAccessFile data = new RandomAccessFile(dataF, "r");
             return new BlockCacheStore(dir, size, data, bitmap, fullyCached, blockSize,
                     m.optString("versionTag", ""));
@@ -482,6 +505,9 @@ public class BlockCacheStore {
             long expireMs = expireDays > 0 ? expireDays * 86400000L : 0;
             long now = System.currentTimeMillis();
             for (File book : books) {
+                if (pinnedKeys.contains(book.getName())) {
+                    continue; // never expire the book being read
+                }
                 if (expireMs > 0 && now - book.lastModified() > expireMs) {
                     com.foobnix.ext.CacheZipUtils.deleteDir(book);
                 }
@@ -502,6 +528,9 @@ public class BlockCacheStore {
             for (File book : books) {
                 if (totalBytes() <= maxBytes) {
                     break;
+                }
+                if (pinnedKeys.contains(book.getName())) {
+                    continue; // never evict the book being read
                 }
                 com.foobnix.ext.CacheZipUtils.deleteDir(book);
             }

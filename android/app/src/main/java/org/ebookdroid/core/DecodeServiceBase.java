@@ -60,6 +60,11 @@ public class DecodeServiceBase implements DecodeService {
     final Map<PageTreeNode, DecodeTask> decodingTasks = new IdentityHashMap<PageTreeNode, DecodeTask>();
     final List<Task> tasks = Collections.synchronizedList(new ArrayList<Task>());
     ExecutorRunnable executor = new ExecutorRunnable();
+    /** In-flight performDecode calls: shutdownInner waits (bounded) for this
+     * to reach 0 before freeing the native document, so a rendering thread
+     * can no longer hit a freed native handle. */
+    final java.util.concurrent.atomic.AtomicInteger inFlightDecodes = new java.util.concurrent.atomic.AtomicInteger();
+    volatile boolean shutdownStarted;
     private CodecDocument codecDocument;
     private Map<Integer, CodecPageHolder> pages = new LinkedHashMap<Integer, CodecPageHolder>() {
 
@@ -331,6 +336,18 @@ public class DecodeServiceBase implements DecodeService {
         if (executor.isTaskDead(task)) {
             return;
         }
+        inFlightDecodes.incrementAndGet();
+        try {
+            performDecodeInner(task);
+        } finally {
+            inFlightDecodes.decrementAndGet();
+        }
+    }
+
+    private void performDecodeInner(final DecodeTask task) {
+        if (executor.isTaskDead(task)) {
+            return;
+        }
 
         CodecPageHolder holder = null;
         CodecPage vuPage = null;
@@ -354,11 +371,14 @@ public class DecodeServiceBase implements DecodeService {
 
             final RectF actualSliceBounds = task.node.croppedBounds != null ? task.node.croppedBounds : task.node.pageSliceBounds;
 
+            if (shutdownStarted || executor.isTaskDead(task)) {
+                return;
+            }
             // TempHolder.lock.lock();
             final BitmapRef bitmap = vuPage.renderBitmap(r.width(), r.height(), actualSliceBounds, true);
             // TempHolder.lock.unlock();
 
-            if (executor.isTaskDead(task)) {
+            if (shutdownStarted || executor.isTaskDead(task)) {
                 BitmapManager.release(bitmap);
                 return;
             }
@@ -901,6 +921,20 @@ public class DecodeServiceBase implements DecodeService {
 
             LOG.d("Begin shutdown 1");
             run.set(false);
+            shutdownStarted = true;
+
+            // bounded wait for an in-flight decode: the native document/pages
+            // below used to be freed under a still-rendering thread (a narrow
+            // but real SIGSEGV window when closing a book mid-render)
+            final long deadline = System.currentTimeMillis() + 3000;
+            while (inFlightDecodes.get() > 0 && System.currentTimeMillis() < deadline) {
+                try {
+                    Thread.sleep(20);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
 
             // same monitor as nextTask/getPageHolder: without it a concurrent
             // decode mutating the pages map could throw a CME here, skipping

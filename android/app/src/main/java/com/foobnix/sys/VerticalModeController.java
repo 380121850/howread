@@ -406,12 +406,30 @@ public class VerticalModeController extends DocumentController {
     @Override
     public String[] getPageParagraphs(int page) {
         try {
-            CodecPage cp = ctr.getDecodeService().getCodecDocument().getPage(page);
-            if (cp instanceof MuPdfPage && !cp.isRecycled()) {
-                // Use the page HTML (working getPageAsHtml native) and split it
-                // into paragraphs. MuPdfPage.text() has no native impl in the
-                // prebuilt libMuPDF.so, so it throws UnsatisfiedLinkError.
-                return com.foobnix.ai.AiTranslator.htmlToParagraphs(cp.getPageHTML());
+            final org.ebookdroid.core.codec.CodecDocument doc = ctr.getDecodeService().getCodecDocument();
+            if (doc == null || doc.isRecycled()) {
+                return null;
+            }
+            // owned page: recycled here, so it must not be the shared cache
+            // instance other threads may still be rendering (see
+            // HorizontalModeController) — a background AI thread holding the
+            // shared page across a document recycle crashed natively
+            CodecPage cp = doc.getOwnedPage(page);
+            if (cp == null) {
+                return null;
+            }
+            try {
+                if (cp.isRecycled() || doc.isRecycled()) {
+                    return null;
+                }
+                if (cp instanceof MuPdfPage) {
+                    // Use the page HTML (working getPageAsHtml native) and split it
+                    // into paragraphs. MuPdfPage.text() has no native impl in the
+                    // prebuilt libMuPDF.so, so it throws UnsatisfiedLinkError.
+                    return com.foobnix.ai.AiTranslator.htmlToParagraphs(cp.getPageHTML());
+                }
+            } finally {
+                cp.recycle();
             }
         } catch (Exception e) {
             LOG.e(e);

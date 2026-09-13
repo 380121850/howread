@@ -194,10 +194,18 @@ public class WebDavRangeDataSource implements RemoteDataSource {
             }
             InputStream in = resp.body().byteStream();
             long skip = resp.code() == 200 ? offset : 0; // 200 = full body
+            // skip() may return 0 without advancing: a silent break here used
+            // to fill block N with bytes from offset 0 (garbage pages).
+            // Discard-read instead, and fail hard when the position cannot
+            // be reached — wrong-position data must never be served.
             while (skip > 0) {
                 long s = in.skip(skip);
                 if (s <= 0) {
-                    break;
+                    s = in.read(new byte[8192], 0, (int) Math.min(skip, 8192));
+                    if (s <= 0) {
+                        throw new IOException(
+                                "WebDAV body shorter than expected: cannot reach offset " + offset);
+                    }
                 }
                 skip -= s;
             }

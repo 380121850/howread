@@ -522,11 +522,14 @@ public class AppDB {
         if (fileMetaDao == null) {
             return;
         }
-        List<FileMeta> recent = getRecentDeprecated();
-        for (FileMeta meta : recent) {
+        // clear STARS (IsStar), not the recent list: the copy-pasted recent
+        // query left every favorite that was not read recently untouched
+        // (compare clearAllStars)
+        List<FileMeta> stars = fileMetaDao.queryBuilder().where(FileMetaDao.Properties.IsStar.eq(1)).list();
+        for (FileMeta meta : stars) {
             meta.setIsStar(false);
         }
-        fileMetaDao.updateInTx(recent);
+        fileMetaDao.updateInTx(stars);
 
     }
 

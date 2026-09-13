@@ -159,6 +159,12 @@ public class AiClient {
                     for (int i = 0; i < arr.length(); i++) {
                         String id = arr.getJSONObject(i).optString("id",
                                 arr.getJSONObject(i).optString("name"));
+                        // Gemini lists entries as "models/<id>"; chat() builds
+                        // "/models/<id>" itself — storing the prefix made
+                        // every model picked from the list 404
+                        if (id.startsWith("models/")) {
+                            id = id.substring("models/".length());
+                        }
                         if (TxtUtils.isNotEmpty(id)) {
                             ids.add(id);
                         }

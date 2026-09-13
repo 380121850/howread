@@ -2221,6 +2221,26 @@ def fn17_outline(dev, case_id, cfg=None, fixtures=None):
         chapter.click()
         time.sleep(3.5)
         after = _wait_page_change(dev, before, timeout=12)
+        if not after:
+            _snap(dev, case_id, "after_chapter_jump_try1")
+            # 冷启会恢复上次阅读位置:所选章节可能恰为当前章,页码不变≠跳转失败
+            # ——重开目录换一章再跳(2026-09-13 全量回归双机同挂)
+            toc = _reader_toolbar_btn(dev, "onDocDontext", desc_kws=("目录",))
+            if toc is not None:
+                toc.click()
+                time.sleep(2.5)
+                _reader_show_toolbar(dev)
+                before = _reader_page_or_none(dev)
+                alt = None
+                for kw in ("CHAPTER III", "Chapter 3", "第三章", "CHAPTER IV", "Chapter 4"):
+                    el = dev.d(textContains=kw)
+                    if el.exists:
+                        alt = el
+                        break
+                if alt is not None:
+                    alt.click()
+                    time.sleep(3.5)
+                    after = _wait_page_change(dev, before, timeout=12)
         _snap(dev, case_id, "after_chapter_jump")
         if not after:
             raise AssertionError("点击章节后页码未变化")
@@ -3219,10 +3239,21 @@ def fn33_hidden_files(dev, case_id, cfg=None, fixtures=None):
             _ensure_home(dev)
             if not _browse_root(dev):
                 raise AssertionError("我的文件根视图不可达")
-            dl = _browse_dl_row(dev)
-            if dl is not None:
-                dl.click()
-                time.sleep(2.5)
+            for _dl_try in range(2):
+                try:
+                    dl = _browse_dl_row(dev)
+                    if dl is None:
+                        break
+                    dl.click()
+                    break
+                except Exception:
+                    # 进入时列表可能正在刷新(StaleObject),重取一次(2026-09-13)
+                    if _dl_try == 1:
+                        raise
+                    time.sleep(2)
+            else:
+                dl = None
+            time.sleep(2.5)
         with dev.step(case_id, "toggle_show_hidden"):
             # [显示隐藏文件]在浏览页弹出菜单(BrowseFragment2.popupMenu:2110),触发按钮
             # 是 R.id.onListGrid(浏览页专属,与书库 onGridList 不同 id,真机核实 2026-09-13)
@@ -3267,10 +3298,21 @@ def fn33_hidden_files(dev, case_id, cfg=None, fixtures=None):
             if not ok:
                 dev.save_dump(case_id, "root_not_ready")
                 raise AssertionError("开关后我的文件根视图未就绪")
-            dl = _browse_dl_row(dev)
-            if dl is not None:
-                dl.click()
-                time.sleep(2.5)
+            for _dl_try in range(2):
+                try:
+                    dl = _browse_dl_row(dev)
+                    if dl is None:
+                        break
+                    dl.click()
+                    break
+                except Exception:
+                    # 进入时列表可能正在刷新(StaleObject),重取一次(2026-09-13)
+                    if _dl_try == 1:
+                        raise
+                    time.sleep(2)
+            else:
+                dl = None
+            time.sleep(2.5)
             el = _find_text_scrolled(dev, ".autotest_hidden", max_swipes=4)
             _snap(dev, case_id, "hidden_visible")
             if el is None:
@@ -3653,7 +3695,7 @@ def fn41_statusbar_pos(dev, case_id, cfg=None, fixtures=None):
         if not opened:
             dev.save_dump(case_id, "no_prefs_entry")
             raise TestSkip("阅读偏好入口不可见")
-        if not _click_any(dev, ["进度条", "状态栏位置", "顶部", "Status bar", "位置"], max_swipes=5):
+        if not _click_any(dev, ["进度条", "状态栏位置", "状态栏", "顶部", "Status bar", "位置"], max_swipes=5):
             dev.d.press("back")
             dev.save_dump(case_id, "no_statusbar_row")
             raise TestSkip("阅读偏好无[进度条/状态栏位置]行")

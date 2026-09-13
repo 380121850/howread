@@ -56,6 +56,23 @@ public class AiTranslator {
         return "英文";
     }
 
+    /** The running translation thread (null when idle) — {@link #cancel()}
+     * interrupts it. */
+    private static volatile Thread currentJob;
+
+    /**
+     * Stop the running translation at the next page/paragraph boundary.
+     * Dismissing the panel only removed its view: the background thread used
+     * to keep issuing AI requests (real API cost) for a dead panel and pin
+     * the finished Activity until the loop ended.
+     */
+    public static void cancel() {
+        final Thread t = currentJob;
+        if (t != null) {
+            t.interrupt();
+        }
+    }
+
     /**
      * Start translating on a background thread.
      *
@@ -67,18 +84,22 @@ public class AiTranslator {
      */
     public static void translate(final Context c, final DocumentController dc,
             final String srcLang, final String tgtLang, final Listener listener) {
-        new Thread(new Runnable() {
+        final Thread thread = new Thread(new Runnable() {
             @Override public void run() {
                 try {
                     doTranslate(c, dc, srcLang, tgtLang, listener);
-                } catch (Throwable t) {
-                    LOG.e(t);
+                } catch (Throwable th) {
+                    LOG.e(th);
                     android.util.Log.i("BENCH", "AiTranslator EXCEPTION: "
-                            + t.getClass().getName() + " " + t.getMessage());
+                            + th.getClass().getName() + " " + th.getMessage());
                     listener.onFinished(false);
+                } finally {
+                    currentJob = null;
                 }
             }
-        }, "AiTranslate").start();
+        }, "AiTranslate");
+        currentJob = thread;
+        thread.start();
     }
 
     private static void doTranslate(Context c, DocumentController dc, String srcLang,
@@ -112,6 +133,9 @@ public class AiTranslator {
 
         int done = 0, failed = 0, empty = 0;
         for (int p = start; p <= end; p++) {
+            if (Thread.currentThread().isInterrupted()) {
+                return; // cancelled: the panel is gone, stay silent
+            }
             int chapter = chapterIndexForPage(outline, p);
             String[] paras = dc.getPageParagraphs(p - 1); // 0-based page
             // Pages outside the reader's decode window are recycled and yield
@@ -131,6 +155,9 @@ public class AiTranslator {
                 android.util.Log.i("BENCH", "AiTranslator page " + p + " sample=[" + sample + "]");
             }
             for (int i = 0; i < paras.length; i++) {
+                if (Thread.currentThread().isInterrupted()) {
+                    return; // cancelled mid-page: stop spending API quota
+                }
                 String orig = clean(paras[i]);
                 if (TxtUtils.isEmpty(orig)) {
                     empty++;
