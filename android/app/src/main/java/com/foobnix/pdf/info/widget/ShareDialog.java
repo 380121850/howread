@@ -538,7 +538,7 @@ public class ShareDialog {
 
                     EventBus.getDefault()
                             .post(new UpdateAllFragments());
-                } else if (AppsConfig.isCloudsEnable && which == i++) {
+                } else if (AppsConfig.isCloudsEnable && !isRemote && which == i++) {
                     showAddToCloudDialog(a, file);
                 } else if (!isPlaylist && which == i++) {
                     DialogsPlaylist.showPlaylistsDialog(a, null, file);

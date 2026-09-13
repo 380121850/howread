@@ -41,6 +41,7 @@ import com.foobnix.pdf.info.model.BookCSS;
 import com.foobnix.pdf.info.wrapper.UITab;
 import com.foobnix.pdf.info.view.MonthlyBarsView;
 import com.foobnix.remote.RemoteBook;
+import com.foobnix.remote.RemoteBookOpener;
 import com.foobnix.remote.RemoteServer;
 import com.foobnix.remote.RemoteStore;
 import com.foobnix.ui2.AppDB;
@@ -722,7 +723,16 @@ public class DashboardFragment2 extends UIFragment<FileMeta> {
                 @Override
                 public void onClick(View v) {
                     Activity a = getActivity();
-                    if (a == null || !new java.io.File(path).isFile()) {
+                    if (a == null) {
+                        return;
+                    }
+                    if (RemoteBook.isRemotePathLoose(path)) {
+                        // remote book: online open / cache fetch at the
+                        // bookmark position — no local file behind the path
+                        RemoteBookOpener.openOrDownload(a, path, 0, bm.p);
+                        return;
+                    }
+                    if (!new java.io.File(path).isFile()) {
                         return;
                     }
                     FileMeta meta = AppDB.get().getOrCreate(path);
