@@ -3,8 +3,6 @@
    <string name="library_settings">Налаштування бібліотеки</string>
    <string name="scan_device_for_new_books">Директорії для пошуку книжок</string>
    <string name="add_folder">Додати теку</string>
-   <string name="archives">Архіви</string>
-   <string name="other">Інше</string>
    <string name="you_need_to_update_the_library">Вам потрібно оновити бібліотеку</string>
    <string name="in_the_author_s_name_first_the_surname">Спочатку прізвище, потім ім\'я автора</string>
    <string name="orientation">Орієнтація</string>

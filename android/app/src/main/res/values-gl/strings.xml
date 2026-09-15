@@ -3,8 +3,6 @@
    <string name="library_settings">Configuración da biblioteca</string>
    <string name="scan_device_for_new_books">Cartafoles para escanear</string>
    <string name="add_folder">Engadir cartafol</string>
-   <string name="archives">Arquivos</string>
-   <string name="other">Outros</string>
    <string name="you_need_to_update_the_library">Actualiza agora a biblioteca para aplicar os cambios</string>
    <string name="in_the_author_s_name_first_the_surname">Apelido do autor primeiro</string>
    <string name="orientation">Orientación</string>

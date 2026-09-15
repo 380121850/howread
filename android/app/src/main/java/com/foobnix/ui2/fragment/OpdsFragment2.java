@@ -57,6 +57,7 @@ import com.foobnix.pdf.info.widget.ChooserDialogFragment;
 import com.foobnix.pdf.search.view.ProgressTask;
 import com.foobnix.sys.TempHolder;
 import com.foobnix.ui2.AppDB;
+import com.foobnix.ui2.MainTabs2;
 import com.foobnix.ui2.adapter.EntryAdapter;
 import com.foobnix.ui2.adapter.NetworkRootAdapter;
 import com.foobnix.ui2.fast.FastScrollRecyclerView;
@@ -90,6 +91,7 @@ public class OpdsFragment2 extends UIFragment<Entry> {
     public List<Entry> allCatalogs = new ArrayList<Entry>();
     EntryAdapter searchAdapter;
     TextView titleView;
+    TextView emptyHint;
     String url = "/";
     String urlRoot = "";
     String title;
@@ -107,6 +109,14 @@ public class OpdsFragment2 extends UIFragment<Entry> {
     String netType = "";
     boolean authFailed = false;
     boolean webDavLoadFailed = false;
+    // configured server but its stored credentials are missing/undecryptable:
+    // the listing then runs anonymously and a permission-filtering NAS may
+    // answer with an EMPTY "successful" list instead of 401
+    boolean credMissing = false;
+    // once-per-entry guard for the re-login prompt
+    boolean reloginPrompted = false;
+    // resolved server object of the current webDavMode session (for re-login)
+    WebDavServer currentWebDavServer = null;
     String currentServerUrl = "";
     List<WebDavItem> webDavItems = new ArrayList<WebDavItem>();
     List<WebDavItem> rootWebDavItems = new ArrayList<WebDavItem>();
@@ -178,6 +188,7 @@ public class OpdsFragment2 extends UIFragment<Entry> {
         recyclerView = (FastScrollRecyclerView) view.findViewById(R.id.recyclerView);
 
         titleView = (TextView) view.findViewById(R.id.titleView);
+        emptyHint = (TextView) view.findViewById(R.id.webdavEmptyHint);
         starIcon = (ImageView) view.findViewById(R.id.starIcon);
         pathContainer = view.findViewById(R.id.pathContainer);
         MyProgressBar = (MyProgressBar) view.findViewById(R.id.MyProgressBarOPDS);
@@ -411,7 +422,15 @@ public class OpdsFragment2 extends UIFragment<Entry> {
 
             @Override
             public void onClick(View v) {
-                onBackAction();
+                if (isInProgress()) {
+                    Toast.makeText(getContext(), R.string.please_wait, Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                // false = no parent level left: the detached "My files" page
+                // closes itself (same contract as the system BACK handling)
+                if (!onBackAction() && externalMode && getActivity() instanceof MainTabs2) {
+                    ((MainTabs2) getActivity()).hideTabOverlay();
+                }
             }
         });
 
@@ -419,6 +438,11 @@ public class OpdsFragment2 extends UIFragment<Entry> {
 
             @Override
             public void onClick(View v) {
+                // detached page opened from "My files": HOME returns there
+                if (externalMode && getActivity() instanceof MainTabs2) {
+                    ((MainTabs2) getActivity()).hideTabOverlay();
+                    return;
+                }
                 stack.clear();
                 webDavMode = false;
                 netType = "";
@@ -828,14 +852,16 @@ public class OpdsFragment2 extends UIFragment<Entry> {
     // the fragment sits detached beyond the pager's offscreen limit
     String pendingOpenUrl;
     boolean pendingOpenWebDav;
+    String pendingTitle;
     // true while this instance is the detached page opened from "My files":
     // a dead catalog shows an error instead of falling back to the network
     // root list, and BACK at the entry target closes the page
     boolean externalMode = false;
 
     /** Open a specific OPDS catalog (or the root list when url is "/"). */
-    public void openExternal(boolean webDav, String targetUrl) {
+    public void openExternal(boolean webDav, String targetUrl, String pageTitle) {
         externalMode = true;
+        pendingTitle = pageTitle;
         if (isAdded() && recyclerView != null) {
             applyExternalTarget(webDav, targetUrl);
         } else {
@@ -848,11 +874,39 @@ public class OpdsFragment2 extends UIFragment<Entry> {
         webDavMode = webDav;
         authFailed = false;
         webDavLoadFailed = false;
+        credMissing = false;
+        reloginPrompted = false;
+        currentWebDavServer = null;
         netType = com.foobnix.remote.RemoteBook.getType(targetUrl);
         currentServerUrl = webDav ? targetUrl : "";
         url = TxtUtils.isEmpty(targetUrl) ? "/" : targetUrl;
         stack.clear();
         stack.push(url);
+        // render the target view at once (server name in the path bar,
+        // empty target adapter, progress) so the loading page never
+        // flashes the network-root skeleton with its 目录 title
+        if (TxtUtils.isNotEmpty(pendingTitle)) {
+            title = pendingTitle;
+        }
+        pendingTitle = null;
+        if (titleView != null) {
+            titleView.setText(title == null ? "" : title.replaceAll("[\n\r\t ]+", " ").trim());
+        }
+        if (starIcon != null) {
+            starIcon.setVisibility(View.GONE);
+        }
+        if (recyclerView != null) {
+            if (webDavMode) {
+                webDavAdapter.setItems(new ArrayList<WebDavItem>());
+                recyclerView.setAdapter(webDavAdapter);
+            } else {
+                searchAdapter.clearItems();
+                recyclerView.setAdapter(searchAdapter);
+            }
+        }
+        if (MyProgressBar != null) {
+            MyProgressBar.setVisibility(View.VISIBLE);
+        }
         populate();
     }
 
@@ -860,6 +914,9 @@ public class OpdsFragment2 extends UIFragment<Entry> {
         if (isRoot()) {
             currentServerUrl = item.href;
             webDavMode = true;
+            credMissing = false;
+            reloginPrompted = false;
+            currentWebDavServer = null;
             netType = com.foobnix.remote.RemoteBook.getType(item.href);
             // honour the server's configured start folder ("" = server root)
             WebDavServer startSrv = WebDavStore.findForUrl(item.href);
@@ -1046,6 +1103,31 @@ public class OpdsFragment2 extends UIFragment<Entry> {
         }
     }
 
+    /** Configured server whose listing came back empty / unauthorized:
+     * offer to re-enter its credentials (edit dialog, prefilled). */
+    private void promptWebDavRelogin() {
+        final WebDavServer srv = currentWebDavServer != null
+                ? currentWebDavServer
+                : WebDavStore.findForUrl(currentServerUrl);
+        if (srv == null || getActivity() == null) {
+            return;
+        }
+        AlertDialogs.showDialog(getActivity(),
+                getString(R.string.webdav_relogin_msg),
+                getString(R.string.ok),
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        AddWebDavDialog.showDialog(getActivity(), new Runnable() {
+                            @Override
+                            public void run() {
+                                populate();
+                            }
+                        }, srv);
+                    }
+                });
+    }
+
     public void clearEmpty() {
         if (ExtUtils.isExteralSD(BookCSS.get().downlodsPath)) {
             searchAdapter.notifyDataSetChanged();
@@ -1102,16 +1184,32 @@ public class OpdsFragment2 extends UIFragment<Entry> {
                 WebDavServer srv = WebDavStore.findForUrl(url);
                 String login = "", password = "";
                 boolean trustAll = false;
+                credMissing = false;
+                currentWebDavServer = null;
                 if (srv != null) {
+                    currentWebDavServer = srv;
                     currentServerUrl = srv.url;
                     String[] creds = WebDavCredentials.load(getContext(), srv.url);
                     if (creds != null) {
                         login = creds[0];
                         password = creds[1];
+                    } else {
+                        // configured server without usable credentials: the
+                        // request below runs anonymously, and a NAS may answer
+                        // with a permission-filtered EMPTY list instead of 401
+                        credMissing = true;
                     }
                     trustAll = WebDavCredentials.isTrustAll(getContext(), srv.url);
                 }
                 List<WebDavItem> items = WebDavClient.list(url, login, password, trustAll);
+                if (items != null && items.isEmpty() && !url.endsWith("/")) {
+                    // some servers include children only when the PROPFIND
+                    // targets a slash-terminated collection path: retry once
+                    List<WebDavItem> slashed = WebDavClient.list(url + "/", login, password, trustAll);
+                    if (slashed != null && !slashed.isEmpty()) {
+                        items = slashed;
+                    }
+                }
                 if (items == null) {
                     authFailed = WebDavClient.lastErrorWasAuth;
                     webDavLoadFailed = true;
@@ -1218,20 +1316,37 @@ public class OpdsFragment2 extends UIFragment<Entry> {
 
     @Override
     public void populateDataInUI(List<Entry> entries) {
+        if (emptyHint != null) {
+            emptyHint.setVisibility(View.GONE);
+        }
         if (webDavMode) {
-            if (authFailed) {
+            final boolean hadAuthFailure = authFailed;
+            final boolean hadLoadFailure = webDavLoadFailed;
+            if (hadAuthFailure) {
                 authFailed = false;
                 Toast.makeText(getContext(), R.string.webdav_auth_failed, Toast.LENGTH_LONG).show();
-            } else if (webDavLoadFailed) {
+            } else if (hadLoadFailure) {
                 webDavLoadFailed = false;
                 Toast.makeText(getContext(), R.string.loading_error, Toast.LENGTH_LONG).show();
             }
             webDavAdapter.setItems(webDavItems);
             recyclerView.setAdapter(webDavAdapter);
+            if (emptyHint != null) {
+                emptyHint.setVisibility(webDavItems.isEmpty() && !hadAuthFailure && !hadLoadFailure
+                        ? View.VISIBLE : View.GONE);
+            }
             if (title != null) {
                 titleView.setText("" + title.replaceAll("[\n\r\t ]+", " ").trim());
             }
             starIcon.setVisibility(View.GONE);
+            // server configured but its listing came back empty/unauthorized:
+            // offer re-entering the credentials instead of a silent blank page
+            if (stack.size() == 1 && !reloginPrompted && !hadLoadFailure && (hadAuthFailure
+                    || (credMissing && webDavItems.isEmpty()))
+                    && com.foobnix.pdf.info.AppsConfig.isProFeaturesEnabled()) {
+                reloginPrompted = true;
+                promptWebDavRelogin();
+            }
             return;
         }
         if ("/".equals(url)) {

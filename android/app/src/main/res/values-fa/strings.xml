@@ -3,8 +3,6 @@
    <string name="library_settings">تنظیمات کتابخانه</string>
    <string name="scan_device_for_new_books">دستگاه اسکن برای کتاب های جدید</string>
    <string name="add_folder">اضافه کردن پوشه</string>
-   <string name="archives">بایگانی</string>
-   <string name="other">دیگر</string>
    <string name="you_need_to_update_the_library">شما باید کتابخانه را به روز کنید</string>
    <string name="in_the_author_s_name_first_the_surname">در نویسنده \ \'s با نام، برای اولین بار نام خانوادگی</string>
    <string name="orientation">گرایش</string>

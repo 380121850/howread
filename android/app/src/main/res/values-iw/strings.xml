@@ -3,8 +3,6 @@
    <string name="library_settings">הגדרות ספריה</string>
    <string name="scan_device_for_new_books">מכשיר סריקת עבור ספרים חדשים</string>
    <string name="add_folder">הוסף תיקיה</string>
-   <string name="archives">אַרְכִיוֹן</string>
-   <string name="other">אחר</string>
    <string name="you_need_to_update_the_library">עליך לעדכן את הספריה</string>
    <string name="in_the_author_s_name_first_the_surname">בשמו של המחבר, תחילה שם המשפחה</string>
    <string name="orientation">נטייה</string>

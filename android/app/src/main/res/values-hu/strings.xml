@@ -3,8 +3,6 @@
    <string name="library_settings">Könyvtárbeállítások</string>
    <string name="scan_device_for_new_books">Beolvasandó mappák</string>
    <string name="add_folder">Mappa hozzáadása</string>
-   <string name="archives">Archívumok</string>
-   <string name="other">Egyéb</string>
    <string name="you_need_to_update_the_library">Most frissítse a könyvtárat a változtatások alkalmazásához</string>
    <string name="in_the_author_s_name_first_the_surname">Először a szerző vezetékneve</string>
    <string name="orientation">Tájolás</string>

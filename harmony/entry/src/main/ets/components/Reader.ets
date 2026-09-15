@@ -528,6 +528,8 @@ struct Reader {
   @State searchCurrentIdx: number = -1;       /* normalized hits on the current page */
   @State searchHitPage: number = -1;        /* page the hits belong to */
   @State brightnessLevel: number = 128;     /* 1..255 system brightness */
+  @State brightHintShow: boolean = false;   /* left-edge drag: brightness bubble */
+  @State brightHintText: string = '';
   @State autoFlip: boolean = false;
   @State autoFlipInterval: number = 3;      /* seconds between flips */
   @State autoScroll: boolean = false;       /* continuous auto-scroll, vertical mode (A) */
@@ -2902,6 +2904,50 @@ struct Reader {
   }
 
   /** Open file info dialog (sprint G6): show title/author/pages/format/size. */
+  /** Human-readable remote address: full URL / smb://host/share/path / sftp://host/path. */
+  private prettyRemoteUri(uri: string): string {
+    const parts = parseRemoteUri(uri);
+    if (parts === null) {
+      return uri;
+    }
+    if (parts.type === 'webdav') {
+      return parts.fileUrl;
+    }
+    const segs: string[] = parts.fileUrl.split('|');
+    if (parts.type === 'smb' && segs.length >= 3) {
+      return 'smb://' + segs[0] + '/' + segs[1] + segs[2];
+    }
+    if (parts.type === 'sftp' && segs.length >= 2) {
+      return 'sftp://' + segs[0] + segs[1];
+    }
+    return uri;
+  }
+
+  /* Left-edge brightness drag (Android BrightnessHelper parity) */
+  private brightPanBase: number = 0;
+  private brightHintTimer: number = -1;
+
+  private brightGestureStart(): void {
+    this.brightPanBase = this.brightnessLevel;
+    this.brightHintShow = true;
+    this.brightHintText = '\u4eae\u5ea6 ' + Math.round(this.brightnessLevel / 255 * 100) + '%';
+  }
+
+  private brightGestureMove(offsetY: number): void {
+    const lv: number = Math.max(1, Math.min(255, Math.round(this.brightPanBase + offsetY * 0.5)));
+    this.setBrightness(lv);
+    this.brightHintText = '\u4eae\u5ea6 ' + Math.round(lv / 255 * 100) + '%';
+  }
+
+  private brightGestureEnd(): void {
+    if (this.brightHintTimer >= 0) {
+      clearTimeout(this.brightHintTimer);
+    }
+    this.brightHintTimer = setTimeout(() => {
+      this.brightHintShow = false;
+    }, 1500);
+  }
+
   private openFileInfo(): void {
     try {
       const parts: string[] = [];
@@ -2910,7 +2956,7 @@ struct Reader {
       if (this.isRemote) {
         /* remote:// docs: show the remote URI instead of stat'ing a local file */
         parts.push(`来源: 远程（在线缓存阅读）`);
-        parts.push(`路径: ${this.remoteUri}`);
+        parts.push(`路径: ${this.prettyRemoteUri(this.remoteUri)}`);
       }
 
       /* Try to get document info via NAPI (handle lives in dataSource) */
@@ -3683,6 +3729,12 @@ struct Reader {
           .backgroundColor(this.barBg())
         }
 
+        /* v1.3.4 parity: how to adjust brightness while reading */
+        Text($r('app.string.brightness_edge_hint'))
+          .fontSize(10).fontColor('#808080')
+          .width('100%').textAlign(TextAlign.Start)
+          .padding({ left: 14, bottom: 2 })
+
         // Search bar (visible when opened)
         if (this.showSearch) {
           Row({ space: 8 }) {
@@ -3834,6 +3886,33 @@ struct Reader {
                   })
               )
 
+            /* v1.3.4 parity: drag the left screen edge to adjust brightness */
+            Stack({ alignContent: Alignment.Center }) {
+              if (this.brightHintShow) {
+                Text(this.brightHintText)
+                  .fontSize(13).fontColor('#333')
+                  .width(140).textAlign(TextAlign.Center).offset({ x: 70 })
+                  .padding({ left: 12, right: 12, top: 4, bottom: 4 })
+                  .borderRadius(14)
+                  .backgroundColor('#f5f5f5')
+              }
+            }
+            .width(32).height('100%')
+            .position({ x: 0, y: 0 })
+            .hitTestBehavior(HitTestMode.Transparent)
+            .gesture(
+              PanGesture({ fingers: 1, distance: 5, direction: PanDirection.Vertical })
+                .onActionStart(() => {
+                  this.brightGestureStart();
+                })
+                .onActionUpdate((event: PanGestureEvent) => {
+                  this.brightGestureMove(event.offsetY);
+                })
+                .onActionEnd(() => {
+                  this.brightGestureEnd();
+                })
+            )
+
             // Phase 9: while in selection mode, this full-page catcher converts
             // taps into the selection end anchor (long-press restarts the anchor)
             if (this.selMode) {
@@ -3924,6 +4003,33 @@ struct Reader {
                 })
                 .onActionEnd(() => {
                   this.fastScrolling = false;
+                })
+            )
+
+            /* v1.3.4 parity: left-edge brightness strip (vertical mode) */
+            Stack({ alignContent: Alignment.Center }) {
+              if (this.brightHintShow) {
+                Text(this.brightHintText)
+                  .fontSize(13).fontColor('#333')
+                  .width(140).textAlign(TextAlign.Center).offset({ x: 70 })
+                  .padding({ left: 12, right: 12, top: 4, bottom: 4 })
+                  .borderRadius(14)
+                  .backgroundColor('#f5f5f5')
+              }
+            }
+            .width(32).height('100%')
+            .position({ x: 0, y: 0 })
+            .hitTestBehavior(HitTestMode.Transparent)
+            .gesture(
+              PanGesture({ fingers: 1, distance: 5, direction: PanDirection.Vertical })
+                .onActionStart(() => {
+                  this.brightGestureStart();
+                })
+                .onActionUpdate((event: PanGestureEvent) => {
+                  this.brightGestureMove(event.offsetY);
+                })
+                .onActionEnd(() => {
+                  this.brightGestureEnd();
                 })
             )
           }

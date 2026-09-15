@@ -3,8 +3,6 @@
    <string name="library_settings">Ρυθμίσεις βιβλιοθήκης</string>
    <string name="scan_device_for_new_books">Φακέλους για σάρωση</string>
    <string name="add_folder">Νέος φάκελος</string>
-   <string name="archives">Αρχεία</string>
-   <string name="other">Άλλα</string>
    <string name="you_need_to_update_the_library">Τώρα ενημερώστε τη βιβλιοθήκη για να εφαρμόσετε αλλαγές</string>
    <string name="in_the_author_s_name_first_the_surname">Το επώνυμο του συγγραφέα</string>
    <string name="orientation">Προσανατολισμός</string>

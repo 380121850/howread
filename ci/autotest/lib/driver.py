@@ -296,10 +296,10 @@ class Device:
         # octet-stream/文档类 VIEW intent 直接路由给第三方默认应用，选择器根本不弹。
         self.shell('am start -n %s/com.foobnix.OpenerActivity -a android.intent.action.VIEW -d "file://%s" -t %s'
                    % (self.pkg, device_path, mime))
-        deadline = time.time() + max(15, self.cfg.get("launcher_timeout_s", 10) + 5)
+        deadline = time.time() + max(45, self.cfg.get("launcher_timeout_s", 10) + 5)
         resolver_hits = 0
         while time.time() < deadline:
-            top = self.shell("dumpsys activity activities | grep mResumedActivity")
+            top = self.shell("dumpsys activity activities | grep ResumedActivity")
             if "ViewActivity" in top or "TTSActivity" in top:
                 time.sleep(2.5)
                 return True
@@ -358,7 +358,7 @@ class Device:
                 return True
             # "打开应用继续阅读"开启时,冷启动会把阅读器盖在主界面上:
             # 检测到阅读器在前台则 back 退出,避免主界面永远等不到
-            top = self.shell("dumpsys activity activities | grep mResumedActivity")
+            top = self.shell("dumpsys activity activities | grep ResumedActivity")
             if "ViewActivity" in top or "TTSActivity" in top:
                 self.d.press("back")
                 time.sleep(1.5)
@@ -437,7 +437,7 @@ class Device:
         target.click()
         deadline = time.time() + self.cfg.get("launcher_timeout_s", 10)
         while time.time() < deadline:
-            top = self.shell("dumpsys activity activities | grep mResumedActivity")
+            top = self.shell("dumpsys activity activities | grep ResumedActivity")
             if "ViewActivity" in top or "TTSActivity" in top:
                 time.sleep(2.5)
                 return True

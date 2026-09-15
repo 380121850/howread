@@ -3,8 +3,6 @@
    <string name="library_settings">Kütüphane Ayarları</string>
    <string name="scan_device_for_new_books">Cihazda Kitapları Tara</string>
    <string name="add_folder">Klasör ekle</string>
-   <string name="archives">Arşiv</string>
-   <string name="other">Diğer</string>
    <string name="you_need_to_update_the_library">Kütüphaneyi güncellemeniz gerekiyor</string>
    <string name="in_the_author_s_name_first_the_surname">Önce yazarın soy adı</string>
    <string name="orientation">Yön</string>

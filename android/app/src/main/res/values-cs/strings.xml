@@ -3,8 +3,6 @@
    <string name="library_settings">Nastavení knihovny</string>
    <string name="scan_device_for_new_books">Skenovat složky</string>
    <string name="add_folder">Přidat složku</string>
-   <string name="archives">Archiv</string>
-   <string name="other">Ostatní</string>
    <string name="you_need_to_update_the_library">Aktualizovat knihovnu a aplikovat změny</string>
    <string name="in_the_author_s_name_first_the_surname">Nejdříve příjmení v názvu autora</string>
    <string name="orientation">Orientace</string>

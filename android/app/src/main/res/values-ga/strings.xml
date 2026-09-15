@@ -3,8 +3,6 @@
    <string name="library_settings">Socruithe leabharlainne</string>
    <string name="scan_device_for_new_books">Fillteáin le scanadh</string>
    <string name="add_folder">Fillteán nua</string>
-   <string name="archives">Cartlanna</string>
-   <string name="other">Eile</string>
    <string name="you_need_to_update_the_library">Déan an leabharlann a nuashonrú anois chun athruithe a chur i bhfeidhm</string>
    <string name="in_the_author_s_name_first_the_surname">Ainm deireanach an údair ar dtús</string>
    <string name="orientation">Treoshuíomh</string>

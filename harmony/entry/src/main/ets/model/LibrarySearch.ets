@@ -14,7 +14,7 @@ import { RecentBook } from './ReadingProgress';
  */
 
 /** File extensions treated as books during the device scan. */
-const BOOK_EXTS: string[] = ['pdf', 'epub', 'txt', 'html', 'htm', 'mobi', 'fb2', 'docx', 'rtf', 'md', 'cbz'];
+const BOOK_EXTS: string[] = ['pdf', 'epub', 'txt', 'html', 'htm', 'mobi', 'azw', 'azw3', 'prc', 'pdb', 'fb2', 'docx', 'rtf', 'md', 'cbz'];
 
 /** Round 7: scan-format families (Android AppState.support* -> ExtUtils.seachExts).
  *  The whitelist only filters scanning/import, never decoding ability. */
@@ -26,7 +26,7 @@ const FORMAT_EXTS: Record<string, string[]> = {
   'epub': ['epub'],
   'fb2': ['fb2'],
   'txtmd': ['txt', 'md'],
-  'mobi': ['mobi', 'azw', 'azw3', 'prc'],
+  'mobi': ['mobi', 'azw', 'azw3', 'prc', 'pdb'],
   'djvu': ['djvu', 'djv'],
   'xps': ['xps', 'oxps'],
   'doc': ['doc', 'docx'],

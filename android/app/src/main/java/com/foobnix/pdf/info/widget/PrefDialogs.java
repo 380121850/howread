@@ -104,6 +104,28 @@ public class PrefDialogs {
         final LinearLayout root = new LinearLayout(a);
         root.setOrientation(LinearLayout.VERTICAL);
 
+        // 本地文件夹路径 header with the add action on one row: the old
+        // bottom "+ add folder / + add file" button row was merged here and
+        // the add-file option removed
+        final LinearLayout localHeader = new LinearLayout(a);
+        localHeader.setOrientation(LinearLayout.HORIZONTAL);
+        localHeader.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        localHeader.setPadding(Dips.DP_5, Dips.DP_5, Dips.DP_5, 0);
+
+        final TextView localTitle = new TextView(a);
+        localTitle.setText(R.string.moon_lib_local_folders);
+        localTitle.setTypeface(null, android.graphics.Typeface.BOLD);
+
+        final TextView addFolder = new TextView(a);
+        addFolder.setText(TxtUtils.notAndUnderline("+ ", a.getString(R.string.add_folder)));
+        addFolder.setPadding(Dips.dpToPx(10), 0, 0, 0);
+
+        localHeader.addView(localTitle, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        localHeader.addView(addFolder, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+        root.addView(localHeader, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
         final ListView list = new ListView(a);
 
         list.setAdapter(recentAdapter);
@@ -131,39 +153,22 @@ public class PrefDialogs {
             final android.content.SharedPreferences sel =
                     a.getSharedPreferences("remoteScanSel", android.content.Context.MODE_PRIVATE);
             for (final com.foobnix.remote.RemoteServer srv : allSmb) {
-                remoteBox.addView(remoteScanRow(a, sel, "smb:" + srv.id,
-                        srv.title + " · " + (TxtUtils.isEmpty(srv.startDir) ? "/" : srv.startDir)));
+                remoteBox.addView(remoteScanRow(a, sel, "smb:" + srv.id, R.drawable.my_nas_smb,
+                        remoteAddressLabel(smbHost(srv), srv.share + "/" + srv.startDir)));
             }
             for (final com.foobnix.remote.RemoteServer srv : allSftp) {
-                remoteBox.addView(remoteScanRow(a, sel, "sftp:" + srv.id,
-                        srv.title + " · " + (TxtUtils.isEmpty(srv.startDir) ? "/" : srv.startDir)));
+                remoteBox.addView(remoteScanRow(a, sel, "sftp:" + srv.id, R.drawable.my_nas_sftp,
+                        remoteAddressLabel(sftpHost(srv), srv.startDir)));
             }
             for (final com.foobnix.webdav.WebDavServer srv : allWebDav) {
-                remoteBox.addView(remoteScanRow(a, sel, "webdav:" + srv.url, srv.title + " · " + srv.startUrl()));
+                remoteBox.addView(remoteScanRow(a, sel, "webdav:" + srv.url, R.drawable.my_nas_webdav,
+                        remoteAddressLabel(webdavHost(srv.url), srv.startDir)));
             }
         }
         if (remoteBox.getChildCount() > 0) {
             root.addView(remoteBox, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT));
         }
-
-        final LinearLayout addRow = new LinearLayout(a);
-        addRow.setOrientation(LinearLayout.HORIZONTAL);
-        addRow.setPadding(Dips.DP_5, Dips.DP_5, Dips.DP_5, Dips.DP_5);
-
-        final TextView addFolder = new TextView(a);
-        addFolder.setText(TxtUtils.notAndUnderline("+ ", a.getString(R.string.add_folder)));
-
-        final TextView addFile = new TextView(a);
-        addFile.setText(TxtUtils.notAndUnderline("+ ", a.getString(R.string.add_file)));
-        addFile.setPadding(Dips.dpToPx(10), 0, 0, 0);
-
-        addRow.addView(addFolder, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
-        addRow.addView(addFile, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
-        root.addView(addRow, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
 
         builder.setView(root);
 
@@ -243,41 +248,6 @@ public class PrefDialogs {
             });
         });
 
-        addFile.setOnClickListener(v -> {
-            create.dismiss();
-            ChooserDialogFragment.chooseFile(a, "").setOnSelectListener(new ResultResponse2<String, Dialog>() {
-                @Override
-                public boolean onResultRecive(String nPath, Dialog dialog) {
-
-                    if (!new File(nPath).isFile()) {
-                        Toast.makeText(a, R.string.incorrect_value, Toast.LENGTH_SHORT).show();
-                        return false;
-                    }
-                    boolean isExists = false;
-                    String existPath = "";
-                    for (String str : JsonDB.get(BookCSS.get().searchPathsJson)) {
-                        if (str != null && str.trim().length() != 0 && nPath.equals(str)) {
-                            isExists = true;
-                            existPath = str;
-                            break;
-                        }
-                    }
-                    if (isExists) {
-                        Toast.makeText(a, String.format("[ %s == %s ] %s", nPath, existPath, a.getString(R.string.this_directory_is_already_in_the_list)), Toast.LENGTH_LONG).show();
-                    } else {
-                        BookCSS.get().searchPathsJson = JsonDB.add(BookCSS.get().searchPathsJson, nPath);
-                        // explicitly added again: lift the fallback exclusion
-                        BookCSS.get().searchPathsHiddenJson = JsonDB.remove(BookCSS.get().searchPathsHiddenJson, nPath);
-                    }
-                    dialog.dismiss();
-                    onChanges.run();
-                    chooseFolderDialog(a, onChanges, onScan);
-                    return false;
-                }
-
-            });
-        });
-
         create.show();
 
         AppsConfig.executorService.execute(() -> {
@@ -305,16 +275,80 @@ public class PrefDialogs {
         });
     }
 
-    /** One checkbox row of the 远程目录 section; the checked state persists
-     * in its own SharedPreferences ("remoteScanSel"), default unchecked. */
-    private static android.widget.CheckBox remoteScanRow(final FragmentActivity a,
-                                                         final android.content.SharedPreferences sel,
-                                                         final String key, final String label) {
+    /** One row of the 远程目录 section: the protocol icon (WebDAV/SMB/SFTP)
+     * + a checkbox. The checked state persists in its own SharedPreferences
+     * ("remoteScanSel"), default unchecked. */
+    private static android.view.View remoteScanRow(final FragmentActivity a,
+                                                   final android.content.SharedPreferences sel,
+                                                   final String key, final int iconRes, final String label) {
         final android.widget.CheckBox box = new android.widget.CheckBox(a);
         box.setText(label);
         box.setChecked(sel.getBoolean(key, false));
         box.setOnCheckedChangeListener((buttonView, isChecked) -> sel.edit().putBoolean(key, isChecked).commit());
-        return box;
+
+        // the icon follows the dialog text color so it stays visible day/night
+        // (the colored protocol logos keep their own colors instead)
+        final android.widget.ImageView icon = new android.widget.ImageView(a);
+        icon.setImageResource(iconRes);
+        if (!isBrandProtocolIcon(iconRes)) {
+            final int textColor = new android.widget.TextView(a).getCurrentTextColor();
+            icon.setColorFilter(textColor);
+        }
+        icon.setPadding(0, 0, Dips.dpToPx(6), 0);
+
+        final android.widget.LinearLayout row = new android.widget.LinearLayout(a);
+        row.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        row.addView(icon, new android.widget.LinearLayout.LayoutParams(Dips.dpToPx(20), Dips.dpToPx(20)));
+        row.addView(box, new android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT));
+        return row;
+    }
+
+    /** 彩色协议 logo（位图）不做单色染色，保持原色显示 */
+    private static boolean isBrandProtocolIcon(int res) {
+        return res == R.drawable.my_nas_webdav || res == R.drawable.my_nas_smb
+                || res == R.drawable.my_nas_sftp;
+    }
+
+    /** "host[:port] · /startDir" address line of a 远程目录 row. */
+    private static String remoteAddressLabel(String hostPart, String startDir) {
+        String d = startDir == null ? "" : startDir.trim();
+        while (d.startsWith("/")) {
+            d = d.substring(1);
+        }
+        while (d.endsWith("/")) {
+            d = d.substring(0, d.length() - 1);
+        }
+        return TxtUtils.isEmpty(d) ? hostPart : hostPart + " · /" + d;
+    }
+
+    /** "host:port" of an SMB server; the default port 445 is omitted. */
+    private static String smbHost(com.foobnix.remote.RemoteServer srv) {
+        return srv.host + (srv.port == 445 ? "" : ":" + srv.port);
+    }
+
+    /** "host:port" of an SFTP server; the default port 22 is omitted. */
+    private static String sftpHost(com.foobnix.remote.RemoteServer srv) {
+        return srv.host + (srv.port == 22 ? "" : ":" + srv.port);
+    }
+
+    /** "host:port" parsed out of a configured WebDAV URL. */
+    private static String webdavHost(String url) {
+        if (url == null) {
+            return "";
+        }
+        String u = url.trim();
+        int i = u.indexOf("://");
+        if (i >= 0) {
+            u = u.substring(i + 3);
+        }
+        int j = u.indexOf('/');
+        if (j >= 0) {
+            u = u.substring(0, j);
+        }
+        return u;
     }
 
     /** Scans every ticked 远程目录 row into the shelf (one shared progress
@@ -618,7 +652,7 @@ public class PrefDialogs {
                             ProfileStateIO.exportMisc(activity);
                             // OPDS / WebDAV servers + library folders, fresh
                             // even when no WebDAV sync has ever run
-                            ProfileStateIO.exportNetworkSources();
+                            ProfileStateIO.exportNetworkSources(activity);
                             ExportConverter.zipFolder(AppProfile.SYNC_FOLDER_ROOT, toFile);
                             return true;
                         } catch (ZipException e) {

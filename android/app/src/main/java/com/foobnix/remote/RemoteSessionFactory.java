@@ -50,7 +50,8 @@ public class RemoteSessionFactory {
                     Context c = LibreraApp.context;
                     String[] creds = WebDavCredentials.load(c, s.url);
                     boolean trustAll = com.foobnix.webdav.WebDavCredentials.isTrustAll(c, s.url);
-                    String fileUrl = com.foobnix.webdav.WebDavStore.trimSlash(s.url) + remotePathOnServer;
+                    String fileUrl = com.foobnix.webdav.WebDavClient.encodeIfNeeded(
+                            com.foobnix.webdav.WebDavStore.trimSlash(s.url) + remotePathOnServer);
                     return new WebDavRangeDataSource(fileUrl, creds == null ? "" : creds[0],
                             creds == null ? "" : creds[1], trustAll);
                 }

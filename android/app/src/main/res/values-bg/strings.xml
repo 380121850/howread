@@ -3,8 +3,6 @@
    <string name="library_settings">Настройки на библиотеката</string>
    <string name="scan_device_for_new_books">Папки за сканиране</string>
    <string name="add_folder">Нова папка</string>
-   <string name="archives">Архиви</string>
-   <string name="other">Друг</string>
    <string name="you_need_to_update_the_library">Сега актуализирайте библиотеката, за да приложите промени</string>
    <string name="in_the_author_s_name_first_the_surname">Първо име на автора</string>
    <string name="orientation">Ориентация</string>

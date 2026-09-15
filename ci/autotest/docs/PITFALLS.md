@@ -197,6 +197,53 @@
 
 > **落地状态**：A 级 7 条已全部进 AGENTS.md「Known Gotchas」——1→**22**、3→**23**、12→**24**（新增）；5→gotcha 21③、19→gotcha 19、21→gotcha 16、22→gotcha 21⑤（既有规则，确认覆盖）。B/C 级维持测试侧备忘，未入规则。
 
+### 34. 应用布局里 android:maxHeight 写在 ScrollView 上是无效属性（2026-09-13 实锤）
+**现象**：小屏机(KSA 720×1520)「我的文件」根页在添加若干远程条目后,书库文件夹卡片整个消失。
+**根因**：平台 ScrollView 不支持 android:maxHeight(静默忽略),远程区块无限增高,
+把 weight=1 的文件夹列表 RecyclerView 挤成 0px(dumpsys 实测 1150px/0px/230px)。
+**规避**：自定义 MaxHeightScrollView(onMeasure 里套 AT_MOST 上限),已在 fragment_browse2 两处生效。
+**建议**：应用侧已修复;测试侧写布局相关断言前先 dumpsys 看真实高度,别信 XML 声明。
+
+### 35. 翻页 pager 未接锁定;锁定只禁页内平移/缩放,且状态无 UI 回读（2026-09-13 审计）
+**事实**：阅读模式仅 上下翻页/左右翻页/演奏模式,翻页拖动走 VerticalViewPager
+(onInterceptTouchEvent/onTouchEvent 只看 isEnableHorizontalSwipe/isSelectTexByTouch);
+锁定门控在 PageImaveView(:809 fling/:936 拖动);lockUnlock 仅换图标,desc 静态,
+上下翻页文本阅读器底栏没有页码指示器。
+**规避**：FN-34 只能做开关冒烟;「锁定禁翻页」不可作为断言。
+**建议**：给 pager 接锁属产品决策(与 lockBooksByDefault=true 叠加=每本书开篇即不可拖动),勿单方面改。
+
+### 36. 状态栏位置只移动 bottomPanel;偏好弹窗是可拖拽容器且分区默认折叠（2026-09-13）
+**事实**：statusBarPosition 移动的是 bottomPanel(pagesTime/pagesCountIndicator/pagesPower),
+currentSeek 永在底部不动;阅读偏好弹窗(DragingPopup)整窗可拖拽,swipe 会拖走弹窗而非滚动内容;
+[状态栏]等分区默认折叠;[位置]行只有「值」TextView 带监听,行标签点了无效。
+**规避**：全程 resourceId 定位 + 点分区头展开 + 点值不点标签,禁用 swipe 滚动(见 _open_prefs_popup/_open_statusbar_settings)。
+
+### 37. toybox find 两个坑：-newermt 'bad date';MIUI /sdcard 上静默列空（2026-09-13 实锤）
+**现象**：导出 zip 已生成,`find -name -newermt '-3 minutes'` 报 bad date(stderr 被 2>/dev/null 吞);
+MIUI 11 上 `find /sdcard -name x.zip` 返回空而 `ls` 可见同一文件。
+**规避**：文件存在性检查用 `ls <精确路径/名>`(导出文件名含秒级时间戳,天然唯一),别用 find。
+
+### 38. 浏览列表记住滚动位,单向向下找会漏掉上方的书（2026-09-13 实锤）
+**现象**：同一台机器 warm-open 时而找不到明明存在的书。
+**根因**：浏览页恢复上次滚动位置,_find_text_scrolled 只向下滚。
+**规避**：第一遍找不到就滚回顶部再找一遍(见 _open_reader_warm 第二次搜索)。
+
+### 39. 上一用例残留阅读器会让热态复用开错书（2026-09-13 KSA 实锤）
+**现象**：fn18 没退出阅读器,fn40 的热态开书直接复用了残留的 Alice,验证读了别的书。
+**规避**：用例结束必须真正退出阅读器(只 back 一次关的可能是弹窗);治理在产生残留的一侧——
+在下游用例里补 _exit_reader 防御,无阅读器时反而会把应用按退到桌面(round-3 MIUI 桌面现场)。
+
+### 40. 侧边栏日夜切换排查入手点（2026-09-13）
+**事实**：抽屉按钮按 appTheme∈{DARK,DARK_OLED} 判向,写 appTheme+isDayNotInvert 后重启;
+阅读器日夜切换只翻 isDayNotInvert(退出后外壳主题不变属设计)。3 台真机 11 次混合切换零复现卡夜间。
+**规避**：复现时先抓 `logcat -s DayNight`(applyDayNight 已埋探针:点击判向/应用结果两条日志),
+再对照 app-State.json 的 appTheme/isDayNotInvert/isSystemThemeColor;另查 WebDAV 三路合并是否回灌旧主题。
+
+### 41. 页码格式百分比只作用于纯数字段（2026-09-13）
+**事实**：TxtUtils.deltaPage 只在纯数字路径路由 PAGE_NUMBER_FORMAT_PERCENT;带书签的 PDF/EPUB
+指示器是「标题 – N ∕ M」复合格式,切百分比后文本仍不含 %。
+**规避**：fn40 断言=阅读器出现 %(强信号)或回读 pageNumberFormat 行值=百分比(兜底)。
+
 ### A. 强烈建议入规则（跨会话必踩、不写就会重犯）
 | 坑 | 理由 | AGENTS.md 落点 |
 |---|---|---|
@@ -221,3 +268,25 @@
 
 ### C. 仅测试侧备忘（不必进 AGENTS.md）
 - 坑 6（Android 9 find）、8（JSON-RPC 自愈）、11（选择光标残留）、13/14（水平模式底栏/幂等点击）、17（Pro 解锁路径，已在 gotcha 21①）、18（弹层位置）、23（sync 落盘，已有政策 ④）。
+
+42. **API 34 dumpsys 字段改名（2026-09-15 AVD 实测）**：`dumpsys activity activities` 的
+   `mResumedActivity` 在 API 34 改名 `ResumedActivity`/`topResumedActivity`，`grep mResumedActivity`
+   在模拟器恒空 → intent 开书/阅读器到达判定全盲（截图里阅读器已渲染仍报失败）。用
+   `grep ResumedActivity`（三种形态的公共子串）通吃新旧。已修 driver.py+tc_function.py 共 14 处。
+43. **API 34 SELinux 拒绝应用读 /sdcard 符号链接（重要）**：logcat 实证
+   `avc: denied { read } for name="sdcard" ... tclass=lnk_file permissive=0`（untrusted_app →
+   mnt_sdcard_file）。应用从 /sdcard 起步的文件树整个列不出来（Browse 只剩网络区段）、书库不索引
+   Download → 13 个用例失败/跳过。真机 API 9-11 策略允许故从未暴露；**疑似 Android 11+ 全新安装
+   场景的真实兼容性问题**，建议应用侧勘探浏览根路径（如改用 /storage/emulated/0 直连）。
+44. **AVD 英文 locale 与测试套件冲突**：devices.json 曾约定"英文 locale+用例英文兜底"，但 L1 用例
+   的 Tab/抽屉选择器只写中文（click_desc("菜单")/("我的文件")等）→ 首页四 Tab 全不可达。
+   解法：`adb shell settings put system system_locales zh-CN` + 重启模拟器（`cmd locale set-locales`
+   该镜像不存在；`setprop persist.sys.locale` 被 SELinux 挡，adb root 也不行）。
+45. **AVD 冷启动网络坑**：冷启动后可能只有 10/8 直连路由无默认路由（报 Network is unreachable），
+   重加 `ip route add default via 10.0.2.2 dev eth0`；ICMP 经模拟器 NAT 经常不通（ping 100% 丢包
+   但 TCP 正常），验证连通一律用 `printf 'OPTIONS / HTTP/1.1\r\n\r\n' | nc -w 4 <ip> <port>`。
+46. **模拟器启动参数**：本机 `-gpu host` 会挂死（进程在但 adb 永不上线，需杀 Emulator.exe+清理
+   *.lock）；已知可用组合 `-no-snapshot -gpu swiftshader_indirect -memory 3072 -no-boot-anim`。
+47. **AVD 输入/渲染怪癖（未解，真机不受影响）**：音量键翻页（疑被路由到系统音量）、长按选词弹层、
+   点按分区翻页、暗色主题截图像素对比，在 AVD 上失败但同用例 MI9/KSA 全过。判定为模拟器输入
+   注入/SwiftShader 差异；AVD 轮报告需注明这些项以真机为准。

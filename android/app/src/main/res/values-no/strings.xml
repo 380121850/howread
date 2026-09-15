@@ -3,8 +3,6 @@
    <string name="library_settings">Bibliotekinnstillinger</string>
    <string name="scan_device_for_new_books">Skann enheten for nye bøker</string>
    <string name="add_folder">Legg til mappe</string>
-   <string name="archives">Arkiv</string>
-   <string name="other">Annen</string>
    <string name="you_need_to_update_the_library">Du må oppdatere biblioteket</string>
    <string name="in_the_author_s_name_first_the_surname">I forfatterens navn, først etternavnet</string>
    <string name="orientation">Orientering</string>

@@ -2083,6 +2083,74 @@
     {
       "name": "fork_of_librera",
       "value": "This is a HarmonyOS port fork of Librera Reader"
+    },
+    {
+      "name": "menu_tags",
+      "value": "Tags"
+    },
+    {
+      "name": "tag_new_hint",
+      "value": "New tag name"
+    },
+    {
+      "name": "tag_create",
+      "value": "Create"
+    },
+    {
+      "name": "tag_empty",
+      "value": "No tags yet"
+    },
+    {
+      "name": "tag_filter_all",
+      "value": "All tags"
+    },
+    {
+      "name": "view_genre",
+      "value": "Genre"
+    },
+    {
+      "name": "group_off",
+      "value": "Group"
+    },
+    {
+      "name": "dav_start_hint",
+      "value": "Start directory (optional, e.g. /sub)"
+    },
+    {
+      "name": "dav_test",
+      "value": "Test"
+    },
+    {
+      "name": "dav_browse_dirs",
+      "value": "Browse dirs"
+    },
+    {
+      "name": "dav_test_ok",
+      "value": "Connection OK"
+    },
+    {
+      "name": "dav_test_auth",
+      "value": "Auth failed: check user/password"
+    },
+    {
+      "name": "dav_test_fail",
+      "value": "Cannot connect to the server. Check the address and network"
+    },
+    {
+      "name": "brightness_edge_hint",
+      "value": "Swipe the left screen edge to adjust brightness"
+    },
+    {
+      "name": "dav_dir_up",
+      "value": "Up"
+    },
+    {
+      "name": "dav_pick_here",
+      "value": "Use this dir"
+    },
+    {
+      "name": "dav_dir_empty",
+      "value": "No subdirectories"
     }
   ]
 }

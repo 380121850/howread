@@ -3,8 +3,6 @@
    <string name="library_settings">Bibliotheek instellingen</string>
    <string name="scan_device_for_new_books">Scan apparaat voor nieuwe boeken</string>
    <string name="add_folder">Map toevoegen</string>
-   <string name="archives">Archief</string>
-   <string name="other">Anders</string>
    <string name="you_need_to_update_the_library">U moet de bibliotheek bijwerken om de wijzigingen toe te passen</string>
    <string name="in_the_author_s_name_first_the_surname">Toon eerst de auteur\'s achternaam</string>
    <string name="orientation">Oriëntatie</string>

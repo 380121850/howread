@@ -89,6 +89,27 @@
 4. ✅ **离线**：完全缓存的书零网络打开（openOffline 降级，服务器停机实测）；已缓存整本书重取回直接从缓存落地。
 5. ✅ **SMB/SFTP/EPUB DRM 已在阶段 15b 完成（2026-09-12，见下）**。剩余待续：OPDS 认证/分页；计费网络检测接入 wholeBookOnMetered。
 
+### 阶段 16d（2026-09-15）：同步安卓 v1.3.4 体验包 —— 三协议图标 + 远程地址 + 左缘亮度手势 ✅ 已完成（0.9.4）
+
+- 三协议专属图标（my_nas_webdav/smb/sftp.png 自安卓 drawable-xxhdpi 移植）：首页 WebDAV 圆钮、服务器行 ×3、远程书行按 parseRemoteUri 选图标（不染色，非直连格式 0.55 透明度区分）；
+- 远程书文件信息显示真实地址：prettyRemoteUri（webdav=完整 URL / smb://host[:port]/share/path / sftp://host[:port]/path）；
+- 左缘亮度手势（BrightnessHelper parity）：翻页/垂直两模式左缘 32vp 透明条（PanGesture 竖直、HitTestMode.Transparent 不抢 tap），offsetY×0.5 映射亮度 1..255，拖动气泡（140vp 居中、offset 70 避屏幕边、松手 1.5s 隐藏）；工具行下方提示行（brightness_edge_hint，灰色）；
+- 格式对齐：FORMAT_ROWS mobi→"MOBI/AZW/PRC"、FORMAT_EXTS['mobi']+pdb、BOOK_EXTS+azw/azw3/prc/pdb；
+- 书库文件夹区去「+添加文件」（addKind 3→0）；dav_test_fail 中性文案对齐（base+zh）+brightness_edge_hint 新增；
+- 版本 0.9.3→0.9.4（versionCode 41→42）；dist 8 件套出包；模拟器（x86_64 debug）验证通过；
+- 待续：批次 4（自动裁边 B2）/批次 5（OPDS 认证分页 + 计费网络检测 C10/C11）；上滑降亮真机复验。
+
+---
+
+### 阶段 16c（2026-09-14）：功能补齐批次 3——标签管理 + 分组浏览 + WebDAV 起始目录 ✅ 已完成（0.9.3）
+
+1. ✅ **标签管理**（补全 Sprint N 死状态 showTagDialog）：LibRow 列表行新增 ⋮ 按钮（对齐安卓书行菜单；原仅网格视图封面浮层有入口），per-book 菜单新增「标签」项；buildTagDialog（勾选/取消/新建，直连 Tags.ets）；书库 chips 行新增「标签」筛选 chip + buildTagFilterDialog（全部/单标签，getLibraryBooks 接入 activeTagFilter）。**顺带修复**：removeTagFromBook 删最后一枚标签被 saveRecentBook 合并语义（空 tags=保留旧值）复活的 bug，改 replaceRecentBooks 直写。
+2. ✅ **分组浏览**：chips 行新增「分组」chip（分组关→作者→系列→分类 循环，libGroupBy）；getGroupedLibrary 组头"组名 (计数)"渲染，空值归"未分类"（tag_none），与搜索/筛选/排序叠加生效；空列表仍走 lib_empty_import 分支（规避安卓 09-13 #2 分组空白类问题）。
+3. ✅ **WebDAV 测试连接/浏览目录/起始目录**（安卓 2026-09-13 九项修复 #6 移植）：DavServer.startPath 字段（getDavServers 字段级合并向后兼容）+ 对话框起始目录输入 + davTestConnection（PROPFIND Depth:0，区分认证失败/无法连接）+ 浏览目录选择器 buildDavBrowseDialog（逐级进出/上一级/选此目录回填）；起始目录接线：服务器行点击 webdavPath 初始化 + remoteScanServer 起扫 URL（浏览面板经 webdavDirUrl 自动生效）。
+4. ✅ **同步安卓 2026-09-13 检视修复（鸿蒙同款问题排查结果）**：materializeBook 临时文件+renameSync 原子改名（弱网不再毁旧完整副本）+ fetchWholeBookToCache fullyCached 后置；parseDavList davDecodeSafe 容错+去重复解码（文件名含 % 不再毁整个列表）；loadOrCreate data.bin 长度校验（损坏自动重置位图）；AiClient listModels 剥 "models/" 前缀。排查确认不适用：阅读速度恒 0（鸿蒙已记页数）、今日阅读不换日（日期键读写）、Range 降级错位（offset>0+200 即抛错）、无自动缓存清理（不存在误删在读书）。
+5. ✅ **验证**（模拟器 x86_64 debug + 50.23）：标签创建/勾选/筛选(11→1)/恢复、分组"未分类 (10)"、⋮ 菜单、WebDAV 行点击连接浏览回归（Connected! 1 dirs, 16 files）；双变体 8 件套出包。
+6. ⏸ **待续/待真机**：起始目录回填与测试连接 toast 表单流（模拟器 uitest 输入法追加语义限制未 UI 实测）；批次 4 自动裁边（B2）；批次 5 OPDS 认证/分页 + 计费网络检测（C10/C11）。
+
 ### 阶段 16b（2026-09-13）：功能补齐批次 2——DOCX/RTF 打开 ✅ 已完成（0.9.3）
 
 1. ✅ **转换管线**（新 `model/DocConvert.ets`）：docx = `@ohos.zlib` 解压 + document.xml 扫描器（段落/粗斜体/br/tab/实体）；rtf = 自写状态机（组栈/控制字/\uN+\'hh 转义/目标组丢弃）。产物缓存 HTML（键 = 名_大小_时间，确定性），MuPDF html handler 打开、reflow 可调。

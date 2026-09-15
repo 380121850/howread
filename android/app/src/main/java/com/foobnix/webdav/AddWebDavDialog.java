@@ -91,7 +91,7 @@ public class AddWebDavDialog {
                 AsyncTasks.toastPleaseWait(a);
                 return;
             }
-            final String feedUrl = url.getText().toString().trim();
+            final String feedUrl = WebDavStore.trimSlash(url.getText().toString().trim());
             final String loginText = login.getText().toString().trim();
             final String passwordText = password.getText().toString().trim();
             final boolean trustAll = trustCerts != null && trustCerts.isChecked();
@@ -141,7 +141,7 @@ public class AddWebDavDialog {
 
             @Override
             public void onClick(View v) {
-                final String feedUrl = url.getText().toString().trim();
+                final String feedUrl = WebDavStore.trimSlash(url.getText().toString().trim());
                 final String title = name.getText().toString().trim();
                 final String loginText = login.getText().toString().trim();
                 final String passwordText = password.getText().toString().trim();

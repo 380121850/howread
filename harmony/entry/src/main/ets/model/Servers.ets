@@ -18,6 +18,9 @@ export interface DavServer {
   password: string;
   /** trust self-signed certificates (stored, informational) */
   trusted: boolean;
+  /** start directory inside the server, "/sub" form; '' = root
+   *  (Android 2026-09-13: WebDAV 起始目录 parity) */
+  startPath: string;
 }
 
 /** SMB server (Android RemoteServer TYPE_SMB parity). Identity = host:port. */
@@ -163,7 +166,19 @@ export async function removeOpdsServer(ctx: Context, url: string): Promise<void>
 
 export async function getDavServers(ctx: Context): Promise<DavServer[]> {
   const json: string = await readRaw(ctx, KEY_DAV);
-  const list: DavServer[] = JSON.parse(json) as DavServer[];
+  const raw: DavServer[] = JSON.parse(json) as DavServer[];
+  /* field merge: entries saved before startPath existed default to root */
+  const list: DavServer[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    list.push({
+      url: raw[i].url,
+      name: raw[i].name,
+      user: raw[i].user,
+      password: raw[i].password,
+      trusted: raw[i].trusted === true,
+      startPath: typeof raw[i].startPath === 'string' ? raw[i].startPath : ''
+    });
+  }
   list.sort((a: DavServer, b: DavServer) => a.name.localeCompare(b.name));
   return list;
 }

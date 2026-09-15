@@ -142,10 +142,7 @@ public class ExtUtils {
     };
 
     static {
-        browseExts.addAll(otherExts);
-        browseExts.addAll(archiveExts);
         browseExts.addAll(imageExts);
-        browseExts.addAll(lirbeExt);
         browseExts.add(".json");
         browseExts.addAll(BookCSS.fontExts);
         browseExts.addAll(AUDIO);
@@ -283,6 +280,8 @@ public class ExtUtils {
             result.add(".mobi");
             result.add(".azw");
             result.add(".azw3");
+            result.add(".prc");
+            result.add(".pdb");
         }
         if (AppState.get().supportCBZ) {
             result.add(".cbz");
@@ -294,19 +293,6 @@ public class ExtUtils {
             result.add(".zip");
             result.add(".okular");
         }
-        if (AppState.get().supportArch) {
-            result.addAll(archiveExts);
-        }
-        if (AppState.get().supportOther) {
-            result.addAll(otherExts);
-            result.addAll(lirbeExt);
-            result.add(".prc");
-            result.add(".pdb");
-            if (!AppsConfig.isDOCXSupported) {
-                result.add(".docx");
-            }
-        }
-
         for (String ext : result) {
             seachExts.add(ext);
             seachExts.add(ext.toUpperCase());
@@ -445,10 +431,6 @@ public class ExtUtils {
         return ExtUtils.isImageFile(file) || ExtUtils.isFileArchive(file) || BookType.EPUB.is(file.getPath());
     }
 
-    public static boolean isOtherBookFormat(File file) {
-        return ExtUtils.isContainExt(file, AppState.OTHER_BOOK_EXT) || ExtUtils.isContainExt(file, AppState.LIBRE_EXT);
-    }
-
     public static boolean isNoTextLayerForamt(String name) {
         return BookType.CBR.is(name) || BookType.CBZ.is(name) || BookType.TIFF.is(name);
     }
@@ -537,18 +519,6 @@ public class ExtUtils {
         for (String ext : lirbeExt) {
             if (name.endsWith(ext)) {
                 return true;
-            }
-        }
-        return false;
-    }
-
-    public static boolean isOtherFile(File file) {
-        if (file != null && file.isFile()) {
-            String name = file.getName().toLowerCase(Locale.US);
-            for (String ext : otherExts) {
-                if (name.endsWith(ext)) {
-                    return true;
-                }
             }
         }
         return false;

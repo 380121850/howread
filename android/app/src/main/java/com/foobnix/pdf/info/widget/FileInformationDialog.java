@@ -192,7 +192,7 @@ public class FileInformationDialog {
         }
 
         final TextView pathView = new TextView(a);
-        pathView.setText(remotePath);
+        pathView.setText(com.foobnix.remote.RemoteBook.fullDisplayPath(remotePath));
         pathView.setTextIsSelectable(true);
         pathView.setPadding(0, pad / 2, 0, 0);
         box.addView(pathView);

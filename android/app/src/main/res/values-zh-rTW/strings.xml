@@ -5,9 +5,6 @@
    <string name="library_folders_settings">書庫文件夾配置</string>
    <string name="scan_device_for_new_books">導入書籍</string>
    <string name="add_folder">添加目錄</string>
-   <string name="add_file">新增檔案</string>
-   <string name="archives">檔案</string>
-   <string name="other">其他</string>
    <string name="you_need_to_update_the_library">更新書架？</string>
    <string name="in_the_author_s_name_first_the_surname">作者姓氏在前</string>
    <string name="orientation">螢幕方向</string>
@@ -704,6 +701,9 @@
    <string name="add_webdav_server">新增 WebDAV 伺服器</string>
    <string name="add_anyway">仍要新增</string>
    <string name="webdav_auth_failed">認證失敗,請檢查伺服器位址和帳號密碼</string>
+   <string name="webdav_empty_hint">目錄為空或無存取權限</string>
+   <string name="webdav_relogin_msg">無法以已保存的帳號讀取該伺服器內容，可能需要重新登入。是否重新輸入帳號密碼？</string>
+   <string name="webdav_connect_failed">連線失敗，請檢查伺服器位址與網路</string>
    <string name="webdav_login">帳號</string>
    <string name="webdav_url">WebDAV 位址</string>
 
@@ -745,6 +745,8 @@
     <string name="moon_net_section_smb">SMB (Pro)</string>
     <string name="moon_net_section_sftp">SFTP (Pro)</string>
     <string name="moon_lib_remote_folders">遠端目錄 (Pro)</string>
+   <string name="moon_brightness_edge_hint">滑動螢幕左邊緣調節亮度</string>
+   <string name="moon_lib_local_folders">本機資料夾路徑</string>
     <string name="remote_add_smb">新增 SMB 伺服器</string>
     <string name="remote_add_sftp">新增 SFTP 伺服器</string>
     <string name="remote_host_hint">主機或 IP</string>

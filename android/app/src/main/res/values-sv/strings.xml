@@ -3,8 +3,6 @@
    <string name="library_settings">Bibliotekets inställningar</string>
    <string name="scan_device_for_new_books">Scan anordning för nya böcker</string>
    <string name="add_folder">Lägg till mapp</string>
-   <string name="archives">Arkiv</string>
-   <string name="other">Andra</string>
    <string name="you_need_to_update_the_library">Du måste uppdatera biblioteket</string>
    <string name="in_the_author_s_name_first_the_surname">I författarens namn, först efternamnet</string>
    <string name="orientation">Orientering</string>

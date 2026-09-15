@@ -104,6 +104,40 @@ public class RemoteBook {
     }
 
     /**
+     * Human-readable full remote address of a remote book, e.g.
+     * "smb://host/share/dir/book.epub" or "http://host:port/dav/dir/book.epub".
+     * Falls back to the internal remote:// path when the server is unknown.
+     */
+    public static String fullDisplayPath(String remotePath) {
+        String type = getType(remotePath);
+        String id = getServerId(remotePath);
+        String path = getRemotePath(remotePath);
+        if (TYPE_SMB.equals(type) || TYPE_SFTP.equals(type)) {
+            RemoteServer s = RemoteStore.find(type, id);
+            if (s == null) {
+                return remotePath;
+            }
+            StringBuilder sb = new StringBuilder(type).append("://").append(s.host);
+            boolean defaultPort = TYPE_SFTP.equals(type) ? s.port == 22 : s.port == 445;
+            if (!defaultPort) {
+                sb.append(":").append(s.port);
+            }
+            if (TYPE_SMB.equals(type) && TxtUtils.isNotEmpty(s.share)) {
+                sb.append("/").append(s.share);
+            }
+            return sb.append(path).toString();
+        }
+        if (TYPE_WEBDAV.equals(type)) {
+            for (com.foobnix.webdav.WebDavServer s : com.foobnix.webdav.WebDavStore.load()) {
+                if (RemoteSessionFactory.webdavId(s.url).equals(id)) {
+                    return com.foobnix.webdav.WebDavStore.trimSlash(s.url) + path;
+                }
+            }
+        }
+        return remotePath;
+    }
+
+    /**
      * Formats whose engines are random-access friendly (ZIP central directory
      * at the tail / PDF xref) and can be fed to MuPDF through the chunk-cache
      * stream without any local pre-conversion.

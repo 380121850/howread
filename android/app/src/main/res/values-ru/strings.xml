@@ -3,8 +3,6 @@
    <string name="library_settings">Настройки библиотеки</string>
    <string name="scan_device_for_new_books">Пути поиска книг на устройстве</string>
    <string name="add_folder">Добавить еще путь</string>
-   <string name="archives">Архивы</string>
-   <string name="other">Другое</string>
    <string name="you_need_to_update_the_library">Для вступления изменений в силу нужно пересканировать библиотеку. Сделать это сейчас?</string>
    <string name="in_the_author_s_name_first_the_surname">Сначала фамилия автора, а затем имя</string>
    <string name="orientation">Ориентация</string>

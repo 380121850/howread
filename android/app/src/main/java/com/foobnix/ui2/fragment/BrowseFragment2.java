@@ -123,8 +123,13 @@ import java.util.Map;
      */
     public static final String ROOT_PATH = "my-files:";
     LinearLayout netSection;
-    /** 搜索 block of the root view, below the library-folder list */
-    LinearLayout searchSection;
+    /** Wraps netSection; on the root view it fills the space between the
+     * path bar and the bottom search block (content adapts, scrolls when
+     * too tall), and is hidden while browsing a directory. */
+    View netSectionScroll;
+    /** Folder/file list area; hidden on the root view (the folder list is
+     * rendered inside netSection), full-height while browsing. */
+    View bankSpaceView;
     View quickDirChipsRow;
 
     /**
@@ -821,7 +826,8 @@ import java.util.Map;
         });
 
         netSection = view.findViewById(R.id.netSection);
-        searchSection = (LinearLayout) view.findViewById(R.id.searchSection);
+        netSectionScroll = view.findViewById(R.id.netSectionScroll);
+        bankSpaceView = view.findViewById(R.id.bankSpace);
         quickDirChipsRow = (View) view.findViewById(R.id.quickDirChips).getParent();
         buildNetSections();
 
@@ -1214,7 +1220,7 @@ import java.util.Map;
         applyHeaderProLock(header);
         netSection.addView(header);
         for (final RemoteServer srv : RemoteStore.load(type)) {
-            netSection.addView(netListItem(R.drawable.glyphicons_544_cloud, srv.title, new OnClickListener() {
+            netSection.addView(netListItem(isSftp ? R.drawable.my_nas_sftp : R.drawable.my_nas_smb, srv.title, new OnClickListener() {
                 @Override public void onClick(View v) {
                     ((MainTabs2) a).openNetworkPage(true, srv.browseRoot(), srv.title);
                 }
@@ -1268,9 +1274,6 @@ import java.util.Map;
             return;
         }
         netSection.removeAllViews();
-        if (searchSection != null) {
-            searchSection.removeAllViews();
-        }
         final Runnable rebuild = new Runnable() {
             @Override public void run() {
                 buildNetSections();
@@ -1337,7 +1340,7 @@ import java.util.Map;
         applyHeaderProLock(webdavHeader);
         netSection.addView(webdavHeader);
         for (final WebDavServer srv : WebDavStore.load()) {
-            netSection.addView(netListItem(R.drawable.glyphicons_544_cloud, srv.title, new OnClickListener() {
+            netSection.addView(netListItem(R.drawable.my_nas_webdav, srv.title, new OnClickListener() {
                 @Override public void onClick(View v) {
                     // enter at the configured start folder ("" = server root)
                     ((MainTabs2) a).openNetworkPage(true, srv.startUrl(), srv.title);
@@ -1395,14 +1398,6 @@ import java.util.Map;
                      }
                  });
                 p.getMenu()
-                 .add(R.string.add_file)
-                 .setOnMenuItemClickListener(new OnMenuItemClickListener() {
-                     @Override public boolean onMenuItemClick(MenuItem item) {
-                         addLibraryFile(rebuild);
-                         return false;
-                     }
-                 });
-                p.getMenu()
                  .add(R.string.search)
                  .setOnMenuItemClickListener(new OnMenuItemClickListener() {
                      @Override public boolean onMenuItemClick(MenuItem item) {
@@ -1414,20 +1409,73 @@ import java.util.Map;
             }
         }));
 
-        // --- search tools: rendered BELOW the library-folder list (see the
-        // searchSection container in the layout), so the folders block
-        // (header + list) stays one visual unit
-        if (searchSection != null) {
-            searchSection.addView(netSectionDivider());
-            searchSection.addView(netSectionHeader(getString(R.string.search), null));
-            // tools moved here from the preferences "file search" category
-            searchSection.addView(netListItem(R.drawable.glyphicons_144_database_search,
-                    getString(R.string.search_for_text_in_multiple_documents), new OnClickListener() {
-                        @Override public void onClick(View v) {
-                            MultyDocSearchDialog.show((androidx.fragment.app.FragmentActivity) a);
-                        }
-                    }, null));
+        // --- library folder rows (root view): rendered right below the
+        // folders header in the SAME scroll container, so OPDS->folders act
+        // as one block that adapts to content and scrolls together
+        List<String> libFolders = new ArrayList<String>();
+        for (String p2 : JsonDB.get(BookCSS.get().searchPathsJson)) {
+            if (TxtUtils.isNotEmpty(p2) && new File(p2).isDirectory()) {
+                libFolders.add(p2);
+            }
         }
+        if (libFolders.isEmpty()) {
+            // same fallback as the old root list: storage root + Downloads,
+            // minus entries the user removed from the library list before
+            final List<String> hidden = JsonDB.get(BookCSS.get().searchPathsHiddenJson);
+            final List<String> fallback = new ArrayList<String>();
+            fallback.add(Environment.getExternalStorageDirectory().getPath());
+            final String pathDownloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getPath();
+            if (new File(pathDownloads).isDirectory()) {
+                fallback.add(pathDownloads);
+            }
+            for (String fp2 : fallback) {
+                if (!hidden.contains(fp2) && new File(fp2).isDirectory()) {
+                    libFolders.add(fp2);
+                }
+            }
+        }
+        for (final String fp : libFolders) {
+            View row = netListItem(R.drawable.glyphicons_336_folder, ExtUtils.getFileName(fp), new OnClickListener() {
+                @Override public void onClick(View v) {
+                    // same as the old root cards: detached folder page, the
+                    // tab keeps its root view
+                    ((MainTabs2) a).openFolderPage(fp);
+                }
+            }, null);
+            row.setOnLongClickListener(new OnLongClickListener() {
+                @Override public boolean onLongClick(View v) {
+                    // remove from the library list only, the folder on disk
+                    // is never touched (same as the old root cards)
+                    AlertDialogs.showDialog(a,
+                            getString(R.string.moon_remove_folder_hint) + "\n[" + fp + "]",
+                            getString(R.string.delete), new Runnable() {
+                                @Override public void run() {
+                                    BookCSS.get().searchPathsJson =
+                                            JsonDB.remove(BookCSS.get().searchPathsJson, fp);
+                                    BookCSS.get().searchPathsHiddenJson =
+                                            JsonDB.add(BookCSS.get().searchPathsHiddenJson, fp);
+                                    AppProfile.save(a);
+                                    buildNetSections();
+                                }
+                            });
+                    return true;
+                }
+            });
+            netSection.addView(row);
+        }
+
+        // --- search tools: same scroll container, right below the folders,
+        // so OPDS -> remote -> folders -> search scroll as one block
+        // (2026-09-14 体验反馈:不再分成上下两部分滚动)
+        netSection.addView(netSectionDivider());
+        netSection.addView(netSectionHeader(getString(R.string.search), null));
+        // tools moved here from the preferences "file search" category
+        netSection.addView(netListItem(R.drawable.glyphicons_144_database_search,
+                getString(R.string.search_for_text_in_multiple_documents), new OnClickListener() {
+                    @Override public void onClick(View v) {
+                        MultyDocSearchDialog.show((androidx.fragment.app.FragmentActivity) a);
+                    }
+                }, null));
     }
 
     @Override public void onResume() {
@@ -1466,32 +1514,6 @@ import java.util.Map;
                         refresh.run();
                         // the chooser's embedded browser rewrote the shared
                         // displayPath — go back to the root view (folders list)
-                        displayAnyPath(ROOT_PATH);
-                        return false;
-                    }
-                });
-    }
-
-    /** "add a single file to the library" flow, from the old preferences row. */
-    private void addLibraryFile(final Runnable refresh) {
-        final androidx.fragment.app.FragmentActivity fa = (androidx.fragment.app.FragmentActivity) getActivity();
-        ChooserDialogFragment.chooseFile(fa, "")
-                .setOnSelectListener(new ResultResponse2<String, Dialog>() {
-                    @Override public boolean onResultRecive(String nPath, Dialog dialog) {
-                        if (!new File(nPath).isFile()) {
-                            Toast.makeText(fa, R.string.incorrect_value, Toast.LENGTH_SHORT).show();
-                        } else if (JsonDB.contains(BookCSS.get().searchPathsJson, nPath)) {
-                            Toast.makeText(fa, R.string.this_directory_is_already_in_the_list, Toast.LENGTH_LONG).show();
-                        } else {
-                            BookCSS.get().searchPathsJson = JsonDB.add(BookCSS.get().searchPathsJson, nPath);
-                            // an explicitly added folder is wanted again: lift
-                            // any earlier fallback-exclusion of it
-                            BookCSS.get().searchPathsHiddenJson = JsonDB.remove(BookCSS.get().searchPathsHiddenJson, nPath);
-                        }
-                        dialog.dismiss();
-                        AppProfile.save(fa);
-                        refresh.run();
-                        // see addLibraryFolder: restore the root view
                         displayAnyPath(ROOT_PATH);
                         return false;
                     }
@@ -1546,6 +1568,13 @@ import java.util.Map;
     }
 
     /** Vertical list entry with a leading icon and an optional delete icon. */
+
+    /** 彩色协议 logo（位图）不做单色染色，保持原色显示 */
+    private static boolean isBrandProtocolIcon(int res) {
+        return res == R.drawable.my_nas_webdav || res == R.drawable.my_nas_smb
+                || res == R.drawable.my_nas_sftp;
+    }
+
     private View netListItem(int iconRes, String text, OnClickListener onClick, OnClickListener onRemove) {
         return netListItem(iconRes, text, onClick, onRemove, null);
     }
@@ -1566,7 +1595,9 @@ import java.util.Map;
 
         ImageView icon = new ImageView(getActivity());
         icon.setImageResource(iconRes);
-        icon.setColorFilter(TintUtil.getColorInDayNighth());
+        if (!isBrandProtocolIcon(iconRes)) {
+            icon.setColorFilter(TintUtil.getColorInDayNighth());
+        }
         icon.setPadding(0, 0, Dips.dpToPx(10), 0);
         row.addView(icon, new LinearLayout.LayoutParams(Dips.dpToPx(40), Dips.dpToPx(40)));
 
@@ -1766,11 +1797,18 @@ import java.util.Map;
             // "my-files:" / OPDS / content paths would poison folder pickers
             BookCSS.get().dirLastPath = path;
         }
+        boolean rootPath = ROOT_PATH.equals(path);
         if (netSection != null) {
-            netSection.setVisibility(ROOT_PATH.equals(path) ? View.VISIBLE : View.GONE);
+            netSection.setVisibility(rootPath ? View.VISIBLE : View.GONE);
         }
-        if (searchSection != null) {
-            searchSection.setVisibility(ROOT_PATH.equals(path) ? View.VISIBLE : View.GONE);
+        if (netSectionScroll != null) {
+            // OPDS/远程/书库文件夹整体占满工具栏与搜索区之间的空间:
+            // 内容少自然高度(不滚),多则整体滚动;进入目录后整块隐藏
+            netSectionScroll.setVisibility(rootPath ? View.VISIBLE : View.GONE);
+        }
+        if (bankSpaceView != null) {
+            // RecyclerView 只负责目录浏览;根视图的文件夹列表移入 netSection
+            bankSpaceView.setVisibility(rootPath ? View.GONE : View.VISIBLE);
         }
         // the 书库 folder rows are rendered bigger on the root page only
         if (searchAdapter != null) {

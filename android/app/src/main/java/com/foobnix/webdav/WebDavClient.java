@@ -92,6 +92,20 @@ public class WebDavClient {
             Map<String, CachingAuthenticator> authCache = new ConcurrentHashMap<String, CachingAuthenticator>();
             builder.authenticator(new CachingAuthenticatorDecorator(authenticator, authCache));
             builder.addInterceptor(new AuthenticationCacheInterceptor(authCache));
+            // Preemptive Basic: a lenient NAS may answer an anonymous request
+            // with a SUCCESS-but-permission-filtered (empty) listing instead
+            // of a 401 challenge, so challenge-driven auth never transmits
+            // the stored credentials. Servers that reject Basic still fall
+            // back to the normal challenge flow above.
+            final String preemptive = okhttp3.Credentials.basic(login, password,
+                    java.nio.charset.StandardCharsets.UTF_8);
+            builder.addInterceptor(chain -> {
+                okhttp3.Request req = chain.request();
+                if (req.header("Authorization") == null) {
+                    req = req.newBuilder().header("Authorization", preemptive).build();
+                }
+                return chain.proceed(req);
+            });
         }
 
         final Sardine created = new OkHttpSardine(builder.build());
@@ -133,6 +147,11 @@ public class WebDavClient {
      * {@link #lastError} for the failure kind right after a null return.
      */
     public static List<WebDavItem> list(String url, String login, String password, boolean trustAll) {
+        // device-visible one-liner (LOG.d is emulator-gated): empty-listing
+        // reports become diagnosable via "adb logcat -s WEBDAV"
+        android.util.Log.i("WEBDAV", "list " + url + " auth=" + TxtUtils.isNotEmpty(login)
+                + " trustAll=" + trustAll);
+        url = encodeIfNeeded(url);
         try {
             List<DavResource> resources = sardine(login, password, trustAll).list(url);
             List<WebDavItem> items = new ArrayList<WebDavItem>();
@@ -159,12 +178,79 @@ public class WebDavClient {
             sort(items);
             lastError = "";
             lastErrorWasAuth = false;
+            android.util.Log.i("WEBDAV", "list ok: " + items.size() + " item(s)");
+            if (items.isEmpty()) {
+                logRawPropfind(url, login, password);
+            }
             return items;
         } catch (Exception e) {
             LOG.e(e);
             lastError = classifyError(e);
             lastErrorWasAuth = "auth".equals(lastError);
+            android.util.Log.i("WEBDAV", "list FAIL kind=" + lastError + ": " + e);
             return null;
+        }
+    }
+
+
+    /**
+     * Empty-listing diagnostic: replay the PROPFIND once outside sardine with
+     * an RFC-encoded request target and log code + body sample. Distinguishes
+     * a genuinely empty folder from rows dropped by strict URI/namespace
+     * parsing and from odd server answers for unencoded (Chinese/space)
+     * paths. Runs only on the empty path, so the cost is one extra request.
+     */
+    private static void logRawPropfind(String url, String login, String password) {
+        try {
+            java.net.URL u = new java.net.URL(url);
+            // re-encode an already-decoded path (raw spaces / Chinese in a
+            // saved startDir would otherwise form an illegal request target)
+            java.net.URI uri = new java.net.URI(u.getProtocol(), u.getUserInfo(),
+                    u.getHost(), u.getPort(), u.getPath(), u.getQuery(), u.getRef());
+            okhttp3.Request.Builder rb = new okhttp3.Request.Builder()
+                    .url(uri.toString())
+                    .header("Depth", "1");
+            if (TxtUtils.isNotEmpty(login)) {
+                String b64 = android.util.Base64.encodeToString(
+                        (login + ":" + password).getBytes("UTF-8"), android.util.Base64.NO_WRAP);
+                rb.header("Authorization", "Basic " + b64);
+            }
+            okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(15, TimeUnit.SECONDS)
+                    .readTimeout(15, TimeUnit.SECONDS)
+                    .build();
+            okhttp3.Response resp = client.newCall(rb.method("PROPFIND", null).build()).execute();
+            String sample = resp.body() == null ? "<no body>" : resp.peekBody(1600).string();
+            android.util.Log.i("WEBDAV", "raw probe " + uri + " code=" + resp.code()
+                    + " body: " + sample.replaceAll("\\s+", " "));
+            resp.close();
+            client.dispatcher().executorService().shutdown();
+            client.connectionPool().evictAll();
+        } catch (Exception e) {
+            android.util.Log.i("WEBDAV", "raw probe FAIL " + url + ": " + e);
+        }
+    }
+
+    /**
+     * Percent-encode the request target when it still contains raw decoded
+     * characters (a startDir saved from display names can carry spaces /
+     * Chinese): a NAS answers such targets with a SUCCESS-but-empty listing
+     * instead of 404. Strict-parse first so already-encoded server hrefs
+     * pass through untouched — no double encoding.
+     */
+    public static String encodeIfNeeded(String url) {
+        try {
+            new java.net.URI(url);
+            return url;
+        } catch (Exception notStrictlyValid) {
+            try {
+                java.net.URL u = new java.net.URL(url);
+                return new java.net.URI(u.getProtocol(), u.getUserInfo(), u.getHost(),
+                        u.getPort(), u.getPath(), u.getQuery(), u.getRef()).toASCIIString();
+            } catch (Exception e) {
+                LOG.e(e);
+                return url;
+            }
         }
     }
 
@@ -193,7 +279,7 @@ public class WebDavClient {
     }
 
     public static InputStream openStream(String url, String login, String password, boolean trustAll) throws IOException {
-        return sardine(login, password, trustAll).get(url);
+        return sardine(login, password, trustAll).get(encodeIfNeeded(url));
     }
 
     static String resolve(String base, String href) {

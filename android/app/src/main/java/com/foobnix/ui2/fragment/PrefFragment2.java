@@ -2355,7 +2355,7 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
                 () -> AppState.get().supportDJVU, v -> AppState.get().supportDJVU = v));
         entries.add(new FormatEntry("FB2", Arrays.asList("fb2"),
                 () -> AppState.get().supportFB2, v -> AppState.get().supportFB2 = v));
-        entries.add(new FormatEntry("MOBI/AZW", Arrays.asList("mobi", "azw", "azw3"),
+        entries.add(new FormatEntry("MOBI/AZW/PRC", Arrays.asList("mobi", "azw", "azw3", "prc", "pdb"),
                 () -> AppState.get().supportMOBI, v -> AppState.get().supportMOBI = v));
         entries.add(new FormatEntry("EPUB", Arrays.asList("epub"),
                 () -> AppState.get().supportEPUB, v -> AppState.get().supportEPUB = v));
@@ -2373,39 +2373,7 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
                 () -> AppState.get().supportZIP, v -> AppState.get().supportZIP = v));
         entries.add(new FormatEntry("HTML/TXT", Arrays.asList("txt", "html", "xhtml", "mhtml", "shtml", "md"),
                 () -> AppState.get().supportTXT, v -> AppState.get().supportTXT = v));
-        // 压缩包/其它 used to be two vague catch-all rows: list every member
-        // extension right in the row label so the group's formats are visible
-        entries.add(new FormatEntry(labeled(context.getString(R.string.archives), stripDots(ExtUtils.archiveExts)),
-                stripDots(ExtUtils.archiveExts),
-                () -> AppState.get().supportArch, v -> AppState.get().supportArch = v));
-
-        List<String> otherExts = new ArrayList<String>(stripDots(ExtUtils.otherExts));
-        otherExts.addAll(stripDots(ExtUtils.lirbeExt));
-        otherExts.add("prc");
-        otherExts.add("pdb");
-        entries.add(new FormatEntry(labeled(context.getString(R.string.other), otherExts), otherExts,
-                () -> AppState.get().supportOther, v -> AppState.get().supportOther = v));
         return entries;
-    }
-
-    /** "标签 (a/b/c…)" row label listing every format of the group. */
-    private static String labeled(String label, List<String> exts) {
-        StringBuilder sb = new StringBuilder(label).append(" (");
-        for (int i = 0; i < exts.size(); i++) {
-            if (i > 0) {
-                sb.append("/");
-            }
-            sb.append(exts.get(i));
-        }
-        return sb.append(")").toString();
-    }
-
-    private static List<String> stripDots(List<String> exts) {
-        List<String> result = new ArrayList<String>();
-        for (String ext : exts) {
-            result.add(ext.startsWith(".") ? ext.substring(1) : ext);
-        }
-        return result;
     }
 
     private static class FormatEntry {

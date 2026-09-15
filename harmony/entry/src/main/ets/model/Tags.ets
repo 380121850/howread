@@ -1,4 +1,4 @@
-import { RecentBook, getRecentBooks, saveRecentBook } from './ReadingProgress';
+import { RecentBook, getRecentBooks, saveRecentBook, replaceRecentBooks } from './ReadingProgress';
 
 /**
  * Sprint N: Tag management for the book library.
@@ -40,8 +40,10 @@ export async function removeTagFromBook(ctx: Context, path: string, tag: string)
   const books = await getRecentBooks(ctx);
   for (let i = 0; i < books.length; i++) {
     if (books[i].path === path) {
-      books[i].tags = books[i].tags.filter((t: string) => t !== tag);
-      await saveRecentBook(ctx, books[i]);
+      /* direct list write: saveRecentBook's merge treats an empty tags array
+       * as "keep old", which would resurrect the last removed tag */
+      books[i].tags = books[i].tags.filter((t: string): boolean => t !== tag);
+      await replaceRecentBooks(ctx, books);
       return;
     }
   }

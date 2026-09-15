@@ -587,8 +587,6 @@ public class AppState {
     public boolean supportMOBI = true;
     public boolean supportCBZ = false;
     public boolean supportZIP = true;
-    public boolean supportArch = false;
-    public boolean supportOther = false;
     public boolean supportTXT = false;
     public boolean isPreText = false;
     public boolean isLineBreaksText = false;

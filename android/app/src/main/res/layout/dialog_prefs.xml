@@ -646,6 +646,14 @@
             </LinearLayout>
         </LinearLayout>
 
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginLeft="34dip"
+            android:text="@string/moon_brightness_edge_hint"
+            android:textColor="@color/tint_gray"
+            android:textSize="12sp" />
+
         <LinearLayout
             android:id="@+id/onKeyCode"
             android:layout_width="match_parent"

@@ -3,8 +3,6 @@
    <string name="library_settings">Configuració de la biblioteca</string>
    <string name="scan_device_for_new_books">Carpetes a escanejar</string>
    <string name="add_folder">Afegeix una carpeta</string>
-   <string name="archives">Arxius</string>
-   <string name="other">Altres</string>
    <string name="you_need_to_update_the_library">Actualitzeu la biblioteca per aplicar els canvis</string>
    <string name="in_the_author_s_name_first_the_surname">Primer els cognoms de l\'autor</string>
    <string name="orientation">Orientació</string>

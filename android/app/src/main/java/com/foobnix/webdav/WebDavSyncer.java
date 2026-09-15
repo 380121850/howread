@@ -69,6 +69,14 @@ import javax.net.ssl.SSLException;
  *                                      against the base, never the clock.
  *   /&lt;dir&gt;/global/app-Recent.json  SimpleMeta lists, entry-level union
  *   /&lt;dir&gt;/global/app-Favorite.json (keyed by path, newer "time" wins)
+ *   /&lt;dir&gt;/global/app-AI.json             AI vendor profiles, PER-VENDOR
+ *                                      union: every saved 厂商 = one item
+ *                                      (all fields incl. its key), restored
+ *                                      per vendor
+ *   /&lt;dir&gt;/global/app-NetworkSources.json "My files" sources, PER-ITEM
+ *                                      union: OPDS / WebDAV / SMB / SFTP
+ *                                      entries + 书库文件夹, each entry one
+ *                                      sub-item with all of its fields
  *   /&lt;dir&gt;/books/&lt;hash&gt;.json      per-book info: name + content hash identity,
  *                                      reading progress and bookmarks/AI notes.
  *                                      Created ONLY for books the user actually
@@ -122,7 +130,11 @@ public class WebDavSyncer {
             "bgImageDayPath", "bgImageNightPath",
             "proxyEnable", "proxyServer", "proxyPort", "proxyUser", "proxyPassword",
             "selectedText", "searchQuery", "isAutoScroll",
-            "hashCode", "webdavLastSyncTime", "webdavLastSyncInfo"));
+            "hashCode", "webdavLastSyncTime", "webdavLastSyncInfo",
+            // the saved AI vendor list syncs PER-VENDOR through app-AI.json
+            // (mergeAi); as one opaque string it would clobber that
+            // per-vendor merge, so it is kept device-local here
+            "aiConfigs", "aiConfigName"));
 
     /** Device-bound app-CSS.json fields (absolute paths and the SAF URI). */
     private static final Set<String> CSS_DEVICE_FIELDS = new HashSet<String>(Arrays.asList(
@@ -314,7 +326,7 @@ public class WebDavSyncer {
             // vs the base snapshot of the last merged result). Devices changing
             // different fields never overwrite each other; change detection is
             // content-based, never clock-based.
-            ProfileStateIO.exportNetworkSources();
+            ProfileStateIO.exportNetworkSources(c);
             syncThreeWayFile(s, globalUrl, AppProfile.syncState, true, false);
             syncThreeWayFile(s, globalUrl, AppProfile.syncCSS, false, true);
 
@@ -338,7 +350,6 @@ public class WebDavSyncer {
             // importAi would have nothing to restore)
             syncMergedObjectFile(s, globalUrl, AppProfile.syncAI, ProfileStateIO::mergeAi);
             syncThreeWayFile(s, globalUrl, AppProfile.syncMisc, false, false);
-            ProfileStateIO.importAi(c);
             ProfileStateIO.importMisc(c);
             // re-apply the synced reading statistics AFTER importMisc: the
             // misc import restores the whole AppSP object from app-Misc.json
@@ -349,6 +360,11 @@ public class WebDavSyncer {
             // running app; AppState.save() at the end would otherwise write
             // the stale in-memory state back over the synced file
             ProfileStateIO.importAppState();
+            // per-vendor AI restore runs AFTER importAppState: app-AI.json
+            // is the vendor-list source of truth (app-State.json keeps
+            // aiConfigs device-local) and must not be clobbered by the
+            // state-file load above
+            ProfileStateIO.importAi(c);
             // same for the styling: re-apply the merged app-CSS.json to the
             // live BookCSS, otherwise AppProfile.save() below writes the stale
             // in-memory copy back over the merged file and the second CSS
@@ -359,8 +375,9 @@ public class WebDavSyncer {
             // dedicated three-way sync, applied AFTER the global files so the
             // app-State.json merge can never override the lists; entries the
             // user deleted locally and did not change remotely stay deleted
-            syncThreeWayFile(s, globalUrl, AppProfile.syncNetworkSources, false, false);
-            ProfileStateIO.importNetworkSources();
+            syncMergedObjectFile(s, globalUrl, AppProfile.syncNetworkSources,
+                    ProfileStateIO::mergeNetworkSources);
+            ProfileStateIO.importNetworkSources(c);
             AppProfile.save(c);
             syncThreeWayFile(s, globalUrl, AppProfile.syncState, true, false);
             syncThreeWayFile(s, globalUrl, AppProfile.syncCSS, false, true);

@@ -3,8 +3,6 @@
    <string name="library_settings">การตั้งค่าไลบรารี</string>
    <string name="scan_device_for_new_books">สแกนอุปกรณ์สำหรับหนังสือใหม่</string>
    <string name="add_folder">เพิ่มโฟลเดอร์ใหม่</string>
-   <string name="archives">คลังข้อมูล</string>
-   <string name="other">อื่น ๆ</string>
    <string name="you_need_to_update_the_library">คุณจำเป็นต้องอัปเดตไลบรารี</string>
    <string name="in_the_author_s_name_first_the_surname">ในนามสกุลผู้เขียนเป็นอันดับแรก</string>
    <string name="orientation">ทิศทางของจอ</string>

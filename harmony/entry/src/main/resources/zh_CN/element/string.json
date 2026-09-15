@@ -2075,6 +2075,74 @@
     {
       "name": "fork_of_librera",
       "value": "基于 Librera Reader 的鸿蒙移植版"
+    },
+    {
+      "name": "menu_tags",
+      "value": "标签"
+    },
+    {
+      "name": "tag_new_hint",
+      "value": "新标签名称"
+    },
+    {
+      "name": "tag_create",
+      "value": "创建"
+    },
+    {
+      "name": "tag_empty",
+      "value": "暂无标签"
+    },
+    {
+      "name": "tag_filter_all",
+      "value": "全部"
+    },
+    {
+      "name": "view_genre",
+      "value": "分类"
+    },
+    {
+      "name": "group_off",
+      "value": "分组"
+    },
+    {
+      "name": "dav_start_hint",
+      "value": "起始目录（可选，如 /sub）"
+    },
+    {
+      "name": "dav_test",
+      "value": "测试连接"
+    },
+    {
+      "name": "dav_browse_dirs",
+      "value": "浏览目录"
+    },
+    {
+      "name": "dav_test_ok",
+      "value": "连接成功"
+    },
+    {
+      "name": "dav_test_auth",
+      "value": "认证失败：请检查账号或密码"
+    },
+    {
+      "name": "dav_test_fail",
+      "value": "连接失败，请检查服务器地址与网络"
+    },
+    {
+      "name": "brightness_edge_hint",
+      "value": "划动屏幕左边缘调节亮度"
+    },
+    {
+      "name": "dav_dir_up",
+      "value": "上一级"
+    },
+    {
+      "name": "dav_pick_here",
+      "value": "选此目录"
+    },
+    {
+      "name": "dav_dir_empty",
+      "value": "无子目录"
     }
   ]
 }

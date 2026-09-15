@@ -3,8 +3,6 @@
    <string name="library_settings">ライブラリ設定</string>
    <string name="scan_device_for_new_books">端末内の新しい書籍をスキャン</string>
    <string name="add_folder">フォルダを追加</string>
-   <string name="archives">アーカイブ</string>
-   <string name="other">その他</string>
    <string name="you_need_to_update_the_library">ライブラリを更新する必要があります</string>
    <string name="in_the_author_s_name_first_the_surname">著者名では、姓を先に</string>
    <string name="orientation">向き</string>

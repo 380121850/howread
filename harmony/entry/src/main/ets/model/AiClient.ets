@@ -199,8 +199,10 @@ export async function listModels(cfg: AiConfig, ctx?: Context): Promise<string[]
     if (data !== undefined && data !== null) {
       for (let i = 0; i < data.length; i++) {
         const id = data[i]['id'];
-        if (typeof id === 'string') {
-          ids.push(id);
+        if (typeof id === 'string' && id.length > 0) {
+          /* Gemini-style model lists carry a redundant "models/" prefix
+           * (Android 2026-09-13 fix parity) — strip it for direct use */
+          ids.push(id.startsWith('models/') ? id.substring(7) : id);
         }
       }
     }

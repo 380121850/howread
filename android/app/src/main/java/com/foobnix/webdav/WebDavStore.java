@@ -27,7 +27,10 @@ public class WebDavStore {
                 if (it.length == 0 || TxtUtils.isEmpty(it[0])) {
                     continue;
                 }
-                String url = it[0].trim();
+                // normalize once: a line saved with a trailing slash must
+                // match the slash-less keys used for credentials, trust flag
+                // and findForUrl (appState keeps the raw line for remove/edit)
+                String url = trimSlash(it[0].trim());
                 String title = it.length > 1 ? it[1] : url;
                 if (TxtUtils.isEmpty(title)) {
                     title = url;

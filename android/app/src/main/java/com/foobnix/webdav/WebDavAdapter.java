@@ -54,7 +54,7 @@ public class WebDavAdapter extends RecyclerView.Adapter<WebDavAdapter.Holder> {
         h.title.setText(item.name);
         if (item.isServer) {
             h.subtitle.setText(item.href);
-            h.icon.setImageResource(R.drawable.glyphicons_544_cloud);
+            h.icon.setImageResource(R.drawable.my_nas_webdav);
             h.remove.setVisibility(View.VISIBLE);
         } else if (item.isDir) {
             h.subtitle.setText("");

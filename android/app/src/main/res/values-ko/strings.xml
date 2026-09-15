@@ -3,8 +3,6 @@
    <string name="library_settings">라이브러리 설정</string>
    <string name="scan_device_for_new_books">장치에서 새책 찾기</string>
    <string name="add_folder">폴더 추가</string>
-   <string name="archives">기록 보관소</string>
-   <string name="other">기타</string>
    <string name="you_need_to_update_the_library">라이브러리를 업데이트해야합니다.</string>
    <string name="in_the_author_s_name_first_the_surname">저자의 이름 먼저 표시하기</string>
    <string name="orientation">맞춤</string>

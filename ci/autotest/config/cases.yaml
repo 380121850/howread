@@ -5,7 +5,7 @@ package: com.leestudio.howread.fd.reader
 package_pro: com.leestudio.howread.pro.reader
 main_activity: com.foobnix.ui2.MainTabs2
 
-launcher_timeout_s: 10
+launcher_timeout_s: 25
 ui_timeout_s: 8
 step_screenshot: true
 heartbeat_s: 30          # >30s 的操作打印心跳行

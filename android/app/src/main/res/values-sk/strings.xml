@@ -3,8 +3,6 @@
    <string name="library_settings">Nastavenia knižnice</string>
    <string name="scan_device_for_new_books">Priečinky na skenovanie</string>
    <string name="add_folder">Pridať priečinok</string>
-   <string name="archives">Archív</string>
-   <string name="other">Ostatné</string>
    <string name="you_need_to_update_the_library">Aktualizovať knižnicu na uplatnenie zmien</string>
    <string name="in_the_author_s_name_first_the_surname">Priezvisko autora ako prvé</string>
    <string name="orientation">Orientácia</string>

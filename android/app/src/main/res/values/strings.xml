@@ -5,9 +5,6 @@
    <string name="library_folders_settings">Library Folders</string>
    <string name="scan_device_for_new_books">Folders to Scan</string>
    <string name="add_folder">Add folder</string>
-   <string name="add_file">Add file</string>
-   <string name="archives">Archives</string>
-   <string name="other">Other</string>
    <string name="you_need_to_update_the_library">Now update Library to apply changes</string>
    <string name="in_the_author_s_name_first_the_surname">Author\'s last name first</string>
    <string name="orientation">Orientation</string>
@@ -705,6 +702,8 @@
    <string name="add_webdav_server">Add WebDAV server</string>
    <string name="add_anyway">Add anyway</string>
    <string name="webdav_auth_failed">Authentication failed. Check the server address, login and password</string>
+   <string name="webdav_empty_hint">Folder is empty or access is denied</string>
+   <string name="webdav_relogin_msg">The saved account cannot list this server. Re-enter the login and password?</string>
    <string name="webdav_login">Login</string>
    <string name="webdav_url">WebDAV URL</string>
    <string name="moon_night_mode">Night mode</string>
@@ -736,7 +735,7 @@
    <string name="webdav_trust_cert">Trust self-signed certificate</string>
    <string name="webdav_err_ssl">Certificate check failed. For a self-signed server enable \u201cTrust self-signed certificate\u201d</string>
    <string name="webdav_err_network">Cannot reach the server. Check the address and network</string>
-   <string name="webdav_connect_failed">Cannot connect to the WebDAV server</string>
+   <string name="webdav_connect_failed">Cannot connect to the server. Check the address and network</string>
    <string name="add_text_note">Add note</string>
    <string name="moon_note_hint">Note text</string>
    <string name="moon_home">Home</string>
@@ -920,6 +919,8 @@
     <string name="moon_net_section_smb">SMB (Pro)</string>
     <string name="moon_net_section_sftp">SFTP (Pro)</string>
     <string name="moon_lib_remote_folders">Remote folders (Pro)</string>
+   <string name="moon_brightness_edge_hint">Swipe the left screen edge to adjust brightness</string>
+   <string name="moon_lib_local_folders">Local folders</string>
     <string name="remote_add_smb">Add SMB server</string>
     <string name="remote_add_sftp">Add SFTP server</string>
     <string name="remote_host_hint">Host or IP</string>

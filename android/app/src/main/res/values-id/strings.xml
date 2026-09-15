@@ -3,8 +3,6 @@
    <string name="library_settings">Pengaturan perpustakaan</string>
    <string name="scan_device_for_new_books">Pindai perangkat untuk buku baru</string>
    <string name="add_folder">Tambah Folder</string>
-   <string name="archives">Arsip</string>
-   <string name="other">Lain</string>
    <string name="you_need_to_update_the_library">Anda perlu memperbarui perpustakaan</string>
    <string name="in_the_author_s_name_first_the_surname">Dalam nama penulis, pertama nama keluarga</string>
    <string name="orientation">Orientasi</string>

@@ -57,7 +57,7 @@ const TAB_ICONS: Resource[] = [$r('app.media.ic_home'), $r('app.media.ic_book_op
 const TAB_NAMES: Resource[] = [$r('app.string.tab_home'), $r('app.string.tab_library'), $r('app.string.tab_my_files'), $r('app.string.tab_prefs')];
 const THEME_PRESETS: string[] = ['#3949AB', '#1565C0', '#00897B', '#2E7D32', '#6D4C41', '#455A64', '#AD1457', '#37474F'];
 const ACCENT_PRESETS: string[] = ['#03A9F4', '#FF4081', '#7CB342', '#FFB300', '#9575CD', '#4DD0E1', '#F06292', '#90A4AE'];
-const FORMAT_ROWS: string[][] = [['pdf', 'PDF'], ['epub', 'EPUB'], ['fb2', 'FB2'], ['txtmd', 'TXT/MD'], ['mobi', 'MOBI/AZW'], ['djvu', 'DJVU'], ['xps', 'XPS'], ['doc', 'DOC/DOCX'], ['rtf', 'RTF'], ['odt', 'ODT'], ['cbz', 'CBZ/CBR'], ['zip', 'ZIP'], ['html', 'HTML']];
+const FORMAT_ROWS: string[][] = [['pdf', 'PDF'], ['epub', 'EPUB'], ['fb2', 'FB2'], ['txtmd', 'TXT/MD'], ['mobi', 'MOBI/AZW/PRC'], ['djvu', 'DJVU'], ['xps', 'XPS'], ['doc', 'DOC/DOCX'], ['rtf', 'RTF'], ['odt', 'ODT'], ['cbz', 'CBZ/CBR'], ['zip', 'ZIP'], ['html', 'HTML']];
 const WHATSNEW_URL: string = 'https://github.com/380121850/howread/blob/master/CHANGES.md';
 const HOME_URL: string = 'https://380121850.github.io/howread/';
 const SUPPORT_MAIL: string = '380121850@163.com';
@@ -142,10 +142,18 @@ struct Index {
   @State allTags: string[] = [];
   @State activeTagFilter: string = '';
   @State recentSortMode: number = 0; /* 0=recent, 1=title A-Z, 2=author */
-  @State recentViewMode: number = 0; /* 0=list, 1=by author, 2=by series */
+  @State recentViewMode: number = 0; /* 0=list, 1=by author, 2=by series, 3=by genre */
   @State showTagDialog: boolean = false;
   @State tagEditTarget: string = '';
   @State newTagInput: string = '';
+  @State tagEditTags: string[] = [];   /* snapshot of the edited book's tags */
+  @State showTagFilter: boolean = false;
+  /* Android 2026-09-13: WebDAV 起始目录 / 测试连接 / 浏览目录 */
+  @State davEditStart: string = '';
+  @State showDavBrowse: boolean = false;
+  @State davBrowsePath: string = '';
+  @State davBrowseDirs: string[] = [];
+  @State libGroupBy: number = 0;   /* 分组 chip: 0=off 1=author 2=series 3=genre */
 
   // ---- Phase 1: Android-aligned shell (top bar + 4 tabs + left drawer + FAB) ----
   /** top bar title = current tab name (Android 18sp bold white) */
@@ -1472,6 +1480,14 @@ struct Index {
         this.buildLibMenuDialog()
       }
 
+      // ---- 标签管理 dialog (Android FN-13 parity) ----
+      if (this.showTagDialog) {
+        this.buildTagDialog()
+      }
+      if (this.showTagFilter) {
+        this.buildTagFilterDialog()
+      }
+
       // ---- 阅读统计 chart dialog (Android stats chart popup) ----
       if (this.showStatsChart) {
         this.buildStatsChartDialog()
@@ -1506,6 +1522,9 @@ struct Index {
       // ---- WebDAV add/edit dialog (hr06) ----
       if (this.showDavEdit) {
         this.buildDavEditDialog()
+      }
+      if (this.showDavBrowse) {
+        this.buildDavBrowseDialog()
       }
 
       // ---- SMB/SFTP add/edit dialogs ----
@@ -1767,7 +1786,9 @@ struct Index {
     const filtered = this.getFilteredRecent();
     for (let i = 0; i < filtered.length; i++) {
       const book = filtered[i];
-      const key = this.recentViewMode === 2 ? book.series : book.author;
+      const key = this.recentViewMode === 2 ? book.series
+        : this.recentViewMode === 3 ? book.genre
+          : book.author;
       const label = key.length > 0 ? key : this.L($r('app.string.tag_none'));
       if (groups.has(label)) {
         groups.get(label)!.push(book);
@@ -1791,16 +1812,15 @@ struct Index {
           Button(this.recentSortMode === 0 ? $r('app.string.sort_recent') : this.recentSortMode === 1 ? 'A-Z' : $r('app.string.sort_author'))
             .fontSize(11).height(26)
             .onClick(() => { this.recentSortMode = (this.recentSortMode + 1) % 3; })
-          Button(this.recentViewMode === 0 ? $r('app.string.view_list') : this.recentViewMode === 1 ? $r('app.string.sort_author') : $r('app.string.sort_series'))
+          Button(this.recentViewMode === 0 ? $r('app.string.view_list') : this.recentViewMode === 1 ? $r('app.string.sort_author') : this.recentViewMode === 2 ? $r('app.string.sort_series') : $r('app.string.view_genre'))
             .fontSize(11).height(26).margin({ left: 6 })
-            .onClick(() => { this.recentViewMode = (this.recentViewMode + 1) % 3; })
+            .onClick(() => { this.recentViewMode = (this.recentViewMode + 1) % 4; })
           if (this.allTags.length > 0) {
             Text(this.activeTagFilter ? '\u7B5B:' + this.activeTagFilter : $r('app.string.lib_tags'))
               .fontSize(11).fontColor('#2a7').height(26)
               .margin({ left: 6 })
               .onClick(() => {
-                const idx = this.allTags.indexOf(this.activeTagFilter);
-                this.activeTagFilter = idx < 0 ? (this.allTags.length > 0 ? this.allTags[0] : '') : (idx + 1 >= this.allTags.length ? '' : this.allTags[idx + 1]);
+                this.showTagFilter = true;
               })
           }
         }.width('94%').margin({ bottom: 8 })
@@ -2394,7 +2414,11 @@ struct Index {
     try {
       const ctx = getContext(this);
       let added = 0;
-      const queue: string[] = [s.url];
+      /* start from the server's configured start directory (Android 起始目录) */
+      const startUrl: string = s.startPath.length > 0
+        ? s.url.replace(/\/+$/, '') + this.davNormStart(s.startPath)
+        : s.url;
+      const queue: string[] = [startUrl];
       let depth = 0;
       let dirsVisited = 0;
       while (queue.length > 0 && depth < 5 && dirsVisited < 200) {
@@ -3699,7 +3723,7 @@ struct Index {
         this.sectionHeader(this.L($r('app.string.tab_my_files')), 2)
         Row({ space: 20 }) {
           if (this.webdavUrl.length > 0) {
-            this.shortcutCircle($r('app.media.ic_cloud'), '#4db6ac', 'WebDAV', 2)
+            this.shortcutCircle($r('app.media.my_nas_webdav'), '#4db6ac', 'WebDAV', 2)
           }
           this.shortcutCircle($r('app.media.ic_folder'), '#bdbdbd', 'Download', 2)
         }
@@ -3935,6 +3959,28 @@ struct Index {
             .onClick(() => {
               this.openPlManage();
             })
+          Text(this.activeTagFilter.length > 0 ? '\u7B5B:' + this.activeTagFilter : $r('app.string.lib_tags'))
+            .fontSize(13)
+            .fontColor(this.activeTagFilter.length > 0 ? Color.White : this.thm())
+            .height(28)
+            .padding({ left: 14, right: 14 })
+            .borderRadius(3)
+            .backgroundColor(this.activeTagFilter.length > 0 ? this.thm() : this.chipBg())
+            .border({ width: 1, color: this.activeTagFilter.length > 0 ? this.thm() : '#9FA8DA' })
+            .onClick(() => {
+              this.showTagFilter = true;
+            })
+          Text(this.groupChipLabel())
+            .fontSize(13)
+            .fontColor(this.libGroupBy > 0 ? Color.White : this.thm())
+            .height(28)
+            .padding({ left: 14, right: 14 })
+            .borderRadius(3)
+            .backgroundColor(this.libGroupBy > 0 ? this.thm() : this.chipBg())
+            .border({ width: 1, color: this.libGroupBy > 0 ? this.thm() : '#9FA8DA' })
+            .onClick(() => {
+              this.libGroupBy = (this.libGroupBy + 1) % 4;
+            })
         }
       }
       .scrollable(ScrollDirection.Horizontal)
@@ -4021,6 +4067,28 @@ struct Index {
       if (this.getLibraryBooks().length === 0) {
         Text($r('app.string.lib_empty_import'))
           .fontSize(13).fontColor(this.txtFaint()).margin({ top: 60 })
+      } else if (this.libGroupBy > 0) {
+        /* grouped view: author / series / genre (Android 分组视图 parity;
+         * empty groups impossible here — the branch above handles the empty list) */
+        Scroll() {
+          Column({ space: 0 }) {
+            ForEach(this.getGroupedLibrary(), (group: [string, RecentBook[]]) => {
+              Column() {
+                Text(group[0] + ' (' + group[1].length + ')')
+                  .fontSize(14).fontWeight(FontWeight.Bold).fontColor(this.txtSec())
+                  .width('100%').padding({ left: 8, top: 10, bottom: 4 })
+                  .textAlign(TextAlign.Start)
+                ForEach(group[1], (book: RecentBook) => {
+                  this.LibRow(book, false)
+                  Divider().color(this.inputBg())
+                }, (item: RecentBook) => `${item.path}_${item.page}_${item.status}_${item.star}`)
+              }
+              .width('100%')
+            }, (g: [string, RecentBook[]]) => g[0])
+          }
+          .width('100%').padding({ left: 8, right: 8, top: 4 })
+        }
+        .layoutWeight(1).width('100%')
       } else if (this.libViewMode <= 1) {
         /* list / compact */
         Scroll() {
@@ -4077,6 +4145,9 @@ struct Index {
       if (this.libStatusFilter >= 0 && b.status !== this.libStatusFilter) {
         continue;
       }
+      if (this.activeTagFilter.length > 0 && !b.tags.includes(this.activeTagFilter)) {
+        continue;
+      }
       /* Round 6: hide fully-read books (pref hideReadBooks) */
       if (this.settings.hideReadBooks && b.status === 2) {
         continue;
@@ -4103,6 +4174,36 @@ struct Index {
 
   sortName(mode: number): string {
     return mode === 0 ? this.L($r('app.string.sort_recent')) : mode === 1 ? this.L($r('app.string.common_name')) : mode === 2 ? this.L($r('app.string.sort_date')) : mode === 3 ? this.L($r('app.string.sort_author')) : this.L($r('app.string.sort_series'));
+  }
+
+  /** Grouped library for the 分组 chip (1=author 2=series 3=genre). */
+  getGroupedLibrary(): [string, RecentBook[]][] {
+    const groups: Map<string, RecentBook[]> = new Map();
+    const filtered = this.getLibraryBooks();
+    for (let i = 0; i < filtered.length; i++) {
+      const book = filtered[i];
+      const key = this.libGroupBy === 2 ? book.series
+        : this.libGroupBy === 3 ? book.genre
+          : book.author;
+      const label = key.length > 0 ? key : this.L($r('app.string.tag_none'));
+      if (groups.has(label)) {
+        groups.get(label)!.push(book);
+      } else {
+        groups.set(label, [book]);
+      }
+    }
+    const result: [string, RecentBook[]][] = [];
+    groups.forEach((val: RecentBook[], keyStr: string) => {
+      result.push([keyStr, val]);
+    });
+    return result;
+  }
+
+  groupChipLabel(): string {
+    return this.libGroupBy === 0 ? this.L($r('app.string.group_off'))
+      : this.libGroupBy === 1 ? this.L($r('app.string.sort_author'))
+        : this.libGroupBy === 2 ? this.L($r('app.string.sort_series'))
+          : this.L($r('app.string.view_genre'));
   }
 
   /** Round 6: grid columns template from the coverColumns pref (1..8). */
@@ -4217,6 +4318,15 @@ struct Index {
       .margin({ left: 8 })
 
       if (!this.selMode) {
+        Column() {
+          Image($r('app.media.ic_more_vert')).width(20).height(20).fillColor(this.txtHint())
+        }
+        .width(32).height(36).justifyContent(FlexAlign.Center)
+        .margin({ right: 4 })
+        .onClick(() => {
+          this.libMenuPath = book.path;
+          console.info(`[Index] Book menu: ${book.title}`);
+        })
         Text(book.star ? '\u2605' : '\u2606')
           .fontSize(22).fontColor(book.star ? '#f5a623' : this.txtFaint())
           .onClick(() => {
@@ -5062,6 +5172,52 @@ struct Index {
     return undefined;
   }
 
+  /** Find a library book by path (tag editor support). */
+  private findRecentBook(path: string): RecentBook | undefined {
+    for (let i = 0; i < this.recentBooks.length; i++) {
+      if (this.recentBooks[i].path === path) {
+        return this.recentBooks[i];
+      }
+    }
+    return undefined;
+  }
+
+  private openTagEditor(path: string): void {
+    this.tagEditTarget = path;
+    const b = this.findRecentBook(path);
+    this.tagEditTags = b !== undefined ? b.tags.slice() : [];
+    this.newTagInput = '';
+    this.showTagDialog = true;
+  }
+
+  private async toggleBookTag(tag: string): Promise<void> {
+    const ctx = getContext(this);
+    if (this.tagEditTags.includes(tag)) {
+      this.tagEditTags = this.tagEditTags.filter((t: string): boolean => t !== tag);
+      await removeTagFromBook(ctx, this.tagEditTarget, tag);
+    } else {
+      this.tagEditTags = this.tagEditTags.concat([tag]);
+      await addTagToBook(ctx, this.tagEditTarget, tag);
+    }
+    this.allTags = await getTagList(ctx);
+    await this.loadLibrary();
+  }
+
+  private async createBookTag(): Promise<void> {
+    const name: string = this.newTagInput.trim();
+    if (name.length === 0) {
+      return;
+    }
+    this.newTagInput = '';
+    const ctx = getContext(this);
+    await addTagToBook(ctx, this.tagEditTarget, name);
+    if (!this.tagEditTags.includes(name)) {
+      this.tagEditTags = this.tagEditTags.concat([name]);
+    }
+    this.allTags = await getTagList(ctx);
+    await this.loadLibrary();
+  }
+
   /** Per-book actions (Android hr19 subset): status marks / star / delete. */
   @Builder
   buildLibMenuDialog() {
@@ -5077,6 +5233,8 @@ struct Index {
         Divider().color(this.divColor())
         this.libMenuPlItem()
         Divider().color(this.divColor())
+        this.libMenuTagsItem()
+        Divider().color(this.divColor())
         this.libMenuItem($r('app.media.ic_check'), this.L($r('app.string.menu_mark_finished')), 2)
         this.libMenuItem($r('app.media.ic_circle_half'), this.L($r('app.string.menu_mark_reading')), 1)
         this.libMenuItem($r('app.media.ic_circle_empty'), this.L($r('app.string.menu_mark_unread')), 0)
@@ -5091,6 +5249,155 @@ struct Index {
       .borderRadius(6)
     }
     .width('100%').height('100%')
+  }
+
+  /** Per-book tag editor (Android FN-13: File info -> Add tags). */
+  @Builder
+  buildTagDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showTagDialog = false;
+        })
+      Column({ space: 10 }) {
+        Text($r('app.string.menu_tags'))
+          .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
+          .width('100%')
+        if (this.tagEditTarget.length > 0) {
+          Text(this.tagEditTarget.substring(this.tagEditTarget.lastIndexOf('/') + 1))
+            .fontSize(11).fontColor(this.txtFaint()).maxLines(1).width('100%')
+        }
+        if (this.allTags.length === 0) {
+          Text($r('app.string.tag_empty'))
+            .fontSize(12).fontColor(this.txtFaint()).width('100%')
+        }
+        Scroll() {
+          Column() {
+            ForEach(this.allTags, (t: string) => {
+              Row({ space: 10 }) {
+                Text(this.tagEditTags.includes(t) ? '☑' : '☐')
+                  .fontSize(16).fontColor(this.thm())
+                Text(t)
+                  .fontSize(14).fontColor(this.txtPri()).layoutWeight(1).maxLines(1)
+              }
+              .width('100%')
+              .padding({ top: 8, bottom: 8 })
+              .onClick(() => {
+                this.toggleBookTag(t);
+              })
+            }, (t: string) => t)
+          }
+          .width('100%')
+        }
+        .constraintSize({ maxHeight: 220 })
+
+        Row({ space: 8 }) {
+          TextInput({ placeholder: $r('app.string.tag_new_hint'), text: this.newTagInput })
+            .fontSize(13).height(36).layoutWeight(1)
+            .onChange((v: string) => {
+              this.newTagInput = v;
+            })
+          Button($r('app.string.tag_create'))
+            .fontSize(12).height(36)
+            .backgroundColor(this.thm()).fontColor(Color.White)
+            .onClick(() => {
+              this.createBookTag();
+            })
+        }
+        .width('100%')
+
+        Button($r('app.string.common_close'))
+          .fontSize(13).height(34).width('60%')
+          .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+          .onClick(() => {
+            this.showTagDialog = false;
+          })
+      }
+      .width('80%')
+      .padding(14)
+      .backgroundColor(this.cardBg())
+      .borderRadius(10)
+    }
+    .width('100%').height('100%')
+  }
+
+  /** Tag filter chooser (replaces the old cycle-chip). */
+  @Builder
+  buildTagFilterDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showTagFilter = false;
+        })
+      Column({ space: 10 }) {
+        Text($r('app.string.lib_tags'))
+          .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
+          .width('100%')
+        Scroll() {
+          Column() {
+            Row({ space: 10 }) {
+              Text(this.activeTagFilter.length === 0 ? '☑' : '☐')
+                .fontSize(16).fontColor(this.thm())
+              Text($r('app.string.tag_filter_all'))
+                .fontSize(14).fontColor(this.txtPri()).layoutWeight(1)
+            }
+            .width('100%')
+            .padding({ top: 8, bottom: 8 })
+            .onClick(() => {
+              this.activeTagFilter = '';
+              this.showTagFilter = false;
+            })
+            ForEach(this.allTags, (t: string) => {
+              Row({ space: 10 }) {
+                Text(this.activeTagFilter === t ? '☑' : '☐')
+                  .fontSize(16).fontColor(this.thm())
+                Text(t)
+                  .fontSize(14).fontColor(this.txtPri()).layoutWeight(1).maxLines(1)
+              }
+              .width('100%')
+              .padding({ top: 8, bottom: 8 })
+              .onClick(() => {
+                this.activeTagFilter = t;
+                this.showTagFilter = false;
+              })
+            }, (t: string) => t)
+          }
+          .width('100%')
+        }
+        .constraintSize({ maxHeight: 260 })
+
+        Button($r('app.string.common_close'))
+          .fontSize(13).height(34).width('60%')
+          .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+          .onClick(() => {
+            this.showTagFilter = false;
+          })
+      }
+      .width('70%')
+      .padding(14)
+      .backgroundColor(this.cardBg())
+      .borderRadius(10)
+    }
+    .width('100%').height('100%')
+  }
+
+  @Builder
+  libMenuTagsItem() {
+    Row({ space: 14 }) {
+      Image($r('app.media.ic_tag')).width(20).height(20).fillColor(this.thm())
+      Text($r('app.string.menu_tags')).fontSize(15).fontColor(this.txtPri())
+    }
+    .width('100%')
+    .padding({ left: 18, right: 18, top: 13, bottom: 13 })
+    .onClick(() => {
+      const path: string = this.libMenuPath;
+      this.libMenuPath = '';
+      this.openTagEditor(path);
+    })
   }
 
   @Builder
@@ -6310,6 +6617,7 @@ struct Index {
       this.davEditUser = s.user;
       this.davEditPass = s.password;
       this.davEditTrusted = s.trusted;
+      this.davEditStart = s.startPath;
       this.davEditIdx = idx;
     } else {
       this.davEditUrl = 'http://';
@@ -6317,6 +6625,7 @@ struct Index {
       this.davEditUser = '';
       this.davEditPass = '';
       this.davEditTrusted = false;
+      this.davEditStart = '';
       this.davEditIdx = -1;
     }
     this.showDavEdit = true;
@@ -6334,7 +6643,8 @@ struct Index {
       name: this.davEditName.trim().length > 0 ? this.davEditName.trim() : this.davEditUrl.trim(),
       user: this.davEditUser,
       password: this.davEditPass,
-      trusted: this.davEditTrusted
+      trusted: this.davEditTrusted,
+      startPath: this.davNormStart(this.davEditStart)
     };
     saveDavServer(getContext(this), s, original).then(() => {
       this.showDavEdit = false;
@@ -6355,6 +6665,103 @@ struct Index {
       this.loadServers();
       this.status = this.L($r('app.string.dav_deleted'));
     });
+  }
+
+  /** Normalize a start-directory string to '/a/b' ('' = server root). */
+  private davNormStart(p: string): string {
+    let s: string = p.trim();
+    if (s.length === 0 || s === '/') {
+      return '';
+    }
+    if (!s.startsWith('/')) {
+      s = '/' + s;
+    }
+    while (s.length > 1 && s.endsWith('/')) {
+      s = s.substring(0, s.length - 1);
+    }
+    return s;
+  }
+
+  /** WebDAV config: PROPFIND Depth:0 connectivity test (Android 测试连接 parity). */
+  private async davTestConnection(): Promise<void> {
+    const base: string = this.davEditUrl.trim().replace(/\/+$/, '');
+    if (base.length === 0) {
+      promptAction.showToast({ message: $r('app.string.dav_url_required') });
+      return;
+    }
+    try {
+      const req = http.createHttp();
+      try {
+        const hdr: Record<string, string> = { 'Depth': '0' };
+        const auth: string = basicAuthHeader(this.davEditUser.trim(), this.davEditPass);
+        if (auth.length > 0) {
+          hdr['Authorization'] = auth;
+        }
+        const r = await req.request(base + '/', {
+          method: 'PROPFIND' as ESObject as http.RequestMethod,
+          header: hdr,
+          connectTimeout: 10000,
+          readTimeout: 15000
+        });
+        const code: number = r.responseCode;
+        if (code >= 200 && code < 300) {
+          promptAction.showToast({ message: $r('app.string.dav_test_ok') });
+        } else if (code === 401 || code === 403) {
+          promptAction.showToast({ message: $r('app.string.dav_test_auth') });
+        } else {
+          promptAction.showToast({ message: $r('app.string.dav_test_fail') + ': HTTP ' + code });
+        }
+      } finally {
+        req.destroy();
+      }
+    } catch (e) {
+      promptAction.showToast({ message: $r('app.string.dav_test_fail') });
+    }
+  }
+
+  /** WebDAV config: browse server directories to pick a start dir. */
+  private davBrowseOpen(): void {
+    if (this.davEditUrl.trim().length === 0) {
+      promptAction.showToast({ message: $r('app.string.dav_url_required') });
+      return;
+    }
+    this.davBrowsePath = this.davNormStart(this.davEditStart);
+    this.showDavBrowse = true;
+    this.davBrowseRefresh();
+  }
+
+  private async davBrowseRefresh(): Promise<void> {
+    const base: string = this.davEditUrl.trim().replace(/\/+$/, '');
+    const url: string = base + (this.davBrowsePath.length > 0 ? this.davBrowsePath : '');
+    const entries: DavListEntry[] | null =
+      await webdavListDir(url + '/', this.davEditUser.trim(), this.davEditPass);
+    const dirs: string[] = [];
+    if (entries !== null) {
+      for (let i = 0; i < entries.length; i++) {
+        if (entries[i].isDir && entries[i].name.length > 0) {
+          dirs.push(entries[i].name);
+        }
+      }
+    }
+    dirs.sort();
+    this.davBrowseDirs = dirs;
+  }
+
+  private davBrowseDrill(name: string): void {
+    this.davBrowsePath = this.davBrowsePath + '/' + name;
+    this.davBrowseRefresh();
+  }
+
+  private davBrowseUp(): void {
+    const p: string = this.davBrowsePath.replace(/\/+$/, '');
+    const cut: number = p.lastIndexOf('/');
+    this.davBrowsePath = cut >= 0 ? p.substring(0, cut) : '';
+    this.davBrowseRefresh();
+  }
+
+  private davBrowsePick(): void {
+    this.davEditStart = this.davBrowsePath;
+    this.showDavBrowse = false;
   }
 
   /** hr05: OPDS server row with edit/delete actions. */
@@ -6399,8 +6806,9 @@ struct Index {
   @Builder
   remoteBookRow(rec: RemoteBookRec) {
     Row({ space: 12 }) {
-      Image($r('app.media.ic_cloud'))
-        .width(24).height(24).fillColor(this.isDirectOpenExtCached(rec.ext) ? this.thm() : this.txtFaint())
+      Image(this.remoteProtoIcon(rec.uri))
+        .width(24).height(24)
+        .opacity(this.isDirectOpenExtCached(rec.ext) ? 1 : 0.55)
       Column({ space: 2 }) {
         Text(rec.title)
           .fontSize(15).fontColor(this.txtSec()).maxLines(1)
@@ -6445,16 +6853,49 @@ struct Index {
     return isDirectOpenExt(ext);
   }
 
+  /** Protocol-specific icon for a remote uri (v1.3.4: NAS icons per protocol). */
+  private remoteProtoIcon(uri: string): Resource {
+    const parts = parseRemoteUri(uri);
+    if (parts === null) {
+      return $r('app.media.ic_cloud');
+    }
+    if (parts.type === 'smb') {
+      return $r('app.media.my_nas_smb');
+    }
+    if (parts.type === 'sftp') {
+      return $r('app.media.my_nas_sftp');
+    }
+    return $r('app.media.my_nas_webdav');
+  }
+
+  /** Host:port of a WebDAV url without scheme/path. */
+  private davHostOf(url: string): string {
+    let h = url.replace(/^[a-zA-Z]+:\/\//, '');
+    const cut = h.indexOf('/');
+    if (cut >= 0) {
+      h = h.substring(0, cut);
+    }
+    return h;
+  }
+
+  /** 'host \u00b7 startDir' subtitle when a start dir is set (Android remoteAddressLabel). */
+  private davRowSubtitle(s: DavServer): string {
+    if (s.startPath.length > 0) {
+      return this.davHostOf(s.url) + ' \u00b7 ' + s.startPath;
+    }
+    return s.url;
+  }
+
   /** hr05: WebDAV server row with edit/delete/scan; tap = connect + open cloud panel. */
   @Builder
   browseDavRow(s: DavServer, idx: number) {
     Row({ space: 12 }) {
-      Image($r('app.media.ic_cloud'))
-        .width(24).height(24).fillColor(this.thm())
+      Image($r('app.media.my_nas_webdav'))
+        .width(24).height(24)
       Column({ space: 2 }) {
         Text(s.name)
           .fontSize(15).fontColor(this.txtSec()).maxLines(1)
-        Text(s.url)
+        Text(this.davRowSubtitle(s))
           .fontSize(11).fontColor(this.txtFaint()).maxLines(1)
       }
       .alignItems(HorizontalAlign.Start)
@@ -6484,6 +6925,7 @@ struct Index {
     .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
     .onClick(() => {
       this.webdavUrl = s.url;
+      this.webdavPath = this.davNormStart(s.startPath);
       this.davSelected = idx;
       this.netSection = 1;
       this.webdavConnect();
@@ -6593,6 +7035,29 @@ struct Index {
           .onChange((v: string) => {
             this.davEditPass = v;
           })
+        TextInput({ text: this.davEditStart, placeholder: $r('app.string.dav_start_hint') })
+          .fontSize(13).height(38).width('100%')
+          .backgroundColor(this.cardBg())
+          .border({ width: 1, color: this.divColor() })
+          .borderRadius(4)
+          .onChange((v: string) => {
+            this.davEditStart = v;
+          })
+        Row({ space: 8 }) {
+          Button($r('app.string.dav_test'))
+            .fontSize(12).height(34).layoutWeight(1)
+            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+            .onClick(() => {
+              this.davTestConnection();
+            })
+          Button($r('app.string.dav_browse_dirs'))
+            .fontSize(12).height(34).layoutWeight(1)
+            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+            .onClick(() => {
+              this.davBrowseOpen();
+            })
+        }
+        .width('100%')
         Row({ space: 6 }) {
           Checkbox({ name: 'davTrust' })
             .width(18).height(18)
@@ -6629,12 +7094,82 @@ struct Index {
     .width('100%').height('100%')
   }
 
+  /** WebDAV start-directory picker (Android RemoteDirPicker parity). */
+  @Builder
+  buildDavBrowseDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showDavBrowse = false;
+        })
+      Column({ space: 10 }) {
+        Text($r('app.string.dav_browse_dirs'))
+          .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
+          .width('100%')
+        Text('/' + this.davBrowsePath.replace(/^\/+/, ''))
+          .fontSize(11).fontColor(this.txtFaint()).maxLines(1).width('100%')
+        Scroll() {
+          Column() {
+            if (this.davBrowseDirs.length === 0) {
+              Text($r('app.string.dav_dir_empty'))
+                .fontSize(12).fontColor(this.txtFaint())
+            }
+            ForEach(this.davBrowseDirs, (d: string) => {
+              Row({ space: 10 }) {
+                Image($r('app.media.ic_folder')).width(18).height(18).fillColor(this.thm())
+                Text(d).fontSize(14).fontColor(this.txtPri()).layoutWeight(1).maxLines(1)
+                Text('›').fontSize(16).fontColor(this.txtFaint())
+              }
+              .width('100%')
+              .padding({ top: 9, bottom: 9 })
+              .onClick(() => {
+                this.davBrowseDrill(d);
+              })
+            }, (d: string) => d)
+          }
+          .width('100%')
+        }
+        .constraintSize({ maxHeight: 240 })
+
+        Row({ space: 8 }) {
+          Button($r('app.string.dav_dir_up'))
+            .fontSize(12).height(34)
+            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+            .onClick(() => {
+              this.davBrowseUp();
+            })
+          Blank()
+          Button($r('app.string.common_cancel'))
+            .fontSize(12).height(34)
+            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+            .onClick(() => {
+              this.showDavBrowse = false;
+            })
+          Button($r('app.string.dav_pick_here'))
+            .fontSize(12).height(34)
+            .backgroundColor(this.thm()).fontColor(Color.White)
+            .onClick(() => {
+              this.davBrowsePick();
+            })
+        }
+        .width('100%')
+      }
+      .width('80%')
+      .padding(14)
+      .backgroundColor(this.cardBg())
+      .borderRadius(10)
+    }
+    .width('100%').height('100%')
+  }
+
   /** SMB server row: edit/delete/scan; tap = browse panel (netSection 2). */
   @Builder
   browseSmbRow(s: SmbServer, idx: number) {
     Row({ space: 12 }) {
-      Image($r('app.media.ic_cloud'))
-        .width(24).height(24).fillColor(this.thm())
+      Image($r('app.media.my_nas_smb'))
+        .width(24).height(24)
       Column({ space: 2 }) {
         Text(s.name)
           .fontSize(15).fontColor(this.txtSec()).maxLines(1)
@@ -6674,8 +7209,8 @@ struct Index {
   @Builder
   browseSftpRow(s: SftpServer, idx: number) {
     Row({ space: 12 }) {
-      Image($r('app.media.ic_cloud'))
-        .width(24).height(24).fillColor(this.thm())
+      Image($r('app.media.my_nas_sftp'))
+        .width(24).height(24)
       Column({ space: 2 }) {
         Text(s.name)
           .fontSize(15).fontColor(this.txtSec()).maxLines(1)
@@ -7159,7 +7694,7 @@ struct Index {
         Divider().color(this.divColor()).margin({ top: 8 })
 
         /* 书库文件夹 */
-        this.browseSectionHeader(this.L($r('app.string.browse_library_folder')), 3)
+        this.browseSectionHeader(this.L($r('app.string.browse_library_folder')), 0)
         ForEach(this.libFolders, (f: LibFolder) => {
           this.browseFolderRow(f)
         }, (f: LibFolder) => f.path)

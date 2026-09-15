@@ -3,8 +3,6 @@
    <string name="library_settings">Auswahl angezeigter Dokumententypen</string>
    <string name="scan_device_for_new_books">Zu durchsuchende Ordner:</string>
    <string name="add_folder">Ordner hinzufügen</string>
-   <string name="archives">Archive</string>
-   <string name="other">Andere</string>
    <string name="you_need_to_update_the_library">Bibliothek aktualsieren um Änderungen vorzunehmen.</string>
    <string name="in_the_author_s_name_first_the_surname">Nachname des Autors zuerst</string>
    <string name="orientation">Orientierung</string>

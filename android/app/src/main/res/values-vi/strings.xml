@@ -3,8 +3,6 @@
    <string name="library_settings">Cài đặt thư viện</string>
    <string name="scan_device_for_new_books">Quét thiết bị cho cuốn sách mới</string>
    <string name="add_folder">Thêm thư mục</string>
-   <string name="archives">Lưu trữ</string>
-   <string name="other">Khác</string>
    <string name="you_need_to_update_the_library">Bạn cần cập nhật thư viện</string>
    <string name="in_the_author_s_name_first_the_surname">Trong tên của tác giả, đầu tiên họ</string>
    <string name="orientation">Sự định hướng</string>

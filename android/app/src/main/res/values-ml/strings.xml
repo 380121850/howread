@@ -3,8 +3,6 @@
    <string name="library_settings">ലൈബ്രറി ക്രമീകരണങ്ങൾ</string>
    <string name="scan_device_for_new_books">സ്കാൻ ചെയ്യാനുള്ള ഫോൾഡറുകൾ</string>
    <string name="add_folder">പുതിയ ഫോൾഡർ</string>
-   <string name="archives">ആർക്കൈവുകൾ</string>
-   <string name="other">മറ്റുള്ളവ</string>
    <string name="you_need_to_update_the_library">മാറ്റങ്ങൾ പ്രയോഗിക്കാൻ ഇപ്പോൾ ലൈബ്രറി അപ്‌ഡേറ്റുചെയ്യുക</string>
    <string name="in_the_author_s_name_first_the_surname">രചയിതാവിന്റെ അവസാന നാമം ആദ്യം</string>
    <string name="orientation">ഓറിയന്റേഷൻ</string>

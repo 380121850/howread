@@ -5,9 +5,6 @@
    <string name="library_folders_settings">书库文件夹配置</string>
    <string name="scan_device_for_new_books">包含的文件夹</string>
    <string name="add_folder">添加文件夹</string>
-   <string name="add_file">添加文件</string>
-   <string name="archives">压缩包</string>
-   <string name="other">其它</string>
    <string name="you_need_to_update_the_library">更新书库以应用更改</string>
    <string name="in_the_author_s_name_first_the_surname">作者姓氏在前</string>
    <string name="orientation">屏幕方向</string>
@@ -705,6 +702,8 @@
    <string name="add_webdav_server">添加 WebDAV 服务器</string>
    <string name="add_anyway">仍要添加</string>
    <string name="webdav_auth_failed">认证失败,请检查服务器地址和账号密码</string>
+   <string name="webdav_empty_hint">目录为空或无访问权限</string>
+   <string name="webdav_relogin_msg">使用已保存的账号无法读取该服务器的内容，可能需要重新登录。是否重新输入账号密码？</string>
    <string name="webdav_login">账号</string>
    <string name="webdav_url">WebDAV 地址</string>
    <string name="moon_night_mode">夜间模式</string>
@@ -736,7 +735,7 @@
    <string name="webdav_trust_cert">信任自签名证书</string>
    <string name="webdav_err_ssl">证书校验失败，自签名服务器请勾选“信任自签名证书”</string>
    <string name="webdav_err_network">无法连接服务器，请检查地址与网络</string>
-   <string name="webdav_connect_failed">无法连接 WebDAV 服务器</string>
+   <string name="webdav_connect_failed">连接失败，请检查服务器地址与网络</string>
    <string name="add_text_note">添加批注便签</string>
    <string name="moon_note_hint">输入批注内容</string>
    <string name="moon_home">首页</string>
@@ -922,6 +921,8 @@
     <string name="moon_net_section_smb">SMB (Pro)</string>
     <string name="moon_net_section_sftp">SFTP (Pro)</string>
     <string name="moon_lib_remote_folders">远程目录 (Pro)</string>
+   <string name="moon_brightness_edge_hint">划动屏幕左边缘调节亮度</string>
+   <string name="moon_lib_local_folders">本地文件夹路径</string>
     <string name="remote_add_smb">添加 SMB 服务器</string>
     <string name="remote_add_sftp">添加 SFTP 服务器</string>
     <string name="remote_host_hint">主机或 IP</string>

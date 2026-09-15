@@ -951,6 +951,10 @@ public class MainTabs2 extends AdsFragmentActivity {
      * reader flag isDayNotInvert in sync so books open in the matching mode.
      */
     private void applyDayNight(boolean night) {
+        android.util.Log.i("DayNight", "applyDayNight tap night=" + night
+                + " | before: appTheme=" + AppState.get().appTheme
+                + " isDayNotInvert=" + AppState.get().isDayNotInvert
+                + " isSystemThemeColor=" + AppState.get().isSystemThemeColor);
         AppState.get().isSystemThemeColor = false;
         if (night) {
             // preserve a user-chosen OLED black over plain dark
@@ -970,6 +974,9 @@ public class MainTabs2 extends AdsFragmentActivity {
         }
         IMG.clearDiscCache();
         IMG.clearMemoryCache();
+        android.util.Log.i("DayNight", "applyDayNight applied appTheme="
+                + AppState.get().appTheme + " isDayNotInvert=" + AppState.get().isDayNotInvert
+                + " -> save+restart");
         AppProfile.save(this);
         AppProfile.clear();
         finish();
@@ -1066,7 +1073,7 @@ public class MainTabs2 extends AdsFragmentActivity {
         OpdsFragment2 fragment = new OpdsFragment2();
         showFragmentOverlay(fragment,
                 TxtUtils.isEmpty(title) ? getString(UITab.OpdsFragment.getName()) : title);
-        fragment.openExternal(webDav, targetUrl);
+        fragment.openExternal(webDav, targetUrl, title);
         if (drawerLayout.isDrawerOpen(GravityCompat.START)) {
             drawerLayout.closeDrawer(GravityCompat.START, AppState.get().appTheme != AppState.THEME_INK);
         }

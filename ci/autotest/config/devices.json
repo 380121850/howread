@@ -55,7 +55,7 @@
       "abi": "x86_64",
       "resolution": "1080x1920",
       "density": 420,
-      "rom_notes": "UI 层模拟器（-no-snapshot -gpu swiftshader_indirect 启动）；英文 locale，用例走英文关键词兜底"
+      "rom_notes": "UI 层模拟器（-no-snapshot -gpu swiftshader_indirect -memory 3072 启动）；系统 locale zh-CN（2026-09-15 起，L1 用例选择器以中文为主）；冷启动后需检查默认路由（PITFALLS 45）；API 34 有 /sdcard 链接 SELinux 限制（PITFALLS 43）"
     }
   ],
   "flavors": {

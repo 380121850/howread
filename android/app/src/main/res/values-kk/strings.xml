@@ -3,8 +3,6 @@
    <string name="library_settings">Кітапхана параметрлері</string>
    <string name="scan_device_for_new_books">Қарап шығатын қалталар</string>
    <string name="add_folder">Қалтаны қосыңыз</string>
-   <string name="archives">Мұрағат</string>
-   <string name="other">Басқа</string>
    <string name="you_need_to_update_the_library">Енді өзгертулерді қолдану үшін Кітапхананы жаңартыңыз</string>
    <string name="in_the_author_s_name_first_the_surname">Алдымен автордың тегі</string>
    <string name="orientation">Бағдарлау</string>

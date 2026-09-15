@@ -254,7 +254,7 @@ public class DashboardFragment2 extends UIFragment<FileMeta> {
         // server opens its own network page (from its configured start
         // folder) …
         for (final WebDavServer srv : WebDavStore.load()) {
-            addSource(row, srv.title, R.drawable.glyphicons_544_cloud, Color.parseColor("#80cbc4"), new Runnable() {
+            addSource(row, srv.title, R.drawable.my_nas_webdav, Color.parseColor("#80cbc4"), new Runnable() {
                 @Override
                 public void run() {
                     if (a instanceof MainTabs2) {
@@ -266,7 +266,7 @@ public class DashboardFragment2 extends UIFragment<FileMeta> {
         // … followed by the configured SMB / SFTP servers (the same entries
         // the network page lists; tapping opens the same detached network page)
         for (final RemoteServer srv : RemoteStore.load(RemoteBook.TYPE_SMB)) {
-            addSource(row, srv.title, R.drawable.glyphicons_544_cloud, Color.parseColor("#7986cb"), new Runnable() {
+            addSource(row, srv.title, R.drawable.my_nas_smb, Color.parseColor("#7986cb"), new Runnable() {
                 @Override
                 public void run() {
                     if (a instanceof MainTabs2) {
@@ -276,7 +276,7 @@ public class DashboardFragment2 extends UIFragment<FileMeta> {
             });
         }
         for (final RemoteServer srv : RemoteStore.load(RemoteBook.TYPE_SFTP)) {
-            addSource(row, srv.title, R.drawable.glyphicons_544_cloud, Color.parseColor("#7986cb"), new Runnable() {
+            addSource(row, srv.title, R.drawable.my_nas_sftp, Color.parseColor("#7986cb"), new Runnable() {
                 @Override
                 public void run() {
                     if (a instanceof MainTabs2) {

@@ -3,8 +3,6 @@
    <string name="library_settings">पुस्तकालय सेटिंग</string>
    <string name="scan_device_for_new_books">नई पुस्तकों के लिए स्कैन डिवाइस</string>
    <string name="add_folder">फ़ोल्डर जोड़ें</string>
-   <string name="archives">अभिलेखागार</string>
-   <string name="other">अन्य</string>
    <string name="you_need_to_update_the_library">आपको पुस्तकालय को अपडेट करना होगा</string>
    <string name="in_the_author_s_name_first_the_surname">लेखक के नाम में, सबसे पहले उपनाम</string>
    <string name="orientation">अभिविन्यास</string>

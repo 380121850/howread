@@ -27,6 +27,16 @@ const REMOTE_BOOKS_KEY = 'books';
 
 export const REMOTE_PREFIX = 'remote://';
 
+/** %XX decode that never throws: malformed names (e.g. "进度50%.pdf")
+ *  fall back to the raw string (Android 2026-09-13 fix parity). */
+function davDecodeSafe(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch (e) {
+    return s;
+  }
+}
+
 /* ---- URI scheme ---- */
 
 export interface RemoteUriParts {
@@ -754,6 +764,26 @@ export class BlockCacheStore {
         fs.closeSync(f);
       }
     } catch (e) { /* ignore */ }
+    /* validate data.bin actually holds the blocks the bitmap claims:
+     * a truncated/corrupt data file must not serve zero-filled "good" blocks
+     * (Android 2026-09-13 fix parity) */
+    try {
+      const dataPath: string = this.dir + '/data.bin';
+      let claimedEnd: number = 0;
+      for (let i = 0; i < this.blockCount; i++) {
+        if (this.bitmap[i] === 1) {
+          claimedEnd = (i + 1) * this.meta.blockSize;
+        }
+      }
+      let actual: number = 0;
+      if (fs.accessSync(dataPath)) {
+        actual = fs.statSync(dataPath).size;
+      }
+      if (claimedEnd > 0 && actual < claimedEnd) {
+        this.bitmap = new Uint8Array(this.blockCount);
+        console.warn('[RemoteBook] data.bin smaller than bitmap claims; bitmap reset');
+      }
+    } catch (_e) { /* probe failure: keep as-is */ }
     /* (re)write meta */
     await this.flushMeta();
   }
@@ -1170,9 +1200,12 @@ export async function fetchWholeBookToCache(session: RemoteSession, ext: string,
       onProgress(percent);
     }
   }
+  /* mark fully-cached only after the local copy is really on disk:
+   * a mid-materialize failure keeps the meta truthful */
+  const materialized: string = await materializeBook(session, ext);
   session.store.meta.fullyCached = true;
   await session.store.flushMeta();
-  return materializeBook(session, ext);
+  return materialized;
 }
 
 /** Assemble the local file from cached blocks. */
@@ -1184,7 +1217,10 @@ export async function materializeBook(session: RemoteSession, ext: string): Prom
     }
   } catch (e) { /* exists */ }
   const path: string = `${booksDir}/${session.cacheKey}${ext.length > 0 ? '.' + ext : ''}`;
-  const f = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+  /* write to a temp file first, then rename: a failed/weak-network assembly
+   * must never destroy the previous complete copy (Android 2026-09-13 fix parity) */
+  const tmpPath: string = path + '.tmp';
+  const f = fs.openSync(tmpPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
   try {
     const bs = session.store.meta.blockSize;
     const total: number = session.store.totalBlockCount;
@@ -1196,6 +1232,14 @@ export async function materializeBook(session: RemoteSession, ext: string): Prom
     }
   } finally {
     fs.closeSync(f);
+  }
+  try {
+    fs.renameSync(tmpPath, path);
+  } catch (e) {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch (_e2) { /* already gone */ }
+    throw e as Error;
   }
   return path;
 }
@@ -1330,7 +1374,7 @@ export async function webdavListDir(baseUrl: string, user: string, password: str
       }
       /* skip the list dir itself */
       const base_path: string = baseUrl.replace(/^https?:\/\/[^/]+/i, '');
-      const normHref: string = decodeURIComponent(href);
+      const normHref: string = davDecodeSafe(href);
       const normBase: string = base_path.length === 0 ? '/' : base_path;
       if (normHref.replace(/\/+$/, '') === normBase.replace(/\/+$/, '')) {
         continue;
@@ -1348,7 +1392,9 @@ export async function webdavListDir(baseUrl: string, user: string, password: str
       if (name.length === 0) {
         continue;
       }
-      out.push({ name: decodeURIComponent(name), isDir: isDir, size: size });
+      /* name comes from normHref (already decoded once); a second decode
+       * throws on names containing a bare '%' */
+      out.push({ name: name, isDir: isDir, size: size });
     }
     return out;
   } catch (e) {

@@ -3,8 +3,6 @@
    <string name="library_settings">Impostazioni della libreria</string>
    <string name="scan_device_for_new_books">Esegui scansione per nuovi libri in</string>
    <string name="add_folder">Aggiungi cartella</string>
-   <string name="archives">Archivio</string>
-   <string name="other">Altro</string>
    <string name="you_need_to_update_the_library">È necessario aggiornare la libreria</string>
    <string name="in_the_author_s_name_first_the_surname">Nel nome dell\'autore, prima il cognome</string>
    <string name="orientation">Orientamento pagina</string>

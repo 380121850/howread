@@ -78,6 +78,20 @@ public class WebDavRangeDataSource implements RemoteDataSource {
             Map<String, CachingAuthenticator> authCache = new ConcurrentHashMap<String, CachingAuthenticator>();
             builder.authenticator(new CachingAuthenticatorDecorator(authenticator, authCache));
             builder.addInterceptor(new AuthenticationCacheInterceptor(authCache));
+            // Preemptive Basic: a lenient NAS may answer an anonymous request
+            // with a SUCCESS-but-permission-filtered (empty) listing instead
+            // of a 401 challenge, so challenge-driven auth never transmits
+            // the stored credentials. Servers that reject Basic still fall
+            // back to the normal challenge flow above.
+            final String preemptive = okhttp3.Credentials.basic(login, password,
+                    java.nio.charset.StandardCharsets.UTF_8);
+            builder.addInterceptor(chain -> {
+                okhttp3.Request req = chain.request();
+                if (req.header("Authorization") == null) {
+                    req = req.newBuilder().header("Authorization", preemptive).build();
+                }
+                return chain.proceed(req);
+            });
         }
         OkHttpClient created = builder.build();
         CLIENTS.put(key, created);

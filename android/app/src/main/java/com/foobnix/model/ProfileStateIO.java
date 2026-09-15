@@ -8,6 +8,12 @@ import com.foobnix.android.utils.JsonDB;
 import com.foobnix.android.utils.LOG;
 import com.foobnix.android.utils.TxtUtils;
 import com.foobnix.pdf.info.model.BookCSS;
+import com.foobnix.remote.RemoteBook;
+import com.foobnix.remote.RemoteServer;
+import com.foobnix.remote.RemoteStore;
+import com.foobnix.webdav.WebDavCredentials;
+import com.foobnix.webdav.WebDavServer;
+import com.foobnix.webdav.WebDavStore;
 
 import org.librera.JSONArray;
 import org.librera.LinkedJSONObject;
@@ -18,6 +24,7 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
@@ -35,6 +42,8 @@ import java.util.Set;
 public class ProfileStateIO {
 
     private static final String K_API_KEY = "apiKey";
+    private static final String K_ACTIVE = "active";
+    private static final String K_VENDORS = "vendors";
     private static final String K_MONTHLY = "readMonthlyJson";
     private static final String K_DAILY = "readDailyJson";
     private static final String K_DAY_KEY = "readDayKey";
@@ -346,7 +355,12 @@ public class ProfileStateIO {
 
     // ------------------------------------------------------------------ AI
 
-    /** Mirror the AI API key into app-AI.json (before export / sync). */
+    /**
+     * Mirror the AI config into app-AI.json (before export / sync): the
+     * active key (legacy field) plus the PER-VENDOR backup — every saved
+     * vendor profile as one config item keyed by its name, restored per
+     * vendor on the other devices.
+     */
     public static void exportAi(Context c) {
         try {
             if (AppProfile.syncAI == null || c == null) {
@@ -354,6 +368,16 @@ public class ProfileStateIO {
             }
             LinkedJSONObject o = new LinkedJSONObject();
             o.put(K_API_KEY, AiCredentials.load(c));
+            o.put(K_ACTIVE, AppState.get().aiConfigName == null ? "" : AppState.get().aiConfigName);
+            LinkedJSONObject vendors = new LinkedJSONObject();
+            JSONArray arr = parseAiProfiles(AppState.get().aiConfigs);
+            for (int i = 0; i < arr.length(); i++) {
+                LinkedJSONObject p = asLinked(arr.opt(i));
+                if (p != null && TxtUtils.isNotEmpty(p.optString("name"))) {
+                    vendors.put(p.optString("name"), p);
+                }
+            }
+            o.put(K_VENDORS, vendors);
             writeIfChanged(AppProfile.syncAI, o.toString());
         } catch (Exception e) {
             LOG.e(e);
@@ -380,9 +404,99 @@ public class ProfileStateIO {
             if (!fileKey.equals(AiCredentials.load(c))) {
                 AiCredentials.save(c, fileKey);
             }
+            // per-vendor restore: every backed-up vendor is upserted into
+            // the saved list by name — a vendor added on another device
+            // appears here with ALL of its fields (key included); local
+            // vendors the server never saw stay untouched
+            LinkedJSONObject vendors = o.optJSONObject(K_VENDORS);
+            if (vendors != null && vendors.length() > 0) {
+                JSONArray cur = parseAiProfiles(AppState.get().aiConfigs);
+                boolean changed = false;
+                Iterator<String> names = vendors.keys();
+                while (names.hasNext()) {
+                    String name = names.next();
+                    LinkedJSONObject v = asLinked(vendors.opt(name));
+                    if (v == null || TxtUtils.isEmpty(name)) {
+                        continue;
+                    }
+                    int hit = aiProfileIndex(cur, name);
+                    if (hit < 0) {
+                        cur.put(v);
+                        changed = true;
+                        android.util.Log.i("BENCH", "ai restore: vendor added " + name);
+                    } else {
+                        LinkedJSONObject lp = asLinked(cur.opt(hit));
+                        if (lp == null || !lp.toString().equals(v.toString())) {
+                            cur.put(hit, v);
+                            changed = true;
+                            android.util.Log.i("BENCH", "ai restore: vendor updated " + name);
+                        }
+                    }
+                }
+                if (changed) {
+                    AppState.get().aiConfigs = cur.toString();
+                }
+            }
+            // a device without an active profile adopts the backed-up one
+            String active = o.optString(K_ACTIVE, "");
+            if (TxtUtils.isNotEmpty(active) && TxtUtils.isEmpty(AppState.get().aiConfigName)) {
+                LinkedJSONObject p = asLinked(vendors == null ? null : vendors.opt(active));
+                if (p != null) {
+                    adoptAiProfile(p, active, c);
+                }
+            }
         } catch (Exception e) {
             LOG.e(e);
         }
+    }
+
+    /** Parsed saved AI vendor profiles of the app-state string (never null). */
+    private static JSONArray parseAiProfiles(String json) {
+        try {
+            return new JSONArray(json == null || json.trim().isEmpty() ? "[]" : json);
+        } catch (Exception e) {
+            return new JSONArray();
+        }
+    }
+
+    /** Wrapped parse of one JSON value into an ordered object (null-safe). */
+    private static LinkedJSONObject asLinked(Object o) {
+        if (o == null) {
+            return null;
+        }
+        try {
+            return new LinkedJSONObject(o.toString());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static int aiProfileIndex(JSONArray arr, String name) {
+        for (int i = 0; i < arr.length(); i++) {
+            LinkedJSONObject p = asLinked(arr.opt(i));
+            if (p != null && name.equals(p.optString("name"))) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** Mirror a vendor profile into the active config fields + runtime key. */
+    private static void adoptAiProfile(LinkedJSONObject p, String name, Context c) {
+        AppState.get().aiConfigName = name;
+        AppState.get().aiProtocol = p.optString("protocol", AppState.get().aiProtocol);
+        AppState.get().aiBaseUrl = p.optString("baseUrl", AppState.get().aiBaseUrl);
+        AppState.get().aiModel = p.optString("model", AppState.get().aiModel);
+        int tokens = p.optInt("maxTokens", AppState.get().aiMaxTokens);
+        if (tokens > 0) {
+            AppState.get().aiMaxTokens = tokens;
+        }
+        AppState.get().aiThinking = p.optBoolean("thinking", AppState.get().aiThinking);
+        String k = p.optString("apiKey", "");
+        if (TxtUtils.isNotEmpty(k)) {
+            AiCredentials.save(c, k);
+        }
+        android.util.Log.i("BENCH", "ai restore: active adopted " + name);
     }
 
     /**
@@ -404,6 +518,41 @@ public class ProfileStateIO {
             } else {
                 out.put(K_API_KEY, remoteKey); // both set: the server copy wins
             }
+            // active profile name: the server copy wins when it has one
+            String localActive = local == null ? "" : local.optString(K_ACTIVE, "");
+            String remoteActive = remote == null ? "" : remote.optString(K_ACTIVE, "");
+            out.put(K_ACTIVE, TxtUtils.isEmpty(remoteActive) ? localActive : remoteActive);
+            // per-vendor union keyed by the profile name: a vendor present
+            // on only one side is kept (restore); the same name with
+            // different content resolves to the server copy
+            LinkedJSONObject vendors = new LinkedJSONObject();
+            LinkedJSONObject lv = local == null ? null : local.optJSONObject(K_VENDORS);
+            if (lv != null) {
+                Iterator<String> it = lv.keys();
+                while (it.hasNext()) {
+                    String k = it.next();
+                    LinkedJSONObject v = asLinked(lv.opt(k));
+                    if (v != null) {
+                        vendors.put(k, v);
+                    }
+                }
+            }
+            LinkedJSONObject rv = remote == null ? null : remote.optJSONObject(K_VENDORS);
+            if (rv != null) {
+                Iterator<String> it = rv.keys();
+                while (it.hasNext()) {
+                    String k = it.next();
+                    LinkedJSONObject v = asLinked(rv.opt(k));
+                    if (v == null) {
+                        continue;
+                    }
+                    LinkedJSONObject cur = asLinked(vendors.opt(k));
+                    if (cur == null || !cur.toString().equals(v.toString())) {
+                        vendors.put(k, v);
+                    }
+                }
+            }
+            out.put(K_VENDORS, vendors);
             return out;
         } catch (Exception e) {
             return remote;
@@ -511,26 +660,45 @@ public class ProfileStateIO {
 
     private static final String SEC_NET_OPDS = "opds";
     private static final String SEC_NET_WEBDAV = "webdav";
+    private static final String SEC_NET_SMB = "smb";
+    private static final String SEC_NET_SFTP = "sftp";
     private static final String SEC_NET_FOLDERS = "folders";
 
     /**
-     * Snapshot the user-configured network sources into app-NetworkSources.json:
-     * the raw OPDS catalog entries, the raw WebDAV server entries and the
-     * 书库文件夹 paths. The file is synced WHOLE (newer mtime wins), so it is
-     * only written when the content actually changed — an unconditional write
-     * would stamp a fresh mtime on every sync, make the local copy always
-     * "newer" and block incoming changes from other devices. Passwords are not
-     * included here — OPDS logins ride with app-Misc.json and WebDAV passwords
-     * stay device-bound.
+     * Snapshot the user-configured "My files" sources into
+     * app-NetworkSources.json as ONE dedicated config file where every
+     * added entry is its own sub-item carrying ALL of its fields: OPDS
+     * catalog lines, WebDAV servers (incl. stored login/password), SMB and
+     * SFTP servers (incl. stored password / key passphrase) and the
+     * 书库文件夹 paths. The file is merged PER ITEM (see mergeNetworkSources),
+     * so N backed-up SFTP entries restore as those same N entries. Written
+     * only when the content changed — an unconditional write would restamp
+     * the file on every sync and block incoming changes.
      */
-    public static void exportNetworkSources() {
+    public static void exportNetworkSources(Context c) {
         try {
             if (AppProfile.syncNetworkSources == null) {
                 return;
             }
             LinkedJSONObject root = new LinkedJSONObject();
             root.put(SEC_NET_OPDS, rawLines(AppState.get().allOPDSLinks));
-            root.put(SEC_NET_WEBDAV, rawLines(AppState.get().allWebDavLinks));
+            JSONArray webdav = new JSONArray();
+            for (WebDavServer srv : WebDavStore.load()) {
+                LinkedJSONObject item = new LinkedJSONObject();
+                item.put("url", srv.url);
+                item.put("title", srv.title == null ? "" : srv.title);
+                item.put("startDir", srv.startDir == null ? "" : srv.startDir);
+                if (c != null) {
+                    String[] creds = WebDavCredentials.load(c, srv.url);
+                    item.put("login", creds != null ? creds[0] : "");
+                    item.put("password", creds != null ? creds[1] : "");
+                    item.put("trustAll", WebDavCredentials.isTrustAll(c, srv.url));
+                }
+                webdav.put(item);
+            }
+            root.put(SEC_NET_WEBDAV, webdav);
+            root.put(SEC_NET_SMB, remoteItems(RemoteBook.TYPE_SMB, c));
+            root.put(SEC_NET_SFTP, remoteItems(RemoteBook.TYPE_SFTP, c));
             JSONArray folders = new JSONArray();
             for (String path : JsonDB.get(BookCSS.get().searchPathsJson)) {
                 if (TxtUtils.isNotEmpty(path)) {
@@ -542,6 +710,34 @@ public class ProfileStateIO {
         } catch (Exception e) {
             LOG.e(e);
         }
+    }
+
+    /** One SMB/SFTP server as a backup item with ALL of its fields. */
+    private static JSONArray remoteItems(String type, Context c) {
+        JSONArray arr = new JSONArray();
+        for (RemoteServer srv : RemoteStore.load(type)) {
+            LinkedJSONObject item = new LinkedJSONObject();
+            item.put("id", srv.id);
+            item.put("title", srv.title == null ? "" : srv.title);
+            item.put("host", srv.host == null ? "" : srv.host);
+            item.put("port", srv.port);
+            item.put("user", srv.user == null ? "" : srv.user);
+            item.put("domain", srv.domain == null ? "" : srv.domain);
+            item.put("share", srv.share == null ? "" : srv.share);
+            item.put("keyPath", srv.keyPath == null ? "" : srv.keyPath);
+            item.put("trustAll", srv.trustAll);
+            item.put("startDir", srv.startDir == null ? "" : srv.startDir);
+            if (c != null) {
+                String[] creds = WebDavCredentials.load(c, RemoteStore.credentialsKey(srv.id));
+                item.put("password", creds != null ? creds[1] : "");
+                if (RemoteBook.TYPE_SFTP.equals(type)) {
+                    String[] kp = WebDavCredentials.load(c, RemoteStore.keyPassKey(srv.id));
+                    item.put("keyPass", kp != null ? kp[1] : "");
+                }
+            }
+            arr.put(item);
+        }
+        return arr;
     }
 
     /**
@@ -583,12 +779,13 @@ public class ProfileStateIO {
     }
 
     /**
-     * Apply the (whole-file) network-source snapshot into the live AppState /
-     * BookCSS: the winning device's lists replace the local ones wholesale —
-     * that is how deletions propagate under the whole-file scheme. The caller
-     * persists them afterwards.
+     * Apply the merged network-source snapshot PER ITEM: every entry
+     * missing locally is added back (restore), an entry that exists is
+     * updated from the merged copy when it differs, and local-only
+     * entries stay untouched. The caller persists AppState / BookCSS
+     * afterwards.
      */
-    public static void importNetworkSources() {
+    public static void importNetworkSources(Context c) {
         try {
             if (AppProfile.syncNetworkSources == null || !AppProfile.syncNetworkSources.isFile()) {
                 return;
@@ -597,41 +794,452 @@ public class ProfileStateIO {
             if (root.length() == 0) {
                 return;
             }
-            if (root.has(SEC_NET_OPDS)) {
-                AppState.get().allOPDSLinks = joinLines(root.optJSONArray(SEC_NET_OPDS));
-            }
-            if (root.has(SEC_NET_WEBDAV)) {
-                AppState.get().allWebDavLinks = joinLines(root.optJSONArray(SEC_NET_WEBDAV));
-            }
-            if (root.has(SEC_NET_FOLDERS)) {
-                JSONArray folders = root.optJSONArray(SEC_NET_FOLDERS);
-                JSONArray paths = new JSONArray();
-                for (int i = 0; i < folders.length(); i++) {
-                    String path = folders.optString(i);
-                    if (TxtUtils.isNotEmpty(path)) {
-                        paths.put(path);
-                    }
-                }
-                BookCSS.get().searchPathsJson = paths.toString();
-            }
+            importOpdsLines(root);
+            importWebDavItems(c, root);
+            importRemoteItems(c, root, SEC_NET_SMB);
+            importRemoteItems(c, root, SEC_NET_SFTP);
+            importFolders(root);
         } catch (Exception e) {
             LOG.e(e);
         }
     }
 
-    /** Rebuild one ';'-joined app-state string from a merged snapshot array. */
-    private static String joinLines(JSONArray arr) {
-        if (arr == null) {
-            return "";
+    /** OPDS entries: restore every catalog line missing locally. */
+    private static void importOpdsLines(LinkedJSONObject root) {
+        JSONArray arr = root.optJSONArray(SEC_NET_OPDS);
+        if (arr == null || arr.length() == 0) {
+            return;
         }
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < arr.length(); i++) {
-            String line = arr.optString(i);
+        Set<String> known = new HashSet<String>();
+        String cur = AppState.get().allOPDSLinks == null ? "" : AppState.get().allOPDSLinks;
+        for (String line : cur.split(";")) {
             if (TxtUtils.isNotEmpty(line)) {
-                sb.append(line).append(";");
+                known.add(line);
             }
         }
-        return sb.toString();
+        StringBuilder sb = new StringBuilder(cur);
+        int added = 0;
+        for (int i = 0; i < arr.length(); i++) {
+            String line = arr.optString(i);
+            if (TxtUtils.isNotEmpty(line) && known.add(line)) {
+                if (sb.length() > 0 && sb.charAt(sb.length() - 1) != ';') {
+                    sb.append(';');
+                }
+                sb.append(line).append(';');
+                added++;
+            }
+        }
+        if (added > 0) {
+            AppState.get().allOPDSLinks = sb.toString();
+            android.util.Log.i("BENCH", "net restore: opds +" + added);
+        }
+    }
+
+    /**
+     * WebDAV entries: restore every server missing locally (with its
+     * stored credentials) and refresh an existing server's title/
+     * startDir/credentials when the merged copy differs. Legacy v1 raw
+     * line elements are handled too.
+     */
+    private static void importWebDavItems(Context c, LinkedJSONObject root) {
+        JSONArray arr = root.optJSONArray(SEC_NET_WEBDAV);
+        if (arr == null || arr.length() == 0 || c == null) {
+            return;
+        }
+        List<WebDavServer> locals = WebDavStore.load();
+        int added = 0, updated = 0;
+        for (int i = 0; i < arr.length(); i++) {
+            LinkedJSONObject item = asLinked(arr.opt(i));
+            String url = item == null ? "" : WebDavStore.trimSlash(item.optString("url"));
+            if (item == null || TxtUtils.isEmpty(url)) {
+                // legacy v1 element: the raw "url,title,startDir" line
+                String line = arr.optString(i);
+                String[] it = TxtUtils.isEmpty(line) ? new String[0] : line.split(",");
+                if (it.length == 0 || TxtUtils.isEmpty(it[0])) {
+                    continue;
+                }
+                url = WebDavStore.trimSlash(it[0].trim());
+                if (TxtUtils.isEmpty(url) || webdavKnown(locals, url)) {
+                    continue;
+                }
+                WebDavServer ns = new WebDavServer(url, it.length > 1 && TxtUtils.isNotEmpty(it[1]) ? it[1] : url,
+                        it.length > 2 ? it[2].trim() : "");
+                ns.appState = WebDavServer.buildLine(ns.url, ns.title, ns.startDir);
+                WebDavStore.add(ns);
+                locals.add(ns);
+                added++;
+                continue;
+            }
+            WebDavServer hit = findWebDav(locals, url);
+            if (hit == null) {
+                WebDavServer ns = new WebDavServer(url, item.optString("title", url),
+                        item.optString("startDir", ""));
+                ns.appState = WebDavServer.buildLine(ns.url, ns.title, ns.startDir);
+                WebDavStore.add(ns);
+                locals.add(ns);
+                added++;
+                android.util.Log.i("BENCH", "net restore: webdav +" + url);
+            } else if (applyWebDavUpdate(hit, item)) {
+                updated++;
+            }
+            // credentials: restore / refresh — an empty backed-up value
+            // never wipes the local one
+            String[] cur = WebDavCredentials.load(c, url);
+            String curLogin = cur != null ? cur[0] : "";
+            String curPass = cur != null ? cur[1] : "";
+            String login = item.optString("login", curLogin);
+            String password = item.optString("password", curPass);
+            if ((!TxtUtils.isEmpty(login) && !login.equals(curLogin))
+                    || (!TxtUtils.isEmpty(password) && !password.equals(curPass))) {
+                WebDavCredentials.save(c, url, login, password);
+            }
+            if (item.has("trustAll")) {
+                WebDavCredentials.saveTrust(c, url, item.optBoolean("trustAll", false));
+            }
+        }
+        if (added > 0 || updated > 0) {
+            android.util.Log.i("BENCH", "net restore: webdav +" + added + " ~" + updated);
+        }
+    }
+
+    private static boolean webdavKnown(List<WebDavServer> list, String url) {
+        return findWebDav(list, url) != null;
+    }
+
+    private static WebDavServer findWebDav(List<WebDavServer> list, String url) {
+        for (WebDavServer srv : list) {
+            if (WebDavStore.trimSlash(srv.url).equals(url)) {
+                return srv;
+            }
+        }
+        return null;
+    }
+
+    /** Server-wins field update of an existing WebDAV entry; true when changed. */
+    private static boolean applyWebDavUpdate(WebDavServer srv, LinkedJSONObject item) {
+        String title = item.optString("title", "");
+        String startDir = item.optString("startDir", "");
+        String newTitle = TxtUtils.isNotEmpty(title) ? title : srv.title;
+        String newStart = item.has("startDir") ? startDir : (srv.startDir == null ? "" : srv.startDir);
+        String oldStart = srv.startDir == null ? "" : srv.startDir;
+        if (newTitle.equals(srv.title) && newStart.equals(oldStart)) {
+            return false;
+        }
+        String newline = WebDavServer.buildLine(srv.url, newTitle, newStart);
+        AppState.get().allWebDavLinks =
+                AppState.get().allWebDavLinks.replace(srv.appState, newline);
+        srv.title = newTitle;
+        srv.startDir = newStart;
+        srv.appState = newline;
+        return true;
+    }
+
+    /**
+     * SMB / SFTP entries: restore every server missing locally — the
+     * backed-up id is kept so remote:// links and the credential keys
+     * stay stable across devices — and refresh an existing server's
+     * fields / password when the merged copy differs.
+     */
+    private static void importRemoteItems(Context c, LinkedJSONObject root, String section) {
+        JSONArray arr = root.optJSONArray(section);
+        if (arr == null || arr.length() == 0 || c == null) {
+            return;
+        }
+        String type = SEC_NET_SFTP.equals(section) ? RemoteBook.TYPE_SFTP : RemoteBook.TYPE_SMB;
+        List<RemoteServer> locals = RemoteStore.load(type);
+        int added = 0, updated = 0;
+        for (int i = 0; i < arr.length(); i++) {
+            LinkedJSONObject item = asLinked(arr.opt(i));
+            if (item == null || TxtUtils.isEmpty(item.optString("host"))) {
+                continue;
+            }
+            String key = remoteItemKey(item.optString("host"), item.optInt("port", 0),
+                    item.optString("user"), item.optString("domain"),
+                    item.optString("share"), item.optString("keyPath"),
+                    item.optString("title"), item.optString("startDir"),
+                    item.optBoolean("trustAll", false));
+            RemoteServer hit = null;
+            for (RemoteServer srv : locals) {
+                if (key.equals(remoteItemKeyOf(srv))) {
+                    hit = srv;
+                    break;
+                }
+            }
+            if (hit == null) {
+                int port = item.optInt("port", RemoteBook.TYPE_SFTP.equals(type) ? 22 : 445);
+                String line = safeField(item.optString("id")) + "|" + safeField(item.optString("title"))
+                        + "|" + safeField(item.optString("host")) + "|" + port
+                        + "|" + safeField(item.optString("user")) + "|" + safeField(item.optString("domain"))
+                        + "|" + safeField(item.optString("share")) + "|" + safeField(item.optString("keyPath"))
+                        + "|" + (item.optBoolean("trustAll", true) ? "1" : "0")
+                        + "|" + safeField(item.optString("startDir")) + ";";
+                RemoteServer ns = RemoteServer.parse(line, type);
+                if (ns == null) {
+                    continue;
+                }
+                RemoteStore.add(ns);
+                locals.add(ns);
+                saveRemoteCreds(c, ns, item);
+                added++;
+                android.util.Log.i("BENCH", "net restore: " + type + " +" + ns.host);
+            } else {
+                boolean changed = applyRemoteUpdate(hit, item);
+                if (saveRemoteCreds(c, hit, item)) {
+                    changed = true;
+                }
+                if (changed) {
+                    updated++;
+                }
+            }
+        }
+        if (added > 0 || updated > 0) {
+            android.util.Log.i("BENCH", "net restore: " + type + " +" + added + " ~" + updated);
+        }
+    }
+
+    private static String remoteItemKey(String host, int port, String user, String domain,
+            String share, String keyPath, String title, String startDir, boolean trustAll) {
+        // everything EXCEPT the random id and the secrets: two entries that
+        // differ in name/start folder are deliberately distinct items and
+        // must both survive the per-item union
+        return (host == null ? "" : host) + "|" + port + "|" + (user == null ? "" : user)
+                + "|" + (domain == null ? "" : domain) + "|" + (share == null ? "" : share)
+                + "|" + (keyPath == null ? "" : keyPath)
+                + "|" + (title == null ? "" : title) + "|" + (startDir == null ? "" : startDir)
+                + "|" + trustAll;
+    }
+
+    private static String remoteItemKeyOf(RemoteServer srv) {
+        return remoteItemKey(srv.host, srv.port, srv.user, srv.domain, srv.share, srv.keyPath,
+                srv.title, srv.startDir, srv.trustAll);
+    }
+
+    /** Same connection identity, different fields → the merged copy wins. */
+    private static boolean applyRemoteUpdate(RemoteServer hit, LinkedJSONObject item) {
+        String newTitle = TxtUtils.isNotEmpty(item.optString("title")) ? item.optString("title") : hit.title;
+        String newStart = item.has("startDir") ? item.optString("startDir")
+                : (hit.startDir == null ? "" : hit.startDir);
+        boolean newTrust = item.optBoolean("trustAll", hit.trustAll);
+        String oldStart = hit.startDir == null ? "" : hit.startDir;
+        if (newTitle.equals(hit.title) && newStart.equals(oldStart) && newTrust == hit.trustAll) {
+            return false;
+        }
+        RemoteStore.remove(hit);
+        hit.title = newTitle;
+        hit.startDir = newStart;
+        hit.trustAll = newTrust;
+        hit.appState = RemoteServer.buildLine(hit);
+        RemoteStore.add(hit);
+        return true;
+    }
+
+    /** Restore the backed-up credentials; an empty backed-up value never wipes a local one. */
+    private static boolean saveRemoteCreds(Context c, RemoteServer srv, LinkedJSONObject item) {
+        boolean changed = false;
+        String credKey = RemoteStore.credentialsKey(srv.id);
+        String[] cur = WebDavCredentials.load(c, credKey);
+        String curLogin = cur != null ? cur[0] : "";
+        String curPass = cur != null ? cur[1] : "";
+        String login = item.optString("user", curLogin);
+        String password = item.optString("password", curPass);
+        if (!TxtUtils.isEmpty(password) && !password.equals(curPass)) {
+            WebDavCredentials.save(c, credKey, login, password);
+            changed = true;
+        }
+        if (RemoteBook.TYPE_SFTP.equals(srv.getTypeStored())) {
+            String kpKey = RemoteStore.keyPassKey(srv.id);
+            String[] kp = WebDavCredentials.load(c, kpKey);
+            String curKp = kp != null ? kp[1] : "";
+            String keyPass = item.optString("keyPass", curKp);
+            if (!TxtUtils.isEmpty(keyPass) && !keyPass.equals(curKp)) {
+                WebDavCredentials.save(c, kpKey, "", keyPass);
+                changed = true;
+            }
+        }
+        if (item.has("trustAll")) {
+            WebDavCredentials.saveTrust(c, credKey, item.optBoolean("trustAll", srv.trustAll));
+        }
+        return changed;
+    }
+
+    private static String safeField(String v) {
+        return (v == null ? "" : v).replace("|", " ").replace(";", " ").trim();
+    }
+
+    /** 书库文件夹: restore every path missing locally. */
+    private static void importFolders(LinkedJSONObject root) {
+        JSONArray arr = root.optJSONArray(SEC_NET_FOLDERS);
+        if (arr == null || arr.length() == 0) {
+            return;
+        }
+        List<String> paths = new ArrayList<String>();
+        for (String p : JsonDB.get(BookCSS.get().searchPathsJson)) {
+            if (TxtUtils.isNotEmpty(p) && !paths.contains(p)) {
+                paths.add(p);
+            }
+        }
+        int added = 0;
+        for (int i = 0; i < arr.length(); i++) {
+            String p = arr.optString(i);
+            if (TxtUtils.isNotEmpty(p) && !paths.contains(p)) {
+                paths.add(p);
+                added++;
+            }
+        }
+        if (added > 0) {
+            JSONArray out = new JSONArray();
+            for (String p : paths) {
+                out.put(p);
+            }
+            BookCSS.get().searchPathsJson = out.toString();
+            android.util.Log.i("BENCH", "net restore: folders +" + added);
+        }
+    }
+
+    /**
+     * Per-item merge of the network-source file: entries are keyed by
+     * their stable identity (the OPDS line / server url / the SMB·SFTP
+     * connection fields / the folder path) and unioned — an entry backed
+     * up on one device restores on every other device, and the same
+     * identity with different content resolves to the server copy.
+     * Unlike the previous whole-file scheme a per-item merge cannot
+     * propagate deletions: an entry removed on one device is re-added
+     * from the other side's list.
+     */
+    public static LinkedJSONObject mergeNetworkSources(LinkedJSONObject local, LinkedJSONObject remote) {
+        try {
+            LinkedJSONObject out = new LinkedJSONObject();
+            out.put(SEC_NET_OPDS, unionStrings(local == null ? null : local.optJSONArray(SEC_NET_OPDS),
+                    remote == null ? null : remote.optJSONArray(SEC_NET_OPDS)));
+            out.put(SEC_NET_WEBDAV, unionWebDavItems(local == null ? null : local.optJSONArray(SEC_NET_WEBDAV),
+                    remote == null ? null : remote.optJSONArray(SEC_NET_WEBDAV)));
+            out.put(SEC_NET_SMB, unionRemoteItems(local == null ? null : local.optJSONArray(SEC_NET_SMB),
+                    remote == null ? null : remote.optJSONArray(SEC_NET_SMB)));
+            out.put(SEC_NET_SFTP, unionRemoteItems(local == null ? null : local.optJSONArray(SEC_NET_SFTP),
+                    remote == null ? null : remote.optJSONArray(SEC_NET_SFTP)));
+            out.put(SEC_NET_FOLDERS, unionStrings(local == null ? null : local.optJSONArray(SEC_NET_FOLDERS),
+                    remote == null ? null : remote.optJSONArray(SEC_NET_FOLDERS)));
+            return out;
+        } catch (Exception e) {
+            LOG.e(e);
+            return remote;
+        }
+    }
+
+    /** Union of string items (OPDS lines / folder paths); identity = the string. */
+    private static JSONArray unionStrings(JSONArray la, JSONArray ra) {
+        JSONArray out = new JSONArray();
+        Set<String> seen = new HashSet<String>();
+        if (la != null) {
+            for (int i = 0; i < la.length(); i++) {
+                String v = la.optString(i);
+                if (TxtUtils.isNotEmpty(v) && seen.add(v)) {
+                    out.put(v);
+                }
+            }
+        }
+        if (ra != null) {
+            for (int i = 0; i < ra.length(); i++) {
+                String v = ra.optString(i);
+                if (TxtUtils.isNotEmpty(v) && seen.add(v)) {
+                    out.put(v);
+                }
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Union of WebDAV items keyed by the server url. Legacy (v1) string
+     * elements are parsed into items first; the same url with different
+     * fields resolves to the server (remote) copy.
+     */
+    private static JSONArray unionWebDavItems(JSONArray la, JSONArray ra) {
+        LinkedHashMap<String, LinkedJSONObject> merged = new LinkedHashMap<String, LinkedJSONObject>();
+        collectWebDav(merged, la);
+        collectWebDav(merged, ra);
+        JSONArray out = new JSONArray();
+        for (LinkedJSONObject item : merged.values()) {
+            out.put(item);
+        }
+        return out;
+    }
+
+    private static void collectWebDav(LinkedHashMap<String, LinkedJSONObject> merged, JSONArray arr) {
+        if (arr == null) {
+            return;
+        }
+        for (int i = 0; i < arr.length(); i++) {
+            LinkedJSONObject item = asLinked(arr.opt(i));
+            String url;
+            if (item != null) {
+                url = WebDavStore.trimSlash(item.optString("url"));
+                if (TxtUtils.isEmpty(url)) {
+                    continue;
+                }
+                item.put("url", url);
+            } else {
+                // legacy v1 element: the raw "url,title,startDir" line
+                String line = arr.optString(i);
+                String[] it = TxtUtils.isEmpty(line) ? new String[0] : line.split(",");
+                if (it.length == 0 || TxtUtils.isEmpty(it[0])) {
+                    continue;
+                }
+                url = WebDavStore.trimSlash(it[0].trim());
+                if (TxtUtils.isEmpty(url)) {
+                    continue;
+                }
+                item = new LinkedJSONObject();
+                item.put("url", url);
+                item.put("title", it.length > 1 ? it[1] : url);
+                item.put("startDir", it.length > 2 ? it[2].trim() : "");
+            }
+            LinkedJSONObject cur = merged.get(url);
+            if (cur == null || !cur.toString().equals(item.toString())) {
+                merged.put(url, item);
+            }
+        }
+    }
+
+    /**
+     * Union of SMB/SFTP items keyed by their full config identity
+     * (connection fields + name + start folder + trust flag) — only the
+     * random per-creation id and the secrets are excluded. The same entry
+     * re-created on two devices (different random ids) still dedupes,
+     * while deliberately distinct entries (e.g. same server under two
+     * names) both survive. Same identity with different content → the
+     * server copy wins.
+     */
+    private static JSONArray unionRemoteItems(JSONArray la, JSONArray ra) {
+        LinkedHashMap<String, LinkedJSONObject> merged = new LinkedHashMap<String, LinkedJSONObject>();
+        collectRemote(merged, la);
+        collectRemote(merged, ra);
+        JSONArray out = new JSONArray();
+        for (LinkedJSONObject item : merged.values()) {
+            out.put(item);
+        }
+        return out;
+    }
+
+    private static void collectRemote(LinkedHashMap<String, LinkedJSONObject> merged, JSONArray arr) {
+        if (arr == null) {
+            return;
+        }
+        for (int i = 0; i < arr.length(); i++) {
+            LinkedJSONObject item = asLinked(arr.opt(i));
+            if (item == null || TxtUtils.isEmpty(item.optString("host"))) {
+                continue;
+            }
+            String key = remoteItemKey(item.optString("host"), item.optInt("port", 0),
+                    item.optString("user"), item.optString("domain"),
+                    item.optString("share"), item.optString("keyPath"),
+                    item.optString("title"), item.optString("startDir"),
+                    item.optBoolean("trustAll", false));
+            LinkedJSONObject cur = merged.get(key);
+            if (cur == null || !cur.toString().equals(item.toString())) {
+                merged.put(key, item);
+            }
+        }
     }
 
     /**

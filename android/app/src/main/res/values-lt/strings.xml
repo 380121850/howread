@@ -3,8 +3,6 @@
    <string name="library_settings">Bibliotekos nustatymai</string>
    <string name="scan_device_for_new_books">Ieškoti naujų knygų įrenginyje</string>
    <string name="add_folder">Pridėti aplanką</string>
-   <string name="archives">Archyvai</string>
-   <string name="other">Kita</string>
    <string name="you_need_to_update_the_library">Jums reikia atnaujinti biblioteką</string>
    <string name="in_the_author_s_name_first_the_surname">Iš pradžių ieškoti pagal autoriaus pavardę</string>
    <string name="orientation">Pozicija</string>

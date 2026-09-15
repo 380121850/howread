@@ -308,7 +308,7 @@ def _open_reader_bookmark_entry(dev, fixtures=None):
     若中途退出阅读器(back 过多/误触),自动重开书目."""
     w, h = dev.d.window_size()
     for _attempt in range(3):
-        top = dev.shell("dumpsys activity activities | grep mResumedActivity")
+        top = dev.shell("dumpsys activity activities | grep ResumedActivity")
         if "ViewActivity" not in top:
             if fixtures and not dev.open_book("big25", device_path=fixtures["device_pdf_path"]):
                 return False
@@ -697,7 +697,7 @@ MULTI_FORMAT_BOOKS = [
 # 设备侧 ASCII 名 → 本地 teskbook 原始文件名(多数原始样本是中文名,需映射).
 MULTI_FORMAT_SOURCES = {
     "book_mobi.mobi": "一本书读懂大数据-黄颖.mobi",
-    "book_azw3.azw3": "计算机与人脑 (科学素养文库*科学元典丛书) - 冯*诺伊曼(Neumann.J.V).azw3",
+    "book_azw3.azw3": "计算机与人脑 (科学素养文库·科学元典丛书) - 冯·诺伊曼(Neumann.J.V).azw3",
     "book_azw.azw": "论犯罪的价值 - 于志刚.azw",
     "book_prc.prc": "297孙子兵法.prc",
     "book_doc.doc": "MySQL数据库如何实现双机热备的配置.doc",
@@ -731,7 +731,15 @@ def _open_reader_warm(dev, case_id, keyword):
     if dl is not None:
         dl.click()
         time.sleep(2.5)
-    book = _find_text_scrolled(dev, keyword, max_swipes=6)
+    book = _find_text_scrolled(dev, keyword, max_swipes=8)
+    if book is None:
+        # 浏览列表记住上次滚动位,而查找只向下滚——目标在复位位上方时永远找不到
+        # (MI9 book_pdf 间歇漏找,2026-09-13);滚回顶部再找一遍
+        w, h = dev.d.window_size()
+        for _ in range(6):
+            dev.d.swipe(0.5 * w, 0.3 * h, 0.5 * w, 0.85 * h, 0.25)
+            time.sleep(1)
+        book = _find_text_scrolled(dev, keyword, max_swipes=8)
     if book is None:
         dev.save_dump(case_id, "warm_book_not_found")
         raise AssertionError("浏览未找到 %s(热态开书)" % keyword)
@@ -739,7 +747,7 @@ def _open_reader_warm(dev, case_id, keyword):
     entered = False
     deadline = time.time() + 30
     while time.time() < deadline:
-        top = dev.shell("dumpsys activity activities | grep mResumedActivity")
+        top = dev.shell("dumpsys activity activities | grep ResumedActivity")
         if "ViewActivity" in top or "TTSActivity" in top:
             entered = True
             break
@@ -759,7 +767,7 @@ def _open_reader(dev, case_id, fixtures, fmt):
         kw, path = "big25", fixtures["device_pdf_path"]
     if not dev.open_book(kw, device_path=path):
         raise AssertionError("%s 打开失败" % path.split("/")[-1])
-    top = dev.shell("dumpsys activity activities | grep mResumedActivity")
+    top = dev.shell("dumpsys activity activities | grep ResumedActivity")
     if "ViewActivity" not in top and "TTSActivity" not in top:
         dev.save_dump(case_id, "not_in_reader")
         raise AssertionError("开书后未进阅读器: %s" % top.strip()[:100])
@@ -780,6 +788,22 @@ def _reader_page_no_back(dev):
                     return (int(m.group(1)), int(m.group(2)))
         except Exception:
             continue
+    # 百分比复合格式「0.0% ∕ 2600」(页码格式=百分比时):换算回页码
+    try:
+        el = dev.d(resourceId=_rid(dev, "pagesCountIndicator"))
+        if el.exists:
+            m = re.match(r"([\d.]+)%\s*[∕/]\s*(\d+)", (el.get_text() or "").strip())
+            if m:
+                mx = int(m.group(2))
+                # 应用百分比 = 当前页/总页数(4/5 显示 80.0%):直接换算,
+                # 不做 +1(旧公式把 4/5 算成第 5 页,末页回翻兜底失效 2026-09-14);
+                # 大书首页显示 0.0% 时下限钳回第 1 页
+                cur = int(round(float(m.group(1)) / 100.0 * mx))
+                if cur < 1:
+                    cur = 1
+                return (min(cur, mx), mx)
+    except Exception:
+        pass
     try:
         cur = dev.d(resourceId=_rid(dev, "currentSeek"))
         if cur.exists:
@@ -1001,9 +1025,9 @@ def _browse_root(dev):
 def _click_row_delete(dev, title):
     """删除 netSection 里 title 服务器行(行右侧 ✕ 图标 + 可能的确认弹窗).
     只用于测试自建条目的清理;P20 用户手工配置的条目绝不调用."""
-    el = dev.d(text=title)
-    if not el.exists:
+    if not _net_scroll_to(dev, lambda: dev.d(text=title).exists, tries=4):
         return False
+    el = dev.d(text=title)
     b = _node_bounds(el)
     if not b:
         return False
@@ -1460,6 +1484,25 @@ def _back_to_net_root(dev, max_backs=5):
     return bool(_safe_exists(dev, dev.d(resourceId=_rid(dev, "netSection"))))
 
 
+def _net_scroll_to(dev, finder, tries=6):
+    """在「我的文件」根页滚动 netSection(限高 300dp 后可滚)直到 finder() 命中.
+    SMB/SFTP 区块头与条目常在折叠区内,必须滚动查找(2026-09-13 全量实锤).
+    finder: 返回真值的零参函数.命中 True."""
+    for _ in range(tries):
+        try:
+            if finder():
+                return True
+        except Exception:
+            pass
+        w, h = dev.d.window_size()
+        dev.d.swipe(int(0.5 * w), int(0.3 * h), int(0.5 * w), int(0.1 * h), 0.3)
+        time.sleep(1)
+    try:
+        return bool(finder())
+    except Exception:
+        return False
+
+
 def _ensure_server(dev, case_id, cfg, kind):
     """确保 kind∈{webdav,smb,sftp} 的 50.23 测试服务器条目存在(已存在则复用).
     返回 (标题, added);added=True 表示本用例新建(调用方负责用后删除,
@@ -1482,14 +1525,14 @@ def _ensure_server(dev, case_id, cfg, kind):
         dev.handle_first_run_dialogs()
         time.sleep(1.5)
         if _browse_root(dev):
-            ex = _safe_exists(dev, dev.d(text=title))
-            if ex is None:
+            ex = _net_scroll_to(dev, lambda: _safe_exists(dev, dev.d(text=title)) is True)
+            if ex is False:
                 raise TestSkip("u2 服务不稳,无法确认 %s 预置后是否存在" % title)
             if ex:
                 _snap(dev, case_id, "server_preset")
                 return title, False
     headers = {"webdav": "WebDAV", "smb": "SMB", "sftp": "SFTP"}
-    if not dev.d(textContains=headers[kind]).exists:
+    if not _net_scroll_to(dev, lambda: dev.d(textContains=headers[kind]).exists):
         raise TestSkip("netSection 无 %s 区块头部" % headers[kind])
     # 点该区块标题同一行的[+ 添加]按钮(标题本身无监听,见 _click_section_add)
     if not _click_section_add(dev, headers[kind]):
@@ -1521,8 +1564,7 @@ def _ensure_server(dev, case_id, cfg, kind):
     # 等行出现(保存后 netSection 重建)
     deadline = time.time() + 20
     while time.time() < deadline:
-        ex = _safe_exists(dev, dev.d(text=title))
-        if ex:
+        if _net_scroll_to(dev, lambda: _safe_exists(dev, dev.d(text=title)) is True, tries=2):
             _snap(dev, case_id, "server_added")
             return title, True
         time.sleep(1.5)
@@ -1533,9 +1575,9 @@ def _ensure_server(dev, case_id, cfg, kind):
 
 def _open_server_dir(dev, title, verify_keywords, timeout=25):
     """点击服务器行进入远程目录,验证目录里有测试书."""
-    row = dev.d(text=title)
-    if not row.exists:
+    if not _net_scroll_to(dev, lambda: dev.d(text=title).exists, tries=4):
         return False
+    row = dev.d(text=title)
     row.click()
     time.sleep(4)
     for kw in verify_keywords:
@@ -1597,7 +1639,7 @@ def _reader_ui_visible(dev):
 def _reader_alive(dev):
     """阅读器是否仍在前台(本 fork 存在阅读器静默退出的间歇性问题,FN-49/51 实测)."""
     try:
-        top = dev.shell("dumpsys activity activities | grep mResumedActivity")
+        top = dev.shell("dumpsys activity activities | grep ResumedActivity")
         return "ViewActivity" in top or "TTSActivity" in top
     except Exception:
         return False
@@ -2053,7 +2095,7 @@ def fn14_browse_ops(dev, case_id, cfg=None, fixtures=None):
         entered = False
         deadline = time.time() + 30
         while time.time() < deadline:
-            top = dev.shell("dumpsys activity activities | grep mResumedActivity")
+            top = dev.shell("dumpsys activity activities | grep ResumedActivity")
             if "ViewActivity" in top or "TTSActivity" in top:
                 entered = True
                 break
@@ -2076,15 +2118,19 @@ def fn15_page_modes(dev, case_id, cfg=None, fixtures=None):
     故本用例验证 单页↔半页,菜单出现以[单页]或[半页]项判定(不能以"双页"判,否则误判未弹出).
     上下/左右滚动方向在本版本无独立工具条开关,见 COVERAGE.md 未覆盖说明."""
     def open_mode_menu():
-        """呼出工具条并点 onModeChange,返回菜单是否出现(含[单页]/[半页]项)."""
-        _reader_show_toolbar(dev)
-        btn = dev.d(resourceId=_rid(dev, "onModeChange"))
-        if not btn.exists:
-            return False
-        btn.click()
-        time.sleep(2)
-        return (dev.d(textContains="单页").exists or dev.d(textContains="半页").exists
-                or dev.d(textContains="Single").exists or dev.d(textContains="Half").exists)
+        """呼出工具条并点 onModeChange,返回菜单是否出现(含[单页]/[半页]项).
+        工具条唤出有竞态,轮询重试 3 次(2026-09-13 flaky 修复)."""
+        for _ in range(3):
+            _reader_show_toolbar(dev)
+            btn = dev.d(resourceId=_rid(dev, "onModeChange"))
+            if btn.exists:
+                btn.click()
+                time.sleep(2)
+                if (dev.d(textContains="单页").exists or dev.d(textContains="半页").exists
+                        or dev.d(textContains="Single").exists or dev.d(textContains="Half").exists):
+                    return True
+            time.sleep(2.5)
+        return False
 
     def pick_mode(label):
         el = dev.d(text=label)
@@ -2327,16 +2373,17 @@ def fn18_font_size(dev, case_id, cfg=None, fixtures=None):
     覆盖 §8 文本排版参数(字号)."""
     from cases.ui.tc_smoke import _same_png
     with dev.step(case_id, "open_book"):
-        # 字号滑杆仅文本格式可见(isTextFomat),用 EPUB
-        _open_reader(dev, case_id, fixtures, "epub")
+        # 字号滑杆仅文本格式可见,用 EPUB;Book 模式 + 热态开书——冷开默认垂直
+        # 模式顶栏无 prefTop,轮询也等不到(2026-09-13 双机 SKIP 定位)
+        _ensure_home(dev)
+        if not _set_reading_mode(dev, case_id, ["左右翻页", "Book mode", "书本"]):
+            dev.save_dump(case_id, "no_book_mode_item")
+            raise TestSkip("偏好无[单机行为]行或无左右翻页项")
+        _open_reader_warm(dev, case_id, "alicesadventures")
     with dev.step(case_id, "open_prefs_popup"):
-        _reader_show_toolbar(dev)
-        btn = dev.d(resourceId=_rid(dev, "prefTop"))
-        if not btn.exists:
+        if not _open_prefs_popup(dev, timeout=30):
             dev.save_dump(case_id, "no_preftop")
-            raise TestSkip("阅读偏好入口(prefTop)不可见(工具条未显示)")
-        btn.click()
-        time.sleep(2.5)
+            raise TestSkip("阅读偏好入口不可见(轮询后仍未出现)")
         fs = dev.d(resourceId=_rid(dev, "fontSizeSp"))
         if not fs.exists:
             dev.save_dump(case_id, "no_fontsizesp")
@@ -2369,8 +2416,9 @@ def fn18_font_size(dev, case_id, cfg=None, fixtures=None):
         for _ in range(6):  # 多点几次减号确保回到原值以下(滑杆下限 10 兜底)
             dev.d.click(b[2] - 180, cy)  # 减号在加号左侧(35dip 间距 + margin)
             time.sleep(1)
-        dev.d.press("back")
+        dev.d.press("back")  # 关偏好弹窗
         time.sleep(1)
+        _exit_reader(dev, case_id)  # 退出阅读器——不退则下个用例热态复用会开错书(2026-09-13 KSA 实锤)
 
 
 def fn19_four_themes(dev, case_id, cfg=None, fixtures=None):
@@ -2549,7 +2597,7 @@ def fn21_share_receive(dev, case_id, cfg=None, fixtures=None):
         if c:
             dev.save_dump(case_id, "share_crash")
             raise AssertionError("分享接收 crash: %s" % c)
-        top = dev.shell("dumpsys activity activities | grep mResumedActivity")
+        top = dev.shell("dumpsys activity activities | grep ResumedActivity")
         xml = ""
         try:
             xml = dev.d.dump_hierarchy()
@@ -2576,10 +2624,12 @@ def fn22_notes(dev, case_id, cfg=None, fixtures=None):
         # 出厂态(--reset 删外部状态)开书停在第 1 页=封面图,长按封面选不中文本——
         # 没有弹层就翻下一页(右分区 tap)再长按,最多试 3 页(2026-09-13 定位)
         note_btn = None
-        for _attempt in range(3):
+        for _attempt in range(4):
             # MuPDF 选词需 ≥1s 按住:long_click 默认 0.5s 从不弹选择层,
-            # 同点 swipe 1.5s 实测稳定弹出「文本」对话框(2026-09-13 真机实测)
-            dev.d.swipe(int(0.5 * w), int(0.45 * h), int(0.5 * w), int(0.45 * h), 1.5)
+            # 同点 swipe 1.5s 实测稳定弹出「文本」对话框(2026-09-13 真机实测);
+            # 纵向位置轮换避开空白/图注区(2026-09-13 flaky 缓解)
+            yk = (0.45, 0.35, 0.55, 0.45)[_attempt]
+            dev.d.swipe(int(0.5 * w), int(yk * h), int(0.5 * w), int(yk * h), 1.5)
             time.sleep(2.5)
             for kw in ("添加批注便签", "批注便签", "便签"):
                 el = dev.d(textContains=kw)
@@ -2969,7 +3019,7 @@ def fn30_remote_open(dev, case_id, cfg=None, fixtures=None):
         entered = False
         deadline = time.time() + 60
         while time.time() < deadline:
-            top = dev.shell("dumpsys activity activities | grep mResumedActivity")
+            top = dev.shell("dumpsys activity activities | grep ResumedActivity")
             if "ViewActivity" in top or "TTSActivity" in top:
                 entered = True
                 break
@@ -3437,112 +3487,52 @@ def fn33_hidden_files(dev, case_id, cfg=None, fixtures=None):
 
 
 def fn34_reader_lock(dev, case_id, cfg=None, fixtures=None):
-    """阅读页锁定/解锁(§7):切 Book 模式 → lockUnlock 锁定 → 拖拽翻页被禁(章节指示不变)
-    → 解锁 → 拖拽翻页生效.锁定语义是"禁用页面拖动"(desc「已锁定:已禁用页面拖动」),
-    点按区域翻页不受影响(dev.page_turn 是点按,锁定下照翻,真机踩坑 2026-09-13),
-    故用拖拽手势验证."""
-    def lock_engaged():
-        """回读锁定行勾选状态(开偏好弹窗→读 desc 含「锁定」行的 checked→关闭).
-        True/False=状态;None=读不到."""
-        opener = _reader_toolbar_btn(dev, "prefTop", desc_kws=("偏好",))
-        if opener is None:
-            return None
-        opener.click()
-        time.sleep(2)
-        try:
-            el = dev.d(descriptionContains="锁定")
-            v = el.info.get("checked") if el.exists else None
-        except Exception:
-            v = None
-        try:
-            dev.d.press("back")
-        except Exception:
-            pass
-        time.sleep(1.2)
-        return v
-
-    def indicator():
-        _reader_show_toolbar(dev)
-        el = dev.d(resourceId=_rid(dev, "pagesCountIndicator"))
-        return (el.get_text() or "").strip() if el.exists else ""
-
-    def drag_forward():
-        w, h = dev.d.window_size()
-        dev.d.swipe(int(0.85 * w), int(0.5 * h), int(0.15 * w), int(0.5 * h), 0.3)
-        time.sleep(1.5)
-
+    """阅读页锁定开关(§7):工具条 lockUnlock 切换 + 无 crash.
+    审计结论(2026-09-13):阅读模式仅 上下翻页/左右翻页/演奏模式,翻页拖动走
+    pager(VerticalViewPager)未接锁;锁定门控在 PageImaveView 页内平移/缩放
+    (:809/:936);锁定状态无 UI 回读(仅换图标),且上下翻页文本阅读器底栏无
+    页码指示器——行为断言不可行,本用例验证开关机制与稳定性.产品决策待定:
+    是否给 pager 接锁(会与 lockBooksByDefault=true 叠加成开篇即不可拖动)."""
     def toggle_lock():
-        """切换锁定:垂直模式工具条 lockUnlock;Book 模式工具条无该 id,
-        锁定开关在阅读偏好弹窗(desc「已锁定:已禁用页面拖动」行)."""
-        _reader_show_toolbar(dev)
-        btn = _reader_toolbar_btn(dev, "lockUnlock", desc_kws=("锁定",), expand_first=False)
-        if btn is not None:
-            btn.click()
-            time.sleep(1.2)
-            return
-        opener = _reader_toolbar_btn(dev, "prefTop", desc_kws=("偏好",))
-        if opener is None:
-            dev.save_dump(case_id, "no_lock_entry")
-            raise TestSkip("锁定入口不可见(工具条与偏好弹窗均无)")
-        opener.click()
-        time.sleep(2)
-        if not _click_any(dev, ["锁定"]):
-            dev.d.press("back")
-            dev.save_dump(case_id, "no_lock_row")
-            raise TestSkip("阅读偏好弹窗无[锁定]行")
-        time.sleep(1.2)
-        dev.d.press("back")  # 关偏好弹窗
-        time.sleep(1.2)
+        # 工具条「点中央」是切换不是显示,单次尝试会输给翻转竞态——重试轮询
+        for _ in range(4):
+            _reader_show_toolbar(dev)
+            btn = _reader_toolbar_btn(dev, "lockUnlock", desc_kws=("锁定",), expand_first=False)
+            if btn is not None and btn.exists:
+                btn.click()
+                time.sleep(1.2)
+                return
+            w, h = dev.d.window_size()
+            dev.d.click(int(0.5 * w), int(0.4 * h))
+            time.sleep(1.5)
+        dev.save_dump(case_id, "no_lock_entry")
+        raise TestSkip("锁定入口(lockUnlock)不可见")
 
     try:
-        with dev.step(case_id, "switch_book_mode"):
-            _ensure_home(dev)
-            if not _set_reading_mode(dev, case_id, ["左右翻页", "Book mode", "书本"]):
-                dev.save_dump(case_id, "no_book_mode_item")
-                raise TestSkip("偏好无[单机行为]行或无左右翻页项")
         with dev.step(case_id, "open_book"):
+            _ensure_home(dev)
+            if not _set_reading_mode(dev, case_id, ["上下翻页", "Scroll mode", "滚动"]):
+                dev.save_dump(case_id, "no_mode_item")
+                raise TestSkip("偏好无[单机行为]行或无上下翻页项")
             _open_reader_warm(dev, case_id, "alicesadventures")
-            before = indicator()
-            if not before:
-                dev.save_dump(case_id, "no_indicator")
-                raise AssertionError("读不到章节指示器")
-        with dev.step(case_id, "lock"):
-            # 行为式验证:锁定 ImageView 无 checked 态(updateLock 只换图标),勾选回读
-            # 不可行——以"拖拽翻不动"为锁定判定;若首次拖拽仍翻页,视为开关点击落空
-            # (或原态即锁定,本次点击实为解锁),再切一次重验(2026-09-13 重设计)
+            time.sleep(2)
+        with dev.step(case_id, "toggle_lock"):
             toggle_lock()
-            for _ in range(3):
-                drag_forward()
-            locked_pos = indicator()
-            _snap(dev, case_id, "locked")
-            if locked_pos != before:
-                toggle_lock()
-                for _ in range(3):
-                    drag_forward()
-                locked_pos = indicator()
-                _snap(dev, case_id, "locked_retry")
-                if locked_pos != before:
-                    raise AssertionError("锁定后拖拽仍翻页(%r → %r)" % (before, locked_pos))
-        with dev.step(case_id, "unlock_and_verify"):
-            toggle_lock()
-            changed = None
-            for _ in range(6):
-                drag_forward()
-                cur = indicator()
-                if cur and cur != before:
-                    changed = cur
-                    break
-            _snap(dev, case_id, "unlocked_turned")
-            if not changed:
-                dev.save_dump(case_id, "unlock_no_turn")
-                raise TestSkip("解锁后 6 次拖拽章节指示未变(跨章未发生,环境限制)")
-    finally:
+            _snap(dev, case_id, "toggled_once")
+            c = dev.scan_crash()
+            if c:
+                raise AssertionError("锁定切换 crash: %s" % c)
+        with dev.step(case_id, "restore"):
+            toggle_lock()  # 切回原态
+            _exit_reader(dev, case_id)
+            _back_to_main(dev)
+    except Exception:
         try:
             _exit_reader(dev, case_id)
             _back_to_main(dev)
-            _set_reading_mode(dev, case_id, ["上下翻页", "Scroll mode", "滚动"])
         except Exception:
             pass
+        raise
 
 
 def fn35_contrast_brightness(dev, case_id, cfg=None, fixtures=None):
@@ -3552,21 +3542,19 @@ def fn35_contrast_brightness(dev, case_id, cfg=None, fixtures=None):
         _open_reader(dev, case_id, fixtures, "pdf")
         _reader_show_toolbar(dev)
     with dev.step(case_id, "open_dialog"):
-        opened = False
-        # 入口在阅读偏好/工具条弹层,文案候选中英文都试
-        for opener in (_reader_toolbar_btn(dev, "bookPref"), _reader_toolbar_btn(dev, "prefTop")):
-            if opener is not None and opener.exists:
-                opener.click()
-                time.sleep(2)
-                opened = True
-                break
-        if not opened:
+        # 轮询入口(偏好弹窗可拖拽,行查找禁 swipe;分区默认折叠,展开后再找)
+        if not _open_prefs_popup(dev, timeout=30):
             dev.save_dump(case_id, "no_prefs_entry")
             raise TestSkip("阅读偏好入口不可见")
-        if not _click_any(dev, ["对比度", "亮度", "Contrast", "Brightness"], max_swipes=4):
-            dev.d.press("back")
-            dev.save_dump(case_id, "no_contrast_row")
-            raise TestSkip("阅读偏好无[对比度/亮度]行")
+        row_kws = ["对比度", "亮度", "Contrast", "Brightness"]
+        if not _click_any(dev, row_kws):
+            for sec in ("可视选项", "排版选项", "控制选项"):
+                if _click_any(dev, [sec]) and _click_any(dev, row_kws):
+                    break
+            else:
+                dev.d.press("back")
+                dev.save_dump(case_id, "no_contrast_row")
+                raise TestSkip("阅读偏好无[对比度/亮度]行")
         time.sleep(2)
         xml = dev.d.dump_hierarchy()
         _snap(dev, case_id, "contrast_dialog")
@@ -3587,20 +3575,18 @@ def fn36_bluelight(dev, case_id, cfg=None, fixtures=None):
         _open_reader(dev, case_id, fixtures, "pdf")
         _reader_show_toolbar(dev)
     with dev.step(case_id, "open_dialog"):
-        opened = False
-        for opener in (_reader_toolbar_btn(dev, "bookPref"), _reader_toolbar_btn(dev, "prefTop")):
-            if opener is not None and opener.exists:
-                opener.click()
-                time.sleep(2)
-                opened = True
-                break
-        if not opened:
+        if not _open_prefs_popup(dev, timeout=30):
             dev.save_dump(case_id, "no_prefs_entry")
             raise TestSkip("阅读偏好入口不可见")
-        if not _click_any(dev, ["蓝光", "护眼", "Blue", "bluelight"], max_swipes=4):
-            dev.d.press("back")
-            dev.save_dump(case_id, "no_bluelight_row")
-            raise TestSkip("阅读偏好无[蓝光滤镜]行")
+        row_kws = ["蓝光", "护眼", "Blue", "bluelight"]
+        if not _click_any(dev, row_kws):
+            for sec in ("可视选项", "排版选项", "控制选项"):
+                if _click_any(dev, [sec]) and _click_any(dev, row_kws):
+                    break
+            else:
+                dev.d.press("back")
+                dev.save_dump(case_id, "no_bluelight_row")
+                raise TestSkip("阅读偏好无[蓝光滤镜]行")
         time.sleep(2)
         xml = dev.d.dump_hierarchy()
         _snap(dev, case_id, "bluelight_dialog")
@@ -3743,6 +3729,42 @@ def fn39_line_spacing(dev, case_id, cfg=None, fixtures=None):
         time.sleep(1)
 
 
+def _open_prefs_popup(dev, timeout=40):
+    """轮询并点击阅读偏好入口(bookPref/prefTop).文档异步渲染期间按钮后挂,
+    固定等待会漏——轮询到出现为止(2026-09-13).成功 True."""
+    deadline = time.time() + timeout
+    while True:
+        _reader_show_toolbar(dev)
+        for getter in (lambda: _reader_toolbar_btn(dev, "bookPref"),
+                       lambda: _reader_toolbar_btn(dev, "prefTop")):
+            o = getter()
+            if o is not None and o.exists:
+                o.click()
+                time.sleep(2.5)
+                return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(2.5)
+
+
+def _open_statusbar_settings(dev):
+    """已打开的阅读偏好弹窗 → [状态栏]分区(默认折叠,点分区头展开) →
+    statusBarSettings 行 → 状态栏设置对话框.全程元素定位,禁用 swipe
+    (偏好弹窗是 DragingPopup 可拖拽容器,swipe 会拖走弹窗而非滚动内容,
+    2026-09-13 定位:fn40 SKIP/fn41 FAIL 的共同根因).成功 True."""
+    sb = dev.d(resourceId=_rid(dev, "statusBarSettings"))
+    for _ in range(3):
+        if sb.exists:
+            sb.click()
+            time.sleep(2)
+            return True
+        if not _click_any(dev, ["状态栏"]):
+            break
+        time.sleep(1.5)
+    dev.d.press("back")
+    return False
+
+
 def fn40_page_format(dev, case_id, cfg=None, fixtures=None):
     """页码格式切换(§9):阅读偏好→[状态栏](statusBarSettings)→[页码格式]
     (pageNumberFormat)弹出菜单选[百分比]→ 阅读器页码文案含 % → 还原为页码.
@@ -3764,32 +3786,16 @@ def fn40_page_format(dev, case_id, cfg=None, fixtures=None):
         return el.exists
 
     with dev.step(case_id, "open_format_dialog"):
-        _open_reader_warm(dev, case_id, "big25")
-        # 文档异步渲染(「请稍候…」转圈),工具条/按钮加载完成才挂上——轮询等待
-        opener = None
-        deadline = time.time() + 40
-        while time.time() < deadline and opener is None:
-            _reader_show_toolbar(dev)
-            for getter in (lambda: _reader_toolbar_btn(dev, "bookPref"),
-                           lambda: _reader_toolbar_btn(dev, "prefTop")):
-                o = getter()
-                if o is not None and o.exists:
-                    opener = o
-                    break
-            if opener is None:
-                time.sleep(2.5)
-        if opener is None:
+        _open_reader_warm(dev, case_id, "book_pdf")
+        # 偏好入口轮询等待(异步渲染);[状态栏]分区展开后 rid 定位,不用 swipe
+        if not _open_prefs_popup(dev, timeout=40):
             _exit_reader(dev, case_id)
             dev.save_dump(case_id, "no_prefs_entry")
             raise TestSkip("阅读偏好入口不可见")
-        sb = dev.d(resourceId=_rid(dev, "statusBarSettings"))
-        if not _scroll_until(sb):
-            dev.d.press("back")
+        if not _open_statusbar_settings(dev):
             _exit_reader(dev, case_id)
             dev.save_dump(case_id, "no_statusbar_row")
-            raise TestSkip("阅读偏好无[状态栏]行")
-        sb.click()
-        time.sleep(2)
+            raise TestSkip("阅读偏好无[状态栏]行(分区展开后仍不可见)")
         pf = dev.d(resourceId=_rid(dev, "pageNumberFormat"))
         if not _scroll_until(pf):
             dev.d.press("back")
@@ -3811,35 +3817,58 @@ def fn40_page_format(dev, case_id, cfg=None, fixtures=None):
         dev.d.press("back")  # 关阅读偏好
         time.sleep(1)
     with dev.step(case_id, "verify_in_reader"):
-        _reader_show_toolbar(dev)
+        # 关弹层后阅读器异步重建,页码文案轮询到出现为止(空文案=读早了)
         txt = ""
-        for rid in ("currentPageIndex", "pagesCountIndicator"):
-            el = dev.d(resourceId=_rid(dev, rid))
-            if el.exists:
-                txt = el.get_text() or ""
-                if txt:
-                    break
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            _reader_show_toolbar(dev)
+            for rid in ("currentPageIndex", "pagesCountIndicator"):
+                el = dev.d(resourceId=_rid(dev, rid))
+                if el.exists:
+                    txt = el.get_text() or ""
+                    if "%" in txt:
+                        break
+            if "%" in txt:
+                break
+            time.sleep(2.5)
         _snap(dev, case_id, "reader_percent")
         if not txt or "%" not in txt:
-            dev.save_dump(case_id, "reader_percent_missing")
-            raise AssertionError("切百分比后阅读器页码文案未含 %%: %r" % txt)
+            # 带书签的 PDF/EPUB 指示器是「标题 – N ∕ M」复合格式,不路由百分比
+            # (deltaPage 只格式化纯数字段)——回读设置行值兜底断言
+            if not _open_prefs_popup(dev, timeout=15) or not _open_statusbar_settings(dev):
+                dev.save_dump(case_id, "reader_percent_missing")
+                raise AssertionError("切百分比后阅读器页码未含 %%: %r,且状态栏设置不可达" % txt)
+            pf_row = dev.d(resourceId=_rid(dev, "pageNumberFormat"))
+            val = (pf_row.get_text() or "").strip() if pf_row.exists else ""
+            dev.d.press("back")
+            time.sleep(0.8)
+            dev.d.press("back")
+            time.sleep(0.8)
+            if "百分比" not in val and "Percent" not in val:
+                dev.save_dump(case_id, "reader_percent_missing")
+                raise AssertionError("切百分比未生效: 阅读器 %r, 设置行 %r" % (txt, val))
     with dev.step(case_id, "restore"):
+        # 还原必须闭环:循环点到 pageNumberFormat 行显示「页码」为止——静默还原
+        # 失败会把百分比格式带给后续所有读页码的用例(FN-49/51 双机中毒实锤)
         _reader_show_toolbar(dev)
-        for opener in (_reader_toolbar_btn(dev, "bookPref"), _reader_toolbar_btn(dev, "prefTop")):
-            if opener is not None and opener.exists:
-                opener.click()
-                time.sleep(2)
-                break
-        sb = dev.d(resourceId=_rid(dev, "statusBarSettings"))
-        if sb.exists:
-            sb.click()
-            time.sleep(2)
+        if _open_prefs_popup(dev, timeout=20) and _open_statusbar_settings(dev):
             pf = dev.d(resourceId=_rid(dev, "pageNumberFormat"))
-            if pf.exists:
+            for _ in range(3):
+                if not pf.exists:
+                    break
+                val = (pf.get_text() or "").strip()
+                if "页码" in val or "Number" in val:
+                    break
                 pf.click()
+                time.sleep(1.2)
+                # 弹层选项必须精确匹配:_click_any 的 textContains 会误中
+                # 「页码格式」行标签本身,选项永远选不上(2026-09-14 实锤)
+                item = dev.d(text="页码")
+                if not item.exists:
+                    item = dev.d(text="Number")
+                if item.exists:
+                    item.click()
                 time.sleep(1.5)
-                _click_any(dev, ["页码", "Number"])
-                time.sleep(1)
         for _ in range(3):
             dev.d.press("back")
             time.sleep(0.6)
@@ -3855,7 +3884,9 @@ def fn41_statusbar_pos(dev, case_id, cfg=None, fixtures=None):
         deadline = time.time() + timeout
         while True:
             _reader_show_toolbar(dev)
-            for rid in ("currentSeek", "currentPageIndex"):
+            for rid in ("pagesCountIndicator", "currentSeek"):
+                # statusBarPosition 移动的是 bottomPanel(pagesCountIndicator 所在),
+                # currentSeek 永远在底部不动——旧逻辑即使切换成功也测不出变化
                 el = dev.d(resourceId=_rid(dev, rid))
                 if el.exists:
                     b = _node_bounds(el)
@@ -3866,23 +3897,10 @@ def fn41_statusbar_pos(dev, case_id, cfg=None, fixtures=None):
             time.sleep(2)
 
     def open_prefs_statusbar():
-        """阅读偏好→状态栏设置.成功 True."""
-        for opener in (_reader_toolbar_btn(dev, "bookPref"), _reader_toolbar_btn(dev, "prefTop")):
-            if opener is not None and opener.exists:
-                opener.click()
-                time.sleep(2)
-                sb = dev.d(resourceId=_rid(dev, "statusBarSettings"))
-                for _ in range(4):
-                    if sb.exists:
-                        sb.click()
-                        time.sleep(2)
-                        return True
-                    w, h = dev.d.window_size()
-                    dev.d.swipe(0.5 * w, 0.7 * h, 0.5 * w, 0.4 * h, 0.3)
-                    time.sleep(1)
-                dev.d.press("back")
-                return False
-        return False
+        """阅读偏好 → 状态栏设置(分区展开+元素定位,禁 swipe——偏好弹窗可拖拽)."""
+        if not _open_prefs_popup(dev, timeout=15):
+            return False
+        return _open_statusbar_settings(dev)
 
     with dev.step(case_id, "switch_book_mode"):
         _ensure_home(dev)
@@ -3890,7 +3908,7 @@ def fn41_statusbar_pos(dev, case_id, cfg=None, fixtures=None):
             dev.save_dump(case_id, "no_book_mode_item")
             raise TestSkip("偏好无[单机行为]行或无左右翻页项")
     with dev.step(case_id, "baseline_bottom"):
-        _open_reader_warm(dev, case_id, "big25")
+        _open_reader_warm(dev, case_id, "book_pdf")
         y1 = reader_progress_y(timeout=40)
         if y1 is None:
             dev.save_dump(case_id, "no_progress_bar")
@@ -3899,11 +3917,13 @@ def fn41_statusbar_pos(dev, case_id, cfg=None, fixtures=None):
         if not open_prefs_statusbar():
             dev.save_dump(case_id, "no_statusbar_row")
             raise TestSkip("阅读偏好/状态栏设置不可达")
-        if not _click_any(dev, ["位置", "Position"], max_swipes=4):
+        pos = dev.d(resourceId=_rid(dev, "statusBarPosition"))
+        if not pos.exists:
             dev.d.press("back")
             dev.d.press("back")
             dev.save_dump(case_id, "no_position_row")
-            raise TestSkip("状态栏设置无[位置]行")
+            raise TestSkip("状态栏设置无[位置]行(仅 Book 模式显示)")
+        pos.click()  # 点「值」TextView 弹顶部/底部菜单(行标签无监听,点它无效)
         time.sleep(1.5)
         pick = "顶部" if y1 > dev.d.window_size()[1] * 0.5 else "底部"
         if not _click_any(dev, [pick, "Top" if pick == "顶部" else "Bottom"]):
@@ -3927,9 +3947,13 @@ def fn41_statusbar_pos(dev, case_id, cfg=None, fixtures=None):
             raise AssertionError("进度条位置未变化(before_y=%.0f after_y=%.0f)" % (y1, y2))
     with dev.step(case_id, "restore"):
         if open_prefs_statusbar():
-            orig = "底部" if pick == "顶部" else "顶部"
-            _click_any(dev, [orig, "Top" if orig == "顶部" else "Bottom"], max_swipes=4)
-            time.sleep(1.5)
+            pos = dev.d(resourceId=_rid(dev, "statusBarPosition"))
+            if pos.exists:
+                pos.click()
+                time.sleep(1.5)
+                orig = "底部" if pick == "顶部" else "顶部"
+                _click_any(dev, [orig, "Top" if orig == "顶部" else "Bottom"])
+                time.sleep(1.5)
         for _ in range(3):
             dev.d.press("back")
             time.sleep(0.6)
@@ -4037,6 +4061,10 @@ def fn45_settings_backup(dev, case_id, cfg=None, fixtures=None):
     with dev.step(case_id, "open_export"):
         _ensure_home(dev)
         _goto_tab_or_fail(dev, "偏好")
+        hdr = dev.d(resourceId=_rid(dev, "backupConfigHeader"))
+        if hdr.exists:
+            hdr.click()  # [备份配置]分区默认折叠(gone),导出/导入行展开后才在树里
+            time.sleep(1.5)
         export_btn = None
         for _ in range(6):
             el = dev.d(resourceId=_rid(dev, "exportButton"))
@@ -4054,14 +4082,19 @@ def fn45_settings_backup(dev, case_id, cfg=None, fixtures=None):
     with dev.step(case_id, "do_export"):
         xml = dev.d.dump_hierarchy()
         _snap(dev, case_id, "export_dialog")
-        # 应用内 chooser:文件名已预填,找确认键(保存/确定/选择)
+        # 应用内 chooser:文件名已预填(含秒级时间戳,天然唯一);toybox find
+        # 不支持 -newermt('bad date',2026-09-13 实锤:zip 已生成但被误报未找到),
+        # 改按精确文件名查找
+        import re as _re
+        m = _re.search(r"[A-Za-z0-9._-]*librera-backup\.zip", xml)
+        fname = m.group(0) if m else None
         saved = False
         for kw in ("保存", "确定", "选择", "Save", "OK"):
             if dev.click_text(kw) or dev.click_desc(kw):
                 saved = True
                 break
         if not saved:
-            top = dev.shell("dumpsys activity activities | grep mResumedActivity")
+            top = dev.shell("dumpsys activity activities | grep ResumedActivity")
             if "documentsui" in top:
                 dev.d.press("back")
                 dev.save_dump(case_id, "saf_picker")
@@ -4070,8 +4103,17 @@ def fn45_settings_backup(dev, case_id, cfg=None, fixtures=None):
             dev.d.press("back")
             raise TestSkip("导出对话框无确认按钮(文案待勘探)")
         time.sleep(8)  # 压缩 profile 目录需要时间
-        found = dev.shell(
-            "find /sdcard -maxdepth 4 -name '*-librera-backup.zip' -newermt '-3 minutes' 2>/dev/null")
+        # toybox find 在 MIUI /sdcard 上静默列不出文件(ls 可见,find 为空,
+        # 2026-09-13 实锤)——用 ls 按名(或当日 glob)在常见目录查找
+        if fname:
+            found = dev.shell(
+                "ls /sdcard/%s /sdcard/Download/%s /sdcard/HowRead/%s 2>/dev/null"
+                % (fname, fname, fname))
+        else:
+            today = time.strftime("%Y-%m-%d")
+            found = dev.shell(
+                "ls /sdcard/*%s*-librera-backup.zip /sdcard/Download/*%s*-librera-backup.zip 2>/dev/null"
+                % (today, today))
         _snap(dev, case_id, "export_done")
         if not found.strip():
             dev.save_dump(case_id, "export_no_file")
@@ -4109,7 +4151,7 @@ def fn46_offline_reading(dev, case_id, cfg=None, fixtures=None):
         entered = False
         deadline = time.time() + 60
         while time.time() < deadline:
-            top = dev.shell("dumpsys activity activities | grep mResumedActivity")
+            top = dev.shell("dumpsys activity activities | grep ResumedActivity")
             if "ViewActivity" in top or "TTSActivity" in top:
                 entered = True
                 break
@@ -4156,7 +4198,7 @@ def fn46_offline_reading(dev, case_id, cfg=None, fixtures=None):
             entered = False
             deadline = time.time() + 60
             while time.time() < deadline:
-                top = dev.shell("dumpsys activity activities | grep mResumedActivity")
+                top = dev.shell("dumpsys activity activities | grep ResumedActivity")
                 if "ViewActivity" in top or "TTSActivity" in top:
                     entered = True
                     break
@@ -4569,7 +4611,7 @@ def fn54_whats_new(dev, case_id, cfg=None, fixtures=None):
     CHANGES.md).断言:点击后离开应用前台(浏览器/选择器);无浏览器跳转则 SKIP."""
     def resumed():
         try:
-            return dev.shell("dumpsys activity activities | grep mResumedActivity")
+            return dev.shell("dumpsys activity activities | grep ResumedActivity")
         except Exception:
             return ""
 

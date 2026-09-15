@@ -3,8 +3,6 @@
    <string name="library_settings">Paramètres de la bibliothèque</string>
    <string name="scan_device_for_new_books">Emplacements où chercher de nouveaux livres</string>
    <string name="add_folder">Ajouter le dossier</string>
-   <string name="archives">Archives</string>
-   <string name="other">Autre</string>
    <string name="you_need_to_update_the_library">Vous devez mettre à jour la bibliothèque</string>
    <string name="in_the_author_s_name_first_the_surname">Au nom de l\'auteur, d\'abord le nom de famille</string>
    <string name="orientation">Orientation</string>

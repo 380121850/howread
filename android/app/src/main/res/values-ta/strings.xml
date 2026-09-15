@@ -3,8 +3,6 @@
    <string name="library_settings">நூலக அமைப்புகள்</string>
    <string name="scan_device_for_new_books">கோப்புறைகள் ஸ்கேன் செய்ய</string>
    <string name="add_folder">புதிய அடைவை</string>
-   <string name="archives">காப்பகங்கள்</string>
-   <string name="other">மற்றவை</string>
    <string name="you_need_to_update_the_library">மாற்றங்களைப் பயன்படுத்த நூலகத்தைப் புதுப்பிக்கவும்</string>
    <string name="in_the_author_s_name_first_the_surname">ஆசிரியரின் கடைசி பெயர் முதலில்</string>
    <string name="orientation">நோக்குநிலை</string>

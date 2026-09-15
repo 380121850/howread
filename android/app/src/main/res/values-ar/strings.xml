@@ -3,8 +3,6 @@
    <string name="library_settings">إعدادات المكتبة</string>
    <string name="scan_device_for_new_books">فحص وجود كتب جديدة في الجهاز</string>
    <string name="add_folder">أضف المجلد</string>
-   <string name="archives">أرشيف</string>
-   <string name="other">آخر</string>
    <string name="you_need_to_update_the_library">تحتاج إلى تحديث المكتبة</string>
    <string name="in_the_author_s_name_first_the_surname">في اسم المؤلف، أولا اللقب</string>
    <string name="orientation">توجيه</string>
