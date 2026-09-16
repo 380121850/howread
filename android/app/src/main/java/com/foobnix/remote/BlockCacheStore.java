@@ -540,9 +540,10 @@ public class BlockCacheStore {
     }
 
     /**
-     * Evicts expired books first ({@code remoteCacheExpireDays}, by directory
-     * mtime), then least-recently-used books until the total cache fits
-     * {@code maxBytes}. Called before a new block write burst.
+     * Evicts least-recently-used books (oldest directory mtime first:
+     * newest kept, oldest dropped) until the total cache fits
+     * {@code maxBytes}. No time-based expiry — cached books live as long
+     * as there is room. Called before a new block write burst.
      */
     public static void evict(long maxBytes) {
         try {
@@ -550,17 +551,6 @@ public class BlockCacheStore {
             File[] books = root.listFiles();
             if (books == null) {
                 return;
-            }
-            int expireDays = com.foobnix.model.AppState.get().remoteCacheExpireDays;
-            long expireMs = expireDays > 0 ? expireDays * 86400000L : 0;
-            long now = System.currentTimeMillis();
-            for (File book : books) {
-                if (pinnedKeys.contains(book.getName())) {
-                    continue; // never expire the book being read
-                }
-                if (expireMs > 0 && now - book.lastModified() > expireMs) {
-                    com.foobnix.ext.CacheZipUtils.deleteDir(book);
-                }
             }
             if (totalBytes() <= maxBytes) {
                 return;

@@ -942,10 +942,8 @@
     <string name="remote_pick_shares">共享列表（选择一个共享）</string>
     <string name="remote_no_subdirs">此处没有子目录</string>
     <string name="remote_trust_all">信任所有证书（不校验主机）</string>
-    <string name="remote_cache_expire">缓存过期天数（0 = 永不过期）</string>
     <string name="remote_retry_interval">重试基础间隔（毫秒，指数退避）</string>
     <string name="remote_retry_count">网络重试次数</string>
-    <string name="remote_whole_book_metered">移动网络下也整本缓存</string>
     <string name="remote_scan_done">%1$s：新增 %2$d 本，更新 %3$d 本，失败 %4$d 个</string>
     <string name="remote_scan_scanning">正在扫描 %1$s ...</string>
     <string name="remote_scan_title">扫描入架</string>

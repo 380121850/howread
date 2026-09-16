@@ -942,10 +942,8 @@
     <string name="remote_pick_shares">Shares — pick one</string>
     <string name="remote_no_subdirs">No subfolders here</string>
     <string name="remote_trust_all">Trust all certificates (do NOT verify the host)</string>
-    <string name="remote_cache_expire">Cache expiry (days, 0 = never)</string>
     <string name="remote_retry_interval">Retry base interval (ms, exponential backoff)</string>
     <string name="remote_retry_count">Network retries</string>
-    <string name="remote_whole_book_metered">Whole-book cache on mobile networks</string>
     <string name="remote_scan_done">%1$s: added %2$d, updated %3$d, failed %4$d</string>
     <string name="remote_scan_scanning">Scanning %1$s ...</string>
     <string name="remote_scan_title">Scan into shelf</string>

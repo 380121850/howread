@@ -765,10 +765,8 @@
     <string name="remote_pick_shares">共用清單（選擇一個共用）</string>
     <string name="remote_no_subdirs">此處沒有子目錄</string>
     <string name="remote_trust_all">信任所有憑證（不校驗主機）</string>
-    <string name="remote_cache_expire">快取過期天數（0 = 永不過期）</string>
     <string name="remote_retry_interval">重試基礎間隔（毫秒，指數退避）</string>
     <string name="remote_retry_count">網路重試次數</string>
-    <string name="remote_whole_book_metered">行動網路下也整本快取</string>
     <string name="remote_scan_done">%1$s：新增 %2$d 本，更新 %3$d 本，失敗 %4$d 個</string>
     <string name="remote_scan_scanning">正在掃描 %1$s ...</string>
     <string name="remote_scan_title">掃描入架</string>

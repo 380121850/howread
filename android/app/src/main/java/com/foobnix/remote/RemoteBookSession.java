@@ -338,9 +338,9 @@ public class RemoteBookSession {
     }
 
     /**
-     * P3: progressive whole-book fill for small books (tech-spec §5.3):
-     * &lt; 5MB fills on any network, 5MB..threshold only when the user
-     * allows metered networks, above the threshold never.
+     * P3: progressive whole-book fill (tech-spec §5.3; threshold in MB,
+     * 0 = off). Metered networks run it only when the WiFi-only rule is
+     * off — the same single switch that gates the prefetch depth.
      */
     private synchronized void maybeStartFiller() {
         // synchronized: readAt runs on multiple MuPDF threads — without the
@@ -355,8 +355,9 @@ public class RemoteBookSession {
         if (thresholdMB <= 0) {
             return;
         }
-        boolean smallAlways = size < 5 * 1024L * 1024L;
-        if (!smallAlways && isMeteredNetwork() && !AppState.get().remoteWholeBookOnMetered) {
+        // single metered gate, shared with prefetch (remotePrefetchWifiOnly):
+        // WiFi-only on + metered = no whole-book fill on mobile either
+        if (AppState.get().remotePrefetchWifiOnly && isMeteredNetwork()) {
             return;
         }
         filler = new Thread(() -> {

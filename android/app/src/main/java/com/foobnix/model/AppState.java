@@ -312,18 +312,17 @@ public class AppState {
     public boolean remoteOnlineFirst = true;
     // remote-book cache config (RemoteCacheDialog)
     public int remoteCacheMaxMB = 500;
+    // single metered-network gate for BOTH prefetch and whole-book fill:
+    // on = prefetch / whole-book cache on WiFi only; off = mobile networks
+    // behave like WiFi (replaces the old separate whole-book-on-metered
+    // switch, which overlapped with this one)
     public boolean remotePrefetchWifiOnly = true;
     // progressive whole-book fill threshold in MB, 0 = off
     public int remoteWholeBookThresholdMB = 20;
-    // whole-book fill tiers (tech-spec §5.3): books < 5MB always fill, even
-    // on metered networks; 5MB..threshold follow the switch below
-    public boolean remoteWholeBookOnMetered = false;
     // network retry policy (RemoteRetry): attempts and initial backoff (ms,
     // exponential base×2ⁿ)
     public int remoteRetryCount = 3;
-    public int remoteRetryIntervalMs = 1000;
-    // remote-cache entries untouched for this many days are evicted, 0 = off
-    public int remoteCacheExpireDays = 30;
+    public int remoteRetryIntervalMs = 100;
     // WebDAV reading-data sync (progress + bookmarks), see WebDavSyncer.
     // Server credentials are stored separately (WebDavCredentials, keyed by
     // this URL) so the sync config is fully independent from the browsing
@@ -885,6 +884,19 @@ public class AppState {
                 if ("Librera".equals(AppState.get().webdavSyncRemoteDir)) {
                     AppState.get().webdavSyncRemoteDir = "HowRead";
                     LOG.d("migration", "webdavSyncRemoteDir to HowRead");
+                }
+            } catch (Exception e) {
+                LOG.e(e);
+            }
+
+            // The network-retry base interval default moved from 1000ms to
+            // 100ms. A stored value still equal to the old default follows
+            // the new default; any other value is a user's own tuning and
+            // stays untouched.
+            try {
+                if (AppState.get().remoteRetryIntervalMs == 1000) {
+                    AppState.get().remoteRetryIntervalMs = 100;
+                    LOG.d("migration", "remoteRetryIntervalMs 1000 -> 100");
                 }
             } catch (Exception e) {
                 LOG.e(e);
