@@ -642,6 +642,12 @@ Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_openStream(JNIEnv* env,
         docstream = fz_new_stream(doc->ctx, state, RsStream_next, RsStream_drop);
         docstream->seek = RsStream_seek;
 
+        /* remote/streamed document: defer <img> payloads that carry explicit
+         * width/height so the layout only needs the text (see image.c).
+         * Applies in image-scale mode too: the attrs are the declared
+         * image dims (identical to the intrinsic ones in scan books), so
+         * the layout result does not change. */
+        fz_set_defer_html_images(doc->ctx, 1);
         doc->document = (fz_document*)fz_open_accelerated_document_with_stream(doc->ctx, magic, docstream, NULL);
 
         __android_log_print(ANDROID_LOG_DEBUG, "EBookDroid", "Open stream ok magic=%s", magic);
@@ -1278,11 +1284,19 @@ Java_org_ebookdroid_droids_mupdf_codec_MuPdfPage_renderPage(JNIEnv* env,
     viewbox.y1 = viewboxarr[3];
     (*env)->ReleasePrimitiveArrayCritical(env, viewboxarray, viewboxarr, 0);
 
-    buffer = (*env)->GetPrimitiveArrayCritical(env, bufferarray, 0);
+    /* The draw below may call back into Java (deferred remote image loads
+     * go through the seekable stream), which is forbidden while a JNI
+     * critical section is held — copy the pixel buffer in/out instead. */
+    const int bufLen = (*env)->GetArrayLength(env, bufferarray);
+    buffer = (jint*)malloc(bufLen * sizeof(jint));
+    if (buffer == NULL) {
+        return;
+    }
+    (*env)->GetIntArrayRegion(env, bufferarray, 0, bufLen, buffer);
 
     fz_context* ctx = page->ctx;
     if (!ctx || !page || !page->pageList) {
-        (*env)->ReleasePrimitiveArrayCritical(env, bufferarray, buffer, 0);
+        free(buffer);
         return;
     }
 
@@ -1318,7 +1332,8 @@ Java_org_ebookdroid_droids_mupdf_codec_MuPdfPage_renderPage(JNIEnv* env,
         DEBUG("Render failed");
     }
 
-    (*env)->ReleasePrimitiveArrayCritical(env, bufferarray, buffer, 0);
+    (*env)->SetIntArrayRegion(env, bufferarray, 0, bufLen, buffer);
+    free(buffer);
 }
 
 // Outline

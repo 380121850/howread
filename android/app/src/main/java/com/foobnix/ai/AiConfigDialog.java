@@ -4,7 +4,6 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.os.AsyncTask;
-import android.text.InputType;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.CheckBox;
@@ -35,7 +34,6 @@ public class AiConfigDialog {
         final TextView protocolValue = (TextView) view.findViewById(R.id.aiProtocolValue);
         final EditText url = (EditText) view.findViewById(R.id.aiBaseUrl);
         final EditText apiKey = (EditText) view.findViewById(R.id.aiApiKey);
-        apiKey.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         final EditText model = (EditText) view.findViewById(R.id.aiModel);
         final EditText maxTokens = (EditText) view.findViewById(R.id.aiMaxTokens);
         final CheckBox thinking = (CheckBox) view.findViewById(R.id.aiThinking);

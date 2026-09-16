@@ -909,7 +909,26 @@ static void gen2_image_html(fz_context *ctx, struct genstate *g, fz_html_box *ro
 			local_style.height.unit = strchr(h_att, '%') ? N_PERCENT : N_LENGTH;
 		}
 
-		img = load_html_image(ctx, g->zip, g->base_uri, src);
+		img = NULL;
+		/* Remote/streamed books: an <img> with explicit pixel width and
+		 * height never consults the intrinsic image size during layout,
+		 * so swap in a deferred stub that pulls the entry bytes only at
+		 * first decode — a scan-style epub can then paginate (and show
+		 * its first page) without downloading every image. */
+		if (fz_defer_html_images(ctx) && w_att && h_att
+				&& !strchr(w_att, '%') && !strchr(h_att, '%')
+				&& strncmp(src, "data:", 5) != 0 && !strstr(src, ".svg")
+				&& (w = fz_atoi(w_att)) > 0 && (h = fz_atoi(h_att)) > 0)
+		{
+			char dpath[2048];
+			fz_strlcpy(dpath, g->base_uri, sizeof dpath);
+			fz_strlcat(dpath, "/", sizeof dpath);
+			fz_strlcat(dpath, src, sizeof dpath);
+			fz_urldecode(dpath);
+			img = fz_new_deferred_archive_image(ctx, g->zip, dpath, w, h);
+		}
+		if (!img)
+			img = load_html_image(ctx, g->zip, g->base_uri, src);
 		gen2_image_common(ctx, g, root_box, node, img, display, &local_style);
 	}
 }

@@ -565,6 +565,15 @@ int fz_use_document_css(fz_context *ctx);
 */
 void fz_set_use_document_css(fz_context *ctx, int use);
 
+/*
+	Deferred HTML images: when enabled (streamed/remote documents only),
+	<img> entries that carry explicit width/height attributes are loaded
+	lazily at first decode instead of at layout time, so pagination does
+	not require the image payloads.
+*/
+void fz_set_defer_html_images(fz_context *ctx, int defer);
+int fz_defer_html_images(fz_context *ctx);
+
 /**
 	Enable icc profile based operation.
 */

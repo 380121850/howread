@@ -60,7 +60,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:hint="@string/ai_config_key"
-        android:inputType="textPassword"
+        android:inputType="text"
         android:singleLine="true" />
 
     <LinearLayout

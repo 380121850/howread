@@ -851,7 +851,7 @@ public class ProfileStateIO {
         for (int i = 0; i < arr.length(); i++) {
             LinkedJSONObject item = asLinked(arr.opt(i));
             String url = item == null ? "" : WebDavStore.trimSlash(item.optString("url"));
-            if (item == null || TxtUtils.isEmpty(url)) {
+            if (item == null || TxtUtils.isEmpty(url) || isCorruptWebDavUrl(url)) {
                 // legacy v1 element: the raw "url,title,startDir" line
                 String line = arr.optString(i);
                 String[] it = TxtUtils.isEmpty(line) ? new String[0] : line.split(",");
@@ -900,6 +900,13 @@ public class ProfileStateIO {
         if (added > 0 || updated > 0) {
             android.util.Log.i("BENCH", "net restore: webdav +" + added + " ~" + updated);
         }
+    }
+
+    /** A legacy bug serialized JSON objects into the link lines; such
+     * entries never re-enter the sync copy (the store sanitizes itself). */
+    private static boolean isCorruptWebDavUrl(String url) {
+        return url.indexOf('{') >= 0 || url.indexOf('"') >= 0
+                || !(url.startsWith("http://") || url.startsWith("https://"));
     }
 
     private static boolean webdavKnown(List<WebDavServer> list, String url) {
@@ -1174,7 +1181,7 @@ public class ProfileStateIO {
             String url;
             if (item != null) {
                 url = WebDavStore.trimSlash(item.optString("url"));
-                if (TxtUtils.isEmpty(url)) {
+                if (TxtUtils.isEmpty(url) || isCorruptWebDavUrl(url)) {
                     continue;
                 }
                 item.put("url", url);
@@ -1186,7 +1193,7 @@ public class ProfileStateIO {
                     continue;
                 }
                 url = WebDavStore.trimSlash(it[0].trim());
-                if (TxtUtils.isEmpty(url)) {
+                if (TxtUtils.isEmpty(url) || isCorruptWebDavUrl(url)) {
                     continue;
                 }
                 item = new LinkedJSONObject();

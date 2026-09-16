@@ -1175,6 +1175,77 @@ fz_new_image_from_compressed_buffer(fz_context *ctx, int w, int h,
 	return &image->super;
 }
 
+/*
+ * Deferred (lazy) archive image: an HTML <img> that carries explicit pixel
+ * dimensions in its tag does not need its intrinsic size during layout, so
+ * streamed/remote documents create this stub up front and pull the real
+ * entry bytes at first decode. This lets a scan-style epub paginate without
+ * downloading every image.
+ */
+typedef struct
+{
+	fz_image super;
+	fz_archive *arch;
+	char path[2048];
+	fz_image *real;
+} fz_deferred_image;
+
+static void
+drop_deferred_archive_image(fz_context *ctx, fz_image *img_)
+{
+	fz_deferred_image *img = (fz_deferred_image *)img_;
+
+	fz_drop_image(ctx, img->real);
+	fz_drop_archive(ctx, img->arch);
+}
+
+static fz_pixmap *
+deferred_archive_image_get_pixmap(fz_context *ctx, fz_image *img_, fz_irect *subarea, int w, int h, int *l2factor)
+{
+	fz_deferred_image *img = (fz_deferred_image *)img_;
+	fz_image *real;
+
+	if (!img->real)
+	{
+		fz_buffer *buf = fz_read_archive_entry(ctx, img->arch, img->path);
+		fz_try(ctx)
+			img->real = fz_new_image_from_buffer(ctx, buf);
+		fz_always(ctx)
+			fz_drop_buffer(ctx, buf);
+		fz_catch(ctx)
+			fz_rethrow(ctx);
+	}
+	/* pass the decode request straight through so subarea / scaling /
+	 * l2factor keep their exact meaning for the real image */
+	real = img->real;
+	return real->get_pixmap(ctx, real, subarea, w, h, l2factor);
+}
+
+static size_t
+deferred_archive_image_get_size(fz_context *ctx, fz_image *img_)
+{
+	fz_deferred_image *img = (fz_deferred_image *)img_;
+
+	if (img->real)
+		return sizeof(fz_deferred_image) + strlen(img->path) + fz_image_size(ctx, img->real);
+	return sizeof(fz_deferred_image) + strlen(img->path);
+}
+
+fz_image *
+fz_new_deferred_archive_image(fz_context *ctx, fz_archive *arch, const char *path, int w, int h)
+{
+	fz_deferred_image *image;
+
+	image = fz_new_derived_image(ctx, w, h, 8, NULL, 0, 0, 0, 0, NULL, NULL, NULL,
+			fz_deferred_image,
+			deferred_archive_image_get_pixmap,
+			deferred_archive_image_get_size,
+			drop_deferred_archive_image);
+	fz_strlcpy(image->path, path, sizeof(image->path));
+	image->arch = fz_keep_archive(ctx, arch);
+	return &image->super;
+}
+
 fz_compressed_buffer *fz_compressed_image_buffer(fz_context *ctx, fz_image *image)
 {
 	if (image == NULL || image->get_pixmap != compressed_image_get_pixmap)

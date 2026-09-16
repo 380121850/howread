@@ -50,10 +50,23 @@ public class RemoteSessionFactory {
                     Context c = LibreraApp.context;
                     String[] creds = WebDavCredentials.load(c, s.url);
                     boolean trustAll = com.foobnix.webdav.WebDavCredentials.isTrustAll(c, s.url);
+                    String root = com.foobnix.webdav.WebDavStore.trimSlash(s.url);
                     String fileUrl = com.foobnix.webdav.WebDavClient.encodeIfNeeded(
-                            com.foobnix.webdav.WebDavStore.trimSlash(s.url) + remotePathOnServer);
-                    return new WebDavRangeDataSource(fileUrl, creds == null ? "" : creds[0],
-                            creds == null ? "" : creds[1], trustAll);
+                            root + remotePathOnServer);
+                    // legacy shelf rows keep the path relative to the start
+                    // folder: on a 404 the source retries below the startDir
+                    String sd = s.startDir == null ? "" : s.startDir.trim();
+                    while (sd.startsWith("/")) {
+                        sd = sd.substring(1);
+                    }
+                    while (sd.endsWith("/")) {
+                        sd = sd.substring(0, sd.length() - 1);
+                    }
+                    String fallbackUrl = sd.isEmpty() ? null
+                            : com.foobnix.webdav.WebDavClient.encodeIfNeeded(
+                                    root + "/" + sd + remotePathOnServer);
+                    return new WebDavRangeDataSource(fileUrl, fallbackUrl,
+                            creds == null ? "" : creds[0], creds == null ? "" : creds[1], trustAll);
                 }
             }
             throw new IOException("WebDAV server not found for remote book: " + remotePath);

@@ -8,6 +8,8 @@ import android.widget.Toast;
 
 import com.foobnix.android.utils.Dips;
 import com.foobnix.android.utils.LOG;
+import com.foobnix.pdf.search.activity.msg.UpdateAllFragments;
+import com.foobnix.sys.TempHolder;
 import com.foobnix.android.utils.TxtUtils;
 import com.foobnix.dao2.FileMeta;
 import com.foobnix.pdf.info.ExtUtils;
@@ -17,6 +19,8 @@ import com.foobnix.ui2.AppDB;
 import com.foobnix.webdav.WebDavCredentials;
 import com.foobnix.webdav.WebDavItem;
 import com.foobnix.webdav.WebDavServer;
+
+import org.greenrobot.eventbus.EventBus;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -39,6 +43,12 @@ public class RemoteScanner {
     private int added, updated, failed;
     private TextView progressView;
     private Activity activity;
+    // books seen during the CURRENT server walk: after a completed walk the
+    // shelf is pruned against this set (deleted-on-server cleanup)
+    private final java.util.Set<String> curSeen = new java.util.HashSet<String>();
+    private String curType;
+    private String curId;
+    private boolean curComplete;
 
     private RemoteScanner() {
     }
@@ -53,6 +63,9 @@ public class RemoteScanner {
             dirs.add(start.startsWith("/") ? start : "/" + start);
             // null password → the listing clients load it from the store
             scanner.walk(a, srv.getTypeStored(), srv.id, dirs, dirs.peekFirst(), srv, null, null, false);
+            if (scanner.curComplete) {
+                RemoteLibraryCleaner.pruneSeen(a, scanner.curType, scanner.curId, scanner.curSeen);
+            }
             scanner.finish(a, progress, srv.title);
         }, "RemoteScanner");
         scanner.start(progress, worker);
@@ -68,8 +81,12 @@ public class RemoteScanner {
             dirs.add(root);
             String[] creds = WebDavCredentials.load(a, srv.url);
             scanner.walk(a, RemoteBook.TYPE_WEBDAV, RemoteSessionFactory.webdavId(srv.url),
-                    dirs, root, null, creds == null ? "" : creds[0], creds == null ? "" : creds[1],
+                    dirs, com.foobnix.webdav.WebDavStore.trimSlash(srv.url), null,
+                    creds == null ? "" : creds[0], creds == null ? "" : creds[1],
                     WebDavCredentials.isTrustAll(a, srv.url));
+            if (scanner.curComplete) {
+                RemoteLibraryCleaner.pruneSeen(a, scanner.curType, scanner.curId, scanner.curSeen);
+            }
             scanner.finish(a, progress, srv.title);
         }, "RemoteScanner");
         scanner.start(progress, worker);
@@ -92,6 +109,9 @@ public class RemoteScanner {
                 Deque<String> dirs = new ArrayDeque<String>();
                 dirs.add(start.startsWith("/") ? start : "/" + start);
                 scanner.walk(a, srv.getTypeStored(), srv.id, dirs, dirs.peekFirst(), srv, null, null, false);
+                if (scanner.curComplete) {
+                    RemoteLibraryCleaner.pruneSeen(a, scanner.curType, scanner.curId, scanner.curSeen);
+                }
             }
             for (final WebDavServer srv : webdavServers) {
                 if (scanner.cancelled) {
@@ -102,8 +122,12 @@ public class RemoteScanner {
                 dirs.add(root);
                 String[] creds = WebDavCredentials.load(a, srv.url);
                 scanner.walk(a, RemoteBook.TYPE_WEBDAV, RemoteSessionFactory.webdavId(srv.url),
-                        dirs, root, null, creds == null ? "" : creds[0], creds == null ? "" : creds[1],
+                        dirs, com.foobnix.webdav.WebDavStore.trimSlash(srv.url), null,
+                        creds == null ? "" : creds[0], creds == null ? "" : creds[1],
                         WebDavCredentials.isTrustAll(a, srv.url));
+                if (scanner.curComplete) {
+                    RemoteLibraryCleaner.pruneSeen(a, scanner.curType, scanner.curId, scanner.curSeen);
+                }
             }
             scanner.finish(a, progress, joinTitles(servers, webdavServers));
         }, "RemoteScanner");
@@ -162,6 +186,8 @@ public class RemoteScanner {
                 LOG.w(e);
             }
             if (!cancelled) {
+                TempHolder.listHash++;
+                EventBus.getDefault().post(new UpdateAllFragments());
                 Toast.makeText(a, a.getString(R.string.remote_scan_done, title, added, updated, failed),
                         Toast.LENGTH_LONG).show();
             }
@@ -171,14 +197,23 @@ public class RemoteScanner {
     /**
      * One BFS shared by all three protocols. SMB / SFTP {@code dir} entries
      * are server paths (remote:// path shape); WebDAV entries are full URLs
-     * and {@code rootDir} is stripped (and URL-decoded) to build the
-     * remote:// path. {@code rootDir} also anchors the depth limit.
+     * and {@code rootDir} (the SERVER ROOT, not the start folder) is stripped
+     * (and URL-decoded) to build the remote:// path — the open path resolves
+     * identities against the server root. The depth limit anchors at the
+     * walk start.
      */
     private void walk(Activity a, String type, String id, Deque<String> dirs, String rootDir,
                       RemoteServer srv, String user, String password, boolean trustAll) {
         this.activity = a;
-        final int rootDepth = dirDepth(rootDir);
+        curType = type;
+        curId = id;
+        curSeen.clear();
+        curComplete = false;
+        // depth budget anchors at the walk start (startDir), while rootDir
+        // only anchors the remote:// identity prefix for WebDAV
+        final int rootDepth = dirDepth(dirs.peekFirst());
         int scannedDirs = 0;
+        boolean listFailed = false;
         while (!dirs.isEmpty() && !cancelled) {
             if (++scannedDirs > MAX_DIRS) {
                 return;
@@ -187,6 +222,7 @@ public class RemoteScanner {
             List<WebDavItem> items = list(type, dir, srv, user, password, trustAll);
             if (items == null) {
                 failed++;
+                listFailed = true;
                 continue;
             }
             showProgress(dir);
@@ -208,9 +244,13 @@ public class RemoteScanner {
                 }
                 String relative = webdavRelative(type, rootDir, dir, it.name);
                 String remotePath = RemoteBook.build(type, id, relative);
+                curSeen.add(remotePath);
                 upsert(it, remotePath, type, id, dir);
             }
         }
+        // a completed walk knows every existing book of this server: shelf
+        // rows absent from the listing were deleted on the server
+        curComplete = !cancelled && !listFailed;
     }
 
     /** remote:// path (after the server id) of one file. */
@@ -272,12 +312,18 @@ public class RemoteScanner {
             meta.setTitle(RemoteBookOpener.displayName(remotePath));
             if (it.size > 0) {
                 meta.setSize(it.size);
+                // the listing already knows the size: keep the display text
+                // in step so 文件信息 / the shelf never show 0 B
+                meta.setSizeTxt(ExtUtils.readableFileSize(it.size));
             }
             String ext = RemoteBook.getExt(remotePath);
             if (TxtUtils.isNotEmpty(ext)) {
                 meta.setExt(ext);
             }
-            meta.setParentPath(RemoteBook.build(type, id, dir));
+            // parent = remotePath minus the file name: dir is a full URL
+            // for WebDAV and must not leak into the remote:// identity
+            String parent = remotePath.substring(0, remotePath.lastIndexOf('/'));
+            meta.setParentPath(TxtUtils.isEmpty(parent) ? remotePath : parent);
             meta.setIsSearchBook(true);
             AppDB.get().update(meta);
             if (existing == null) {

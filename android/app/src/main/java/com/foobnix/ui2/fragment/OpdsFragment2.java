@@ -312,6 +312,12 @@ public class OpdsFragment2 extends UIFragment<Entry> {
                         srv.appState = item.appState;
                         WebDavStore.remove(srv);
                         WebDavCredentials.clear(getContext(), item.href);
+                        // the server must not come back through config sync,
+                        // and its shelf books go away with it
+                        com.foobnix.remote.RemoteTombstones.add("webdav:" + WebDavStore.trimSlash(item.href));
+                        com.foobnix.remote.RemoteLibraryCleaner.purgeServer(getContext(),
+                                com.foobnix.remote.RemoteBook.TYPE_WEBDAV,
+                                com.foobnix.remote.RemoteSessionFactory.webdavId(item.href));
                         populate();
                     }
                 });
@@ -951,19 +957,17 @@ public class OpdsFragment2 extends UIFragment<Entry> {
             if (srv == null) {
                 return null;
             }
+            // paths live relative to the SERVER ROOT (the open path builds
+            // root + path): strip only the root, never the configured
+            // startDir — stripping it too stored start-folder books under
+            // the server root, where they 404 on open ("文件已不可用")
             String root = WebDavStore.trimSlash(srv.url);
-            // with a startDir configured, browse hrefs start at root+startDir:
-            // strip that base so the remote:// identity matches the scanner's
-            String base = srv.startUrl();
-            String href = item.href;
-            if (TxtUtils.isEmpty(href) || !href.startsWith(base)) {
-                if (TxtUtils.isEmpty(href) || !href.startsWith(root)) {
-                    return null;
-                }
-                base = root;
-            }
             // Uri.decode (NOT URLDecoder) keeps "+" intact, only %XX expands
-            String path = Uri.decode(href.substring(base.length()));
+            String href = Uri.decode(item.href);
+            if (TxtUtils.isEmpty(href) || !href.startsWith(root)) {
+                return null;
+            }
+            String path = href.substring(root.length());
             String id = com.foobnix.remote.RemoteSessionFactory.webdavId(srv.url);
             return com.foobnix.remote.RemoteBook.build(com.foobnix.remote.RemoteBook.TYPE_WEBDAV, id, path);
         } catch (Exception e) {
@@ -1094,6 +1098,75 @@ public class OpdsFragment2 extends UIFragment<Entry> {
         });
     }
 
+    /**
+     * Hide the app's own WebDAV-sync storage from the browsing list: the sync
+     * root folder (e.g. HowReadTest) when listing its parent, and its
+     * books/global internals when listing inside it (WebDavSyncer layout:
+     * &lt;syncDir&gt;/books + &lt;syncDir&gt;/global). Only the configured
+     * sync server is filtered; other servers keep every folder. The sync
+     * remote-dir picker is unaffected (it lists via WebDavClient directly).
+     */
+    private List<WebDavItem> withoutAppSyncDirs(List<WebDavItem> items) {
+        try {
+            if (TxtUtils.isEmpty(currentServerUrl)) {
+                return items;
+            }
+            String syncServer = AppState.get().webdavSyncServer;
+            if (TxtUtils.isEmpty(syncServer)) {
+                java.util.List<WebDavServer> servers = WebDavStore.load();
+                syncServer = servers.isEmpty() ? "" : servers.get(0).url;
+            }
+            if (TxtUtils.isEmpty(syncServer)
+                    || !WebDavStore.isSameServer(syncServer, WebDavStore.trimSlash(currentServerUrl))) {
+                return items;
+            }
+            String syncUrl = WebDavStore.trimSlash(currentServerUrl) + "/"
+                    + com.foobnix.webdav.WebDavSyncer.remoteDir();
+            boolean insideSync = sameRemoteFolder(url, syncUrl);
+            List<WebDavItem> out = new ArrayList<WebDavItem>();
+            for (WebDavItem it : items) {
+                if (sameRemoteFolder(it.href, syncUrl)) {
+                    continue; // the sync root row itself
+                }
+                if (insideSync && it.isDir && isSyncInternalDir(it.href, syncUrl)) {
+                    continue; // books/ + global/ inside the sync root
+                }
+                out.add(it);
+            }
+            return out;
+        } catch (Exception e) {
+            LOG.e(e);
+            return items;
+        }
+    }
+
+    private static String normalizeForCompare(String u) {
+        u = WebDavStore.trimSlash(u);
+        try {
+            return URLDecoder.decode(u, "UTF-8");
+        } catch (Exception e) {
+            return u;
+        }
+    }
+
+    private static boolean sameRemoteFolder(String a, String b) {
+        if (TxtUtils.isEmpty(a) || TxtUtils.isEmpty(b)) {
+            return false;
+        }
+        return a.equalsIgnoreCase(b) || normalizeForCompare(a).equalsIgnoreCase(normalizeForCompare(b));
+    }
+
+    /** direct books/ or global/ child of the sync root */
+    private static boolean isSyncInternalDir(String href, String syncUrl) {
+        String h = normalizeForCompare(WebDavStore.trimSlash(href));
+        String s = normalizeForCompare(WebDavStore.trimSlash(syncUrl));
+        int i = h.lastIndexOf('/');
+        String parent = i >= 0 ? h.substring(0, i) : "";
+        String name = i >= 0 ? h.substring(i + 1) : h;
+        return parent.equalsIgnoreCase(s)
+                && ("books".equalsIgnoreCase(name) || "global".equalsIgnoreCase(name));
+    }
+
     private static String decodeName(String href) {
         String last = WebDavClient.lastName(href);
         try {
@@ -1218,7 +1291,7 @@ public class OpdsFragment2 extends UIFragment<Entry> {
                 }
                 authFailed = false;
                 webDavLoadFailed = false;
-                webDavItems = items;
+                webDavItems = withoutAppSyncDirs(items);
                 title = srv != null ? srv.title : decodeName(url);
                 return Collections.emptyList();
             }

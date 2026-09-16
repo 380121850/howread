@@ -1233,6 +1233,11 @@ import java.util.Map;
                                     RemoteStore.remove(srv);
                                     WebDavCredentials.clear(a, RemoteStore.credentialsKey(srv.id));
                                     WebDavCredentials.clear(a, RemoteStore.keyPassKey(srv.id));
+                                    // no config-sync resurrection; books go too
+                                    com.foobnix.remote.RemoteTombstones.add(
+                                            (isSftp ? RemoteBook.TYPE_SFTP : RemoteBook.TYPE_SMB) + ":" + srv.id);
+                                    com.foobnix.remote.RemoteLibraryCleaner.purgeServer(a,
+                                            isSftp ? RemoteBook.TYPE_SFTP : RemoteBook.TYPE_SMB, srv.id);
                                     AppProfile.save(a);
                                     rebuild.run();
                                 }

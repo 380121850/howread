@@ -194,6 +194,17 @@ public class ImageExtractor {
 
     public static synchronized CodecDocument getNewCodecContext(final String path, String
             passw, int w, int h) {
+        return getNewCodecContext(path, passw, w, h, true);
+    }
+
+    /**
+     * Like the 4-arg variant, but {@code countPages == false} skips the
+     * (potentially very slow) full-document layout and page count — used by
+     * the remote-text deferred-layout flow, which runs the layout in the
+     * background afterwards.
+     */
+    public static synchronized CodecDocument getNewCodecContext(final String path, String
+            passw, int w, int h, boolean countPages) {
 
         if (path.equals(pathCache) /* && whCache == h + w */ && codeCache != null && !codeCache.isRecycled()) {
             LOG.d("getNewCodecContext cache", path, w, h);
@@ -229,7 +240,11 @@ public class ImageExtractor {
         }
 
         LOG.d("getNewCodecContext CodecContext-fontSizeSp", w, h, BookCSS.get().fontSizeSp);
-        pageCount = codeCache.getPageCount(w, h, BookCSS.get().fontSizeSp);
+        if (countPages) {
+            pageCount = codeCache.getPageCount(w, h, BookCSS.get().fontSizeSp);
+        } else {
+            pageCount = 1;
+        }
         pathCache = path;
         whCache = h + w;
         return codeCache;

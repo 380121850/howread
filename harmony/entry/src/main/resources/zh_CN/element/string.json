@@ -2133,6 +2133,10 @@
       "value": "划动屏幕左边缘调节亮度"
     },
     {
+      "name": "dav_empty_hint",
+      "value": "目录为空或无访问权限"
+    },
+    {
       "name": "dav_dir_up",
       "value": "上一级"
     },

@@ -211,6 +211,10 @@ public class MainTabs2 extends AdsFragmentActivity {
         return false;
     }
 
+    /** Restart marker: onNewIntent() of the surviving singleTop instance
+     * must rebuild the activity instead of only switching the tab. */
+    private static final String EXTRA_RESTART_FRESH = "restartFresh";
+
     public static void startActivity(Activity c, int tab) {
         final Intent intent = new Intent(c, MainTabs2.class);
         intent.putExtra(MainTabs2.EXTRA_SHOW_TABS, true);
@@ -218,6 +222,11 @@ public class MainTabs2 extends AdsFragmentActivity {
         intent.putExtra(PasswordDialog.EXTRA_APP_PASSWORD, c.getIntent()
                                                             .getStringExtra(PasswordDialog.EXTRA_APP_PASSWORD));
         intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        // every caller restarts MainTabs2 to apply changed config (theme,
+        // day/night, language, font size): flush queued async config writes
+        // first, or the recreated activity re-reads the previous values
+        com.foobnix.android.utils.IO.awaitWrites();
+        intent.putExtra(EXTRA_RESTART_FRESH, true);
         c.startActivity(intent);
         c.overridePendingTransition(0, 0);
     }
@@ -235,6 +244,14 @@ public class MainTabs2 extends AdsFragmentActivity {
         // testIntentHandler();
         if (intent.getBooleanExtra(EXTRA_EXIT, false)) {
             finish();
+            return;
+        }
+        if (intent.getBooleanExtra(EXTRA_RESTART_FRESH, false) && !isFinishing()) {
+            // finish()+startActivity() race: the surviving singleTop instance
+            // received the restart intent instead of a fresh onCreate —
+            // rebuild here so the new theme/config actually applies
+            setIntent(intent);
+            recreate();
             return;
         }
         if (intent.getCategories() != null && intent.getCategories().contains("android.intent.category.BROWSABLE")) {
@@ -899,13 +916,20 @@ public class MainTabs2 extends AdsFragmentActivity {
             }
         });
 
-        bindDrawerBottomButton(bar, R.id.drawerBtnNight, R.id.drawerBtnNightIcon, R.id.drawerBtnNightLabel, R.string.moon_night_mode, new OnClickListener() {
+        // like the reader's day/night toggle: moon icon + 夜间模式 in day
+        // mode, sun icon + 白天模式 in night mode (rebuilt after the theme
+        // restart, so it always mirrors the current state)
+        final boolean nightNow = AppState.get().appTheme == AppState.THEME_DARK || AppState.get().appTheme == AppState.THEME_DARK_OLED;
+        bindDrawerBottomButton(bar, R.id.drawerBtnNight, R.id.drawerBtnNightIcon, R.id.drawerBtnNightLabel, nightNow ? R.string.sun_day_mode : R.string.moon_night_mode, new OnClickListener() {
             @Override
             public void onClick(View v) {
                 boolean night = AppState.get().appTheme == AppState.THEME_DARK || AppState.get().appTheme == AppState.THEME_DARK_OLED;
                 applyDayNight(!night);
             }
         });
+        ImageView nightIcon = (ImageView) bar.findViewById(R.id.drawerBtnNightIcon);
+        nightIcon.setImageResource(nightNow ? R.drawable.glyphicons_232_sun : R.drawable.glyphicons_231_moon);
+        TintUtil.setTintImageWithAlpha(nightIcon, drawerIconColor);
 
         bindDrawerBottomButton(bar, R.id.drawerBtnExit, R.id.drawerBtnExitIcon, R.id.drawerBtnExitLabel, R.string.moon_drawer_exit, new OnClickListener() {
             @Override
@@ -950,7 +974,21 @@ public class MainTabs2 extends AdsFragmentActivity {
      * the same way the settings page does (PrefFragment2.onTheme). Keeping the
      * reader flag isDayNotInvert in sync so books open in the matching mode.
      */
+    private static long lastDayNightTap;
+
     private void applyDayNight(boolean night) {
+        // a tap may land on the dying activity of a previous theme restart,
+        // or the user may re-tap while the restart is still building the new
+        // UI: both would flip the freshly saved theme straight back
+        if (isFinishing() || isDestroyed()) {
+            return;
+        }
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - lastDayNightTap < 1200) {
+            android.util.Log.i("DayNight", "applyDayNight debounced (rapid re-tap)");
+            return;
+        }
+        lastDayNightTap = now;
         android.util.Log.i("DayNight", "applyDayNight tap night=" + night
                 + " | before: appTheme=" + AppState.get().appTheme
                 + " isDayNotInvert=" + AppState.get().isDayNotInvert

@@ -1345,6 +1345,7 @@ export async function webdavListDir(baseUrl: string, user: string, password: str
     if (resp.responseCode === 207 || resp.responseCode === 200) {
       xml = String(resp.result);
     } else {
+      console.warn(`[WEBDAV] list ${baseUrl} -> HTTP ${resp.responseCode}`);
       return null;
     }
     const out: DavListEntry[] = [];
@@ -1375,7 +1376,7 @@ export async function webdavListDir(baseUrl: string, user: string, password: str
       /* skip the list dir itself */
       const base_path: string = baseUrl.replace(/^https?:\/\/[^/]+/i, '');
       const normHref: string = davDecodeSafe(href);
-      const normBase: string = base_path.length === 0 ? '/' : base_path;
+      const normBase: string = davDecodeSafe(base_path.length === 0 ? '/' : base_path);
       if (normHref.replace(/\/+$/, '') === normBase.replace(/\/+$/, '')) {
         continue;
       }
@@ -1396,6 +1397,7 @@ export async function webdavListDir(baseUrl: string, user: string, password: str
        * throws on names containing a bare '%' */
       out.push({ name: name, isDir: isDir, size: size });
     }
+    console.info(`[WEBDAV] list ${baseUrl} -> ${out.length} entries`);
     return out;
   } catch (e) {
     return null;

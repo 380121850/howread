@@ -378,6 +378,12 @@ public class WebDavSyncer {
             syncMergedObjectFile(s, globalUrl, AppProfile.syncNetworkSources,
                     ProfileStateIO::mergeNetworkSources);
             ProfileStateIO.importNetworkSources(c);
+            // a config sync can re-add a server this device has deleted:
+            // re-strip the tombstoned identities so the deletion sticks
+            com.foobnix.remote.RemoteTombstones.apply();
+            // re-run the store sanitizer: the app-State merge can hand back
+            // corrupt legacy link lines, and this schedules the repaired list
+            com.foobnix.webdav.WebDavStore.load();
             AppProfile.save(c);
             syncThreeWayFile(s, globalUrl, AppProfile.syncState, true, false);
             syncThreeWayFile(s, globalUrl, AppProfile.syncCSS, false, true);

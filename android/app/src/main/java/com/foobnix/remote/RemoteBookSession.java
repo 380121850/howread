@@ -183,9 +183,19 @@ public class RemoteBookSession {
             if (block != null) {
                 return block;
             }
-            if (cache.cachedBytes() >= BlockCacheStore.PER_BOOK_LIMIT && !cache.hasBlock(idx)) {
-                // per-book disk cap reached: serve through without persisting
-                return readRawBlock(idx);
+            if (cache.cachedBytes() >= perBookLimit() && !cache.hasBlock(idx)) {
+                // per-book disk cap reached: serve through without persisting;
+                // keep a small in-memory LRU so scattered small reads of the
+                // same block don't re-download it on every access
+                byte[] mem = cache.getReadThrough(idx);
+                if (mem != null) {
+                    return mem;
+                }
+                byte[] raw = readRawBlock(idx);
+                if (raw != null) {
+                    cache.putReadThrough(idx, raw);
+                }
+                return raw;
             }
             byte[] raw = readRawBlock(idx);
             if (raw == null) {
@@ -244,6 +254,15 @@ public class RemoteBookSession {
         return (mb <= 0 ? 500 : mb) * 1024L * 1024L;
     }
 
+    /** Per-book disk cap: the hard 512MB ceiling or the user's total cache
+     * budget, whichever is smaller. The open book is pinned against
+     * book-level LRU eviction, so its own cap must respect the configured
+     * budget — otherwise one big book could push the total cache past the
+     * setting while open. */
+    private long perBookLimit() {
+        return Math.min(BlockCacheStore.PER_BOOK_LIMIT, maxCacheBytes());
+    }
+
     /**
      * P2: refill the next blocks in the background. Page-based formats get
      * a wider sequential window (tech-spec §7.2: PDF 8–16MB), reflowable
@@ -292,6 +311,33 @@ public class RemoteBookSession {
     }
 
     /**
+     * Pre-fetches the last two blocks in the background: PDF keeps its xref /
+     * trailer at the file tail, so without this every (re)open of a big book
+     * waited on tail network reads before the first page could appear.
+     */
+    public void warmTail() {
+        final int n = cache.getBlockCount();
+        if (n <= 0) {
+            return;
+        }
+        prefetch.execute(() -> {
+            for (long i = n - 1; i >= Math.max(0, n - 2); i--) {
+                if (cancelled) {
+                    return;
+                }
+                try {
+                    if (!cache.hasBlock(i)) {
+                        fetchBlock(i);
+                    }
+                } catch (Exception e) {
+                    LOG.w(e);
+                    return;
+                }
+            }
+        });
+    }
+
+    /**
      * P3: progressive whole-book fill for small books (tech-spec §5.3):
      * &lt; 5MB fills on any network, 5MB..threshold only when the user
      * allows metered networks, above the threshold never.
@@ -302,8 +348,11 @@ public class RemoteBookSession {
         if (cancelled || filler != null || cache.isFullyCached()) {
             return;
         }
+        // the size threshold no longer gates an OPEN book: the rest of a
+        // big book is cached in the background while reading (bounded by the
+        // per-book cap). threshold 0 still disables whole-book fill entirely.
         long thresholdMB = AppState.get().remoteWholeBookThresholdMB;
-        if (thresholdMB <= 0 || size > thresholdMB * 1024L * 1024L) {
+        if (thresholdMB <= 0) {
             return;
         }
         boolean smallAlways = size < 5 * 1024L * 1024L;
@@ -319,7 +368,7 @@ public class RemoteBookSession {
                 if (cache.hasBlock(i)) {
                     continue;
                 }
-                if (cache.cachedBytes() + cache.getBlockSize() > BlockCacheStore.PER_BOOK_LIMIT) {
+                if (cache.cachedBytes() + cache.getBlockSize() > perBookLimit()) {
                     // per-book disk cap: stop WITHOUT marking fullyCached —
                     // a fake 100% badge made offline opens fail with a
                     // network error

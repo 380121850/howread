@@ -38,6 +38,8 @@ public class WebDavRangeDataSource implements RemoteDataSource {
     private static final Map<String, OkHttpClient> CLIENTS = new ConcurrentHashMap<String, OkHttpClient>();
 
     private final String url;
+    private final String fallbackUrl;
+    private String activeUrl;
     private final String login;
     private final String password;
     private final boolean trustAll;
@@ -50,10 +52,22 @@ public class WebDavRangeDataSource implements RemoteDataSource {
     private boolean rangeSupported = true;
 
     public WebDavRangeDataSource(String url, String login, String password, boolean trustAll) {
+        this(url, null, login, password, trustAll);
+    }
+
+    /**
+     * @param fallbackUrl optional second URL tried when the primary 404s
+     *                    (legacy shelf rows stored paths relative to the
+     *                    start folder instead of the server root)
+     */
+    public WebDavRangeDataSource(String url, String fallbackUrl, String login, String password,
+                                 boolean trustAll) {
         this.url = url;
+        this.fallbackUrl = fallbackUrl;
         this.login = login;
         this.password = password;
         this.trustAll = trustAll;
+        this.activeUrl = url;
     }
 
     private static OkHttpClient client(String login, String password, boolean trustAll) {
@@ -131,8 +145,25 @@ public class WebDavRangeDataSource implements RemoteDataSource {
         // the Content-Range total doubles as proof of range support.
         Response resp = null;
         try {
-            Request req = new Request.Builder().url(url).header("Range", "bytes=0-0").build();
-            resp = client.newCall(req).execute();
+            resp = probe(url);
+            if (resp.code() == 404 && fallbackUrl != null) {
+                Response fb = null;
+                try {
+                    fb = probe(fallbackUrl);
+                    if (fb.code() == 206 || fb.code() == 200) {
+                        android.util.Log.i("REMOTE", "webdav 404 on " + url
+                                + ", retry under startDir ok: " + fallbackUrl);
+                        resp.close();
+                        resp = fb;
+                        fb = null;
+                        activeUrl = fallbackUrl;
+                    }
+                } finally {
+                    if (fb != null) {
+                        fb.close();
+                    }
+                }
+            }
             if (resp.code() == 206) {
                 String cr = resp.header("Content-Range");
                 size = parseTotal(cr);
@@ -160,6 +191,12 @@ public class WebDavRangeDataSource implements RemoteDataSource {
                 resp.close();
             }
         }
+    }
+
+    /** Executes the 1-byte Range probe against {@code u} (caller closes). */
+    private Response probe(String u) throws IOException {
+        Request req = new Request.Builder().url(u).header("Range", "bytes=0-0").build();
+        return client.newCall(req).execute();
     }
 
     private static long parseTotal(String contentRange) {
@@ -193,7 +230,7 @@ public class WebDavRangeDataSource implements RemoteDataSource {
             return 0;
         }
         long end = Math.min(offset + len, size) - 1;
-        Request.Builder rb = new Request.Builder().url(url);
+        Request.Builder rb = new Request.Builder().url(activeUrl);
         if (offset > 0 || end < size - 1) {
             rb.header("Range", "bytes=" + offset + "-" + end);
         }

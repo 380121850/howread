@@ -174,6 +174,11 @@ public class FileMetaCore {
     }
 
     public static void reUpdateIfNeed(FileMeta fileMeta) {
+        if (fileMeta.getPath() != null && com.foobnix.remote.RemoteBook.isRemotePathLoose(fileMeta.getPath())) {
+            // remote rows keep their scanner/open-time metadata; there is no
+            // local file to (re)extract from
+            return;
+        }
         if (fileMeta.getState() != null && fileMeta.getState() != FileMetaCore.STATE_FULL) {
             LOG.d("reupdateIfNeed 1", fileMeta.getPath(), fileMeta.getState());
             EbookMeta ebookMeta = FileMetaCore.get().getEbookMeta(fileMeta.getPath(), CacheDir.ZipApp, true);
@@ -378,6 +383,12 @@ public class FileMetaCore {
     }
 
     public void upadteBasicMeta(FileMeta fileMeta, File file) {
+        if (com.foobnix.remote.RemoteBook.isRemotePathLoose(fileMeta.getPath()) && !file.exists()) {
+            // a File("remote://…") never exists on disk (length() == 0):
+            // keep the scanner-supplied size / date instead of writing zeros
+            fileMeta.setState(STATE_BASIC);
+            return;
+        }
         fileMeta.setTitle(file.getName());// temp
 
         fileMeta.setSize(file.length());

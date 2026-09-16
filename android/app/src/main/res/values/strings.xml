@@ -706,6 +706,7 @@
    <string name="webdav_relogin_msg">The saved account cannot list this server. Re-enter the login and password?</string>
    <string name="webdav_login">Login</string>
    <string name="webdav_url">WebDAV URL</string>
+   <string name="sun_day_mode">Day mode</string>
    <string name="moon_night_mode">Night mode</string>
    <string name="moon_tab_hidden">This tab is hidden. Enable it in Preferences</string>
    <string name="moon_empty_library_hint">Shelf is empty. Tap + at the top to import books</string>
@@ -952,6 +953,15 @@
     <string name="remote_missing_title">File no longer available</string>
     <string name="remote_unsupported_title">Online reading not supported</string>
     <string name="remote_unsupported_msg">This format does not support online reading.</string>
+    <string name="remote_norange_title">Full download needed</string>
+    <string name="remote_norange_msg">This server does not support partial downloads (HTTP Range). The whole book (%1$s) must be cached before it can be opened.</string>
     <string name="remote_download">Download</string>
     <string name="remote_reload">Reload</string>
+    <string name="remote_open_progress">Loading remote book %1$d%% (%2$s of %3$s)</string>
+    <string name="remote_open_progress_nosize">Loading remote book %1$d%%</string>
+    <string name="remote_loading_slow">Network is slow. Tap ✕ to cancel and use “Download and open” instead.</string>
+    <string name="remote_fetch_progress">Fetching book %1$d%% (%2$s of %3$s)</string>
+    <string name="remote_open_waiting">Loading remote book… %1$d s</string>
+    <string name="remote_open_eta">about %1$s left</string>
+    <string name="remote_locating_position">Locating last read position…</string>
 </resources>

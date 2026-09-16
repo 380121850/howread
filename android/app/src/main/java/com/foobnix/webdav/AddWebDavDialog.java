@@ -217,6 +217,7 @@ public class AddWebDavDialog {
         WebDavServer s = new WebDavServer(url, TxtUtils.isNotEmpty(title) ? title : url,
                 TxtUtils.isEmpty(startDir) ? "" : startDir.trim());
         s.appState = WebDavServer.buildLine(url, s.title, s.startDir);
+        com.foobnix.remote.RemoteTombstones.clear("webdav:" + WebDavStore.trimSlash(url));
         WebDavStore.add(s);
         WebDavCredentials.save(a, url, login, password);
         WebDavCredentials.saveTrust(a, url, trustAll);

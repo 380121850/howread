@@ -175,6 +175,9 @@ public class PrefDialogs {
         builder.setPositiveButton(R.string.search, new DialogInterface.OnClickListener() {
             @Override
             public void onClick(DialogInterface dialog, int id) {
+                // books of servers that are no longer configured cannot ever
+                // open again: drop them as part of the 搜索 action
+                com.foobnix.remote.RemoteLibraryCleaner.purgeUnconfigured(a);
                 onScan.run();
                 scanCheckedRemoteServers(a);
             }

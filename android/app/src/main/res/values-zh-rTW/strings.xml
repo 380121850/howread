@@ -776,6 +776,16 @@
     <string name="remote_missing_title">檔案已不可用</string>
     <string name="remote_unsupported_title">不支援線上閱讀</string>
     <string name="remote_unsupported_msg">該格式不支援線上閱讀。</string>
+    <string name="remote_norange_title">需完整快取後開啟</string>
+    <string name="remote_norange_msg">該伺服器不支援分段下載（Range），需先完整快取 %1$s 才能開啟。</string>
     <string name="remote_download">下載</string>
     <string name="remote_reload">重新載入</string>
+    <string name="remote_open_progress">正在載入遠端書籍 %1$d%%（%2$s / %3$s）</string>
+    <string name="remote_open_progress_nosize">正在載入遠端書籍 %1$d%%</string>
+    <string name="remote_loading_slow">網路較慢：點 ✕ 可取消，改用「下載並開啟」。</string>
+    <string name="remote_fetch_progress">正在取得整本 %1$d%%（%2$s / %3$s）</string>
+    <string name="remote_open_waiting">正在載入遠端書籍… 已等待 %1$d 秒</string>
+    <string name="remote_open_eta">預計剩餘 %1$s</string>
+    <string name="remote_locating_position">正在定位上次閱讀位置…</string>
+   <string name="sun_day_mode">白天模式</string>
 </resources>

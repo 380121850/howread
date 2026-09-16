@@ -979,6 +979,12 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
                         finish();
                     }
                 });
+
+                // remote books: show live cache progress in the loading box
+                // (the generic "please wait" spinner gave no feedback while a
+                // 200-300MB book fetched the blocks for its first pages)
+                com.foobnix.remote.RemoteBookOpener.startLoadingProgress(dialog,
+                        com.foobnix.android.utils.Apps.getBookPathFromActivity(HorizontalViewActivity.this));
             }
 
             @Override
@@ -1188,9 +1194,19 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
 
                     HypenPanelHelper.init(parentParent, dc);
 
+                    // remote text book: finish the deferred full layout in
+                    // the background — the reader is already visible, pages
+                    // appear as the layout completes and the rest of the
+                    // book is cached meanwhile
+                    if (dc != null && dc.isPendingRemoteLayout()) {
+                        startRemoteTextLayout();
+                    }
+
                 }
 
             }
+
+
 
             ;
         };
@@ -1826,6 +1842,252 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
         }
     }
 
+    /** epub fast path: layout chunks — a small first chunk so the first
+     * screen appears quickly, then big chunks until the book ends. */
+    private static final int REMOTE_LAYOUT_FIRST_CHUNK = 10;
+    private static final int REMOTE_LAYOUT_CHUNK_STEP = 60;
+
+    /** Full-screen cache overlay of the deferred remote layout; removed
+     * as soon as the first progressive chunk can render content. */
+    private android.widget.FrameLayout remoteOverlay;
+    /** Slim top banner shown while the saved position is still being
+     * located after content is already visible. */
+    private android.widget.TextView remoteLandBanner;
+    private boolean remoteChunkSeen;
+
+    /**
+     * Deferred layout for a big remote text book: the reader shell is
+     * already on screen. epub books lay out in progressive chunks — content
+     * appears once the first chapters are cached, then the known page count
+     * grows chunk by chunk while the rest of the book is cached in the
+     * background. Other text formats (fb2/mobi/txt are parsed whole by the
+     * engine) keep the one-shot full layout behind a progress overlay.
+     */
+    private void startRemoteTextLayout() {
+        final String book = com.foobnix.android.utils.Apps.getBookPathFromActivity(this);
+        final android.widget.FrameLayout overlay = new android.widget.FrameLayout(this);
+        overlay.setBackgroundColor(0xFF171717);
+        final android.widget.TextView tv = new android.widget.TextView(this);
+        tv.setGravity(android.view.Gravity.CENTER);
+        tv.setTextColor(0xFFFFFFFF);
+        tv.setTextSize(16f);
+        tv.setPadding(Dips.dpToPx(24), 0, Dips.dpToPx(24), 0);
+        overlay.addView(tv, new android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
+        // the overlay covers exactly the window in which no content can
+        // be drawn yet: the whole one-shot layout for fb2/mobi/txt, and
+        // for epub only the first layout chunk (with deferred images
+        // that is the text part alone — seconds even for a huge scan
+        // book). After it the reader is visible and the saved position
+        // is located behind a slim banner.
+        addContentView(overlay, new android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT));
+        remoteOverlay = overlay;
+        final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
+        final long t0 = android.os.SystemClock.elapsedRealtime();
+        final Runnable tick = new Runnable() {
+            @Override public void run() {
+                if (overlay.getParent() == null) {
+                    return; // done (or never added): the poller stops itself
+                }
+                try {
+                    final int pct = com.foobnix.remote.BlockCacheStore.cachedPercent(book);
+                    final long sec = (android.os.SystemClock.elapsedRealtime() - t0) / 1000;
+                    String text;
+                    if (pct >= 0) {
+                        final long size = com.foobnix.remote.BlockCacheStore.peekSize(book);
+                        text = size > 0
+                                ? getString(R.string.remote_open_progress, pct,
+                                        com.foobnix.remote.RemoteBookOpener.fmtMB(size * pct / 100),
+                                        com.foobnix.remote.RemoteBookOpener.fmtMB(size))
+                                : getString(R.string.remote_open_progress_nosize, pct);
+                    } else {
+                        text = getString(R.string.remote_open_waiting, sec);
+                    }
+                    if (pct >= 3) {
+                        final long eta = sec * (100 - pct) / pct;
+                        text += "\n" + getString(R.string.remote_open_eta,
+                                String.format(java.util.Locale.US, "%d:%02d", eta / 60, eta % 60));
+                    }
+                    if (sec > 30) {
+                        text += "\n" + getString(R.string.remote_loading_slow);
+                    }
+                    tv.setText(text);
+                } catch (Throwable t) {
+                    LOG.e(t);
+                }
+                ui.postDelayed(this, 600);
+            }
+        };
+        ui.postDelayed(tick, 600);
+        new CopyAsyncTask() {
+            @Override protected Object doInBackground(Object... params) {
+                try {
+                    if (dc == null) {
+                        return 0;
+                    }
+                    if (!dc.isRemoteProgressive()) {
+                        return dc.runRemoteTextLayout();
+                    }
+                    // epub: chunked layout — the global native lock is held
+                    // only per chunk, so page renders (and the back key)
+                    // stay responsive between chunks
+                    dc.beginRemoteLayout();
+                    int upto = REMOTE_LAYOUT_FIRST_CHUNK;
+                    int total = 0;
+                    int guard = 0;
+                    while (!isFinishing() && guard++ < 2000) {
+                        final int n = dc.runRemoteLayoutChunk(upto);
+                        if (n <= 0) {
+                            break;
+                        }
+                        total = n;
+                        final boolean last = n < upto;
+                        ui.post(new Runnable() {
+                            @Override public void run() {
+                                applyRemoteChunk(n, last);
+                            }
+                        });
+                        if (last) {
+                            break; // book end reached
+                        }
+                        upto = total + REMOTE_LAYOUT_CHUNK_STEP;
+                        // yield the native lock to anyone waiting (page
+                        // renders have priority over the layout loop)
+                        try {
+                            int yield = 0;
+                            while (TempHolder.lock.hasQueuedThreads() && yield++ < 50) {
+                                Thread.sleep(100);
+                            }
+                        } catch (InterruptedException e) {
+                            break;
+                        }
+                    }
+                    return total;
+                } catch (Throwable t) {
+                    LOG.e(t);
+                    return 0;
+                }
+            }
+
+            @Override protected void onPostExecute(Object o) {
+                ui.removeCallbacks(tick);
+                removeRemoteOverlay();
+                hideRemoteLocateBanner();
+                if (dc == null) {
+                    return;
+                }
+                if (isFinishing()) {
+                    // the user backed out during the layout: the native lock
+                    // is free again, so the codec can be closed without
+                    // blocking the UI (onFinishActivity deferred it here)
+                    dc.onCloseActivityFinal(null);
+                    dc.closeActivity();
+                    return;
+                }
+                if (dc.isRemoteProgressive()) {
+                    // final safety apply (covers a loop aborted before the
+                    // "last" chunk was posted); no-op when already applied
+                    if (o instanceof Integer && ((Integer) o) > 0) {
+                        applyRemoteChunk((Integer) o, true);
+                    }
+                    return;
+                }
+                dc.applyRemoteTextLayout(o == null ? 0 : (Integer) o);
+                if (pagerAdapter != null) {
+                    pagerAdapter.notifyDataSetChanged();
+                }
+                viewPager.setCurrentItem(dc.getCurentPage(), false);
+                updateUI(dc.getCurrentPage());
+            }
+        }.executeOnExecutor(CopyAsyncTask.THREAD_POOL_EXECUTOR);
+    }
+
+    /** Applies one progressive layout chunk on the UI thread (epub fast
+     * path): grows the known page count and, on the first chunk covering the
+     * landing page, shows content and jumps the pager. */
+    private void applyRemoteChunk(final int count, final boolean last) {
+        if (dc == null || isFinishing()) {
+            return;
+        }
+        try {
+            if (!remoteChunkSeen) {
+                // first chunk is in: content can render, hand the screen
+                // back to the reader (the saved position is still being
+                // located in the background)
+                remoteChunkSeen = true;
+                removeRemoteOverlay();
+            }
+            final boolean justLanded = dc.applyRemoteLayoutResult(count, last);
+            if (pagerAdapter != null) {
+                pagerAdapter.notifyDataSetChanged();
+            }
+            if (dc.getPendingRestorePercent() > 0f && !dc.isRemoteLanded()) {
+                showRemoteLocateBanner();
+            } else {
+                hideRemoteLocateBanner();
+            }
+            if (justLanded || last) {
+                viewPager.setCurrentItem(dc.getCurentPage(), false);
+            }
+            updateUI(dc.getCurrentPage());
+        } catch (Throwable t) {
+            LOG.e(t);
+        }
+    }
+
+    private void removeRemoteOverlay() {
+        try {
+            if (remoteOverlay != null && remoteOverlay.getParent() != null) {
+                ((android.view.ViewGroup) remoteOverlay.getParent()).removeView(remoteOverlay);
+            }
+        } catch (Throwable t) {
+            LOG.e(t);
+        }
+    }
+
+    private void showRemoteLocateBanner() {
+        if (remoteLandBanner != null || isFinishing()) {
+            return;
+        }
+        try {
+            final android.widget.TextView tv = new android.widget.TextView(this);
+            tv.setText(R.string.remote_locating_position);
+            tv.setTextColor(0xFFFFFFFF);
+            tv.setTextSize(13f);
+            tv.setBackgroundColor(0xCC2B2B2B);
+            tv.setPadding(Dips.dpToPx(16), Dips.dpToPx(6), Dips.dpToPx(16), Dips.dpToPx(6));
+            final android.widget.FrameLayout wrap = new android.widget.FrameLayout(this);
+            wrap.addView(tv, new android.widget.FrameLayout.LayoutParams(
+                    android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                    android.widget.FrameLayout.LayoutParams.WRAP_CONTENT));
+            final android.widget.FrameLayout.LayoutParams lp = new android.widget.FrameLayout.LayoutParams(
+                    android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                    android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                    android.view.Gravity.TOP | android.view.Gravity.CENTER_HORIZONTAL);
+            lp.topMargin = Dips.dpToPx(64);
+            addContentView(wrap, lp);
+            remoteLandBanner = tv;
+        } catch (Throwable t) {
+            LOG.e(t);
+        }
+    }
+
+    private void hideRemoteLocateBanner() {
+        try {
+            if (remoteLandBanner != null && remoteLandBanner.getParent() != null
+                    && remoteLandBanner.getParent().getParent() instanceof android.view.ViewGroup) {
+                ((android.view.ViewGroup) remoteLandBanner.getParent().getParent())
+                        .removeView((android.view.View) remoteLandBanner.getParent());
+            }
+            remoteLandBanner = null;
+        } catch (Throwable t) {
+            LOG.e(t);
+        }
+    }
+
     public void initAsync(int w, int h) {
         readerWidth = w;
         readerHeight = h;
@@ -2227,12 +2489,16 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
         LOG.d("createAdapter");
         nullAdapter();
         pagerAdapter = null;
-        final int count = dc.getPageCount();
         pagerAdapter = new UpdatableFragmentPagerAdapter(getSupportFragmentManager()) {
 
+            // live count: the deferred remote layout grows the page count in
+            // progressive chunks AFTER the adapter was created — the captured
+            // int froze the pager at the provisional count (1 page, no
+            // swiping). For books whose count never changes this is the same
+            // value the capture produced.
             @Override
             public int getCount() {
-                return count;
+                return dc == null ? 0 : dc.getPageCount();
             }
 
             @Override
@@ -2679,6 +2945,14 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
     public void onBackPressedImpl() {
         // Toast.makeText(this, "onBackPressed", Toast.LENGTH_SHORT).show();
 
+        if (dc != null && dc.isRemoteLayoutRunning()) {
+            // the deferred layout is still running: back exits right away
+            // (closing the codec here would block on the native layout lock);
+            // the layout task finishes the codec cleanup afterwards
+            showInterstitial();
+            return;
+        }
+
         if (dc != null && dc.floatingBookmark != null) {
             dc.floatingBookmark = null;
             onRefresh.run();
@@ -2709,6 +2983,13 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
         }
         nullAdapter();
 
+        if (dc != null && dc.isRemoteLayoutRunning()) {
+            // the background layout holds the native lock: closing the codec
+            // here would block the UI until the layout finishes. Finish the
+            // activity now; the layout task releases the codec afterwards.
+            finish();
+            return;
+        }
         if (dc != null) {
             dc.saveCurrentPageAsync();
             dc.onCloseActivityFinal(null);

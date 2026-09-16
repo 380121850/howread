@@ -2141,6 +2141,10 @@
       "value": "Swipe the left screen edge to adjust brightness"
     },
     {
+      "name": "dav_empty_hint",
+      "value": "Directory is empty or access denied"
+    },
+    {
       "name": "dav_dir_up",
       "value": "Up"
     },

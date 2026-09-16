@@ -706,6 +706,7 @@
    <string name="webdav_relogin_msg">使用已保存的账号无法读取该服务器的内容，可能需要重新登录。是否重新输入账号密码？</string>
    <string name="webdav_login">账号</string>
    <string name="webdav_url">WebDAV 地址</string>
+   <string name="sun_day_mode">白天模式</string>
    <string name="moon_night_mode">夜间模式</string>
    <string name="moon_tab_hidden">该页面未启用，可在设置中开启</string>
    <string name="moon_empty_library_hint">书架还是空的，点击右上角 ＋ 导入书籍</string>
@@ -952,6 +953,15 @@
     <string name="remote_missing_title">文件已不可用</string>
     <string name="remote_unsupported_title">不支持在线阅读</string>
     <string name="remote_unsupported_msg">该格式不支持在线阅读。</string>
+    <string name="remote_norange_title">需完整缓存后打开</string>
+    <string name="remote_norange_msg">该服务器不支持分段下载（Range），需先完整缓存 %1$s 才能打开。</string>
     <string name="remote_download">下载</string>
     <string name="remote_reload">重新加载</string>
+    <string name="remote_open_progress">正在加载远程书籍 %1$d%%（%2$s / %3$s）</string>
+    <string name="remote_open_progress_nosize">正在加载远程书籍 %1$d%%</string>
+    <string name="remote_loading_slow">网络较慢：点 ✕ 可取消，改用“下载并打开”。</string>
+    <string name="remote_fetch_progress">正在获取整本 %1$d%%（%2$s / %3$s）</string>
+    <string name="remote_open_waiting">正在加载远程书籍… 已等待 %1$d 秒</string>
+    <string name="remote_open_eta">预计剩余 %1$s</string>
+    <string name="remote_locating_position">正在定位上次阅读位置…</string>
 </resources>

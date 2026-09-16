@@ -171,7 +171,14 @@ public class SearchAllBooksWorker extends MessageWorker {
             }
 
 
-            itemsMeta.addAll(AppData.get().getAllFavoriteFiles(false));
+            // favorites whose file is gone (deleted locally or on the
+            // server) are not re-added: the shelf must not list dead books
+            for (FileMeta fav : AppData.get().getAllFavoriteFiles(false)) {
+                if (com.foobnix.remote.RemoteBook.isRemotePathLoose(fav.getPath())
+                        || new File(fav.getPath()).exists()) {
+                    itemsMeta.add(fav);
+                }
+            }
             itemsMeta.addAll(AppData.get().getAllFavoriteFolders());
 
 
@@ -187,6 +194,12 @@ public class SearchAllBooksWorker extends MessageWorker {
                 if (isStopped()) {
                     return false;
                 }
+                if (com.foobnix.remote.RemoteBook.isRemotePathLoose(meta.getPath())) {
+                    // remote rows keep their scan metadata: a local File on a
+                    // remote:// path reads length 0 and zeroed the size (the
+                    // "0 B" file info on never-opened remote books)
+                    continue;
+                }
                 File file = new File(meta.getPath());
                 FileMetaCore.get().upadteBasicMeta(meta, file);
             }
@@ -198,6 +211,9 @@ public class SearchAllBooksWorker extends MessageWorker {
             for (FileMeta meta : itemsMeta) {
                 if (isStopped()) {
                     return false;
+                }
+                if (com.foobnix.remote.RemoteBook.isRemotePathLoose(meta.getPath())) {
+                    continue; // no local file to extract meta from
                 }
                 //if(FileMetaCore.isSafeToExtactBook(meta.getPath())) {
                 EbookMeta ebookMeta = FileMetaCore.get().getEbookMeta(meta.getPath(), CacheZipUtils.CacheDir.ZipService, true);

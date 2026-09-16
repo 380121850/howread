@@ -27,6 +27,11 @@ import java.io.FileOutputStream;
  */
 public class RemoteBookOpener {
 
+    /** A no-Range server forces a full fetch: from this size the user is
+     * asked before the download starts — a silent multi-hundred-MB fetch
+     * before anything opens reads like a hang. */
+    private static final long CONFIRM_FULL_FETCH_BYTES = 50L * 1024 * 1024;
+
     /**
      * True when the click should go the online route. Behaviour is driven by
      * the "online reading first" switch; with Pro not unlocked the switch is
@@ -108,7 +113,7 @@ public class RemoteBookOpener {
         if (!RemoteBook.isDirectOpen(remotePath)) {
             // formats whose converters need a local file: fetch to the cache
             // dir and open the local copy
-            fetchToCacheAndOpen(a, remotePath, sizeHint);
+            fetchToCacheAndOpen(a, remotePath, sizeHint, startPercent);
             return;
         }
         new AsyncTask() {
@@ -139,9 +144,24 @@ public class RemoteBookOpener {
                 }
                 if (!session.isRangeSupported()) {
                     // server ignores Range headers: no real random access —
-                    // degrade to a full fetch instead of skipping (§6.5)
-                    android.util.Log.i("REMOTE", "openOnline range unsupported, full fetch");
-                    fetchToCacheAndOpen(a, remotePath, sizeHint);
+                    // degrade to a full fetch instead of skipping (§6.5).
+                    // Huge books ask first: a silent 200-300MB download with
+                    // nothing opening reads like a hang
+                    android.util.Log.i("REMOTE", "openOnline range unsupported, full fetch size="
+                            + session.size);
+                    if (session.size >= CONFIRM_FULL_FETCH_BYTES) {
+                        new AlertDialog.Builder(a)
+                                .setTitle(R.string.remote_norange_title)
+                                .setMessage(a.getString(R.string.remote_norange_msg,
+                                        fmtMB(session.size)))
+                                .setPositiveButton(R.string.remote_download,
+                                        (d, w) -> fetchToCacheAndOpen(a, remotePath, sizeHint,
+                                                startPercent))
+                                .setNegativeButton(android.R.string.cancel, null)
+                                .show();
+                        return;
+                    }
+                    fetchToCacheAndOpen(a, remotePath, sizeHint, startPercent);
                     return;
                 }
                 if (session.versionChanged) {
@@ -159,6 +179,10 @@ public class RemoteBookOpener {
                     return;
                 }
                 android.util.Log.i("REMOTE", "openOnline ok, launching viewer: " + remotePath);
+                // PDF stores its xref/trailer at the tail: warm it before the
+                // viewer opens so the document open does not wait on tail
+                // network reads (the pain point for 200-300MB books)
+                session.warmTail();
                 ensureMeta(remotePath, session.size);
                 ExtUtils.showDocumentWithoutDialog2(a, Uri.parse(remotePath), startPercent, null);
             }
@@ -202,6 +226,38 @@ public class RemoteBookOpener {
                                     final FileReady onReady) {
         final File target = cacheBookFile(remotePath);
         final File tagFile = new File(target.getPath() + ".tag");
+        // live progress (bytes fetched / total) + user cancel: 200-300MB
+        // whole-book fetches used to run in total silence
+        final java.util.concurrent.atomic.AtomicLong pos = new java.util.concurrent.atomic.AtomicLong();
+        final java.util.concurrent.atomic.AtomicLong total = new java.util.concurrent.atomic.AtomicLong(-1);
+        final java.util.concurrent.atomic.AtomicBoolean cancelled = new java.util.concurrent.atomic.AtomicBoolean();
+        final android.app.AlertDialog[] progress = new android.app.AlertDialog[1];
+        final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
+        final Runnable[] ticker = new Runnable[1];
+        ticker[0] = new Runnable() {
+            @Override public void run() {
+                android.app.AlertDialog d = progress[0];
+                if (d == null || !d.isShowing()) {
+                    return; // dialog gone: the poller stops itself
+                }
+                long t = total.get();
+                if (t > 0) {
+                    long p = pos.get();
+                    int pct = (int) Math.min(100, p * 100 / t);
+                    d.setMessage(a.getString(R.string.remote_fetch_progress, pct,
+                            fmtMB(p), fmtMB(t)));
+                }
+                ui.postDelayed(ticker[0], 500);
+            }
+        };
+        android.app.AlertDialog.Builder pb = new android.app.AlertDialog.Builder(a);
+        pb.setTitle(R.string.remote_download);
+        pb.setMessage(a.getString(R.string.remote_fetch_progress, 0, fmtMB(0), "…"));
+        pb.setNegativeButton(R.string.cancel, (d, w) -> cancelled.set(true));
+        pb.setCancelable(false);
+        progress[0] = pb.create();
+        progress[0].show();
+        ui.postDelayed(ticker[0], 500);
         new AsyncTask() {
             RemoteBookSession session;
             String error;
@@ -220,6 +276,7 @@ public class RemoteBookOpener {
                         return null;
                     }
                     session = RemoteSessionFactory.open(remotePath);
+                    total.set(session.size);
                     android.util.Log.i("REMOTE", "fetchToCache start " + remotePath + " size=" + session.size);
                     if (isCopyCurrent(target, tagFile, session)) {
                         done = true;
@@ -237,7 +294,11 @@ public class RemoteBookOpener {
                         byte[] buf = new byte[64 * 1024];
                         int n;
                         while ((n = in.read(buf)) > 0) {
+                            if (cancelled.get()) {
+                                throw new java.io.IOException("cancelled");
+                            }
                             out.write(buf, 0, n);
+                            pos.addAndGet(n);
                         }
                     } finally {
                         if (out != null) {
@@ -282,7 +343,17 @@ public class RemoteBookOpener {
 
             @Override
             protected void onPostExecute(Object o) {
+                if (progress[0] != null) {
+                    try {
+                        progress[0].dismiss();
+                    } catch (Exception ignore) {
+                    }
+                }
                 if (!done) {
+                    if (cancelled.get()) {
+                        android.util.Log.i("REMOTE", "fetchToCache cancelled by user");
+                        return;
+                    }
                     android.util.Log.i("REMOTE", "fetchToCache failed toast: " + error);
                     Toast.makeText(a, TxtUtils.isNotEmpty(error) ? error
                             : a.getString(R.string.remote_open_failed), Toast.LENGTH_LONG).show();
@@ -396,6 +467,58 @@ public class RemoteBookOpener {
                 || m.contains("cannot stat") || m.contains("410");
     }
 
+    /**
+     * Binds a live progress ticker onto the reader's loading dialog for a
+     * remote book: cached share of the book + elapsed seconds. Without it a
+     * 200-300MB book shows only a static "please wait" while its first pages
+     * are fetched. Self-stops once the dialog is dismissed.
+     */
+    public static void startLoadingProgress(final android.app.AlertDialog dialog, final String remotePath) {
+        if (dialog == null || !RemoteBook.isRemotePath(remotePath)) {
+            return;
+        }
+        final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
+        final long t0 = android.os.SystemClock.elapsedRealtime();
+        final Runnable tick = new Runnable() {
+            @Override
+            public void run() {
+                if (!dialog.isShowing()) {
+                    return; // dialog gone: the poller stops itself
+                }
+                try {
+                    final android.widget.TextView msg =
+                            (android.widget.TextView) dialog.findViewById(R.id.text1);
+                    if (msg != null) {
+                        final int pct = BlockCacheStore.cachedPercent(remotePath);
+                        final long sec = (android.os.SystemClock.elapsedRealtime() - t0) / 1000;
+                        String text;
+                        if (pct >= 0) {
+                            final long size = BlockCacheStore.peekSize(remotePath);
+                            text = size > 0
+                                    ? com.foobnix.LibreraApp.context.getString(
+                                            R.string.remote_open_progress, pct,
+                                            fmtMB(size * pct / 100), fmtMB(size))
+                                    : com.foobnix.LibreraApp.context.getString(
+                                            R.string.remote_open_progress_nosize, pct);
+                        } else {
+                            text = com.foobnix.LibreraApp.context.getString(
+                                    R.string.remote_open_waiting, sec);
+                        }
+                        if (pct < 100 && sec > 30) {
+                            text += "\n" + com.foobnix.LibreraApp.context.getString(
+                                    R.string.remote_loading_slow);
+                        }
+                        msg.setText(text);
+                    }
+                } catch (Throwable t) {
+                    LOG.e(t);
+                }
+                ui.postDelayed(this, 600);
+            }
+        };
+        ui.postDelayed(tick, 600);
+    }
+
     /** Creates/updates the FileMeta record of a remote book (path-keyed). */
     public static void ensureMeta(String remotePath, long size) {
         try {
@@ -403,13 +526,35 @@ public class RemoteBookOpener {
             if (TxtUtils.isEmpty(meta.getTitle())) {
                 meta.setTitle(displayName(remotePath));
             }
-            if (size > 0 && (meta.getSize() == null || meta.getSize() != size)) {
-                meta.setSize(size);
+            if (size > 0) {
+                if (meta.getSize() == null || meta.getSize() != size) {
+                    meta.setSize(size);
+                }
+                // heal rows whose size text stayed "0 B" while the byte size
+                // was already right (an old full scan zeroed it)
+                String cur = meta.getSizeTxt();
+                if (TxtUtils.isEmpty(cur) || "0 B".equals(cur) || "0B".equals(cur)) {
+                    meta.setSizeTxt(ExtUtils.readableFileSize(size));
+                }
             }
             AppDB.get().update(meta);
         } catch (Exception e) {
             LOG.e(e);
         }
+    }
+
+    /** "12.3 MB"-style size for the remote progress dialogs. */
+    public static String fmtMB(long bytes) {
+        if (bytes < 0) {
+            return "…";
+        }
+        if (bytes < 1024 * 1024) {
+            return String.format(java.util.Locale.US, "%.0f KB", bytes / 1024.0);
+        }
+        if (bytes < 1024L * 1024 * 1024) {
+            return String.format(java.util.Locale.US, "%.1f MB", bytes / (1024.0 * 1024));
+        }
+        return String.format(java.util.Locale.US, "%.2f GB", bytes / (1024.0 * 1024 * 1024));
     }
 
     /** Human-readable book name of a remote:// URI (URL-decoded). */

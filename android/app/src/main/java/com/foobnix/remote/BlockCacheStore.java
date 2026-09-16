@@ -23,7 +23,11 @@ import java.util.Map;
  */
 public class BlockCacheStore {
 
-    public static final int BLOCK_SIZE = 256 * 1024;
+    // Text formats (epub/fb2/txt/...) read the book mostly sequentially
+    // during the first-open layout: 1MB blocks cut the per-request round
+    // trips ~4x compared to 256KB, so the first screen appears much faster.
+    // A block-size change wipes existing text caches once (acceptable).
+    public static final int BLOCK_SIZE = 1024 * 1024;
     /** Page-based formats (PDF / CBZ / XPS) use 1MB blocks (tech-spec §7.1). */
     public static final int BLOCK_SIZE_PAGE_FORMAT = 1024 * 1024;
     /** Memory LRU byte cap, tiered by device RAM (tech-spec §14 double
@@ -70,7 +74,11 @@ public class BlockCacheStore {
         return (int) (memLimitBytes() / BLOCK_SIZE);
     }
     /** Per-book disk cap for the progressive whole-book filler. */
-    public static final long PER_BOOK_LIMIT = 200L * 1024 * 1024;
+    // per-book disk cap: 512MB matches the 500MB default total cache budget,
+    // so a 200-300MB book fully caches and its whole-book layout / background
+    // fill never falls into read-through (which re-downloaded blocks on every
+    // scattered small read and made the layout crawl)
+    public static final long PER_BOOK_LIMIT = 512L * 1024 * 1024;
 
     private final File dir;
     private final long fileSize;
@@ -113,6 +121,31 @@ public class BlockCacheStore {
 
     public static File rootDir() {
         return new File(BookCSS.get().cachePath, "Remote");
+    }
+
+    /** Small in-memory LRU for blocks served through past the per-book cap:
+     * scattered small reads of a non-persisted block must not re-download
+     * the whole block every time. ~12 blocks (12MB at 1MB blocks). */
+    private static final java.util.LinkedHashMap<Long, byte[]> READ_THROUGH =
+            new java.util.LinkedHashMap<Long, byte[]>(16, 0.75f, true) {
+                private static final long serialVersionUID = 1L;
+
+                @Override
+                protected boolean removeEldestEntry(java.util.Map.Entry<Long, byte[]> eldest) {
+                    return size() > 12;
+                }
+            };
+
+    public byte[] getReadThrough(long idx) {
+        synchronized (READ_THROUGH) {
+            return READ_THROUGH.get(idx);
+        }
+    }
+
+    public void putReadThrough(long idx, byte[] block) {
+        synchronized (READ_THROUGH) {
+            READ_THROUGH.put(idx, block);
+        }
     }
 
     /**
@@ -291,6 +324,23 @@ public class BlockCacheStore {
             return new JSONObject(com.foobnix.android.utils.IO.readString(metaF)).optString("versionTag", null);
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    /**
+     * Stored book size from meta.json (never touches data.bin), or -1 when
+     * the book has no block cache. Used by the info dialog for remote books
+     * whose DB row was created before any successful open.
+     */
+    public static long peekSize(String remotePath) {
+        try {
+            File metaF = new File(new File(rootDir(), RemoteBook.cacheKey(remotePath)), "meta.json");
+            if (!metaF.isFile()) {
+                return -1;
+            }
+            return new JSONObject(com.foobnix.android.utils.IO.readString(metaF)).optLong("size", -1);
+        } catch (Exception e) {
+            return -1;
         }
     }
 

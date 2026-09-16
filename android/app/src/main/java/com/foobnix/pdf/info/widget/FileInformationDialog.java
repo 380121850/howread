@@ -139,19 +139,41 @@ public class FileInformationDialog {
         String title = "";
         String author = "";
         String ext = "";
-        String sizeTxt = "";
         long pages = 0;
+        FileMeta meta = null;
         try {
-            FileMeta meta = AppDB.get().load(remotePath);
+            meta = AppDB.get().load(remotePath);
             if (meta != null) {
                 title = TxtUtils.nullToEmpty(meta.getTitle());
                 author = TxtUtils.nullToEmpty(meta.getAuthor());
                 ext = TxtUtils.nullToEmpty(meta.getExt());
-                sizeTxt = TxtUtils.nullToEmpty(meta.getSizeTxt());
                 pages = meta.getPages() == null ? 0 : meta.getPages();
             }
         } catch (Exception e) {
             com.foobnix.android.utils.LOG.e(e);
+        }
+        // A remote book never opened shows "0 B" (the DB row has no size —
+        // an old full scan zeroed it): derive the size from the DB byte
+        // size, then the block-cache meta; when both are unknown the server
+        // is asked (stat / depth-0 PROPFIND) below and the answer persisted.
+        long realSize = meta != null && meta.getSize() != null ? meta.getSize() : 0;
+        if (realSize <= 0) {
+            realSize = com.foobnix.remote.BlockCacheStore.peekSize(remotePath);
+            if (realSize > 0) {
+                com.foobnix.remote.RemoteBookOpener.ensureMeta(remotePath, realSize);
+            }
+        }
+        final String sizeTxt = realSize > 0 ? ExtUtils.readableFileSize(realSize) : "";
+        if (realSize > 0 && meta != null && !sizeTxt.equals(meta.getSizeTxt())) {
+            final long sizeForMeta = realSize;
+            // keep the shelf display text in step with the real size
+            // (heals "0B"/empty leftovers from old scans)
+            AppsConfig.executorService.execute(new Runnable() {
+                @Override
+                public void run() {
+                    com.foobnix.remote.RemoteBookOpener.ensureMeta(remotePath, sizeForMeta);
+                }
+            });
         }
         if (TxtUtils.isEmpty(title)) {
             title = ExtUtils.getFileName(remotePath);
@@ -169,27 +191,14 @@ public class FileInformationDialog {
         titleView.setTypeface(null, android.graphics.Typeface.BOLD);
         box.addView(titleView);
 
-        final StringBuilder info = new StringBuilder();
-        if (TxtUtils.isNotEmpty(author)) {
-            info.append(author).append("\n");
-        }
-        if (TxtUtils.isNotEmpty(ext)) {
-            info.append(ext.toUpperCase());
-        }
-        if (TxtUtils.isNotEmpty(sizeTxt)) {
-            if (info.length() > 0 && info.charAt(info.length() - 1) != '\n') {
-                info.append("  ");
-            }
-            info.append(sizeTxt);
-        }
-        if (pages > 0) {
-            info.append(" (").append(pages).append("p)");
-        }
-        if (info.length() > 0) {
-            final TextView infoView = new TextView(a);
-            infoView.setText(info.toString());
+        final String infoText = remoteInfoText(author, ext, sizeTxt, pages);
+        TextView infoView = null;
+        if (infoText.length() > 0) {
+            infoView = new TextView(a);
+            infoView.setText(infoText);
             box.addView(infoView);
         }
+        final TextView infoViewRef = infoView;
 
         final TextView pathView = new TextView(a);
         pathView.setText(com.foobnix.remote.RemoteBook.fullDisplayPath(remotePath));
@@ -210,7 +219,85 @@ public class FileInformationDialog {
                 }
             });
         }
-        builder.show();
+        final android.app.AlertDialog dlg = builder.show();
+        if (realSize <= 0) {
+            fetchRemoteSizeAsync(a, dlg, box, infoViewRef, remotePath, author, ext, pages);
+        }
+    }
+
+    /** "author\n EXT  12.3 MB (120p)" — the one/two-line summary of the dialog. */
+    private static String remoteInfoText(String author, String ext, String sizeTxt, long pages) {
+        StringBuilder info = new StringBuilder();
+        if (TxtUtils.isNotEmpty(author)) {
+            info.append(author).append("\n");
+        }
+        if (TxtUtils.isNotEmpty(ext)) {
+            info.append(ext.toUpperCase());
+        }
+        if (TxtUtils.isNotEmpty(sizeTxt)) {
+            if (info.length() > 0 && info.charAt(info.length() - 1) != '\n') {
+                info.append("  ");
+            }
+            info.append(sizeTxt);
+        }
+        if (pages > 0) {
+            info.append(" (").append(pages).append("p)");
+        }
+        return info.toString();
+    }
+
+    /**
+     * The DB row and the block cache know no size: ask the server for it
+     * (WebDAV depth-0 PROPFIND / SMB length / SFTP stat), persist the answer
+     * into the shelf row and drop it into the open dialog when it arrives.
+     */
+    private static void fetchRemoteSizeAsync(final Activity a, final android.app.AlertDialog dlg,
+                                             final android.widget.LinearLayout box, final TextView infoView,
+                                             final String remotePath, final String author, final String ext,
+                                             final long pages) {
+        AppsConfig.executorService.execute(new Runnable() {
+            @Override
+            public void run() {
+                final long srvSize = com.foobnix.remote.RemoteStat.fetchSize(remotePath);
+                if (srvSize <= 0) {
+                    return;
+                }
+                boolean rowChanged = false;
+                try {
+                    FileMeta m = AppDB.get().load(remotePath);
+                    rowChanged = m == null || m.getSize() == null || m.getSize() <= 0;
+                    com.foobnix.remote.RemoteBookOpener.ensureMeta(remotePath, srvSize);
+                } catch (Exception e) {
+                    LOG.e(e);
+                }
+                if (rowChanged) {
+                    TempHolder.listHash++;
+                    EventBus.getDefault().post(new UpdateAllFragments());
+                }
+                a.runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            if (dlg == null || !dlg.isShowing()) {
+                                return;
+                            }
+                            String text = remoteInfoText(author, ext, ExtUtils.readableFileSize(srvSize), pages);
+                            if (text.length() == 0) {
+                                return;
+                            }
+                            if (infoView != null) {
+                                infoView.setText(text);
+                            } else {
+                                TextView v = new TextView(a);
+                                v.setText(text);
+                                box.addView(v, 1);
+                            }
+                        } catch (Exception ignored) {
+                        }
+                    }
+                });
+            }
+        });
     }
 
     public static void showFileInfoDialog(final Activity a, final File file, final Runnable onDeleteAction) {

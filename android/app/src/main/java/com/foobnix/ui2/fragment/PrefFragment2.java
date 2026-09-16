@@ -984,23 +984,8 @@ public class PrefFragment2 extends UIFragment {
         });
         alphaIfProLocked((View) remoteConfigValue.getParent());
 
-        // 在线阅读缓存: same dialog, cache section (usable for the usage view
-        // even when locked — the switch part stays Pro only)
-        final TextView remoteCacheValue = inflate.findViewById(R.id.remoteCacheValue);
-        refreshRemoteCacheRow(remoteCacheValue);
-        TxtUtils.underlineTextView(remoteCacheValue);
-        remoteCacheValue.setOnClickListener(new OnClickListener() {
-            @Override public void onClick(View v) {
-                if (!AppsConfig.isProFeaturesEnabled()) {
-                    proLockedToast(v);
-                    return;
-                }
-                com.foobnix.remote.RemoteCacheDialog.showDialog(getActivity(),
-                        () -> refreshRemoteCacheRow(remoteCacheValue));
-            }
-        });
-        alphaIfProLocked((View) remoteCacheValue.getParent());
-
+        // (the former 在线阅读缓存 row was merged into the 在线阅读 row:
+        //  one entry, value shows switch state + cache footprint)
         final TextView appFontScale = inflate.findViewById(R.id.appFontScale);
         appFontScale.setText(
 
@@ -2540,7 +2525,6 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
         refreshWebdavSyncRow((TextView) inflate.findViewById(R.id.webdavSyncValue));
         refreshAiConfigRow((TextView) inflate.findViewById(R.id.aiConfigValue));
         refreshRemoteRow((TextView) inflate.findViewById(R.id.remoteConfigValue));
-        refreshRemoteCacheRow((TextView) inflate.findViewById(R.id.remoteCacheValue));
 
     }
 
@@ -2615,19 +2599,15 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
         if (v == null) {
             return;
         }
-        v.setText(AppState.get().remoteOnlineFirst ? R.string.remote_state_on : R.string.remote_state_off);
+        // merged 在线阅读 row: switch state + current remote-cache footprint
+        String state = getString(AppState.get().remoteOnlineFirst
+                ? R.string.remote_state_on : R.string.remote_state_off);
+        v.setText(state + " · " + com.foobnix.pdf.info.ExtUtils.readableFileSize(
+                com.foobnix.remote.BlockCacheStore.totalBytes()));
         applyProLock(v);
     }
 
     /** 常规设置 在线阅读缓存 行的值：当前占用 */
-    private void refreshRemoteCacheRow(TextView v) {
-        if (v == null) {
-            return;
-        }
-        v.setText(com.foobnix.pdf.info.ExtUtils.readableFileSize(com.foobnix.remote.BlockCacheStore.totalBytes()));
-        applyProLock(v);
-    }
-
     /** Pro 功能未解锁时的统一提示（fdroid 与未解锁 pro 共用） */
     public static void proLockedToast(Context c) {
         Toast.makeText(c, R.string.pro_toast_locked, Toast.LENGTH_SHORT).show();

@@ -18,6 +18,8 @@ public class WebDavStore {
     public static List<WebDavServer> load() {
         synchronized (LOCK) {
             List<WebDavServer> res = new ArrayList<WebDavServer>();
+            StringBuilder repaired = new StringBuilder();
+            boolean changed = false;
             String[] list = AppState.get().allWebDavLinks.split(";");
             for (String line : list) {
                 if (TxtUtils.isEmpty(line)) {
@@ -35,11 +37,64 @@ public class WebDavStore {
                 if (TxtUtils.isEmpty(title)) {
                     title = url;
                 }
-                WebDavServer s = new WebDavServer(url, title, it.length > 2 ? it[2].trim() : "");
-                s.appState = line + ";";
+                String startDir = it.length > 2 ? it[2].trim() : "";
+                // self-repair: an older build could persist a JSON object
+                // instead of the plain "url,title,startDir" line — recover
+                // the real server from it, drop the line when that fails
+                if (url.indexOf('{') >= 0 || url.indexOf('"') >= 0) {
+                    String[] fixed = repairJsonLine(line);
+                    if (fixed == null) {
+                        changed = true;
+                        android.util.Log.i("WEBDAV", "dropped corrupt link line");
+                        continue;
+                    }
+                    url = fixed[0];
+                    title = fixed[1];
+                    startDir = fixed[2];
+                    changed = true;
+                }
+                // dedupe: recovered JSON lines can repeat an existing server
+                boolean dup = false;
+                for (WebDavServer ex : res) {
+                    if (trimSlash(ex.url).equals(trimSlash(url))) {
+                        dup = true;
+                        break;
+                    }
+                }
+                if (dup || com.foobnix.remote.RemoteTombstones.has("webdav:" + trimSlash(url))) {
+                    changed = true;
+                    continue;
+                }
+                WebDavServer s = new WebDavServer(url, title, startDir);
+                s.appState = WebDavServer.buildLine(url, title, startDir);
                 res.add(s);
+                repaired.append(s.appState);
+            }
+            if (changed) {
+                // persist the sanitized list (garbage/duplicate lines dropped
+                // for good) — off the main thread, load() may run anywhere
+                AppState.get().allWebDavLinks = repaired.toString();
+                com.foobnix.pdf.info.AppsConfig.executorServiceSingle.execute(() ->
+                        com.foobnix.model.AppProfile.save(com.foobnix.LibreraApp.context));
             }
             return res;
+        }
+    }
+
+    /** url/title/startDir recovered from a JSON-encoded line, or null. */
+    private static String[] repairJsonLine(String line) {
+        try {
+            org.json.JSONObject o = new org.json.JSONObject(line);
+            String url = o.optString("url", "");
+            if (TxtUtils.isEmpty(url) || url.indexOf('{') >= 0 || url.indexOf('"') >= 0
+                    || !(url.startsWith("http://") || url.startsWith("https://"))) {
+                return null;
+            }
+            String title = o.optString("title", url);
+            String startDir = o.optString("startDir", "");
+            return new String[]{trimSlash(url), TxtUtils.isEmpty(title) ? url : title, startDir};
+        } catch (Exception e) {
+            return null;
         }
     }
 

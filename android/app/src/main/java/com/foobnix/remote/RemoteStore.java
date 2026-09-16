@@ -24,7 +24,7 @@ public class RemoteStore {
                     continue;
                 }
                 RemoteServer s = RemoteServer.parse(line, type);
-                if (s != null) {
+                if (s != null && !RemoteTombstones.has(type + ":" + s.id)) {
                     res.add(s);
                 }
             }

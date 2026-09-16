@@ -62,6 +62,24 @@ public abstract class HorizontalModeController extends DocumentController {
     CodecDocument codeDocument;
     int imageWidth, imageHeight;
     private int pagesCount;
+    /** Remote text book whose full layout is deferred to a background task. */
+    private boolean pendingRemoteLayout;
+    private float pendingRestorePercent = -1f;
+    /** True while the deferred layout task is inside the native layout call
+     * (which holds the global native lock): closing the codec then would
+     * block the UI thread until the layout finishes. */
+    private volatile boolean remoteLayoutRunning;
+    /** epub fast path: the deferred layout runs in progressive chunks so the
+     * first screen appears once the first chapters are cached; fb2/mobi/txt
+     * are parsed whole by the engine and keep the one-shot background layout. */
+    private boolean remoteProgressive;
+    /** Page count stored by the previous full layout (DB): landing estimate
+     * while the progressive layout is still catching up. */
+    private Integer pendingRestorePages;
+    /** Set once the landing page has been applied to the pager. */
+    private boolean remoteLanded;
+    /** The user turned pages while the landing was still pending — never jump. */
+    private boolean remoteUserTookOver;
     private CopyAsyncTask searchTask;
     private boolean isTextFormat = false;
     private SharedPreferences matrixSP;
@@ -130,8 +148,27 @@ public abstract class HorizontalModeController extends DocumentController {
             imageWidth = Dips.screenWidth() / 2;
         }
 
-        codeDocument = ImageExtractor.getNewCodecContext(bookPath, pasw, imageWidth, imageHeight);
-        if (codeDocument != null) {
+        final boolean remoteText = com.foobnix.remote.RemoteBook.isRemotePath(bookPath) && isTextFormat;
+        final boolean deferRemote = remoteText && deferRemoteLayout();
+        android.util.Log.i("REMOTE", "hcontroller remoteText=" + remoteText
+                + " isTextFormat=" + isTextFormat + " deferRemote=" + deferRemote
+                + " book=" + bookPath);
+        codeDocument = ImageExtractor.getNewCodecContext(bookPath, pasw, imageWidth, imageHeight, !deferRemote);
+        if (deferRemote && codeDocument != null) {
+            // Big remote text book: skip the blocking full-document layout
+            // here — the reader shell shows immediately and the layout runs
+            // in the background (see HorizontalViewActivity.startRemoteTextLayout),
+            // so the first screen appears fast and the rest of the book is
+            // laid out / cached afterwards.
+            pendingRemoteLayout = true;
+            pagesCount = 1;
+            // epub is a zip container the engine walks chapter by chapter:
+            // the progressive chunked layout can show the first screen after
+            // the first few MB of cache. fb2/mobi/txt are single-file parses
+            // (the engine reads the whole file at open) — the one-shot
+            // background layout is their ceiling without engine changes.
+            remoteProgressive = "epub".equals(com.foobnix.remote.RemoteBook.getExt(bookPath));
+        } else if (codeDocument != null) {
             pagesCount = codeDocument.getPageCount(imageWidth, imageHeight, BookCSS.get().fontSizeSp);
         } else {
             pagesCount = 0;
@@ -146,10 +183,18 @@ public abstract class HorizontalModeController extends DocumentController {
             FileMeta meta = AppDB.get()
                                  .load(bookPath);
             if (meta != null) {
-                meta.setPages(pagesCount);
-                AppDB.get()
-                     .update(meta);
-                LOG.d("update openDocument.getPageCount()", bookPath, pagesCount);
+                if (pendingRemoteLayout) {
+                    // keep the last known real page count in the DB (writing
+                    // the provisional 1 would corrupt the landing estimate
+                    // and the shelf page column) and remember it as the
+                    // landing estimate for the deferred layout
+                    pendingRestorePages = meta.getPages();
+                } else {
+                    meta.setPages(pagesCount);
+                    AppDB.get()
+                         .update(meta);
+                    LOG.d("update openDocument.getPageCount()", bookPath, pagesCount);
+                }
             }
 
         } catch (Exception e) {
@@ -161,7 +206,12 @@ public abstract class HorizontalModeController extends DocumentController {
 
         float percent = Intents.getFloatAndClear(activity.getIntent(), DocumentController.EXTRA_PERCENT);
 
-        if (percent > 0.0f) {
+        if (pendingRemoteLayout) {
+            // the real page count is not known yet: remember where to land
+            // and start at page 0; applyRemoteTextLayout() jumps afterwards
+            pendingRestorePercent = percent > 0f ? percent : (bs != null ? bs.p : 0f);
+            currentPage = 0;
+        } else if (percent > 0.0f) {
             currentPage = Math.round(pagesCount * percent) - 1;
         } else if (pagesCount > 0) {
             currentPage = bs.getCurrentPage(getPageCount()).viewIndex;
@@ -531,6 +581,181 @@ public abstract class HorizontalModeController extends DocumentController {
 
     @Override public int getPageCount() {
         return PageUrl.realToFake(pagesCount);
+    }
+
+    public boolean isPendingRemoteLayout() {
+        return pendingRemoteLayout;
+    }
+
+    /** Runs the deferred full layout (background thread). Returns the real
+     * page count, or the provisional count when the layout failed. */
+    public int runRemoteTextLayout() {
+        pendingRemoteLayout = false;
+        remoteLayoutRunning = true;
+        try {
+            return codeDocument.getPageCount(imageWidth, imageHeight, BookCSS.get().fontSizeSp);
+        } catch (Throwable t) {
+            LOG.e(t);
+            return pagesCount;
+        } finally {
+            remoteLayoutRunning = false;
+        }
+    }
+
+    public boolean isRemoteLayoutRunning() {
+        return remoteLayoutRunning;
+    }
+
+    public boolean isRemoteProgressive() {
+        return remoteProgressive;
+    }
+
+    /** True once the pager sits on the page to show (saved position,
+     * page 0, or the user's own page) — no further jumps needed. */
+    public boolean isRemoteLanded() {
+        return remoteLanded;
+    }
+
+    /** Saved reading position (0..1) the deferred layout must land on. */
+    public float getPendingRestorePercent() {
+        return pendingRestorePercent;
+    }
+
+    /** Marks the deferred progressive layout as started (background thread). */
+    public void beginRemoteLayout() {
+        pendingRemoteLayout = false;
+    }
+
+    /**
+     * One progressive layout chunk (background thread): lays out chapters
+     * only until {@code uptoPage} is reachable and returns the cumulative
+     * page count so far (less than requested = book end reached). Falls back
+     * to the full one-shot layout for non-progressive books. Returns 0 when
+     * the codec is already closed.
+     */
+    public int runRemoteLayoutChunk(int uptoPage) {
+        if (codeDocument == null || isClosed) {
+            return 0;
+        }
+        remoteLayoutRunning = true;
+        try {
+            if (remoteProgressive) {
+                return codeDocument.getPageCountProgressive(imageWidth, imageHeight,
+                        BookCSS.get().fontSizeSp, Math.max(1, uptoPage));
+            }
+            return codeDocument.getPageCount(imageWidth, imageHeight, BookCSS.get().fontSizeSp);
+        } catch (Throwable t) {
+            LOG.e(t);
+            return pagesCount > 0 ? pagesCount : 0;
+        } finally {
+            remoteLayoutRunning = false;
+        }
+    }
+
+    /**
+     * Applies one progressive layout result on the UI thread: the page count
+     * grows monotonically; the first result covering the landing page (or the
+     * last one) lands the pager on the saved position. Later results only
+     * grow the count, so pages the user already turned are preserved.
+     *
+     * @return true when the landing happened on this call — the caller shows
+     *         content (removes the overlay) and jumps the pager.
+     */
+    public boolean applyRemoteLayoutResult(int count, boolean last) {
+        if (count <= 0) {
+            return false;
+        }
+        pagesCount = count;
+        boolean justLanded = false;
+        if (!remoteLanded) {
+            if (currentPage > 0) {
+                // the user turned pages while the saved position was
+                // still being located — keep their page, drop the jump
+                remoteLanded = true;
+                remoteUserTookOver = true;
+            } else if (pendingRestorePercent > 0f) {
+                int est = pendingRestorePages != null ? pendingRestorePages : 0;
+                // early landing is only allowed with a page count from a
+                // previous real layout (est>1); a stale count lands on
+                // the wrong page, so wait for the final count instead
+                int base = (last || est <= 1) ? count : est;
+                int target = Math.max(0, Math.min(Math.round(base * pendingRestorePercent) - 1, count - 1));
+                if (last || target < count) {
+                    android.util.Log.i("REMOTE", "remoteLand est=" + est + " base=" + base
+                            + " pct=" + pendingRestorePercent + " -> page " + target
+                            + " of " + count + (last ? " (last)" : ""));
+                    currentPage = target;
+                    remoteLanded = true;
+                    justLanded = true;
+                }
+                // else: the landing chapter is not laid out yet — keep
+                // waiting for the next chunk
+            } else {
+                // fresh open: page 0 is the landing, content can show now
+                remoteLanded = true;
+                justLanded = true;
+            }
+        } else if (last && pendingRestorePercent > 0f && !remoteUserTookOver) {
+            // re-anchor: the stored page count the early landing used may
+            // be stale (font size changed etc.) — snap to the position
+            // derived from the real final count
+            int target = Math.max(0, Math.min(Math.round(count * pendingRestorePercent) - 1, count - 1));
+            if (Math.abs(target - currentPage) > 2) {
+                android.util.Log.i("REMOTE", "remoteLand re-anchor " + currentPage + " -> " + target
+                        + " of " + count + " (est was " + pendingRestorePages + ")");
+                currentPage = target;
+                justLanded = true;
+            }
+        }
+        try {
+            FileMeta meta = AppDB.get().load(bookPath);
+            if (meta != null) {
+                meta.setPages(pagesCount);
+                AppDB.get().update(meta);
+            }
+        } catch (Throwable t) {
+            LOG.e(t);
+        }
+        return justLanded;
+    }
+
+    /** Applies the background layout result: real page count, persisted meta
+     * and the landing page. Call on the UI thread. */
+    public void applyRemoteTextLayout(int count) {
+        if (count > 0) {
+            pagesCount = count;
+        }
+        try {
+            FileMeta meta = AppDB.get().load(bookPath);
+            if (meta != null) {
+                meta.setPages(pagesCount);
+                AppDB.get().update(meta);
+            }
+        } catch (Throwable t) {
+            LOG.e(t);
+        }
+        if (pendingRestorePercent > 0f) {
+            currentPage = Math.round(pagesCount * pendingRestorePercent) - 1;
+        }
+        if (currentPage < 0) {
+            currentPage = 0;
+        }
+        if (currentPage >= pagesCount) {
+            currentPage = pagesCount - 1;
+        }
+    }
+
+    /** Remote text books defer the full layout only when the book is big
+     * enough to make the first screen wait (small ones lay out instantly). */
+    private boolean deferRemoteLayout() {
+        try {
+            final FileMeta meta = AppDB.get().load(bookPath);
+            final Long size = meta == null ? null : meta.getSize();
+            android.util.Log.i("REMOTE", "deferRemoteLayout size=" + size);
+            return size == null || size >= 10L * 1024 * 1024;
+        } catch (Throwable t) {
+            return true;
+        }
     }
 
     @Override public void onScrollY(int value) {

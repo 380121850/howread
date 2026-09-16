@@ -89,6 +89,18 @@
 4. ✅ **离线**：完全缓存的书零网络打开（openOffline 降级，服务器停机实测）；已缓存整本书重取回直接从缓存落地。
 5. ✅ **SMB/SFTP/EPUB DRM 已在阶段 15b 完成（2026-09-12，见下）**。剩余待续：OPDS 认证/分页；计费网络检测接入 wholeBookOnMetered。
 
+### 阶段 16e（2026-09-16）：同步安卓 WebDAV 空白修复 —— 中文/空格路径编码 + 空目录提示 ✅ 已完成（0.9.5）
+
+- davEncodePath 逐段 encodeURIComponent（保留斜杠、前导/尾斜杠），应用 webdavDirUrl / remoteScanServer 起点 / davBrowseRefresh；
+- davClassifyEntry 与 webdavListDir 自引用过滤：href 先容错解码（davDecodeName/davDecodeSafe）再与原始路径比较，修正编码请求下条目全丢（小写 %xx vs 大写 %XX）的解析丢失；
+- 云面板空态「目录为空或无访问权限」（dav_empty_hint，两处渲染点）；
+- 诊断日志：webdavConnect PROPFIND 状态码/条数、webdavListDir 失败/成功（[WEBDAV] 前缀）；
+- 不移植：抢占式认证（已满足）/凭据自愈弹窗（无密钥失效场景）/尾斜杠重试（已恒带）；
+- 版本 0.9.4→0.9.5（versionCode 42→43）；模拟器 5 用例全过（中文起始目录列表/在线打开/根目录回归/空目录提示/扫描）；dist 8 件套；
+- 待续：批次 4（自动裁边 B2）/批次 5（OPDS 认证分页 + 计费网络检测 C10/C11）。
+
+---
+
 ### 阶段 16d（2026-09-15）：同步安卓 v1.3.4 体验包 —— 三协议图标 + 远程地址 + 左缘亮度手势 ✅ 已完成（0.9.4）
 
 - 三协议专属图标（my_nas_webdav/smb/sftp.png 自安卓 drawable-xxhdpi 移植）：首页 WebDAV 圆钮、服务器行 ×3、远程书行按 parseRemoteUri 选图标（不染色，非直连格式 0.55 透明度区分）；

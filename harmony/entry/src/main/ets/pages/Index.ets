@@ -1889,7 +1889,7 @@ struct Index {
   private webdavDirUrl(): string {
     let u = this.webdavUrl.replace(/\/+$/, '');
     if (this.webdavPath.length > 0) {
-      u = u + '/' + this.webdavPath;
+      u = u + this.davEncodePath(this.webdavPath);
     }
     return u.endsWith('/') ? u : u + '/';
   }
@@ -1942,6 +1942,7 @@ struct Index {
           readTimeout: 15000
         });
         xml = String(r1.result);
+        console.info(`[WEBDAV] PROPFIND ${url} -> HTTP ${r1.responseCode}`);
         req1.destroy();
         if (r1.responseCode !== 207 && r1.responseCode !== 200) {
           xml = '';
@@ -2016,6 +2017,7 @@ struct Index {
       }
       this.webdavDirs = dirs;
       this.webdavFiles = files;
+      console.info(`[WEBDAV] ${url} -> ${dirs.length} dirs, ${files.length} files`);
       this.webdavStatus = `Connected! ${dirs.length} dirs, ${files.length} files`;
     } catch (e) {
       this.webdavStatus = 'Connection failed: ' + String(e);
@@ -2028,7 +2030,10 @@ struct Index {
     if (rawHref.length === 0 || rawHref.startsWith('http') && rawHref.indexOf('://') < 0) {
       return;
     }
-    let href = rawHref;
+    /* server hrefs are percent-encoded (apache lowercases the hex); decode
+     * once, tolerantly, so the prefix check below compares against the raw
+     * this.webdavPath text (v0.9.5, 50.100 NAS blank-list fix) */
+    let href = rawHref.indexOf('%') >= 0 ? this.davDecodeName(rawHref) : rawHref;
     /* strip query string; strip URL prefix up to the path */
     const q: number = href.indexOf('?');
     if (q >= 0) {
@@ -2416,7 +2421,7 @@ struct Index {
       let added = 0;
       /* start from the server's configured start directory (Android 起始目录) */
       const startUrl: string = s.startPath.length > 0
-        ? s.url.replace(/\/+$/, '') + this.davNormStart(s.startPath)
+        ? s.url.replace(/\/+$/, '') + this.davEncodePath(s.startPath)
         : s.url;
       const queue: string[] = [startUrl];
       let depth = 0;
@@ -3163,6 +3168,11 @@ struct Index {
         }
         .width('90%').padding({ top: 6, bottom: 6 })
         .onClick(() => { this.davUp(); })
+      }
+
+      if (this.webdavDirs.length === 0 && this.webdavFiles.length === 0 && !this.webdavConnecting) {
+        Text($r('app.string.dav_empty_hint'))
+          .fontSize(13).fontColor(this.txtHint()).margin({ top: 24 })
       }
 
       if (this.webdavDirs.length > 0 || this.webdavFiles.length > 0) {
@@ -6156,6 +6166,11 @@ struct Index {
         })
       }
 
+      if (this.webdavDirs.length === 0 && this.webdavFiles.length === 0 && !this.webdavConnecting) {
+        Text($r('app.string.dav_empty_hint'))
+          .fontSize(13).fontColor(this.txtHint()).margin({ top: 24 })
+      }
+
       if (this.webdavDirs.length > 0 || this.webdavFiles.length > 0) {
         List() {
           ForEach(this.webdavDirs, (dir: string) => {
@@ -6682,6 +6697,23 @@ struct Index {
     return s;
   }
 
+  /** Percent-encode each segment of a dir path (spaces/CJK break loose URLs);
+   *  keeps slashes, guarantees leading + trailing '/'. v0.9.5, Android
+   *  WebDavClient encodeIfNeeded parity (50.100 NAS blank-list fix). */
+  private davEncodePath(p: string): string {
+    const segs: string[] = p.split('/');
+    const out: string[] = [];
+    for (let i = 0; i < segs.length; i++) {
+      if (segs[i].length > 0) {
+        out.push(encodeURIComponent(segs[i]));
+      }
+    }
+    if (out.length === 0) {
+      return '/';
+    }
+    return '/' + out.join('/') + '/';
+  }
+
   /** WebDAV config: PROPFIND Depth:0 connectivity test (Android 测试连接 parity). */
   private async davTestConnection(): Promise<void> {
     const base: string = this.davEditUrl.trim().replace(/\/+$/, '');
@@ -6732,9 +6764,9 @@ struct Index {
 
   private async davBrowseRefresh(): Promise<void> {
     const base: string = this.davEditUrl.trim().replace(/\/+$/, '');
-    const url: string = base + (this.davBrowsePath.length > 0 ? this.davBrowsePath : '');
+    const url: string = base + (this.davBrowsePath.length > 0 ? this.davEncodePath(this.davBrowsePath) : '');
     const entries: DavListEntry[] | null =
-      await webdavListDir(url + '/', this.davEditUser.trim(), this.davEditPass);
+      await webdavListDir(url, this.davEditUser.trim(), this.davEditPass);
     const dirs: string[] = [];
     if (entries !== null) {
       for (let i = 0; i < entries.length; i++) {

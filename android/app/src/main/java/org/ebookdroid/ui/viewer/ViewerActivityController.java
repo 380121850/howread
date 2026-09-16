@@ -724,6 +724,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                 //Thread.sleep(3000);
                 m_fileName = Apps.getBookPathFromActivity(getActivity());
                 android.util.Log.i("REMOTE", "openTask file=" + m_fileName + " model=" + documentModel);
+                startRemoteProgress();
 
                 // Full metadata extraction + hyphenation language detection,
                 // both potentially O(file), run here on the background thread
@@ -747,12 +748,22 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                 // first screen appears without the full-document layout; the
                 // remaining chapters are laid out in the background afterwards.
                 int uptoPage = -1;
-                if (AppState.get().isFastOpen && ExtUtils.isTextFomat(m_fileName)
+                // Remote books always take the fast-open path (even with the
+                // global switch off): a 200-300MB book must show its first
+                // screen after only a few pages are laid out, with the rest
+                // of the layout continuing in the background.
+                final boolean remoteBook = com.foobnix.remote.RemoteBook.isRemotePath(m_fileName);
+                if ((remoteBook || AppState.get().isFastOpen) && ExtUtils.isTextFomat(m_fileName)
                         && (intent == null || intent.getStringExtra(DocumentController.EXTRA_PERCENT) == null)) {
                     final AppBook bs = SettingsManager.getBookSettings();
                     if (bs != null) {
                         if (bs.pg >= 0) {
-                            uptoPage = bs.pg + Math.max(80, bs.pg / 4);
+                            // remote: tiny first window (saved page + a few)
+                            // so the first screen appears fast; the rest of
+                            // the book is laid out and cached in the
+                            // background (two-phase layout)
+                            uptoPage = remoteBook ? bs.pg + Math.max(3, Math.min(10, bs.pg / 4))
+                                    : bs.pg + Math.max(80, bs.pg / 4);
                         } else {
                             // Progress saved by an older version: estimate the
                             // target page from the library page count.
@@ -767,9 +778,10 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                             }
                             if (dbPages > 0 && bs.p > 0f) {
                                 final int target = Math.round(dbPages * bs.p);
-                                uptoPage = target + Math.max(120, target / 4);
+                                uptoPage = remoteBook ? target + 4
+                                        : target + Math.max(120, target / 4);
                             } else if (bs.p <= 0f) {
-                                uptoPage = 150;
+                                uptoPage = remoteBook ? 4 : 150;
                             }
                         }
                     }
@@ -794,6 +806,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
         }
 
         @Override protected void onPostExecute(Throwable result) {
+            stopRemoteProgress();
             try {
                 LOG.d("onPostExecute");
                 android.util.Log.i("BENCH", "load-end " + (android.os.SystemClock.elapsedRealtime() - benchT0) + "ms");
@@ -896,6 +909,65 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
 
         @Override public void setProgressDialogMessage(final int resourceID, final Object... args) {
             publishProgress(getManagedComponent().getString(resourceID, args));
+        }
+
+        /**
+         * Remote books: the generic "loading" spinner gives no clue how far
+         * the open is. While the document loads, poll the block cache and
+         * show the cached share of the book directly in the loading dialog.
+         * Stops itself once the dialog is dismissed; onPostExecute cancels
+         * it explicitly.
+         */
+        private final android.os.Handler remoteUi = new android.os.Handler(android.os.Looper.getMainLooper());
+        private Runnable remoteTick;
+        private long remoteStartMs;
+
+        private void startRemoteProgress() {
+            if (!com.foobnix.remote.RemoteBook.isRemotePath(m_fileName)) {
+                return;
+            }
+            remoteStartMs = android.os.SystemClock.elapsedRealtime();
+            remoteTick = new Runnable() {
+                @Override public void run() {
+                    final android.app.AlertDialog d = progressDialog;
+                    if (d == null || !d.isShowing()) {
+                        return;
+                    }
+                    try {
+                        final android.widget.TextView msg =
+                                (android.widget.TextView) d.findViewById(com.foobnix.pdf.info.R.id.text1);
+                        if (msg != null) {
+                            final int pct = com.foobnix.remote.BlockCacheStore.cachedPercent(m_fileName);
+                            if (pct >= 0) {
+                                final long size = com.foobnix.remote.BlockCacheStore.peekSize(m_fileName);
+                                String text = size > 0
+                                        ? getActivity().getString(
+                                                com.foobnix.pdf.info.R.string.remote_open_progress, pct,
+                                                com.foobnix.remote.RemoteBookOpener.fmtMB(size * pct / 100),
+                                                com.foobnix.remote.RemoteBookOpener.fmtMB(size))
+                                        : getActivity().getString(
+                                                com.foobnix.pdf.info.R.string.remote_open_progress_nosize, pct);
+                                if (pct < 100 && android.os.SystemClock.elapsedRealtime() - remoteStartMs > 30000) {
+                                    text += "\n" + getActivity().getString(
+                                            com.foobnix.pdf.info.R.string.remote_loading_slow);
+                                }
+                                msg.setText(text);
+                            }
+                        }
+                    } catch (Throwable t) {
+                        LOG.e(t);
+                    }
+                    remoteUi.postDelayed(this, 600);
+                }
+            };
+            remoteUi.postDelayed(remoteTick, 600);
+        }
+
+        private void stopRemoteProgress() {
+            if (remoteTick != null) {
+                remoteUi.removeCallbacks(remoteTick);
+                remoteTick = null;
+            }
         }
     }
 

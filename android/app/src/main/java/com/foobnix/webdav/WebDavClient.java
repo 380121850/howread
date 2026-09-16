@@ -278,6 +278,27 @@ public class WebDavClient {
         return "other";
     }
 
+    /**
+     * Content length of a single file (PROPFIND depth 0), -1 on any failure.
+     * Used to heal shelf rows whose size was never recorded.
+     */
+    public static long fileSize(String url, String login, String password, boolean trustAll) {
+        try {
+            List<DavResource> res = sardine(login, password, trustAll).list(encodeIfNeeded(url), 0);
+            if (res != null) {
+                for (DavResource r : res) {
+                    Long len = r.getContentLength();
+                    if (len != null && len > 0) {
+                        return len;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            LOG.e(e);
+        }
+        return -1;
+    }
+
     public static InputStream openStream(String url, String login, String password, boolean trustAll) throws IOException {
         return sardine(login, password, trustAll).get(encodeIfNeeded(url));
     }
@@ -301,7 +322,33 @@ public class WebDavClient {
     }
 
     private static boolean isSelf(String url, String href) {
-        return WebDavStore.trimSlash(url).equals(WebDavStore.trimSlash(href));
+        if (WebDavStore.trimSlash(url).equals(WebDavStore.trimSlash(href))) {
+            return true;
+        }
+        // Some servers answer with RAW (unencoded) UTF-8 hrefs while our
+        // request target was percent-encoded (Chinese / space start
+        // folders): the collection's own entry then slips into the listing
+        // as a phantom subfolder of itself. Compare on the decoded form.
+        return decodedUrl(url).equals(decodedUrl(href));
+    }
+
+    /** href decoded for comparison: query/fragment stripped, %XX expanded,
+     * trailing slash ignored. */
+    private static String decodedUrl(String u) {
+        String p = WebDavStore.trimSlash(u);
+        int q = p.indexOf('?');
+        if (q >= 0) {
+            p = p.substring(0, q);
+        }
+        int h = p.indexOf('#');
+        if (h >= 0) {
+            p = p.substring(0, h);
+        }
+        try {
+            p = java.net.URLDecoder.decode(p, "UTF-8");
+        } catch (Exception ignored) {
+        }
+        return p;
     }
 
     public static String lastName(String href) {

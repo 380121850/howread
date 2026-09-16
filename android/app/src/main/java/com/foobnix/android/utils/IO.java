@@ -55,6 +55,24 @@ public class IO {
         }
     }
 
+    /**
+     * Blocks (up to 10 s) until every write queued through {@link #writeObj}
+     * has been flushed to disk. Config-change restarts (day/night toggle,
+     * theme, language, font size) re-read the JSON config synchronously in
+     * the freshly started activity: without this drain the restart can race
+     * the async writer and bring the PREVIOUS values back on screen
+     * (e.g. the sidebar night-mode toggle sometimes "not applying").
+     */
+    public static void awaitWrites() {
+        try {
+            java.util.concurrent.Future<?> f = AppsConfig.executorServiceSingle.submit((Runnable) () -> {
+            });
+            f.get(10, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (Exception e) {
+            LOG.e(e);
+        }
+    }
+
     public static void readObj(File file, Object o) {
 
         try {

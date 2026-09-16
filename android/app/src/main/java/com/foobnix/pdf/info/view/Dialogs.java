@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.DialogInterface.OnDismissListener;
+import android.view.KeyEvent;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.os.Handler;
@@ -693,6 +694,21 @@ public class Dialogs {
 
             AlertDialog dialog = builder.show();
             dialog.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+
+            // A non-cancelable loading dialog must still let the user back out
+            // (gesture / hardware back while the book loads): treat BACK like
+            // the \u2715 cancel — the caller closes the activity / stops the task.
+            dialog.setOnKeyListener(new DialogInterface.OnKeyListener() {
+                @Override
+                public boolean onKey(DialogInterface d, int keyCode, KeyEvent event) {
+                    if (keyCode == KeyEvent.KEYCODE_BACK && event.getAction() == KeyEvent.ACTION_DOWN) {
+                        TempHolder.get().loadingCancelled.set(true);
+                        onCancel.run();
+                        return true;
+                    }
+                    return false;
+                }
+            });
 
             if (AppState.get().isExperimental) {
                 WebViewUtils.init(c);
