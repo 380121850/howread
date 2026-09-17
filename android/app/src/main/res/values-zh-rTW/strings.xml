@@ -167,6 +167,7 @@
    <string name="simple_scroll_animation">顯示翻頁動畫</string>
    <string name="___TABS___SECTION___">標籤區域</string>
    <string name="library">書架</string>
+    <string name="open_book_auto_add_to_library">其他應用開啟的書籍自動加入書庫</string>
    <string name="extracting_information_from_books">書籍資訊</string>
    <string name="no_author">無作者</string>
    <string name="no_serie">無叢書</string>

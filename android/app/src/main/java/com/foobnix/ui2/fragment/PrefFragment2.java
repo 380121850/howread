@@ -2434,6 +2434,9 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
         final CheckBox isShowSeriesNumberInTitle = new CheckBox(activity);
         isShowSeriesNumberInTitle.setText(getString(R.string.show_series_number_in_title));
 
+        final CheckBox isAutoAddToLibrary = new CheckBox(activity);
+        isAutoAddToLibrary.setText(getString(R.string.open_book_auto_add_to_library));
+
         root.addView(isScanOnLaunch);
         root.addView(isFirstSurname);
         root.addView(isSkipFolderWithNOMEDIA);
@@ -2443,6 +2446,7 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
         root.addView(isDisplayAnnotation);
         root.addView(isHideReadBook);
         root.addView(isShowSeriesNumberInTitle);
+        root.addView(isAutoAddToLibrary);
 
         isScanOnLaunch.setChecked(AppState.get().isScanOnLaunch);
         isFirstSurname.setChecked(AppState.get().isFirstSurname);
@@ -2453,6 +2457,7 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
         isDisplayAnnotation.setChecked(AppState.get().isDisplayAnnotation);
         isHideReadBook.setChecked(AppState.get().isHideReadBook);
         isShowSeriesNumberInTitle.setChecked(AppState.get().isShowSeriesNumberInTitle);
+        isAutoAddToLibrary.setChecked(AppState.get().isAutoAddToLibrary);
 
         isScanOnLaunch.setOnCheckedChangeListener((buttonView, isChecked) -> {
             AppState.get().isScanOnLaunch = isChecked;
@@ -2466,6 +2471,7 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
             AppState.get().isUseCalibreOpf = isUseCalibreOpf.isChecked();
             AppState.get().isDisplayAnnotation = isDisplayAnnotation.isChecked();
             AppState.get().isShowSeriesNumberInTitle = isShowSeriesNumberInTitle.isChecked();
+            AppState.get().isAutoAddToLibrary = isAutoAddToLibrary.isChecked();
 
             handler.removeCallbacksAndMessages(null);
             handler.postDelayed(ask, timeout);

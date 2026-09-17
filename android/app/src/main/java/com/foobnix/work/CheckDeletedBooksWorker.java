@@ -8,6 +8,7 @@ import androidx.work.WorkerParameters;
 import com.foobnix.android.utils.JsonDB;
 import com.foobnix.android.utils.LOG;
 import com.foobnix.dao2.FileMeta;
+import com.foobnix.model.AppData;
 import com.foobnix.model.AppProfile;
 import com.foobnix.model.TagData;
 import com.foobnix.model.Tags2;
@@ -71,6 +72,15 @@ public class CheckDeletedBooksWorker extends MessageWorker {
                 }
             }
 
+        }
+
+        // the same strict purge as the full scan: books deleted above also
+        // leave 最近阅读/我的珍藏 (library membership = current rows)
+        try {
+            AppData.get().purgeNonLibrary(
+                    new java.util.HashSet<String>(AppDB.get().getSearchBookPaths()));
+        } catch (Exception e) {
+            LOG.e(e);
         }
 
         List<FileMeta> localMeta = new LinkedList<FileMeta>();

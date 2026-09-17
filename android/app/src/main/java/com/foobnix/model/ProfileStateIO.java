@@ -670,7 +670,7 @@ public class ProfileStateIO {
      * added entry is its own sub-item carrying ALL of its fields: OPDS
      * catalog lines, WebDAV servers (incl. stored login/password), SMB and
      * SFTP servers (incl. stored password / key passphrase) and the
-     * 书库文件夹 paths. The file is merged PER ITEM (see mergeNetworkSources),
+     * 书库文件夹 paths. The file is merged PER ITEM (see mergeNetworkSources3),
      * so N backed-up SFTP entries restore as those same N entries. Written
      * only when the content changed — an unconditional write would restamp
      * the file on every sync and block incoming changes.
@@ -960,14 +960,15 @@ public class ProfileStateIO {
             if (item == null || TxtUtils.isEmpty(item.optString("host"))) {
                 continue;
             }
-            String key = remoteItemKey(item.optString("host"), item.optInt("port", 0),
+            // stable connection identity: an edited 子目录/title must hit
+            // the existing entry (applyRemoteUpdate updates it in place), not
+            // re-add the merged copy as a second entry
+            String key = remoteConnKey(item.optString("host"), item.optInt("port", 0),
                     item.optString("user"), item.optString("domain"),
-                    item.optString("share"), item.optString("keyPath"),
-                    item.optString("title"), item.optString("startDir"),
-                    item.optBoolean("trustAll", false));
+                    item.optString("share"), item.optString("keyPath"));
             RemoteServer hit = null;
             for (RemoteServer srv : locals) {
-                if (key.equals(remoteItemKeyOf(srv))) {
+                if (key.equals(remoteConnKeyOf(srv))) {
                     hit = srv;
                     break;
                 }
@@ -1004,21 +1005,29 @@ public class ProfileStateIO {
         }
     }
 
-    private static String remoteItemKey(String host, int port, String user, String domain,
-            String share, String keyPath, String title, String startDir, boolean trustAll) {
-        // everything EXCEPT the random id and the secrets: two entries that
-        // differ in name/start folder are deliberately distinct items and
-        // must both survive the per-item union
+    /**
+     * STABLE connection identity of an SMB/SFTP entry: everything except the
+     * random per-creation id, the secrets and the freely editable payload
+     * fields (title, start folder, trust flag). Editing the 子目录 must
+     * UPDATE this identity — the previous key included startDir/title, so an
+     * edit looked like "remove old + add new" and the pre-edit entry kept
+     * surviving the merge as a ghost duplicate with the old folder.
+     */
+    private static String remoteConnKey(String host, int port, String user, String domain,
+            String share, String keyPath) {
         return (host == null ? "" : host) + "|" + port + "|" + (user == null ? "" : user)
                 + "|" + (domain == null ? "" : domain) + "|" + (share == null ? "" : share)
-                + "|" + (keyPath == null ? "" : keyPath)
-                + "|" + (title == null ? "" : title) + "|" + (startDir == null ? "" : startDir)
-                + "|" + trustAll;
+                + "|" + (keyPath == null ? "" : keyPath);
     }
 
-    private static String remoteItemKeyOf(RemoteServer srv) {
-        return remoteItemKey(srv.host, srv.port, srv.user, srv.domain, srv.share, srv.keyPath,
-                srv.title, srv.startDir, srv.trustAll);
+    private static String remoteConnKeyOf(RemoteServer srv) {
+        return remoteConnKey(srv.host, srv.port, srv.user, srv.domain, srv.share, srv.keyPath);
+    }
+
+    private static String remoteConnKeyOfItem(LinkedJSONObject item) {
+        return remoteConnKey(item.optString("host"), item.optInt("port", 0),
+                item.optString("user"), item.optString("domain"),
+                item.optString("share"), item.optString("keyPath"));
     }
 
     /** Same connection identity, different fields → the merged copy wins. */
@@ -1113,17 +1122,38 @@ public class ProfileStateIO {
      * propagate deletions: an entry removed on one device is re-added
      * from the other side's list.
      */
-    public static LinkedJSONObject mergeNetworkSources(LinkedJSONObject local, LinkedJSONObject remote) {
+    /**
+     * Per-item THREE-way merge of the network-source file: base = the last
+     * merged result this device wrote (app-NetworkSources.json.base, the
+     * same local-only convention as the app-State three-way). A field changed
+     * on only one side since the base wins — an edit saved on THIS device (a
+     * new 子目录) beats the stale server copy instead of being reverted by
+     * it, and a change made on another device still arrives. Both sides
+     * changed → local wins (the next round converges the other device);
+     * without a base (first run after the upgrade) conflicts also keep the
+     * local copy, so an edit made before the upgrade survives. Identities:
+     * WebDAV items by server url; SMB/SFTP items grouped by the stable
+     * connection fields (title/startDir/trustAll are payload, not identity);
+     * OPDS lines and 书库文件夹 stay additive unions.
+     */
+    public static LinkedJSONObject mergeNetworkSources3(LinkedJSONObject local, LinkedJSONObject remote,
+            LinkedJSONObject base) {
         try {
             LinkedJSONObject out = new LinkedJSONObject();
             out.put(SEC_NET_OPDS, unionStrings(local == null ? null : local.optJSONArray(SEC_NET_OPDS),
                     remote == null ? null : remote.optJSONArray(SEC_NET_OPDS)));
-            out.put(SEC_NET_WEBDAV, unionWebDavItems(local == null ? null : local.optJSONArray(SEC_NET_WEBDAV),
-                    remote == null ? null : remote.optJSONArray(SEC_NET_WEBDAV)));
-            out.put(SEC_NET_SMB, unionRemoteItems(local == null ? null : local.optJSONArray(SEC_NET_SMB),
-                    remote == null ? null : remote.optJSONArray(SEC_NET_SMB)));
-            out.put(SEC_NET_SFTP, unionRemoteItems(local == null ? null : local.optJSONArray(SEC_NET_SFTP),
-                    remote == null ? null : remote.optJSONArray(SEC_NET_SFTP)));
+            out.put(SEC_NET_WEBDAV, mergeWebDavItems(
+                    local == null ? null : local.optJSONArray(SEC_NET_WEBDAV),
+                    remote == null ? null : remote.optJSONArray(SEC_NET_WEBDAV),
+                    base == null ? null : base.optJSONArray(SEC_NET_WEBDAV)));
+            out.put(SEC_NET_SMB, mergeRemoteGroups(
+                    local == null ? null : local.optJSONArray(SEC_NET_SMB),
+                    remote == null ? null : remote.optJSONArray(SEC_NET_SMB),
+                    base == null ? null : base.optJSONArray(SEC_NET_SMB)));
+            out.put(SEC_NET_SFTP, mergeRemoteGroups(
+                    local == null ? null : local.optJSONArray(SEC_NET_SFTP),
+                    remote == null ? null : remote.optJSONArray(SEC_NET_SFTP),
+                    base == null ? null : base.optJSONArray(SEC_NET_SFTP)));
             out.put(SEC_NET_FOLDERS, unionStrings(local == null ? null : local.optJSONArray(SEC_NET_FOLDERS),
                     remote == null ? null : remote.optJSONArray(SEC_NET_FOLDERS)));
             return out;
@@ -1156,25 +1186,11 @@ public class ProfileStateIO {
         return out;
     }
 
-    /**
-     * Union of WebDAV items keyed by the server url. Legacy (v1) string
-     * elements are parsed into items first; the same url with different
-     * fields resolves to the server (remote) copy.
-     */
-    private static JSONArray unionWebDavItems(JSONArray la, JSONArray ra) {
-        LinkedHashMap<String, LinkedJSONObject> merged = new LinkedHashMap<String, LinkedJSONObject>();
-        collectWebDav(merged, la);
-        collectWebDav(merged, ra);
-        JSONArray out = new JSONArray();
-        for (LinkedJSONObject item : merged.values()) {
-            out.put(item);
-        }
-        return out;
-    }
-
-    private static void collectWebDav(LinkedHashMap<String, LinkedJSONObject> merged, JSONArray arr) {
+    /** url -> item for one WebDAV array (legacy v1 lines parsed into items). */
+    private static LinkedHashMap<String, LinkedJSONObject> webdavMap(JSONArray arr) {
+        LinkedHashMap<String, LinkedJSONObject> m = new LinkedHashMap<String, LinkedJSONObject>();
         if (arr == null) {
-            return;
+            return m;
         }
         for (int i = 0; i < arr.length(); i++) {
             LinkedJSONObject item = asLinked(arr.opt(i));
@@ -1201,52 +1217,155 @@ public class ProfileStateIO {
                 item.put("title", it.length > 1 ? it[1] : url);
                 item.put("startDir", it.length > 2 ? it[2].trim() : "");
             }
-            LinkedJSONObject cur = merged.get(url);
-            if (cur == null || !cur.toString().equals(item.toString())) {
-                merged.put(url, item);
-            }
+            m.put(url, item);
         }
+        return m;
     }
 
-    /**
-     * Union of SMB/SFTP items keyed by their full config identity
-     * (connection fields + name + start folder + trust flag) — only the
-     * random per-creation id and the secrets are excluded. The same entry
-     * re-created on two devices (different random ids) still dedupes,
-     * while deliberately distinct entries (e.g. same server under two
-     * names) both survive. Same identity with different content → the
-     * server copy wins.
-     */
-    private static JSONArray unionRemoteItems(JSONArray la, JSONArray ra) {
-        LinkedHashMap<String, LinkedJSONObject> merged = new LinkedHashMap<String, LinkedJSONObject>();
-        collectRemote(merged, la);
-        collectRemote(merged, ra);
+    /** Field-level three-way of the WebDAV items keyed by server url. */
+    private static JSONArray mergeWebDavItems(JSONArray la, JSONArray ra, JSONArray ba) {
+        LinkedHashMap<String, LinkedJSONObject> lm = webdavMap(la);
+        LinkedHashMap<String, LinkedJSONObject> rm = webdavMap(ra);
+        LinkedHashMap<String, LinkedJSONObject> bm = webdavMap(ba);
+        java.util.Set<String> keys = new java.util.LinkedHashSet<String>(lm.keySet());
+        keys.addAll(rm.keySet());
+        keys.addAll(bm.keySet());
         JSONArray out = new JSONArray();
-        for (LinkedJSONObject item : merged.values()) {
-            out.put(item);
+        for (String url : keys) {
+            LinkedJSONObject l = lm.get(url), r = rm.get(url), b = bm.get(url);
+            LinkedJSONObject keep;
+            if (l == null) {
+                keep = r;                 // restore a remote addition / other device's entry
+            } else if (r == null || r.toString().equals(l.toString())) {
+                keep = l;                 // deletion not propagated / already equal
+            } else if (b == null || r.toString().equals(b.toString())) {
+                keep = l;                 // no base, or remote unchanged: keep the local edit
+            } else if (l.toString().equals(b.toString())) {
+                keep = r;                 // locally unchanged: accept the remote edit
+            } else {
+                keep = mergeItemFields(l, r, b); // both changed: per field, local wins ties
+            }
+            if (keep != null) {
+                out.put(keep);
+            }
         }
         return out;
     }
 
-    private static void collectRemote(LinkedHashMap<String, LinkedJSONObject> merged, JSONArray arr) {
+    /**
+     * Field-level three-way of one config item: a field the local side did
+     * not change since the base adopts the remote value; a field the local
+     * side changed (or both sides changed) keeps the local value.
+     */
+    private static LinkedJSONObject mergeItemFields(LinkedJSONObject l, LinkedJSONObject r,
+            LinkedJSONObject b) {
+        LinkedJSONObject out = new LinkedJSONObject();
+        java.util.Set<String> keys = new java.util.LinkedHashSet<String>();
+        for (java.util.Iterator<String> it = l.keys(); it.hasNext();) {
+            keys.add(it.next());
+        }
+        for (java.util.Iterator<String> it = r.keys(); it.hasNext();) {
+            keys.add(it.next());
+        }
+        for (java.util.Iterator<String> it = b.keys(); it.hasNext();) {
+            keys.add(it.next());
+        }
+        for (String k : keys) {
+            boolean lh = l.has(k), rh = r.has(k), bh = b.has(k);
+            Object lv = lh ? l.opt(k) : null, rv = rh ? r.opt(k) : null, bv = bh ? b.opt(k) : null;
+            boolean localChanged = lh != bh || (lh && !String.valueOf(lv).equals(String.valueOf(bv)));
+            boolean remoteChanged = rh != bh || (rh && !String.valueOf(rv).equals(String.valueOf(bv)));
+            if (localChanged) {
+                if (lh) {
+                    out.put(k, lv);
+                }
+            } else if (remoteChanged) {
+                if (rh) {
+                    out.put(k, rv);
+                }
+            } else {
+                if (lh) {
+                    out.put(k, lv);
+                }
+            }
+        }
+        return out;
+    }
+
+    /** Order-insensitive content fingerprint of one connection group. */
+    private static String groupFinger(java.util.List<LinkedJSONObject> g) {
+        java.util.List<String> parts = new ArrayList<String>();
+        for (LinkedJSONObject it : g) {
+            parts.add(it.toString());
+        }
+        java.util.Collections.sort(parts);
+        return parts.toString();
+    }
+
+    /** connection identity -> items (one side of the merge). */
+    private static LinkedHashMap<String, java.util.List<LinkedJSONObject>> remoteGroups(JSONArray arr) {
+        LinkedHashMap<String, java.util.List<LinkedJSONObject>> m =
+                new LinkedHashMap<String, java.util.List<LinkedJSONObject>>();
         if (arr == null) {
-            return;
+            return m;
         }
         for (int i = 0; i < arr.length(); i++) {
             LinkedJSONObject item = asLinked(arr.opt(i));
             if (item == null || TxtUtils.isEmpty(item.optString("host"))) {
                 continue;
             }
-            String key = remoteItemKey(item.optString("host"), item.optInt("port", 0),
-                    item.optString("user"), item.optString("domain"),
-                    item.optString("share"), item.optString("keyPath"),
-                    item.optString("title"), item.optString("startDir"),
-                    item.optBoolean("trustAll", false));
-            LinkedJSONObject cur = merged.get(key);
-            if (cur == null || !cur.toString().equals(item.toString())) {
-                merged.put(key, item);
+            String key = remoteConnKeyOfItem(item);
+            java.util.List<LinkedJSONObject> list = m.get(key);
+            if (list == null) {
+                list = new ArrayList<LinkedJSONObject>();
+                m.put(key, list);
+            }
+            list.add(item);
+        }
+        return m;
+    }
+
+    /**
+     * SMB/SFTP items grouped by the STABLE connection identity; the whole
+     * group resolves three-way. Locally unchanged since the base → the
+     * remote group arrives; remotely unchanged → the local group (with its
+     * edited 子目录) wins and the pre-edit ghost entry the server still
+     * carries is dropped; both changed → local wins. Deliberately distinct
+     * entries (same server saved twice under two names) form one group and
+     * survive as long as no side edits it.
+     */
+    private static JSONArray mergeRemoteGroups(JSONArray la, JSONArray ra, JSONArray ba) {
+        LinkedHashMap<String, java.util.List<LinkedJSONObject>> lm = remoteGroups(la);
+        LinkedHashMap<String, java.util.List<LinkedJSONObject>> rm = remoteGroups(ra);
+        LinkedHashMap<String, java.util.List<LinkedJSONObject>> bm = remoteGroups(ba);
+        java.util.Set<String> keys = new java.util.LinkedHashSet<String>(lm.keySet());
+        keys.addAll(rm.keySet());
+        keys.addAll(bm.keySet());
+        JSONArray out = new JSONArray();
+        for (String key : keys) {
+            java.util.List<LinkedJSONObject> l = lm.get(key), r = rm.get(key), b = bm.get(key);
+            java.util.List<LinkedJSONObject> keep;
+            String lf = l == null ? null : groupFinger(l);
+            String rf = r == null ? null : groupFinger(r);
+            String bf = b == null ? null : groupFinger(b);
+            if (l == null) {
+                keep = r;
+            } else if (r == null || lf.equals(rf)) {
+                keep = l;
+            } else if (b == null || rf.equals(bf)) {
+                keep = l;
+            } else if (lf.equals(bf)) {
+                keep = r;
+            } else {
+                keep = l;
+            }
+            if (keep != null) {
+                for (LinkedJSONObject item : keep) {
+                    out.put(item);
+                }
             }
         }
+        return out;
     }
 
     /**

@@ -596,6 +596,12 @@ public class AppState {
     public boolean isShowCloseAppDialog = true;
     public boolean isFirstSurname = false;
     public boolean isScanOnLaunch = false;
+    /**
+     * Open a book from another app (file manager "open with") → it joins the
+     * 书库 automatically (default on; the reader's own in-app opens are not
+     * affected). Settable in 偏好-书库.
+     */
+    public boolean isAutoAddToLibrary = true;
     public boolean isAuthorTitleFromMetaPDF = false;
     public boolean isShowOnlyOriginalFileNames = false;
     public boolean isSkipFolderWithNOMEDIA = true;

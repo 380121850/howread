@@ -18,7 +18,11 @@ import com.foobnix.android.utils.TxtUtils;
 import com.foobnix.dao2.FileMeta;
 import com.foobnix.mobi.parser.IOUtils;
 import com.foobnix.model.AppProfile;
+import com.foobnix.model.AppData;
 import com.foobnix.model.AppSP;
+import com.foobnix.model.SimpleMeta;
+import com.foobnix.pdf.info.Clouds;
+import com.foobnix.ui2.AppDB;
 import com.foobnix.model.AppState;
 import com.foobnix.pdf.info.Android6;
 import com.foobnix.pdf.info.ExtUtils;
@@ -240,6 +244,32 @@ public class OpenerActivity extends Activity {
             return;
         }
         LOG.d(TAG, "Open file", file);
+        // a book opened from ANOTHER app joins the 书库 by default — the
+        // same flag write the manual "add to library" action uses. Cache
+        // copies (the content:// fallback lands in TempDownloads), remote /
+        // cloud paths and books the user explicitly removed from the library
+        // (excluded list) are never auto-added.
+        try {
+            final String p = file.getPath();
+            final boolean cacheCopy = p.startsWith(downloadsDir.getPath())
+                    || p.startsWith(getCacheDir().getPath())
+                    || (getExternalCacheDir() != null && p.startsWith(getExternalCacheDir().getPath()));
+            final boolean excluded = AppData.get().getAllExcluded()
+                    .contains(SimpleMeta.SyncSimpleMeta(p));
+            if (AppState.get().isAutoAddToLibrary && !cacheCopy && !excluded
+                    && !com.foobnix.remote.RemoteBook.isRemotePathLoose(p)
+                    && !Clouds.isCloud(p)) {
+                FileMeta load = AppDB.get().getOrCreate(p);
+                if (load.getIsSearchBook() == null || !load.getIsSearchBook()) {
+                    load.setIsSearchBook(true);
+                    AppDB.get().update(load);
+                    AppData.get().removeExcluded(load);
+                    Toast.makeText(this, R.string.add_to_library, Toast.LENGTH_SHORT).show();
+                }
+            }
+        } catch (Exception e) {
+            LOG.e(e);
+        }
         ExtUtils.openFile(this, new FileMeta(file.getPath()));
     }
 

@@ -241,6 +241,63 @@ public class AppData {
         removeAll(meta, AppProfile.APP_EXCLUDE_JSON);
     }
 
+    /**
+     * Library-refresh purge (书库刷新后同步清理): entries for books that are
+     * NOT in the given library path set are removed from app-Recent.json and
+     * app-Favorite.json — across EVERY device-profile copy, matched by exact
+     * path (removeAll matches by file NAME and could hit a different
+     * folder's same-named book). Remote (remote://), cloud and folder
+     * entries are always kept. Called after the scan has rebuilt the library
+     * (SearchAllBooksWorker / CheckDeletedBooksWorker).
+     *
+     * @return the number of purged entries
+     */
+    public synchronized int purgeNonLibrary(java.util.Set<String> libraryPaths) {
+        int removed = 0;
+        try {
+            removed += purgeList(AppProfile.APP_RECENT_JSON, libraryPaths);
+            removed += purgeList(AppProfile.APP_FAVORITE_JSON, libraryPaths);
+        } catch (Exception e) {
+            LOG.e(e);
+        }
+        if (removed > 0) {
+            invalidateListCache();
+            RecentUpates.updateAll();
+        }
+        LOG.d("purgeNonLibrary", "removed", removed, "of", libraryPaths.size());
+        return removed;
+    }
+
+    private int purgeList(String name, java.util.Set<String> libraryPaths) {
+        int removed = 0;
+        final List<File> allFiles = AppProfile.getAllFiles(name);
+        for (File file : allFiles) {
+            List<SimpleMeta> res = getSimpleMeta(file);
+            boolean changed = false;
+            final Iterator<SimpleMeta> iterator = res.iterator();
+            while (iterator.hasNext()) {
+                SimpleMeta it = iterator.next();
+                String path = SimpleMeta.SyncSimpleMeta(it).getPath();
+                if (com.foobnix.remote.RemoteBook.isRemotePathLoose(path)
+                        || Clouds.isCloud(path) || Clouds.isCloudFile(path)
+                        || new File(path).isDirectory()) {
+                    continue;
+                }
+                if (!libraryPaths.contains(path)) {
+                    iterator.remove();
+                    changed = true;
+                    removed++;
+                    AppDB.get().deleteBy(path);
+                    LOG.d("purgeList", "drop", path);
+                }
+            }
+            if (changed) {
+                writeSimpleMeta(res, file);
+            }
+        }
+        return removed;
+    }
+
     public void clearAll(String name) {
         recentCacheTime = 0;
         final List<File> allFiles = AppProfile.getAllFiles(name);

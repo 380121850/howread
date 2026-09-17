@@ -86,6 +86,25 @@ public class SearchAllBooksWorker extends MessageWorker {
             });
 
 
+            // snapshot the library books added from OUTSIDE the scan roots
+            // (manually via "add to library" or by opening them with
+            // isAutoAddToLibrary): deleteAllData below wipes the whole table
+            // and the scan never walks their folders, so without this they
+            // would vanish from the 书库 on every refresh
+            final List<String> rescuedBooks = new LinkedList<String>();
+            try {
+                for (String p : AppDB.get().getSearchBookPaths()) {
+                    if (com.foobnix.remote.RemoteBook.isRemotePathLoose(p) || Clouds.isCloud(p)) {
+                        continue;
+                    }
+                    if (new File(p).isFile()) {
+                        rescuedBooks.add(p);
+                    }
+                }
+            } catch (Exception e) {
+                LOG.e(e);
+            }
+
             AppDB.get().deleteAllData();
 
 
@@ -183,6 +202,30 @@ public class SearchAllBooksWorker extends MessageWorker {
 
 
             AppDB.get().saveAll(itemsMeta);
+
+            // re-insert the rescued out-of-root library books (their rows are
+            // gone after the wipe; metadata is (re)extracted by the
+            // STATE_NONE pass further down)
+            for (String p : rescuedBooks) {
+                if (isStopped()) {
+                    return false;
+                }
+                if (AppDB.get().load(p) == null) {
+                    FileMeta meta = AppDB.get().getOrCreate(p);
+                    meta.setIsSearchBook(true);
+                    AppDB.get().update(meta);
+                }
+            }
+
+            // 书库刷新后同步清理: 最近阅读/我的珍藏 entries not in the rebuilt
+            // library are purged (strict semantics per user request; remote /
+            // cloud / folder entries are exempt inside purgeNonLibrary)
+            try {
+                AppData.get().purgeNonLibrary(
+                        new java.util.HashSet<String>(AppDB.get().getSearchBookPaths()));
+            } catch (Exception e) {
+                LOG.e(e);
+            }
 
             handler.removeCallbacks(timer);
 

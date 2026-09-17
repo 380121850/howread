@@ -3923,3 +3923,22 @@ iOS / Desktop 两个预留平台没有任何版本配置位。
 - 引擎 html-parse.c：defer 分支不再要求 width/height 属性，缺属性时 sniff_image_entry_dims 读条目头 4KB 解析 PNG/IHDR、JPEG/SOF、GIF、BMP 尺寸（mupdf/fitz.h 伞头文件已含 archive API）；libMuPDF.so 四 ABI 重编并刷新 prebuilt/native 缓存。
 - RemoteVariantDetector 与 RemoteDocxLite 统一改为 new Inflater(true)（ZIP method 8 为裸 deflate，非 zlib 包装）；探测器新增 skip 原因日志便于远程排障。
 - ci/autotest/lib/driver.py：save_logcat 失败不再吞异常；step() 失败分支与 _run_once 补 scan_crash()。
+
+## 2026-09-17 v1.3.11（Round 14）：服务器条目编辑不再回退 + 书库刷新同步清理最近/珍藏 + 外部打开自动入库
+
+### 做了什么（用户视角）
+- **修复"编辑 WebDAV/SFTP 子目录保存后过一会又变回去"**：根因是同一份服务器条目配置存在两份都在跨设备同步的副本——设置文件里一份"整串文本"、网络源文件里一份"逐条目清单"，后者的合并规则是"同一身份、内容不同→服务器旧副本无条件获胜"。编辑保存 3 秒后的自动同步（或 5 分钟周期同步）就用服务器上的旧副本把刚保存的子目录（以及改名）盖掉；SFTP/SMB 的条目身份还把"起始目录"算在内，编辑会被当成"删旧加新"，服务器上的旧条目原样复活成一条同名的幽灵重复条目。本次重构为**网络源文件是条目唯一的跨设备同步来源**，合并升级为带"上次同步基线"的三方裁决：本地改过的字段以本地为准，本地没改的字段才接受其他设备的改动；条目身份只看连接信息（主机/端口/用户/共享/证书），编辑子目录/改名就是原地更新。升级后首轮同步没有基线时冲突也保留本地——升级前已做但被回退的编辑不会再丢。
+- **书库刷新后，最近阅读/我的珍藏同步清理**（按确认的"严格按书库清单"语义）：全量刷新/增量检查删除书籍后，凡不在当前书库清单里的本地书籍条目，会从"最近阅读"和"我的珍藏"（含跨设备配置副本）中一并移除并清理对应数据库残留；远程书（remote://）、云端书与收藏的文件夹永远保留。
+- **其他应用打开的书籍默认自动加入书库**：在文件管理器等外部应用"用阅读打开"一本书后，该书自动出现在书库中（带"已添加到书库"提示，可在 偏好-书库 关闭）；应用内缓存副本（如聊天工具转存的临时文件）不误入库；用户手动"移出书库"过的书不会被反复加回。同时这类"库外书籍"（含手动加入书库的）在每次书库刷新后保留在书库中，不再被刷新冲掉。
+- 版本 1.3.11（appCode 7311），pro/fdroid × debug/release 全量出包。
+
+### 如何验证（MI9 真机）
+- 同步不回退：配置 WebDAV 同步（50.23）完成首轮同步建基线 → 编辑 HowRead-Test 的起始目录保存 → 自动同步后 UI、本地与服务器上的 app-NetworkSources.json 均保持新值；服务器侧伪造他人改动（改条目名）再同步 → 改名导入且起始目录不回退；编辑 HowRead-SFTP 的起始目录 → 同步后仅一条、新目录生效、无幽灵重复；
+- 清理生效：打开一本书（进入最近阅读）→ 删除其文件 → 书库刷新 → 该书从最近阅读消失；星标书同理从我的珍藏消失；远程书不受影响；
+- 自动入库：`am start -a android.intent.action.VIEW` 外部打开 /sdcard/Download 下新书 → 弹"已添加到书库"且书库出现该书 → 书库刷新后仍在。
+
+### 内部佐证（辅助）
+- WebDavSyncer：STATE_DEVICE_FIELDS 增加 allWebDavLinks/allSmbLinks/allSftpLinks（app-State.json 不再搬运条目）；新增带本地基线（app-NetworkSources.json.base）的 syncMergedObjectFile 三方重载；NetworkSources 换用 ProfileStateIO::mergeNetworkSources3。
+- ProfileStateIO：mergeNetworkSources3（WebDAV 按 URL 逐字段三方 mergeItemFields；SMB/SFTP 按稳定连接身份 remoteConnKey 分组三方）；importRemoteItems 匹配键换为 remoteConnKey；旧 remoteItemKey/unionWebDavItems/collectWebDav/unionRemoteItems/collectRemote 移除。
+- AppData.purgeNonLibrary/purgeList（按精确 path、跨 AppProfile.getAllFiles 副本、豁免远程/云/目录）挂入 SearchAllBooksWorker（saveAll 后）与 CheckDeletedBooksWorker（删除循环后）；SearchAllBooksWorker 重扫前快照 getSearchBookPaths 并在重建后重插（库外入库书存活）。
+- OpenerActivity.handleIntent 自动入库（isAutoAddToLibrary 默认 true，豁免缓存副本/远程/云/排除清单）；AppState.isAutoAddToLibrary + PrefFragment2 书库设置复选框 + strings 三语言（open_book_auto_add_to_library）。

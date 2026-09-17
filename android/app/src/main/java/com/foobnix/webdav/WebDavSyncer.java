@@ -134,7 +134,15 @@ public class WebDavSyncer {
             // the saved AI vendor list syncs PER-VENDOR through app-AI.json
             // (mergeAi); as one opaque string it would clobber that
             // per-vendor merge, so it is kept device-local here
-            "aiConfigs", "aiConfigName"));
+            "aiConfigs", "aiConfigName",
+            // the server entry lists sync PER-ITEM through
+            // app-NetworkSources.json (mergeNetworkSources3); as one raw
+            // delimited string each they are a second, coarser copy of the
+            // same data — the stale server copy of that single string used
+            // to revert a just-saved 子目录/title edit 3 s after the save.
+            // Device-local now: NetworkSources is the only cross-device
+            // representation of the server entries.
+            "allWebDavLinks", "allSmbLinks", "allSftpLinks"));
 
     /** Device-bound app-CSS.json fields (absolute paths and the SAF URI). */
     private static final Set<String> CSS_DEVICE_FIELDS = new HashSet<String>(Arrays.asList(
@@ -376,7 +384,7 @@ public class WebDavSyncer {
             // app-State.json merge can never override the lists; entries the
             // user deleted locally and did not change remotely stay deleted
             syncMergedObjectFile(s, globalUrl, AppProfile.syncNetworkSources,
-                    ProfileStateIO::mergeNetworkSources);
+                    ProfileStateIO::mergeNetworkSources3);
             ProfileStateIO.importNetworkSources(c);
             // a config sync can re-add a server this device has deleted:
             // re-strip the tombstoned identities so the deletion sticks
@@ -728,6 +736,12 @@ public class WebDavSyncer {
     /** Merge callback for the global state files. */
     interface JsonMerger {
         LinkedJSONObject merge(LinkedJSONObject local, LinkedJSONObject remote);
+    }
+
+    /** Three-way merge callback for files that keep a local base snapshot
+     * (…json.base): base = the last merged result this device wrote. */
+    interface JsonMerger3 {
+        LinkedJSONObject merge(LinkedJSONObject local, LinkedJSONObject remote, LinkedJSONObject base);
     }
 
     /**
@@ -1175,6 +1189,73 @@ public class WebDavSyncer {
         }
     }
 
+
+    /**
+     * Three-way merge of a JSON-object file via the given merger, with the
+     * same local base-snapshot convention as syncThreeWayFile
+     * (…json.base next to the config file, local-only): base = the last
+     * merged result this device wrote. The merger compares local and remote
+     * AGAINST the base, so a change made on only one side wins and the
+     * pre-edit server copy can no longer revert a just-saved local edit.
+     * The merged result becomes the new base after a successful round.
+     */
+    static void syncMergedObjectFile(Sardine s, String globalUrl, File local, JsonMerger3 merger) {
+        try {
+            if (local == null || !local.isFile()) {
+                return;
+            }
+            final String url = globalUrl + "/" + local.getName();
+            final LinkedJSONObject localObj = IO.readJsonObject(local);
+            final String remoteText = fetchText(s, url);
+            if (remoteText == null) {
+                // transient GET failure: touch neither the server nor the local file
+                android.util.Log.i("BENCH", "sync " + local.getName() + ": remote error, skipped");
+                return;
+            }
+            if (remoteText.isEmpty()) {
+                if (localObj.length() > 0) {
+                    s.put(url, localObj.toString().getBytes("UTF-8"));
+                }
+                return;
+            }
+            LinkedJSONObject remoteObj;
+            try {
+                remoteObj = new LinkedJSONObject(remoteText);
+            } catch (Exception badPayload) {
+                remoteObj = new LinkedJSONObject();
+            }
+            if (remoteObj.length() == 0) {
+                if (localObj.length() > 0) {
+                    s.put(url, localObj.toString().getBytes("UTF-8"));
+                }
+                return;
+            }
+            final File baseF = baseFileOf(local);
+            LinkedJSONObject baseObj = null;
+            if (baseF.isFile()) {
+                final String baseText = readText(baseF);
+                if (baseText != null && baseText.trim().startsWith("{")) {
+                    baseObj = new LinkedJSONObject(baseText);
+                }
+            }
+            final LinkedJSONObject merged = merger.merge(localObj, remoteObj, baseObj);
+            if (merged == null || merged.length() == 0) {
+                return;
+            }
+            if (!merged.toString().equals(localObj.toString())) {
+                IO.writeObjSync(local, merged);
+            }
+            if (!merged.toString().equals(remoteObj.toString())) {
+                s.put(url, merged.toString().getBytes("UTF-8"));
+            }
+            final String baseText = baseF.isFile() ? readText(baseF) : null;
+            if (baseText == null || !normalize(baseText).equals(normalize(merged.toString()))) {
+                IO.writeObjSync(baseF, merged);
+            }
+        } catch (Exception e) {
+            LOG.e(e, "WebDavSyncer merged3", local == null ? "?" : local.getName());
+        }
+    }
 
     /** Two-way merge of a JSON-object state file via the given merger. */
     static void syncMergedObjectFile(Sardine s, String globalUrl, File local, JsonMerger merger) {
