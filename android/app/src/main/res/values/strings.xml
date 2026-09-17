@@ -921,6 +921,8 @@
     <string name="remote_variant_drm_msg">This book is DRM-protected and cannot be opened by the app.</string>
     <string name="remote_variant_full_title">Full download required</string>
     <string name="remote_variant_full_msg">The layout structure of this book requires downloading the whole file before it can be opened (about %1$s). Download now?</string>
+    <string name="remote_docx_online_title">Opening online (text mode)</string>
+    <string name="remote_docx_online_msg">Extracting document text — images are skipped for a fast online open.</string>
     <string name="remote_overlay_download_btn">Download full book</string>
     <string name="remote_layout_failed">Online loading failed</string>
     <string name="remote_retry">Retry</string>

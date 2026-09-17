@@ -27,6 +27,10 @@
 #include <string.h>
 #include <stdio.h>
 #include <assert.h>
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
+
 
 enum { T, R, B, L };
 
@@ -875,6 +879,111 @@ static void gen2_image_common(fz_context *ctx, struct genstate *g, fz_html_box *
 	}
 }
 
+/* Reads a few header bytes of an archive entry and extracts the intrinsic
+ * pixel dimensions (PNG / JPEG / GIF / BMP) without reading the whole entry,
+ * so a streamed layout can size a deferred stub for <img> tags that carry
+ * no width/height attributes. Returns 1 and fills w/h on success; any
+ * error or unknown format returns 0 and the caller keeps the eager load
+ * (layout results never change for those). */
+static int
+sniff_image_entry_dims(fz_context *ctx, fz_archive *zip, const char *path, int *out_w, int *out_h)
+{
+	fz_stream *stm = NULL;
+	unsigned char buf[4096];
+	size_t n = 0;
+	int w = 0, h = 0, ok = 0;
+
+	if (!zip)
+		return 0;
+	fz_try(ctx)
+	{
+		stm = fz_open_archive_entry(ctx, zip, path);
+		n = fz_read(ctx, stm, buf, sizeof buf);
+		if (n >= 24 && buf[0] == 0x89 && buf[1] == 'P' && buf[2] == 'N' && buf[3] == 'G')
+		{
+			/* IHDR is the first chunk: the dims sit at fixed offsets */
+			w = (buf[16] << 24) | (buf[17] << 16) | (buf[18] << 8) | buf[19];
+			h = (buf[20] << 24) | (buf[21] << 16) | (buf[22] << 8) | buf[23];
+			ok = w > 0 && h > 0;
+		}
+		else if (n >= 10 && buf[0] == 'G' && buf[1] == 'I' && buf[2] == 'F')
+		{
+			w = buf[6] | (buf[7] << 8);
+			h = buf[8] | (buf[9] << 8);
+			ok = w > 0 && h > 0;
+		}
+		else if (n >= 26 && buf[0] == 'B' && buf[1] == 'M')
+		{
+			unsigned hdr = (unsigned)buf[14] | ((unsigned)buf[15] << 8)
+				| ((unsigned)buf[16] << 16) | ((unsigned)buf[17] << 24);
+			if (hdr >= 40) /* BITMAPINFOHEADER and newer only */
+			{
+				unsigned uw = (unsigned)buf[18] | ((unsigned)buf[19] << 8)
+					| ((unsigned)buf[20] << 16) | ((unsigned)buf[21] << 24);
+				unsigned uh = (unsigned)buf[22] | ((unsigned)buf[23] << 8)
+					| ((unsigned)buf[24] << 16) | ((unsigned)buf[25] << 24);
+				w = (int)uw;
+				h = uh > 0x7FFFFFFFu ? -(int)(0x100000000u - uh) : (int)uh;
+				if (h < 0)
+					h = -h; /* top-down DIB */
+				ok = w > 0 && h > 0;
+			}
+		}
+		else if (n >= 4 && buf[0] == 0xFF && buf[1] == 0xD8)
+		{
+			/* walk the segment chain; a SOF always precedes the first SOS,
+			 * so the scan never enters entropy-coded data. Anything past
+			 * the 4KB window (huge EXIF) simply fails -> eager load. */
+			size_t i = 2;
+			while (i + 9 < n)
+			{
+				int mark;
+				size_t seg;
+				if (buf[i] != 0xFF)
+				{
+					i++;
+					continue;
+				}
+				mark = buf[i + 1];
+				if (mark == 0xFF)
+				{
+					i++;
+					continue;
+				}
+				if (mark == 0x01 || (mark >= 0xD0 && mark <= 0xD7))
+				{
+					i += 2;
+					continue;
+				}
+				if (mark >= 0xC0 && mark <= 0xCF && mark != 0xC4 && mark != 0xC8 && mark != 0xCC)
+				{
+					h = (buf[i + 5] << 8) | buf[i + 6];
+					w = (buf[i + 7] << 8) | buf[i + 8];
+					ok = w > 0 && h > 0;
+					break;
+				}
+				seg = (size_t)(((buf[i + 2] << 8) | buf[i + 3]) + 2);
+				if (seg <= 2)
+					break;
+				i += seg;
+			}
+		}
+	}
+	fz_always(ctx)
+		fz_drop_stream(ctx, stm);
+	fz_catch(ctx)
+	{
+		ok = 0;
+	}
+	if (ok)
+	{
+		*out_w = w;
+		*out_h = h;
+		__android_log_print(ANDROID_LOG_INFO, "REMOTE", "img sniff %s -> %dx%d", path, w, h);
+	}
+	return ok;
+}
+
 static void gen2_image_html(fz_context *ctx, struct genstate *g, fz_html_box *root_box, fz_xml *node, int display, fz_css_style *style)
 {
 
@@ -910,22 +1019,41 @@ static void gen2_image_html(fz_context *ctx, struct genstate *g, fz_html_box *ro
 		}
 
 		img = NULL;
-		/* Remote/streamed books: an <img> with explicit pixel width and
-		 * height never consults the intrinsic image size during layout,
-		 * so swap in a deferred stub that pulls the entry bytes only at
-		 * first decode — a scan-style epub can then paginate (and show
-		 * its first page) without downloading every image. */
-		if (fz_defer_html_images(ctx) && w_att && h_att
-				&& !strchr(w_att, '%') && !strchr(h_att, '%')
-				&& strncmp(src, "data:", 5) != 0 && !strstr(src, ".svg")
-				&& (w = fz_atoi(w_att)) > 0 && (h = fz_atoi(h_att)) > 0)
+		/* Remote/streamed books: swap in a deferred stub that pulls the
+		 * entry bytes only at first decode — a scan-style epub can then
+		 * paginate (and show its first page) without downloading every
+		 * image. The stub needs pixel dims: from width/height attributes
+		 * when present, otherwise sniffed from the entry's image header,
+		 * so attribute-less scan images defer too. The sniffed dims are
+		 * the intrinsic dims, so the layout result is unchanged; unknown
+		 * formats keep the eager load. */
+		if (fz_defer_html_images(ctx)
+				&& strncmp(src, "data:", 5) != 0 && !strstr(src, ".svg"))
 		{
-			char dpath[2048];
-			fz_strlcpy(dpath, g->base_uri, sizeof dpath);
-			fz_strlcat(dpath, "/", sizeof dpath);
-			fz_strlcat(dpath, src, sizeof dpath);
-			fz_urldecode(dpath);
-			img = fz_new_deferred_archive_image(ctx, g->zip, dpath, w, h);
+			int dw = 0, dh = 0;
+			if (w_att && h_att && !strchr(w_att, '%') && !strchr(h_att, '%'))
+			{
+				dw = fz_atoi(w_att);
+				dh = fz_atoi(h_att);
+			}
+			else
+			{
+				char spath[2048];
+				fz_strlcpy(spath, g->base_uri, sizeof spath);
+				fz_strlcat(spath, "/", sizeof spath);
+				fz_strlcat(spath, src, sizeof spath);
+				fz_urldecode(spath);
+				sniff_image_entry_dims(ctx, g->zip, spath, &dw, &dh);
+			}
+			if (dw > 0 && dh > 0)
+			{
+				char dpath[2048];
+				fz_strlcpy(dpath, g->base_uri, sizeof dpath);
+				fz_strlcat(dpath, "/", sizeof dpath);
+				fz_strlcat(dpath, src, sizeof dpath);
+				fz_urldecode(dpath);
+				img = fz_new_deferred_archive_image(ctx, g->zip, dpath, dw, dh);
+			}
 		}
 		if (!img)
 			img = load_html_image(ctx, g->zip, g->base_uri, src);

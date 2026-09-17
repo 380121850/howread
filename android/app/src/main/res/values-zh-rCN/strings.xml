@@ -923,6 +923,8 @@
     <string name="remote_variant_drm_msg">该书受 DRM 加密保护，应用无法解密打开。</string>
     <string name="remote_variant_full_title">需要完整下载</string>
     <string name="remote_variant_full_msg">该书的排版结构需要下载整本书后才能打开（约 %1$s）。要现在下载吗？</string>
+    <string name="remote_docx_online_title">在线打开（文字版）</string>
+    <string name="remote_docx_online_msg">正在提取文档文字——为快速在线打开，图片已跳过。</string>
     <string name="remote_overlay_download_btn">下载整本后打开</string>
     <string name="remote_layout_failed">在线加载失败</string>
     <string name="remote_retry">重试</string>

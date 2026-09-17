@@ -68,6 +68,12 @@ public class RemoteBookOpener {
             return;
         }
         String ext = RemoteBook.getExt(remotePath);
+        if ("docx".equals(ext)) {
+            // Phase 2: restricted online reading — text parts only, media
+            // never downloaded; unsuitable books degrade to the full fetch
+            openDocxRestricted(a, remotePath, sizeHint, startPercent);
+            return;
+        }
         if (isHeavyFormat(ext)) {
             // formats that need the whole book before opening (mobi family,
             // djvu, cbr, doc): the user decides between download and cancel
@@ -76,6 +82,118 @@ public class RemoteBookOpener {
             // simple formats (TXT / FB2 / RTF / HTML): silent fetch
             fetchToCacheAndOpen(a, remotePath, sizeHint, startPercent);
         }
+    }
+
+    /**
+     * Restricted online reading for DOCX (Phase 2): extract the text parts
+     * through the block cache into a small "lite" copy (images skipped) and
+     * open it through the regular mammoth chain. An existing current local
+     * copy (lite or a previous full download) reopens with zero network.
+     * Anything the restriction cannot serve — giant document.xml, ZIP64,
+     * encryption, odd methods — degrades silently to the proven whole-book
+     * download, i.e. exactly the pre-Phase-2 behaviour.
+     */
+    private static void openDocxRestricted(final Activity a, final String remotePath,
+                                           final long sizeHint, final float startPercent) {
+        final File target = cacheBookFile(remotePath);
+        final File tagFile = new File(target.getPath() + ".tag");
+        final java.util.concurrent.atomic.AtomicBoolean cancelled =
+                new java.util.concurrent.atomic.AtomicBoolean();
+        final android.app.AlertDialog[] progress = new android.app.AlertDialog[1];
+        progress[0] = new android.app.AlertDialog.Builder(a)
+                .setTitle(R.string.remote_docx_online_title)
+                .setMessage(R.string.remote_docx_online_msg)
+                .setNegativeButton(R.string.cancel, (d, w) -> cancelled.set(true))
+                .setCancelable(false)
+                .create();
+        progress[0].show();
+        new AsyncTask() {
+            RemoteBookSession session;
+            boolean done;
+            boolean degrade;
+
+            @Override
+            protected Object doInBackground(Object[] objects) {
+                try {
+                    session = RemoteSessionFactory.open(remotePath);
+                    String tag = session.versionTag == null ? "" : session.versionTag;
+                    if (target.isFile() && target.length() > 0 && tagFile.isFile()
+                            && tag.equals(com.foobnix.android.utils.IO.readString(tagFile).trim())) {
+                        done = true; // current local copy (lite or full): no network
+                        return null;
+                    }
+                    if (isNetworkOffline() && target.isFile() && target.length() > 0
+                            && tagFile.isFile()) {
+                        done = true; // offline with a complete earlier copy
+                        return null;
+                    }
+                    if (cancelled.get()) {
+                        return null;
+                    }
+                    File part = RemoteDocxLite.extract(session,
+                            new File(target.getPath() + ".part"), cancelled);
+                    if (part == null) {
+                        degrade = true; // restriction cannot apply: proven path
+                        return null;
+                    }
+                    if (cancelled.get()) {
+                        part.delete();
+                        return null;
+                    }
+                    target.getParentFile().mkdirs();
+                    if (!part.renameTo(target)) {
+                        part.delete();
+                        degrade = true;
+                        return null;
+                    }
+                    java.io.FileWriter tw = new java.io.FileWriter(tagFile);
+                    tw.write(tag);
+                    tw.close();
+                    done = true;
+                } catch (Exception e) {
+                    LOG.e(e);
+                    android.util.Log.i("REMOTE", "docx restricted failed: " + e);
+                    new File(target.getPath() + ".part").delete();
+                    degrade = true;
+                } finally {
+                    if (session != null) {
+                        try {
+                            session.close();
+                        } catch (Exception ignore) {
+                            LOG.w(ignore);
+                        }
+                    }
+                }
+                return null;
+            }
+
+            @Override
+            protected void onPostExecute(Object o) {
+                if (progress[0] != null) {
+                    try {
+                        progress[0].dismiss();
+                    } catch (Exception ignore) {
+                    }
+                }
+                if (cancelled.get()) {
+                    android.util.Log.i("REMOTE", "docx restricted cancelled by user");
+                    return;
+                }
+                if (!done || degrade) {
+                    android.util.Log.i("REMOTE", "docx restricted -> whole-book download: "
+                            + remotePath);
+                    fetchToCacheAndOpen(a, remotePath, sizeHint, startPercent);
+                    return;
+                }
+                android.util.Log.i("REMOTE", "docx restricted ok: " + target);
+                ensureMeta(remotePath, session == null ? 0 : session.size);
+                if (startPercent > 0f) {
+                    ExtUtils.showDocumentWithoutDialog2(a, Uri.fromFile(target), startPercent, null);
+                } else {
+                    ExtUtils.openFile(a, AppDB.get().getOrCreate(target.getPath()));
+                }
+            }
+        }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }
 
     /** MOBI / AZW / AZW3 / PRC: binary containers, not streamable. */

@@ -363,7 +363,7 @@ public class RemoteVariantDetector {
         }
         if (v[0] == 8) {
             try {
-                Inflater inf = new Inflater();
+                Inflater inf = new Inflater(true); // ZIP raw deflate (RFC 1951), not zlib
                 inf.setInput(raw);
                 byte[] out = new byte[(int) v[2]];
                 int n = inf.inflate(out);

@@ -43,7 +43,11 @@ public class DocxContext extends PdfContext {
 
     @Override
     public CodecDocument openDocumentInner(String fileName, String password) {
-        if (!cacheFile.isFile()) {
+        File src = new File(fileName);
+        // a replaced/updated book (e.g. the remote docx fetched anew) must
+        // invalidate the derived html — key on the source's mtime, not just
+        // the cache file's existence
+        if (!cacheFile.isFile() || cacheFile.lastModified() < src.lastModified()) {
             DocumentConverter converter = new DocumentConverter().
                     imageConverter(new ImageConverter.ImgElement() {
                         @Override
