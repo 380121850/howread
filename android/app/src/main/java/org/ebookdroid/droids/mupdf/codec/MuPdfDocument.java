@@ -122,9 +122,26 @@ public class MuPdfDocument extends AbstractCodecDocument {
             CacheZipUtils.trimAccel(CacheZipUtils.CACHE_TEMP == null ? null : CacheZipUtils.CACHE_TEMP.listFiles(),
                     new File(accel), 8);
 
+            // Round 12: local big scan EPUBs get the same deferred-image
+            // layout as remote books — pagination is identical (the <img>
+            // width/height drive layout) but the compressed images no
+            // longer have to be resident, so 200MB+ books open fast
+            // instead of loading every image at layout time (OOM risk).
+            int deferHtml = 0;
+            String lower = fname.toLowerCase(java.util.Locale.US);
+            if (lower.endsWith(".epub") || lower.endsWith(".epub2")) {
+                try {
+                    if (new File(fname).length() >= 100L * 1024 * 1024) {
+                        deferHtml = 1;
+                        android.util.Log.i("REMOTE", "local big epub: deferred image layout on");
+                    }
+                } catch (Throwable t) {
+                    LOG.e(t);
+                }
+            }
             final long open = open(allocatedMemory, format, fname, pwd, css,
                     BookCSS.get().documentStyle == BookCSS.STYLES_ONLY_USER ? 0 : 1, BookCSS.get().imageScale,
-                    AppState.get().antiAliasLevel, accel, isImageScale);
+                    AppState.get().antiAliasLevel, accel, isImageScale, deferHtml);
             LOG.d("TEST", "Open document " + fname + " " + open);
             LOG.d("TEST", "Open document css ", css);
             LOG.d("TEST", "Open document isImageScale ", isImageScale);
@@ -180,7 +197,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
     public static native String getFzVersion();
 
     private static native long open(int storememory, int format, String fname, String pwd, String css, int useDocStyle,
-                                    float scale, int antialias, String accel, int isImageScale);
+                                    float scale, int antialias, String accel, int isImageScale, int deferHtmlImages);
 
     private static native long openStream(int storememory, int format, String magic, String pwd, String css,
                                           int useDocStyle, float scale, int antialias, int isImageScale,

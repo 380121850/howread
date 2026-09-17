@@ -16,6 +16,11 @@ public class HtmlContext extends PdfContext {
 
     @Override
     public CodecDocument openDocumentInner(String fileName, String password) {
+        if (com.foobnix.remote.RemoteBook.isRemotePath(fileName)) {
+            // Remote HTML (round 12): engine-native stream open — restricted
+            // mode: external images cannot resolve without a local directory.
+            return openTextDoc(fileName, fileName, password);
+        }
         try {
             return openDocumentInnerForce(fileName, password, false);
         } catch (Exception e1) {

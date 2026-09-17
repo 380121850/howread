@@ -119,6 +119,7 @@ public class RemoteBookOpener {
         new AsyncTask() {
             RemoteBookSession session;
             String error;
+            RemoteVariantDetector.Verdict verdict;
 
             @Override
             protected Object doInBackground(Object[] objects) {
@@ -132,6 +133,16 @@ public class RemoteBookOpener {
                     error = e.getMessage();
                     android.util.Log.i("REMOTE", "openOnline probe failed: " + error);
                 }
+                if (session != null) {
+                    // round 12: packaging-variant gate — DRM / giant-XHTML /
+                    // engine-hostile encodings degrade before the reader opens
+                    try {
+                        verdict = RemoteVariantDetector.check(session, RemoteBook.getExt(remotePath));
+                    } catch (Throwable t) {
+                        LOG.e(t);
+                        verdict = null;
+                    }
+                }
                 return null;
             }
 
@@ -140,6 +151,34 @@ public class RemoteBookOpener {
                 if (session == null) {
                     android.util.Log.i("REMOTE", "openOnline session null, offer download fallback");
                     offerDownloadFallback(a, remotePath, sizeHint, error);
+                    return;
+                }
+                if (verdict != null && verdict.action == RemoteVariantDetector.UNSUPPORTED) {
+                    android.util.Log.i("REMOTE", "variant unsupported: " + verdict.detail);
+                    new AlertDialog.Builder(a)
+                            .setTitle(R.string.remote_variant_drm_title)
+                            .setMessage(R.string.remote_variant_drm_msg)
+                            .setPositiveButton(android.R.string.ok, null)
+                            .show();
+                    return;
+                }
+                if (verdict != null && verdict.action == RemoteVariantDetector.DOWNLOAD) {
+                    android.util.Log.i("REMOTE", "variant download: " + verdict.detail);
+                    if (verdict.prompt) {
+                        new AlertDialog.Builder(a)
+                                .setTitle(R.string.remote_variant_full_title)
+                                .setMessage(a.getString(R.string.remote_variant_full_msg,
+                                        fmtMB(session.size)))
+                                .setPositiveButton(R.string.remote_download,
+                                        (d, w) -> fetchToCacheAndOpen(a, remotePath, sizeHint,
+                                                startPercent))
+                                .setNegativeButton(android.R.string.cancel, null)
+                                .show();
+                    } else {
+                        // engine-hostile variant (encoding / wrapper / size):
+                        // silently take the proven conversion path
+                        fetchToCacheAndOpen(a, remotePath, sizeHint, startPercent);
+                    }
                     return;
                 }
                 if (!session.isRangeSupported()) {

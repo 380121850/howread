@@ -917,6 +917,13 @@
     <string name="remote_open_failed">Cannot open online</string>
     <string name="remote_open_failed_msg">Error: %1$s</string>
     <string name="remote_download_and_open">Download and open</string>
+    <string name="remote_variant_drm_title">Protected book</string>
+    <string name="remote_variant_drm_msg">This book is DRM-protected and cannot be opened by the app.</string>
+    <string name="remote_variant_full_title">Full download required</string>
+    <string name="remote_variant_full_msg">The layout structure of this book requires downloading the whole file before it can be opened (about %1$s). Download now?</string>
+    <string name="remote_overlay_download_btn">Download full book</string>
+    <string name="remote_layout_failed">Online loading failed</string>
+    <string name="remote_retry">Retry</string>
     <string name="moon_net_section_smb">SMB (Pro)</string>
     <string name="moon_net_section_sftp">SFTP (Pro)</string>
     <string name="moon_lib_remote_folders">Remote folders (Pro)</string>

@@ -742,6 +742,13 @@
     <string name="remote_open_failed">無法線上開啟</string>
     <string name="remote_open_failed_msg">錯誤：%1$s</string>
     <string name="remote_download_and_open">下載後開啟</string>
+    <string name="remote_variant_drm_title">加密書籍</string>
+    <string name="remote_variant_drm_msg">該書受 DRM 加密保護，應用無法解密開啟。</string>
+    <string name="remote_variant_full_title">需要完整下載</string>
+    <string name="remote_variant_full_msg">該書的排版結構需要下載整本書後才能開啟（約 %1$s）。要現在下載嗎？</string>
+    <string name="remote_overlay_download_btn">下載整本後開啟</string>
+    <string name="remote_layout_failed">線上載入失敗</string>
+    <string name="remote_retry">重試</string>
     <string name="moon_net_section_smb">SMB (Pro)</string>
     <string name="moon_net_section_sftp">SFTP (Pro)</string>
     <string name="moon_lib_remote_folders">遠端目錄 (Pro)</string>

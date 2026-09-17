@@ -1875,6 +1875,28 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
         overlay.addView(tv, new android.widget.FrameLayout.LayoutParams(
                 android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
                 android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
+        // round 12: escape hatch for variants the probe could not predict
+        // (no-dimension scan epubs, very slow one-shot layouts): the user
+        // can switch to a full download instead of waiting blind
+        final android.widget.Button dlBtn = new android.widget.Button(this);
+        dlBtn.setText(R.string.remote_overlay_download_btn);
+        dlBtn.setVisibility(android.view.View.GONE);
+        android.widget.FrameLayout.LayoutParams dlLp = new android.widget.FrameLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+                android.view.Gravity.BOTTOM | android.view.Gravity.CENTER_HORIZONTAL);
+        dlLp.bottomMargin = Dips.dpToPx(48);
+        overlay.addView(dlBtn, dlLp);
+        dlBtn.setOnClickListener(v -> {
+            dlBtn.setEnabled(false);
+            android.util.Log.i("REMOTE", "overlay: slow layout, user chose full download: " + book);
+            com.foobnix.remote.RemoteBookOpener.fetchToCache(HorizontalViewActivity.this, book, 0,
+                    target -> {
+                        ExtUtils.openFile(HorizontalViewActivity.this,
+                                com.foobnix.ui2.AppDB.get().getOrCreate(target.getPath()));
+                        finish();
+                    });
+        });
         // the overlay covers exactly the window in which no content can
         // be drawn yet: the whole one-shot layout for fb2/mobi/txt, and
         // for epub only the first layout chunk (with deferred images
@@ -1915,6 +1937,10 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
                         text += "\n" + getString(R.string.remote_loading_slow);
                     }
                     tv.setText(text);
+                    if (sec >= 20 && dc != null && !dc.isRemoteLanded()
+                            && dlBtn.getVisibility() != android.view.View.VISIBLE) {
+                        dlBtn.setVisibility(android.view.View.VISIBLE);
+                    }
                 } catch (Throwable t) {
                     LOG.e(t);
                 }
@@ -1987,15 +2013,22 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
                     dc.closeActivity();
                     return;
                 }
+                final int total = o instanceof Integer ? (Integer) o : 0;
+                if (total <= 0 && dc.getPagesCount() == 0) {
+                    // layout failed (network / engine error): recovery panel
+                    // instead of a silently empty shell
+                    showLayoutFailure(overlay, tv, ui, tick, book);
+                    return;
+                }
                 if (dc.isRemoteProgressive()) {
                     // final safety apply (covers a loop aborted before the
                     // "last" chunk was posted); no-op when already applied
-                    if (o instanceof Integer && ((Integer) o) > 0) {
-                        applyRemoteChunk((Integer) o, true);
+                    if (total > 0) {
+                        applyRemoteChunk(total, true);
                     }
                     return;
                 }
-                dc.applyRemoteTextLayout(o == null ? 0 : (Integer) o);
+                dc.applyRemoteTextLayout(total);
                 if (pagerAdapter != null) {
                     pagerAdapter.notifyDataSetChanged();
                 }
@@ -2003,6 +2036,54 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
                 updateUI(dc.getCurrentPage());
             }
         }.executeOnExecutor(CopyAsyncTask.THREAD_POOL_EXECUTOR);
+    }
+
+    /** Layout task failed (network / engine error): turn the overlay into
+     * a recovery panel — retry the online layout or switch to a full
+     * download — instead of silently showing an empty reader shell. */
+    private void showLayoutFailure(final android.widget.FrameLayout overlay,
+                                   final android.widget.TextView tv,
+                                   final android.os.Handler ui, final Runnable tick,
+                                   final String book) {
+        android.util.Log.i("REMOTE", "remote layout failed, offering retry/download: " + book);
+        ui.removeCallbacks(tick);
+        tv.setText(R.string.remote_layout_failed);
+        if (overlay.getParent() == null) {
+            addContentView(overlay, new android.view.ViewGroup.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+        android.widget.Button retry = new android.widget.Button(this);
+        retry.setText(R.string.remote_retry);
+        retry.setOnClickListener(v -> {
+            try {
+                ((android.view.ViewGroup) overlay.getParent()).removeView(overlay);
+            } catch (Throwable ignore) {
+            }
+            startRemoteTextLayout();
+        });
+        android.widget.Button dl = new android.widget.Button(this);
+        dl.setText(R.string.remote_download_and_open);
+        dl.setOnClickListener(v -> {
+            dl.setEnabled(false);
+            com.foobnix.remote.RemoteBookOpener.fetchToCache(HorizontalViewActivity.this, book, 0,
+                    target -> {
+                        ExtUtils.openFile(HorizontalViewActivity.this,
+                                com.foobnix.ui2.AppDB.get().getOrCreate(target.getPath()));
+                        finish();
+                    });
+        });
+        android.widget.LinearLayout box = new android.widget.LinearLayout(this);
+        box.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        box.setGravity(android.view.Gravity.CENTER);
+        box.addView(retry);
+        box.addView(dl);
+        android.widget.FrameLayout.LayoutParams lp = new android.widget.FrameLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+                android.view.Gravity.BOTTOM | android.view.Gravity.CENTER_HORIZONTAL);
+        lp.bottomMargin = Dips.dpToPx(48);
+        overlay.addView(box, lp);
     }
 
     /** Applies one progressive layout chunk on the UI thread (epub fast

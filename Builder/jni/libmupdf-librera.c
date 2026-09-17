@@ -262,7 +262,8 @@ JNIEXPORT jlong
                                                             jfloat imageScale,
                                                             jint antialias,
                                                             jstring accelerate,
-                                                            jint is_image_scale)
+                                                            jint is_image_scale,
+                                                            jint defer_html_images)
 {
 
     // try this
@@ -301,6 +302,13 @@ JNIEXPORT jlong
     }
     doc->ctx->image_scale = imageScale;
     doc->ctx->is_image_scale = is_image_scale;
+    if (defer_html_images) {
+        /* Round 12: local big scan EPUB — layout must not pull every image
+         * entry (OOM on 200MB+ books); identical pagination, lazy decode. */
+        fz_set_defer_html_images(doc->ctx, 1);
+        __android_log_print(ANDROID_LOG_INFO, "REMOTE",
+                            "local big epub: deferred html images");
+    }
 
     fz_register_document_handlers(doc->ctx);
 

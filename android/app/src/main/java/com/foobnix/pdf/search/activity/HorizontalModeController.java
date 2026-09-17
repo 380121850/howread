@@ -167,7 +167,8 @@ public abstract class HorizontalModeController extends DocumentController {
             // the first few MB of cache. fb2/mobi/txt are single-file parses
             // (the engine reads the whole file at open) — the one-shot
             // background layout is their ceiling without engine changes.
-            remoteProgressive = "epub".equals(com.foobnix.remote.RemoteBook.getExt(bookPath));
+            String rext = com.foobnix.remote.RemoteBook.getExt(bookPath);
+            remoteProgressive = "epub".equals(rext) || "epub2".equals(rext);
         } else if (codeDocument != null) {
             pagesCount = codeDocument.getPageCount(imageWidth, imageHeight, BookCSS.get().fontSizeSp);
         } else {
@@ -614,6 +615,12 @@ public abstract class HorizontalModeController extends DocumentController {
      * page 0, or the user's own page) — no further jumps needed. */
     public boolean isRemoteLanded() {
         return remoteLanded;
+    }
+
+    /** Page count known so far (0 while the deferred layout has not produced
+     * its first result). */
+    public int getPagesCount() {
+        return pagesCount;
     }
 
     /** Saved reading position (0..1) the deferred layout must land on. */

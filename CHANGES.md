@@ -3878,3 +3878,24 @@ iOS / Desktop 两个预留平台没有任何版本配置位。
 - 本地 epub / 远程 PDF 打开渲染正常（回归通过）；全程无崩溃、无 ANR。
 
 **内部佐证（辅助）**：MuPDF 引擎新增“延迟图片加载”（image.c fz_deferred_image 子类 + fz_new_deferred_archive_image；html-parse.c gen2_image_html 对带 width/height 属性的 `<img>` 生成延迟桩，渲染时才经远程流拉取真实图片；JNI glue 流式打开路径开启 fz_set_defer_html_images）；延迟桩带 RGB colorspace（否则 fz_fill_image 报 “must be a color image” 并中止显示列表录制）；MuPdfPage_renderPage 的像素缓冲由 GetPrimitiveArrayCritical 改为 Get/SetIntArrayRegion 拷贝（绘制期间回调 Java 合法，修复 “JNI DETECTED ERROR … after critical get” 导致的进程终止）；HorizontalViewActivity 遮罩改为首个渐进分块即撤、定位横幅（remote_locating_position）、ETA（remote_open_eta）；HorizontalModeController 落点按真实页数重算（est≤1 保护 + 全书排完重锚 + 用户翻页不打断）。鸿蒙原生库经 harmony/native/build_mupdf_harmony.sh 重编。
+
+## 2026-09-16 v1.3.9（Round 12）：在线阅读"封装变体识别"——8 种格式在线直开 + 异常变体提前兜底
+
+### 做了什么（用户视角）
+- **TXT / FB2 / HTML 新增"在线直开"**：此前这三类点开都要先把整本书下载完才能阅读；现在符合条件（UTF-8 编码、体积在阈值内）的书点开即进入阅读器"边下边读"，缓存进度与预计剩余时间直接显示在打开遮罩上。已知差异：在线直开的 FB2/HTML 暂不支持脚注弹注，HTML 的外链图片不显示——这类书仍可手动"下载后打开"获得完整效果。
+- **epub 打开前"变体体检"**：epub 在打开前用少量 Range 请求读取文件目录（ZIP 中央目录 + OPF），把两种"怎么优化都必须整本下载"的形态在进阅读器之前就明确告知，不再让用户进去干等：
+  - **DRM 加密书**：直接提示"该书受 DRM 加密保护，应用无法打开"；
+  - **巨型单文件排版**（整本书挤在一个超大 XHTML 里、超 30MB）：提示"需要完整下载"，确认后走带进度的下载、完成后自动打开，本地留有副本、二次打开秒开。
+- **编码/封装不合格的变体自动走老路**：GBK 等非 UTF-8 的 TXT/FB2、gzip/zip 包裹的 FB2、MHTML、超阈值的大文件等，自动静默转入原"下载→本地转换→打开"链路，体验与旧版一致，不弹多余对话框。
+- **卡住可自救**：在线打开若 20 秒仍未渲染出内容，缓存遮罩上出现「下载整本后打开」按钮，一键转为下载；在线加载失败不再静默白屏，给出「重试 / 下载并打开」两个选择。
+- **本地大扫描 epub 提速**：≥100MB 的本地 epub 打开时启用与在线版相同的"延迟图片"排版（与 v1.3.8 在线机制同源、分页结果完全一致），200MB 级扫描书从"排版数分钟、易被系统杀"变为秒级出页。
+- **.epub2 扩展名修复**：此前 .epub2 文件会被整本下载且当作 PDF 打开（无重排）；现正确按 epub 在线直开、可重排。
+- 版本 1.3.9（appCode 7309），pro/fdroid × debug/release 全量出包。逐格式变体矩阵见工作区《在线格式封装变体适配实施-v1.3.9.md》。
+
+### 如何验证
+50.23 测试服三协议根目录已投放 var_* 系列大体积变体书。MI9 真机：var_txt_utf8_bom / var_txt_utf8_nobom / var_fb2_utf8 / var_html_small 应在线直开且可阅读；var_txt_gbk / var_fb2_gbk / var_fb2_big / var_html_big / var_txt_big_utf8 应自动转入下载链路；var_epub_drm 应提示"不支持"；var_epub_giantxhtml 应提示"需要完整下载"；var_epub_nosize_scan 应流式打开、20 秒后遮罩出现下载按钮；var_epub_normal_big / var_cbz_big / var_pdf_big 及既有《网络传播概论》回归流式阅读与落点。
+
+### Round 12 真机验证中发现并修复的两个问题（同日热修复，已复验）
+- **DRM 识别修正**：真机测试发现带命名空间前缀的加密节点（`<enc:EncryptedData>`，EPUB 实际书籍的常见写法）不会被识别为 DRM。已修正匹配逻辑并复验：加密书现在正确弹出"加密书籍不受支持"提示。
+- **BookWarmer 预热守卫**：真机压测中出现一次"应用无响应"（ANR）：后台"书籍预热"组件对新下载的 110MB 巨型单文件排版副本做全量排版预热，长时间占用全局排版锁，导致随后打开其他在线书被饿死。已为预热组件增加 >100MB 跳过守卫并复验：大书打开不再被预热饿死（book_bigepub 秒开、128 页、落点正常）。
+- 已知待验证项（需要慢速/不稳定网络才能触发，局域网太快无法自然出现）：打开遮罩停留 20 秒后出现的「下载整本后打开」按钮、加载失败的「重试 / 下载并打开」面板。逻辑已实现并通过代码走查，建议在弱网环境补充人工验证。

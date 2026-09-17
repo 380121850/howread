@@ -144,8 +144,12 @@ public class RemoteBook {
      */
     public static boolean isDirectOpen(String path) {
         String ext = getExt(path);
-        return "pdf".equals(ext) || "epub".equals(ext) || "cbz".equals(ext) || "xps".equals(ext)
-                || "oxps".equals(ext);
+        // round 12: txt/fb2/html/epub2 stream too — the open-time variant
+        // detector (RemoteVariantDetector) gates hostile variants back to
+        // the download path before the reader opens
+        return "pdf".equals(ext) || "epub".equals(ext) || "epub2".equals(ext) || "cbz".equals(ext)
+                || "xps".equals(ext) || "oxps".equals(ext) || "txt".equals(ext) || "fb2".equals(ext)
+                || "html".equals(ext) || "htm".equals(ext);
     }
 
     /**

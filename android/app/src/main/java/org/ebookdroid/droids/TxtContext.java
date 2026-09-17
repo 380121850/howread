@@ -17,6 +17,12 @@ public class TxtContext extends PdfContext {
 
     @Override
     public CodecDocument openDocumentInner(String fileName, String password) {
+        if (com.foobnix.remote.RemoteBook.isRemotePath(fileName)) {
+            // Remote TXT (round 12): engine-native stream open (the variant
+            // gate already vetted the encoding); the local TxtExtract chain
+            // needs a real file.
+            return openTextDoc(fileName, fileName, password);
+        }
 
         String extractFile;
         try {

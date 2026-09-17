@@ -44,7 +44,7 @@ public enum BookType {
 
     FOLDER(FolderContext.class, false, false,list(FolderContext.LXML), list("application/lxml")),
 
-    EPUB(EpubContext.class, true, true, list("epub"), list("application/epub+zip")),
+    EPUB(EpubContext.class, true, true, list("epub", "epub2"), list("application/epub+zip")),
 
 
     FB2(Fb2Context.class, true, true, list("fb2","fbd"),

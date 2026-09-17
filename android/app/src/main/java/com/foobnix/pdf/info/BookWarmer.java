@@ -62,7 +62,15 @@ public class BookWarmer {
         t.start();
     }
 
+    /** Books larger than this are skipped: their full-document warm layout
+     * can run for many minutes (giant single-chapter scan copies) while
+     * holding the global native lock in chunks, starving real reader opens. */
+    private static final long MAX_WARM_FILE_BYTES = 100L * 1024 * 1024;
+
     private static void warmOne(final String path) {
+        if (new File(path).length() > MAX_WARM_FILE_BYTES) {
+            return; // too big to warm: the first real open handles it
+        }
         final long t0 = SystemClock.elapsedRealtime();
         CodecContext context = null;
         CodecDocument document = null;

@@ -40,6 +40,11 @@ public class Fb2Context extends PdfContext {
 
     @Override
     public CodecDocument openDocumentInner(final String fileName, String password) {
+        if (com.foobnix.remote.RemoteBook.isRemotePath(fileName)) {
+            // Remote FB2 (round 12): engine-native stream open; the local
+            // Fb2Extractor chain (epub + footer notes) needs a real file.
+            return openTextDoc(fileName, fileName, password);
+        }
         if(cacheFile==null){
             cacheFile = getCacheFileName(fileName);
         }
