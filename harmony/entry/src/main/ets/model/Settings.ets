@@ -161,18 +161,17 @@ export interface ReaderSettings {
   remoteOnlineFirst: boolean;
   /** Disk cache total cap in MB (50..4096) */
   remoteCacheMaxMB: number;
-  /** Prefetch only on unmetered (wifi-like) networks */
+  /** Single metered gate (0.9.6 merged switch): prefetch AND whole-book
+   *  cache run on wifi-like networks only; a stored legacy
+   *  remoteWholeBookOnMetered=true migrates this to false at load
+   *  (Android 2026-09-17 switch merge) */
   remotePrefetchWifiOnly: boolean;
   /** Whole-book background fill threshold in MB (0 = off) */
   remoteWholeBookThresholdMB: number;
-  /** Allow whole-book fill on metered networks */
-  remoteWholeBookOnMetered: boolean;
   /** Network retry count for range reads */
   remoteRetryCount: number;
-  /** Initial retry interval in ms (exponential backoff) */
+  /** Initial retry interval in ms (exponential backoff; default 100) */
   remoteRetryIntervalMs: number;
-  /** Cache expire days (LRU eviction) */
-  remoteCacheExpireDays: number;
 
   /* ---- Round 9: volume-key navigation (Android enable_volume_keys) ---- */
   /** Volume keys: 0=off, 1=page turn, 2=zoom (auto-scroll speed when auto-scrolling) */
@@ -273,15 +272,20 @@ export function defaultSettings(): ReaderSettings {
     remoteCacheMaxMB: 500,
     remotePrefetchWifiOnly: true,
     remoteWholeBookThresholdMB: 20,
-    remoteWholeBookOnMetered: false,
     remoteRetryCount: 3,
-    remoteRetryIntervalMs: 1000,
-    remoteCacheExpireDays: 30,
+    remoteRetryIntervalMs: 100,
     volumeKeyAction: 1,
     tapLeftAction: 0,
     tapCenterAction: 2,
     tapRightAction: 1
   };
+}
+
+/* 0.9.6: one legacy key stays readable for a release (merged-switch
+ * migration): old "whole-book cache on metered too"=true maps to the merged
+ * wifi-only switch OFF. Not in ReaderSettings, so new saves drop it. */
+interface LegacyRemoteSettings {
+  remoteWholeBookOnMetered?: boolean;
 }
 
 export async function loadSettings(ctx: Context): Promise<ReaderSettings> {
@@ -294,6 +298,7 @@ export async function loadSettings(ctx: Context): Promise<ReaderSettings> {
     }
     const raw: object = JSON.parse(json) as object;
     const r = raw as ReaderSettings;
+    const legacy = raw as LegacyRemoteSettings;
     /* field-by-field merge with defaults so newer builds stay compatible */
     const s: ReaderSettings = {
       theme: typeof r.theme === 'number' ? r.theme : d.theme,
@@ -365,15 +370,14 @@ export async function loadSettings(ctx: Context): Promise<ReaderSettings> {
       downloadsFolder: typeof r.downloadsFolder === 'string' ? r.downloadsFolder : d.downloadsFolder,
       remoteOnlineFirst: r.remoteOnlineFirst !== false,
       remoteCacheMaxMB: typeof r.remoteCacheMaxMB === 'number' ? r.remoteCacheMaxMB : d.remoteCacheMaxMB,
-      remotePrefetchWifiOnly: r.remotePrefetchWifiOnly !== false,
+      remotePrefetchWifiOnly: (r.remotePrefetchWifiOnly !== false) && !(legacy.remoteWholeBookOnMetered === true),
       remoteWholeBookThresholdMB: typeof r.remoteWholeBookThresholdMB === 'number'
         ? r.remoteWholeBookThresholdMB : d.remoteWholeBookThresholdMB,
-      remoteWholeBookOnMetered: r.remoteWholeBookOnMetered === true,
       remoteRetryCount: typeof r.remoteRetryCount === 'number' ? r.remoteRetryCount : d.remoteRetryCount,
-      remoteRetryIntervalMs: typeof r.remoteRetryIntervalMs === 'number'
+      /* 0.9.6: a stored old default 1000 follows the new default 100
+       * (Android AppState migration parity); custom values kept */
+      remoteRetryIntervalMs: typeof r.remoteRetryIntervalMs === 'number' && r.remoteRetryIntervalMs !== 1000
         ? r.remoteRetryIntervalMs : d.remoteRetryIntervalMs,
-      remoteCacheExpireDays: typeof r.remoteCacheExpireDays === 'number'
-        ? r.remoteCacheExpireDays : d.remoteCacheExpireDays,
       volumeKeyAction: typeof r.volumeKeyAction === 'number' ? r.volumeKeyAction : d.volumeKeyAction,
       tapLeftAction: typeof r.tapLeftAction === 'number' ? r.tapLeftAction : d.tapLeftAction,
       tapCenterAction: typeof r.tapCenterAction === 'number' ? r.tapCenterAction : d.tapCenterAction,

@@ -11,6 +11,7 @@
  * remote books store (Android RemoteScanner) live here too.
  */
 import http from '@ohos.net.http';
+import connection from '@ohos.net.connection';
 import fs from '@ohos.file.fs';
 import util from '@ohos.util';
 import cryptoFramework from '@ohos.security.cryptoFramework';
@@ -170,17 +171,34 @@ export function isPageFormatExt(ext: string): boolean {
   return PAGE_FORMAT_EXTS.indexOf(ext) >= 0;
 }
 
+/* 0.9.6 single metered gate (Android isMeteredNetwork): a cellular bearer is
+ * metered; probe failure or no default network counts as not metered
+ * (fail-open, same as the Android catch path). */
+export async function isMeteredNetwork(): Promise<boolean> {
+  try {
+    const has: boolean = await connection.hasDefaultNet();
+    if (!has) {
+      return false;
+    }
+    const handle: connection.NetHandle = await connection.getDefaultNet();
+    const cap: connection.NetCapabilities = await connection.getNetCapabilities(handle);
+    return cap.bearerTypes.indexOf(connection.NetBearType.BEARER_CELLULAR) >= 0;
+  } catch (e) {
+    return false;
+  }
+}
+
 /* ---- cache settings snapshot (Android AppState.remote*) ---- */
 
 export interface RemoteCacheSettings {
   onlineFirst: boolean;
   cacheMaxMB: number;
+  /* 0.9.6 merged switch: when true, prefetch AND whole-book fill are
+   * wifi-only (single metered gate, Android 2026-09-17 parity) */
   prefetchWifiOnly: boolean;
   wholeBookThresholdMB: number;
-  wholeBookOnMetered: boolean;
   retryCount: number;
   retryIntervalMs: number;
-  cacheExpireDays: number;
 }
 
 export async function loadRemoteCacheSettings(ctx: Context): Promise<RemoteCacheSettings> {
@@ -191,10 +209,8 @@ export async function loadRemoteCacheSettings(ctx: Context): Promise<RemoteCache
       cacheMaxMB: s.remoteCacheMaxMB > 0 ? s.remoteCacheMaxMB : 500,
       prefetchWifiOnly: s.remotePrefetchWifiOnly,
       wholeBookThresholdMB: s.remoteWholeBookThresholdMB,
-      wholeBookOnMetered: s.remoteWholeBookOnMetered,
       retryCount: s.remoteRetryCount,
-      retryIntervalMs: s.remoteRetryIntervalMs,
-      cacheExpireDays: s.remoteCacheExpireDays
+      retryIntervalMs: s.remoteRetryIntervalMs
     };
   } catch (e) {
     return {
@@ -202,10 +218,8 @@ export async function loadRemoteCacheSettings(ctx: Context): Promise<RemoteCache
       cacheMaxMB: 500,
       prefetchWifiOnly: true,
       wholeBookThresholdMB: 20,
-      wholeBookOnMetered: false,
       retryCount: 3,
-      retryIntervalMs: 1000,
-      cacheExpireDays: 30
+      retryIntervalMs: 100
     };
   }
 }
@@ -1085,6 +1099,10 @@ export class RemoteSession {
   store: BlockCacheStore;
   private closed: boolean = false;
   private prefetchBusy: boolean = false;
+  /* 0.9.6: probed once per open(); Android re-probes per decision — the
+   * per-open snapshot is the port compromise (a network switch picked up
+   * on the next open) */
+  private metered: boolean = false;
   private fillerBusy: boolean = false;
   private fillerGen: number = 0;
   onFillerProgress: ((percent: number) => void) | undefined = undefined;
@@ -1101,6 +1119,8 @@ export class RemoteSession {
 
   /** Probe remote, (re)open the cache; returns the probe (throws when unreachable). */
   async open(): Promise<RemoteProbe> {
+    this.metered = await isMeteredNetwork();
+    console.info(`[RemoteBook] session open: metered=${this.metered}, wifiOnly=${this.settings.prefetchWifiOnly}`);
     const probe: RemoteProbe | null = await this.source.probe();
     if (probe === null) {
       throw new Error('remote probe failed');
@@ -1127,6 +1147,10 @@ export class RemoteSession {
     if (this.closed || this.prefetchBusy) {
       return;
     }
+    /* 0.9.6 single metered gate (Android prefetchBlocks) */
+    if (this.settings.prefetchWifiOnly && this.metered) {
+      return;
+    }
     const ext: string = fileExtOf(this.uri.substring(this.uri.lastIndexOf('/') + 1));
     const depth: number = isPageFormatExt(ext) ? 32 : 3;
     this.prefetchBusy = true;
@@ -1146,8 +1170,13 @@ export class RemoteSession {
     if (threshold <= 0 || this.store.meta.size > threshold) {
       return;
     }
-    /* metered-network policy is not probed this round (emulator/VM only);
-     * wholeBookOnMetered=false still fills on wifi-like networks */
+    /* 0.9.6 single metered gate (Android maybeStartFiller): wifi-only ON +
+     * metered = no whole-book fill on mobile either; the old <5MB small-book
+     * mobile exception was dropped on Android in the same merge and never
+     * existed here */
+    if (this.settings.prefetchWifiOnly && this.metered) {
+      return;
+    }
     this.fillerBusy = true;
     const gen: number = ++this.fillerGen;
     const fetcher = (off: number, want: number): Promise<ArrayBuffer> => {

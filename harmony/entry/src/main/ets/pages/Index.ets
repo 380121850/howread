@@ -8623,13 +8623,11 @@ struct Index {
         this.settingsGroupBar('在线阅读与缓存', 'remote')
         if (this.groupExp['remote'] === true) {
           this.settingsToggleRow('在线优先阅读', 'remoteOnlineFirst', '直开格式直接流式打开')
-          this.settingsToggleRow('仅 WiFi 预取', 'remotePrefetchWifiOnly', '')
-          this.settingsToggleRow('计费网络允许整本缓存', 'remoteWholeBookOnMetered', '')
+          this.settingsToggleRow('仅 WiFi 下预取与整本缓存', 'remotePrefetchWifiOnly', '开：流量下只随读随取；关：流量与 WiFi 同等对待')
           this.settingsNumRow('缓存上限 (MB)', 'remoteCacheMaxMB', 50, 4096)
           this.settingsNumRow('整本缓存阈值 (MB)', 'remoteWholeBookThresholdMB', 0, 200)
           this.settingsNumRow('重试次数', 'remoteRetryCount', 0, 10)
-          this.settingsNumRow('重试间隔 (ms)', 'remoteRetryIntervalMs', 100, 30000)
-          this.settingsNumRow('缓存过期 (天)', 'remoteCacheExpireDays', 1, 365)
+          this.settingsNumRow('重试间隔 (ms)', 'remoteRetryIntervalMs', 0, 30000)
           Row() {
             Text(`缓存用量：${this.remoteCacheUsage}`)
               .fontSize(14).fontColor(this.txtSec()).layoutWeight(1)
@@ -8956,8 +8954,6 @@ struct Index {
       this.settings.remoteOnlineFirst = v;
     } else if (key === 'remotePrefetchWifiOnly') {
       this.settings.remotePrefetchWifiOnly = v;
-    } else if (key === 'remoteWholeBookOnMetered') {
-      this.settings.remoteWholeBookOnMetered = v;
     }
     this.saveNow();
     console.info(`[Index] Pref ${key} = ${v}`);
@@ -8977,9 +8973,6 @@ struct Index {
     if (key === 'remoteRetryIntervalMs') {
       return this.settings.remoteRetryIntervalMs;
     }
-    if (key === 'remoteCacheExpireDays') {
-      return this.settings.remoteCacheExpireDays;
-    }
     return 0;
   }
 
@@ -8993,8 +8986,6 @@ struct Index {
       this.settings.remoteRetryCount = v;
     } else if (key === 'remoteRetryIntervalMs') {
       this.settings.remoteRetryIntervalMs = v;
-    } else if (key === 'remoteCacheExpireDays') {
-      this.settings.remoteCacheExpireDays = v;
     }
     this.saveNow();
   }
@@ -9023,9 +9014,6 @@ struct Index {
     }
     if (key === 'remoteRetryIntervalMs') {
       return '重试初始间隔 (ms，指数退避)';
-    }
-    if (key === 'remoteCacheExpireDays') {
-      return '缓存过期天数';
     }
     return key;
   }
@@ -9166,9 +9154,6 @@ struct Index {
     }
     if (key === 'remotePrefetchWifiOnly') {
       return this.settings.remotePrefetchWifiOnly;
-    }
-    if (key === 'remoteWholeBookOnMetered') {
-      return this.settings.remoteWholeBookOnMetered;
     }
     return false;
   }

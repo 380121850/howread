@@ -89,6 +89,17 @@
 4. ✅ **离线**：完全缓存的书零网络打开（openOffline 降级，服务器停机实测）；已缓存整本书重取回直接从缓存落地。
 5. ✅ **SMB/SFTP/EPUB DRM 已在阶段 15b 完成（2026-09-12，见下）**。剩余待续：OPDS 认证/分页；计费网络检测接入 wholeBookOnMetered。
 
+### 阶段 16f（2026-09-18）：同步安卓「在线阅读设置」合并/提速 + 鸿蒙引擎 NULL 崩溃修复 ✅ 已完成（0.9.6）
+
+- 设置合并：删除 remoteWholeBookOnMetered / remoteCacheExpireDays；合并开关 remotePrefetchWifiOnly（迁移 = 旧 wifiOnly && !旧 metered，经 LegacyRemoteSettings 读一次旧 JSON；新保存不再写旧键）；重试默认 1000→100（存储值 1000 自动跟随新默认，对齐安卓 AppState 迁移；自定义值保留）；Index.ets 设置行 / toggle / numPref / applyNumPref / remoteNumLabel 同步清理；重试行下限 0（对齐安卓 0..30000）。
+- 门控落地（原为纯桩）：RemoteBook.ets 新增 isMeteredNetwork（hasDefaultNet + getNetCapabilities bearerTypes 含 CELLULAR 即计费，异常 fail-open）；RemoteSession.open() 每会话探测一次存快照（安卓逐次探测的移植妥协）+ 日志 `[RemoteBook] session open: metered=…`；maybeStartFiller / prefetchAfter 以 prefetchWifiOnly && metered 拦截；用户显式「整本取回」不受门控（对齐安卓）；安卓 <5MB 小书流量特例鸿蒙本就无此逻辑。
+- **引擎修复（Builder/mupdf-1.23.7/source/html/html-parse.c，保持最新优化引擎不回退）**：① xml_to_boxes 内 user_css 空值守卫被改残（if 空体 + 无条件 fz_parse_css）→ 无用户样式打开 EPUB/TXT/HTML/MOBI 即 fz_chartorune NULL 解引用（应用启动自检第 13 步即崩，3/3 必现）；恢复守卫、保留优化新增的 fz_add_css_font_faces。② img sniff 的 __android_log_print 未包 __ANDROID__ 守卫 → OHOS 工具链编译失败（html-parse.c:982）。双 ABI 以修复后源码重建（x86_64 68e4b0b8…/arm64 c7acfc8e…）；今日 00:13 旧批次产物含同源崩溃（不采用）。
+- 验证（Pura 90 模拟器 x86_64 debug）：启动自检全过（EPUB 105 页 + 全格式，demo.mobi FAILED 为既有现象）；迁移/UI/持久化 dump 断言（合并开关关→迁移、重试 100、重启保持、旧键不再写入）；TestNAS epub 整本缓存秒开、92MB book_bigepub 流式 64 页翻页零失败、html/docx 分块 1-2%；metered=false 日志。
+- 版本 0.9.5→0.9.6（versionCode 43→44）；dist 8 件套。
+- 遗留：真机蜂窝网络下的计费拦截未实测（虚拟机无蜂窝）；arm64 引擎无真机验证通道；批次 4（自动裁边）/批次 5（OPDS 认证分页）待续。
+
+---
+
 ### 阶段 16e（2026-09-16）：同步安卓 WebDAV 空白修复 —— 中文/空格路径编码 + 空目录提示 ✅ 已完成（0.9.5）
 
 - davEncodePath 逐段 encodeURIComponent（保留斜杠、前导/尾斜杠），应用 webdavDirUrl / remoteScanServer 起点 / davBrowseRefresh；
