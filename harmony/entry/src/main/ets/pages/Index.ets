@@ -325,6 +325,8 @@ struct Index {
 
   /* ---- Round 8: online cache reading ---- */
   /** Scanned remote books (Android RemoteScanner bookshelf) */
+  /* 2026-09-18: dedicated network browse page header (server name) */
+  @State netBrowseTitle: string = '';
   @State remoteBooks: RemoteBookRec[] = [];
   @State remoteScanBusy: boolean = false;
   /** cached percent per remote uri */
@@ -2456,7 +2458,7 @@ struct Index {
         }
       }
       await this.loadRemoteBooks();
-      promptAction.showToast({ message: `扫描完成：发现 ${added} 本书` });
+      promptAction.showToast({ message: `扫描完成：${added} 本已加入书库` });
     } finally {
       this.remoteScanBusy = false;
     }
@@ -2778,6 +2780,7 @@ struct Index {
     this.smbSelected = idx;
     this.smbPath = '';
     this.netSection = 2;
+    this.netBrowseTitle = idx >= 0 && idx < this.smbServers.length ? this.smbServers[idx].name : 'SMB';
     this.activeOverlay = 2;
     this.smbBrowse('');
   }
@@ -2882,7 +2885,7 @@ struct Index {
         }
       }
       await this.loadRemoteBooks();
-      promptAction.showToast({ message: `扫描完成：发现 ${added} 本书` });
+      promptAction.showToast({ message: `扫描完成：${added} 本已加入书库` });
     } finally {
       this.remoteScanBusy = false;
     }
@@ -2893,6 +2896,7 @@ struct Index {
     this.sftpSelected = idx;
     this.sftpPath = '/';
     this.netSection = 3;
+    this.netBrowseTitle = idx >= 0 && idx < this.sftpServers.length ? this.sftpServers[idx].name : 'SFTP';
     this.activeOverlay = 2;
     this.sftpBrowse('/');
   }
@@ -3011,7 +3015,7 @@ struct Index {
         }
       }
       await this.loadRemoteBooks();
-      promptAction.showToast({ message: `扫描完成：发现 ${added} 本书` });
+      promptAction.showToast({ message: `扫描完成：${added} 本已加入书库` });
     } catch (e) {
       const msg: string = e instanceof Error ? e.message : String(e);
       console.error(`[Index] sftp scan FAILED: ${msg}`);
@@ -4123,8 +4127,38 @@ struct Index {
   getLibraryBooks(): RecentBook[] {
     const list: RecentBook[] = [];
     const q: string = this.libQuery.trim().toLowerCase();
-    for (let i = 0; i < this.recentBooks.length; i++) {
-      const b = this.recentBooks[i];
+    /* 2026-09-18: scanned remote books render inside the library
+       (Android RemoteScanner parity); recent entries win on path clash. */
+    const base: RecentBook[] = this.recentBooks.slice();
+    for (let r = 0; r < this.remoteBooks.length; r++) {
+      const rec = this.remoteBooks[r];
+      let dup = false;
+      for (let i = 0; i < base.length; i++) {
+        if (base[i].path === rec.uri) {
+          dup = true;
+          break;
+        }
+      }
+      if (!dup) {
+        const nb: RecentBook = {
+          path: rec.uri,
+          title: rec.title,
+          page: 0,
+          totalPages: 0,
+          lastRead: rec.addedAt,
+          star: false,
+          coverPath: '',
+          author: '',
+          tags: [],
+          series: '',
+          genre: '',
+          status: 0
+        };
+        base.push(nb);
+      }
+    }
+    for (let i = 0; i < base.length; i++) {
+      const b = base[i];
       if (this.libStarFilter && !b.star) {
         continue;
       }
@@ -4271,7 +4305,14 @@ struct Index {
           .objectFit(ImageFit.Cover).borderRadius(4).backgroundColor(this.divColor())
       } else {
         Column() {
-          Text('\u{1F4C4}').fontSize(compact ? 20 : 26)
+          /* 2026-09-18: scanned remote books show the protocol icon */
+          if (book.path.startsWith('remote://')) {
+            Image(this.remoteProtoIcon(book.path))
+              .width(compact ? 18 : 24).height(compact ? 18 : 24)
+              .fillColor(this.thm())
+          } else {
+            Text('\u{1F4C4}').fontSize(compact ? 20 : 26)
+          }
         }
         .width(compact ? 40 : 52).height(compact ? 54 : 70)
         .justifyContent(FlexAlign.Center).backgroundColor(this.inputBg()).borderRadius(4)
@@ -5148,6 +5189,27 @@ struct Index {
         return this.recentBooks[i];
       }
     }
+    /* 2026-09-18: scanned remote books merged into the library */
+    for (let r = 0; r < this.remoteBooks.length; r++) {
+      if (this.remoteBooks[r].uri === this.libMenuPath) {
+        const rec = this.remoteBooks[r];
+        const nb: RecentBook = {
+          path: rec.uri,
+          title: rec.title,
+          page: 0,
+          totalPages: 0,
+          lastRead: rec.addedAt,
+          star: false,
+          coverPath: '',
+          author: '',
+          tags: [],
+          series: '',
+          genre: '',
+          status: 0
+        };
+        return nb;
+      }
+    }
     return undefined;
   }
 
@@ -5455,6 +5517,15 @@ struct Index {
     .onClick(() => {
       const path: string = this.libMenuPath;
       this.libMenuPath = '';
+      if (path.startsWith('remote://')) {
+        /* 2026-09-18: scanned remote book — remove the record, never a local file */
+        removeRemoteBook(getContext(this), path).then(() => {
+          this.loadRemoteBooks();
+          this.loadLibrary();
+          promptAction.showToast({ message: '已从书库移除' });
+        });
+        return;
+      }
       try {
         fs.unlinkSync(path);
         console.info(`[Index] Deleted book file: ${path}`);
@@ -5773,15 +5844,19 @@ struct Index {
   @Builder
   buildDrawerPanel() {
     Column() {
-      /* banner with brand tagline */
-      Column() {
+      /* banner with brand tagline (2026-09-18: day/night images, Android
+         drawer_banner_day/night parity) */
+      Stack({ alignContent: Alignment.Center }) {
+        Image(this.isDark() ? $r('app.media.drawer_banner_night')
+          : $r('app.media.drawer_banner_day'))
+          .width('100%').height(170)
+          .objectFit(ImageFit.Cover)
         Text($r('app.string.drawer_tagline'))
           .fontSize(30).fontWeight(FontWeight.Bold).fontColor(Color.White)
           .textAlign(TextAlign.Center)
+          .shadow({ radius: 6, color: '#88000000', offsetX: 0, offsetY: 2 })
       }
       .width('100%').height(170)
-      .justifyContent(FlexAlign.Center)
-      .linearGradient({ angle: 135, colors: [[this.thm(), 0.0], ['#5C6BC0', 1.0]] })
 
       /* nav items: 最近阅读 / 书库 / 我的文件 / 网上书库 / 书签笔记 */
       Column({ space: 0 }) {
@@ -5793,16 +5868,17 @@ struct Index {
       }
       .width('100%').margin({ top: 6 })
 
-      /* random reading quote, refreshed every drawer open */
+      Blank()
+
+      /* random reading quote, refreshed every drawer open
+         (2026-09-18: anchored above the bottom bar, Android drawerQuote parity) */
       Text(this.drawerQuote)
         .fontSize(15)
         .fontColor(this.isDark() ? '#bbbbbb' : '#555')
         .lineHeight(22)
         .padding({ left: 12, right: 12, top: 8, bottom: 8 })
         .width('100%')
-        .margin({ top: 4 })
-
-      Blank()
+        .margin({ bottom: 8 })
 
       Divider().color(this.isDark() ? '#3a3a3a' : '#e0e0e0')
 
@@ -5977,50 +6053,25 @@ struct Index {
   @Builder
   buildNetworkOverlay() {
     Column() {
+      /* 2026-09-18: dedicated browse page (Android OpdsFragment2 parity):
+         back arrow + target server name; no protocol switcher */
       Row() {
-        Text($r('app.string.sec_online'))
-          .fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.txtPri()).layoutWeight(1)
+        Text('\u2039')
+          .fontSize(24).fontColor(this.txtPri()).width(40).height(36).textAlign(TextAlign.Center)
+          .onClick(() => {
+            this.activeOverlay = 0;
+          })
+        Text(this.netBrowseTitle.length > 0 ? this.netBrowseTitle : $r('app.string.sec_online'))
+          .fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
+          .maxLines(1).textAlign(TextAlign.Center).layoutWeight(1)
         Text('\u2716')
           .fontSize(18).fontColor(this.txtHint()).width(36).height(36).textAlign(TextAlign.Center)
           .onClick(() => {
             this.activeOverlay = 0;
           })
       }
-      .width('100%').padding({ left: 12, right: 6, top: 8 })
+      .width('100%').padding({ left: 4, right: 6, top: 8 })
       Divider().color(this.divColor())
-
-      /* section toggle: OPDS 目录 / WebDAV 云盘 / SMB / SFTP */
-      Row({ space: 8 }) {
-        Button(this.netSection === 0 ? $r('app.string.opds_star_title') : $r('app.string.opds_title'))
-          .fontSize(12).height(30).layoutWeight(1)
-          .backgroundColor(this.netSection === 0 ? this.thm() : this.chipBg())
-          .fontColor(this.netSection === 0 ? Color.White : this.txtPri())
-          .onClick(() => {
-            this.netSection = 0;
-          })
-        Button(this.netSection === 1 ? '\u2605 WebDAV' : 'WebDAV')
-          .fontSize(12).height(30).layoutWeight(1)
-          .backgroundColor(this.netSection === 1 ? this.thm() : this.chipBg())
-          .fontColor(this.netSection === 1 ? Color.White : this.txtPri())
-          .onClick(() => {
-            this.netSection = 1;
-          })
-        Button('SMB')
-          .fontSize(12).height(30).layoutWeight(1)
-          .backgroundColor(this.netSection === 2 ? this.thm() : this.chipBg())
-          .fontColor(this.netSection === 2 ? Color.White : this.txtPri())
-          .onClick(() => {
-            this.netSection = 2;
-          })
-        Button('SFTP')
-          .fontSize(12).height(30).layoutWeight(1)
-          .backgroundColor(this.netSection === 3 ? this.thm() : this.chipBg())
-          .fontColor(this.netSection === 3 ? Color.White : this.txtPri())
-          .onClick(() => {
-            this.netSection = 3;
-          })
-      }
-      .width('90%').margin({ top: 8 })
 
       if (this.netSection === 0) {
         this.buildOpdsPanel()
@@ -6130,26 +6181,11 @@ struct Index {
   @Builder
   buildWebdavPanel() {
     Column() {
-      Text($r('app.string.dav_cloud_title'))
-        .fontSize(13).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
-        .margin({ top: 10, bottom: 6 })
-
-      TextInput({ placeholder: 'https://example.com/webdav/', text: this.webdavUrl })
-        .width('90%').height(36)
-        .onChange((v: string) => {
-          this.webdavUrl = v;
-        })
-
-      Button(this.webdavConnecting ? 'Connecting...' : 'Connect')
-        .width('90%').height(34).margin({ top: 8 })
-        .backgroundColor(this.thm()).fontColor(Color.White)
-        .onClick(() => {
-          this.webdavConnect();
-        })
-
+      /* 2026-09-18: no manual URL form — entry is always a saved-server row
+         (auto-connected, Android OpdsFragment2 parity); status + list remain */
       Text(this.webdavStatus)
         .fontSize(12).fontColor(this.txtMid())
-        .width('90%').margin({ top: 6 }).textAlign(TextAlign.Center)
+        .width('90%').margin({ top: 10 }).textAlign(TextAlign.Center)
 
       if (this.webdavProgress >= 0) {
         Text(`Downloading ${this.webdavDownloading} ${this.webdavProgress}%`)
@@ -6789,50 +6825,10 @@ struct Index {
     .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
     .onClick(() => {
       this.netSection = 0;
+      this.netBrowseTitle = s.name;
       this.opdsOpen(s.url);
       this.activeOverlay = 2;
     })
-  }
-
-  /** Round 8: scanned remote-book row (cloud icon + size + cached % badge). */
-  @Builder
-  remoteBookRow(rec: RemoteBookRec) {
-    Row({ space: 12 }) {
-      Image(this.remoteProtoIcon(rec.uri))
-        .width(24).height(24)
-        .opacity(this.isDirectOpenExtCached(rec.ext) ? 1 : 0.55)
-      Column({ space: 2 }) {
-        Text(rec.title)
-          .fontSize(15).fontColor(this.txtSec()).maxLines(1)
-        Row({ space: 6 }) {
-          Text(rec.serverName.length > 0 ? rec.serverName : '远程')
-            .fontSize(11).fontColor(this.txtFaint())
-          Text(this.fmtBytes(rec.size))
-            .fontSize(11).fontColor(this.txtFaint())
-          Text(rec.ext.toUpperCase())
-            .fontSize(10).fontColor(this.thm())
-        }
-      }
-      .alignItems(HorizontalAlign.Start)
-      .layoutWeight(1)
-      Text(`${this.remotePercentOf(rec.uri)}%`)
-        .fontSize(11).fontColor(this.thm())
-        .padding({ left: 8, right: 8, top: 2, bottom: 2 })
-        .borderRadius(10)
-        .backgroundColor(this.chipBg())
-    }
-    .width('94%')
-    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-    .backgroundColor(this.cardBg())
-    .borderRadius(3)
-    .margin({ bottom: 8 })
-    .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
-    .onClick(() => {
-      this.remoteOpenRec(rec);
-    })
-    .gesture(LongPressGesture().onAction(() => {
-      this.remoteRemoveRec(rec);
-    }))
   }
 
   private remotePercentOf(uri: string): number {
@@ -6920,6 +6916,7 @@ struct Index {
       this.webdavPath = this.davNormStart(s.startPath);
       this.davSelected = idx;
       this.netSection = 1;
+      this.netBrowseTitle = s.name;
       this.webdavConnect();
       this.activeOverlay = 2;
     })
@@ -7709,36 +7706,14 @@ struct Index {
         }, (s: SftpServer) => s.host)
         Divider().color(this.divColor()).margin({ top: 8 })
 
-        /* Round 8: remote books (Android RemoteScanner bookshelf) */
-        this.browseSectionHeader('远程书籍', 0)
-        if (this.remoteBooks.length === 0) {
-          Text('暂无远程书籍，可在服务器行点 ⟳ 扫描，或浏览目录在线打开（支持 WebDAV / SMB / SFTP）')
-            .fontSize(12).fontColor(this.txtFaint())
-            .width('94%').padding({ left: 12, bottom: 8 })
-        }
-        ForEach(this.remoteBooks, (rec: RemoteBookRec) => {
-          this.remoteBookRow(rec)
-        }, (rec: RemoteBookRec) => rec.uri)
-
-        Divider().color(this.divColor()).margin({ top: 8 })
+        /* 2026-09-18: 远程书籍区移除（用户要求）——扫描与在线打开的远程书
+           直接合并进书库标签展示（Android RemoteScanner parity） */
 
         /* 书库文件夹 */
         this.browseSectionHeader(this.L($r('app.string.browse_library_folder')), 4)
         ForEach(this.libFolders, (f: LibFolder) => {
           this.browseFolderRow(f)
         }, (f: LibFolder) => f.path)
-        Row({ space: 14 }) {
-          Image($r('app.media.ic_book_open'))
-            .width(24).height(24).fillColor(this.thm())
-          Text($r('app.string.browse_imported'))
-            .fontSize(16).fontColor(this.txtSec())
-            .layoutWeight(1)
-        }
-        .width('94%')
-        .padding({ left: 12, right: 12, top: 12, bottom: 12 })
-        .onClick(() => {
-          this.enterBrowseAbs(this.libFolders.length > 0 ? this.libFolders[0].path : '');
-        })
 
         Divider().color(this.divColor()).margin({ top: 8 })
 
@@ -8064,21 +8039,25 @@ struct Index {
     })
   }
 
-  /** Round 7: collapsible sub-section bar inside a group (Android nested headers). */
+  /** Round 7 + 2026-09-18: config-button row (Android hr07: sliders icon +
+   *  green underlined link + chevron; taps toggle its config container). */
   @Builder
   settingsSubBar(title: string, key: string) {
-    Row({ space: 8 }) {
+    Row({ space: 10 }) {
+      Image($r('app.media.ic_sliders'))
+        .width(18).height(18).fillColor(this.isDark() ? this.thm() : '#00897B')
       Text(title)
-        .fontSize(13).fontWeight(FontWeight.Medium).fontColor(Color.White)
+        .fontSize(this.fsp(15)).fontColor(this.isDark() ? this.thm() : '#00897B')
+        .decoration({ type: TextDecorationType.Underline, color: this.isDark() ? this.thm() : '#00897B' })
         .layoutWeight(1)
       Image(this.groupExp[key] === true ? $r('app.media.ic_chevron_up') : $r('app.media.ic_chevron_down'))
-        .width(16).height(16).fillColor(Color.White)
+        .width(16).height(16).fillColor(this.txtHint())
     }
     .width('100%')
-    .padding({ left: 10, right: 10, top: 7, bottom: 7 })
-    .backgroundColor(this.isDark() ? '#3a4160' : '#7986CB')
-    .borderRadius(2)
-    .margin({ left: 10 })
+    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+    .backgroundColor(this.cardBg())
+    .borderRadius(3)
+    .margin({ top: 2, bottom: 2 })
     .onClick(() => {
       this.toggleGroup(key);
     })
@@ -8105,11 +8084,13 @@ struct Index {
   settingsKvSheet(label: string, target: string) {
     Row() {
       Text(label)
-        .fontSize(14).fontColor(this.accentTextColor() ? this.acc() : this.txtPri()).width(120)
+        .fontSize(this.fsp(14)).fontColor(this.accentTextColor() ? this.acc() : this.txtPri())
+        .layoutWeight(1)
       Text(this.kvValue(target))
         .fontSize(14).fontColor(this.thm())
         .decoration({ type: TextDecorationType.Underline, color: this.thm() })
         .maxLines(1)
+        .textAlign(TextAlign.End)
     }
     .width('100%')
     .padding({ left: 12, right: 12, top: 9, bottom: 9 })
@@ -8636,14 +8617,14 @@ struct Index {
           this.settingsKvSheet(this.L($r('app.string.set_language')), 'lang')
           Row() {
             Text($r('app.string.sync_title'))
-              .fontSize(this.fsp(14)).fontColor(this.txtPri()).width(120)
+              .fontSize(this.fsp(14)).fontColor(this.txtPri()).layoutWeight(1)
             Text(this.syncCfg.enabled
               ? (this.syncCfg.lastSyncTime.length > 0 ? '\u4E0A\u6B21\uFF1A' + this.syncCfg.lastSyncTime.substring(0, 16).replace('T', ' ') : $r('app.string.set_enabled'))
               : $r('app.string.set_disabled'))
               .fontSize(14).fontColor(this.thm())
               .decoration({ type: TextDecorationType.Underline, color: this.thm() })
-              .maxLines(1)
-              .layoutWeight(1)
+              .maxLines(2)
+              .textAlign(TextAlign.End)
           }
           .width('100%')
           .padding({ left: 12, right: 12, top: 9, bottom: 9 })
@@ -8656,12 +8637,12 @@ struct Index {
           })
           Row() {
             Text($r('app.string.set_ai_model'))
-              .fontSize(this.fsp(14)).fontColor(this.txtPri()).width(120)
+              .fontSize(this.fsp(14)).fontColor(this.txtPri()).layoutWeight(1)
             Text(this.aiCfg.model.length > 0 ? this.aiCfg.provider + ' \u00B7 ' + this.aiCfg.model : $r('app.string.set_not_configured'))
               .fontSize(14).fontColor(this.thm())
               .decoration({ type: TextDecorationType.Underline, color: this.thm() })
-              .maxLines(1)
-              .layoutWeight(1)
+              .maxLines(2)
+              .textAlign(TextAlign.End)
           }
           .width('100%')
           .padding({ left: 12, right: 12, top: 9, bottom: 9 })
@@ -8819,22 +8800,22 @@ struct Index {
             .width('100%')
             .padding({ left: 12, right: 12, top: 6, bottom: 6 })
           }
-        }
 
-        /* ================= 5. 关于 (Android aboutSoftware row) ================= */
-        Row({ space: 12 }) {
-          Image($r('app.media.ic_info'))
-            .width(22).height(22).fillColor(this.thm())
-          Text($r('app.string.drawer_about'))
-            .fontSize(this.fsp(15)).fontColor(this.thm())
-            .decoration({ type: TextDecorationType.Underline, color: this.thm() })
-            .layoutWeight(1)
+          /* 软件说明 (Android aboutSoftware row; 2026-09-18 移入 UI 配置组内) */
+          Row({ space: 12 }) {
+            Image($r('app.media.ic_info'))
+              .width(22).height(22).fillColor(this.thm())
+            Text($r('app.string.drawer_about'))
+              .fontSize(this.fsp(15)).fontColor(this.thm())
+              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+              .layoutWeight(1)
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+          .onClick(() => {
+            this.activeOverlay = 3;
+          })
         }
-        .width('100%')
-        .padding({ left: 12, right: 12, top: 9, bottom: 9 })
-        .onClick(() => {
-          this.activeOverlay = 3;
-        })
 
         /* ===== NAPI self-test (diagnostics, hidden by default; tap 3x on title) ===== */
         if (this.showApiTest) {

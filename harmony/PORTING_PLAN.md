@@ -89,6 +89,16 @@
 4. ✅ **离线**：完全缓存的书零网络打开（openOffline 降级，服务器停机实测）；已缓存整本书重取回直接从缓存落地。
 5. ✅ **SMB/SFTP/EPUB DRM 已在阶段 15b 完成（2026-09-12，见下）**。剩余待续：OPDS 认证/分页；计费网络检测接入 wholeBookOnMetered。
 
+### 阶段 16h（2026-09-18）：UI 二轮——抽屉日/夜背景图、远程书进书库、专属浏览页、偏好三大项改版 ✅ 已完成（0.9.8）
+
+- 抽屉头部：linearGradient → Stack（Image drawer_banner_day/night 按 isDark() 切换，PNG 自安卓 drawable-xxhdpi 移植；标语叠加）；格言移到 Blank() 之后、底栏之上（安卓 drawerQuote marginBottom 66 对齐）；
+- 我的文件：删"远程书籍"区（含 remoteBookRow builder）与"已导入的书"行；扫描仍写 RemoteBookRec 存储，getLibraryBooks/getGroupedLibrary 合并渲染（合成 RecentBook path=uri；recentBooks 优先去重——recent_books MAX_RECENT=20 不宜承载批量扫描）；LibRow 无封面远程书显示协议图标；libMenuDeleteItem 对 remote:// 走 removeRemoteBook（防误删本地文件），libMenuBook 兜底远程条目；扫描 toast →"N 本已加入书库"；
+- 专属浏览页：buildNetworkOverlay 头部重写（‹ + netBrowseTitle + ✕）、删四协议切换器；browseOpdsRow/browseDavRow/smbConnectServer/sftpConnectServer 写 netBrowseTitle；buildWebdavPanel 去手输 URL+Connect 表单（行点击本就自动连接）；书库文件夹维持页内完整浏览（安卓 openFolderPage 同形态）；
+- 偏好页：settingsSubBar 改配置按钮行（ic_sliders + 下划线链接文字，日间 #00897B/夜间主题色 + chevron，cardBg 圆角）；settingsKvSheet 值右对齐（label layoutWeight + End）；WebDAV/AI 行值右对齐、长值 2 行；"软件说明"移入 UI 配置组内（安卓 aboutSoftware 位置）；三大项 lib/gen/ui 结构与顶部 配置文件/重置/退出程序 不动；
+- 版本 0.9.7→0.9.8（versionCode 45→46）；build_hap_all.sh pro 出 Pro 4 件套（debug+release × arm64/x86_64）；
+- 验证（Pura 90 模拟器 x86_64 debug）：日/夜 banner 截图、格言位置、远程区删除、扫描→书库合并→流式打开→菜单删除（有打开记录的条目按设计保留）、专属页三要素 + Connected! 4 dirs 39 files + 打开 book_txt + 返回、三大项行样式/右对齐/软件说明归位、跨重启服务器条目保留；
+- 备注：SMB/SFTP 专属页未实测（模拟器无配置条目），本轮改动仅共享头部与标题赋值，两面板零改动；书库文件夹页内浏览为既有能力（0.9.7 已验）。
+
 ### 阶段 16g（2026-09-18）：界面补齐 11 项——统计卡直达/整页子页/命名统一/页面精简 ✅ 已完成（0.9.7）
 
 - 首页统计卡可点（总时间→三档图表弹窗、已读书籍→书库预选已读、书籍总数→书库全部；安卓 DashboardFragment2 对齐），统计区去"更多"（Android statsHeader GONE 对齐）；
