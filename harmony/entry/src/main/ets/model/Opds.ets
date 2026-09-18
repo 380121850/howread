@@ -21,20 +21,13 @@ export interface OpdsEntry {
   isSub: boolean;
 }
 
-/** Built-in catalog presets shown on the OPDS home (aligned with Android: Gutenberg + CBETA). */
+/** Built-in catalog presets (2026-09-19: Project Gutenberg only, user request). */
 export const OPDS_PRESETS: OpdsEntry[] = [
   {
     title: 'Project Gutenberg',
     href: 'https://www.gutenberg.org/opds/',
     type: 'application/atom+xml;profile=opds-catalog',
     summary: '5 万+ 公版电子书（英文为主）',
-    isSub: true
-  },
-  {
-    title: 'CBETA 电子佛典',
-    href: 'https://www.cbeta.org/opds/',
-    type: 'application/atom+xml;profile=opds-catalog',
-    summary: '汉文佛典电子化（CBETA）',
     isSub: true
   }
 ];

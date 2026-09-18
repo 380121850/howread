@@ -25,7 +25,7 @@ import { scanDeviceBooks, importPathToSandbox, searchLibraryText, findMissingBoo
 import { initProfiles, listProfiles, createProfile, switchProfile, deleteProfile, getCurrentProfile, DEFAULT_PROFILE } from '../model/Profiles';
 import { getTagList, addTagToBook, removeTagFromBook, getSeriesList } from '../model/Tags';
 import { getReadingStats, getDailyStats, getMonthlyStats, ReadingStatsData, DayStat, MonthStat } from '../model/ReadingStats';
-import { fetchOpds, OPDS_PRESETS, OpdsEntry } from '../model/Opds';
+import { fetchOpds, OpdsEntry } from '../model/Opds';
 import { OpdsServer, DavServer, SmbServer, SftpServer, getOpdsServers, saveOpdsServer, removeOpdsServer, getDavServers, saveDavServer, removeDavServer, getSmbServers, saveSmbServer, removeSmbServer, getSftpServers, saveSftpServer, removeSftpServer, LibFolder, getLibFolders, saveLibFolders } from '../model/Servers';
 import { SyncConfig, SyncLogEntry, SYNC_CONFLICTS, defaultSyncConfig, loadSyncConfig, saveSyncConfig, getSyncLog, runSync, testSyncConnection } from '../model/Sync';
 import { AiConfig, AiMessage, loadAiConfig, saveAiConfig, chatCompletion, listModels, testChat, aiConfigReady, AI_PROVIDERS, AI_PROVIDER_URLS } from '../model/AiClient';
@@ -1425,6 +1425,10 @@ struct Index {
         .width('100%').height(48)
         .backgroundColor(this.barColor())
 
+        /* 2026-09-19: network browse (WebDAV/SMB/SFTP/OPDS) renders as a single
+           full page above the tab content; the bar-height padding strip keeps
+           the tab bar visible and clickable (tap = jump away), BACK closes too. */
+        Stack() {
         // 4 tabs, bottom by default; top position optional (Android tapPositionTop).
         // Round 7: tabsOrder drives the display order (content dispatcher) + icon-only labels.
         Tabs({ barPosition: this.settings.tabPositionTop ? BarPosition.Start : BarPosition.End, index: this.tabPos }) {
@@ -1449,13 +1453,31 @@ struct Index {
           .tabBar(this.tabLabelFor(3))
         }
         .width('100%')
-        .layoutWeight(1)
+        .height('100%')
         .barMode(BarMode.Fixed)
+        .barHeight(70)
         .barBackgroundColor(this.barColor())
         .backgroundColor(this.pageBg())
         .onChange((pos: number) => {
           this.onTabPos(pos);
+          /* 2026-09-19: tapping the tab bar leaves the browse page directly */
+          if (this.activeOverlay === 2) {
+            this.activeOverlay = 0;
+          }
         })
+        /* browse page above the tabs; the padding strip exposes the tab bar */
+        if (this.activeOverlay === 2) {
+          Column() {
+            this.buildNetworkOverlay()
+          }
+          .width('100%')
+          .height('100%')
+          .padding({ top: this.settings.tabPositionTop ? 70 : 0, bottom: this.settings.tabPositionTop ? 0 : 70 })
+          .hitTestBehavior(HitTestMode.Transparent)
+        }
+        }
+        .width('100%')
+        .layoutWeight(1)
       }
       .width('100%')
       .height('100%')
@@ -1575,17 +1597,8 @@ struct Index {
         .width('100%').height('100%')
       }
 
-      // ---- modal overlays: bookmarks / network(OPDS+WebDAV) / about ----
-
-      if (this.activeOverlay === 2) {
-        Column() {}
-          .width('100%').height('100%')
-          .backgroundColor('#66000000')
-          .onClick(() => {
-            this.activeOverlay = 0;
-          })
-        this.buildNetworkOverlay()
-      }
+      // ---- modal overlays: bookmarks / about (network browse moved into the
+      //      main column as a single full page, 2026-09-19) ----
       if (this.activeOverlay === 3) {
         Column() {}
           .width('100%').height('100%')
@@ -3263,11 +3276,29 @@ struct Index {
       this.subPage = 0;
       return true;
     }
+    /* 2026-09-19: BACK leaves the network browse page / about page / folder
+       browser directly (Android fragment back-stack parity). */
+    if (this.activeOverlay === 2) {
+      this.activeOverlay = 0;
+      return true;
+    }
+    if (this.activeOverlay === 3) {
+      this.activeOverlay = 0;
+      return true;
+    }
+    if (this.browseCurrentDir.length > 0) {
+      this.browseHome();
+      return true;
+    }
     return false;
   }
 
   /** Switch to a TAB ID (0..3): map to its display position first (Round 7). */
   switchTab(index: number): void {
+    /* 2026-09-19: drawer navigation also leaves the browse page directly */
+    if (this.activeOverlay === 2) {
+      this.activeOverlay = 0;
+    }
     this.currentTab = index;
     this.tabPos = this.tabIndexOf(index);
     const names: string[] = [this.L($r('app.string.tab_home')), this.L($r('app.string.tab_library')), this.L($r('app.string.tab_my_files')), this.L($r('app.string.tab_prefs'))];
@@ -6083,10 +6114,8 @@ struct Index {
         this.buildSftpPanel()
       }
     }
-    .width('92%').height('86%')
-    .backgroundColor(this.cardBg())
-    .borderRadius(12)
-    .align(Alignment.Center)
+    .width('100%').height('100%')
+    .backgroundColor(this.pageBg())
   }
 
   /** OPDS 目录 panel (built-in catalogs + drill-down feeds + download). */

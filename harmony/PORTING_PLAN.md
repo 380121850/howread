@@ -89,6 +89,13 @@
 4. ✅ **离线**：完全缓存的书零网络打开（openOffline 降级，服务器停机实测）；已缓存整本书重取回直接从缓存落地。
 5. ✅ **SMB/SFTP/EPUB DRM 已在阶段 15b 完成（2026-09-12，见下）**。剩余待续：OPDS 认证/分页；计费网络检测接入 wholeBookOnMetered。
 
+### 阶段 16i（2026-09-19）：浏览页整页化 + 直返导航 + OPDS 预置精简 ✅ 已完成（0.9.9）
+
+- 网络浏览页（WebDAV/OPDS/SMB/SFTP 共用 buildNetworkOverlay）从 92%×86% 浮层改为占满内容区的单页：主列 Tabs 外包 Stack，浏览层为 Stack 兄弟节点（100%×100% + pageBg），底部（tabPositionTop 时顶部）留 barHeight(70) 透明条露出标签栏，hitTestBehavior(HitTestMode.Transparent) 让标签栏点击穿透到 Tabs；Tabs 显式 barHeight(70)。onChange/switchTab 关闭浏览层实现"点标签栏直接跳转"。
+- onBackPress 扩展：subPage → activeOverlay===2（网络浏览页）→ 3（关于）→ browseCurrentDir 非空（文件夹浏览回根 browseHome）→ false；删除原外层 Stack 的全屏遮罩挂载块。
+- OPDS 预置只留 Project Gutenberg（用户要求）：Servers.ets 种子缩减为 Gutenberg 一条 + KEY_LEGACY='opds_legacy_purged' 一次性升级迁移（按 URL 剔除 standardebooks/cbeta 旧预置，不动用户自加条目）；Opds.ets OPDS_PRESETS 同步精简，Index.ets 移除未用 import。
+- 验证（Pura 90 模拟器 x86_64 debug）：整页浏览+标签栏可见、标签栏跳转、BACK 直返（WebDAV 页/文件夹浏览）、远程书打开与"下载完成"回显、抽屉/banner/格言回归全部通过；产物 dist/{debug,release}/HowRead-Pro-v0.9.9-{arm64,x86_64}-hmos.hap（版本 47/0.9.9）。
+
 ### 阶段 16h（2026-09-18）：UI 二轮——抽屉日/夜背景图、远程书进书库、专属浏览页、偏好三大项改版 ✅ 已完成（0.9.8）
 
 - 抽屉头部：linearGradient → Stack（Image drawer_banner_day/night 按 isDark() 切换，PNG 自安卓 drawable-xxhdpi 移植；标语叠加）；格言移到 Blank() 之后、底栏之上（安卓 drawerQuote marginBottom 66 对齐）；

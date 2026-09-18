@@ -55,6 +55,8 @@ const KEY_DAV = 'dav';
 const KEY_SMB = 'smb';
 const KEY_SFTP = 'sftp';
 const KEY_SEEDED = 'seeded';
+/* 2026-09-19: one-time purge flag for legacy OPDS presets (see ensureSeeded) */
+const KEY_LEGACY = 'opds_legacy_purged';
 
 let prefInstance: preferences.Preferences | undefined = undefined;
 
@@ -94,23 +96,34 @@ async function writeDav(ctx: Context, list: DavServer[]): Promise<void> {
   }
 }
 
-/** Seed the built-in OPDS presets on first launch. */
+/** Seed the built-in OPDS presets on first launch (2026-09-19: Project Gutenberg only). */
 async function ensureSeeded(ctx: Context): Promise<void> {
   try {
     const prefs = await getPrefs(ctx);
     const seeded: boolean = await prefs.get(KEY_SEEDED, false) as boolean;
-    if (seeded) {
-      return;
+    if (!seeded) {
+      /* 2026-09-19: fresh installs seed Project Gutenberg only (user request) */
+      const seeds: OpdsServer[] = [
+        { url: 'https://www.gutenberg.org/opds/', name: 'Project Gutenberg' }
+      ];
+      await prefs.put(KEY_OPDS, JSON.stringify(seeds));
+      await prefs.put(KEY_SEEDED, true);
+      await prefs.flush();
+      console.info('[Servers] seeded OPDS presets');
     }
-    const seeds: OpdsServer[] = [
-      { url: 'https://www.gutenberg.org/opds/', name: 'Project Gutenberg' },
-      { url: 'https://standardebooks.org/opds/', name: 'Standard Ebooks' },
-      { url: 'https://www.cbeta.org/opds/', name: 'CBETA \u7535\u5B50\u4F5B\u5178' }
-    ];
-    await prefs.put(KEY_OPDS, JSON.stringify(seeds));
-    await prefs.put(KEY_SEEDED, true);
-    await prefs.flush();
-    console.info('[Servers] seeded OPDS presets');
+    /* 2026-09-19: one-time upgrade purge - legacy installs still store Standard
+       Ebooks / CBETA presets; OPDS now ships Project Gutenberg only. */
+    const purged: boolean = await prefs.get(KEY_LEGACY, false) as boolean;
+    if (!purged) {
+      const list: OpdsServer[] = JSON.parse(await readRaw(ctx, KEY_OPDS)) as OpdsServer[];
+      const kept: OpdsServer[] = list.filter((s: OpdsServer) =>
+        s.url !== 'https://standardebooks.org/opds/' && s.url !== 'https://www.cbeta.org/opds/');
+      if (kept.length !== list.length) {
+        await prefs.put(KEY_OPDS, JSON.stringify(kept));
+      }
+      await prefs.put(KEY_LEGACY, true);
+      await prefs.flush();
+    }
   } catch (e) {
     console.error('[Servers] seed failed');
   }
