@@ -5,6 +5,28 @@
 
 ---
 
+### [2026-09-18] （晚间修复）「我的文件」里 WebDAV/SMB/SFTP 与书库文件夹"消失"
+
+**现象与原因（用户视角）**
+- 更新到今日构建后，「我的文件」页只能看到"网上书库(OPDS)"两行和最底边一条"WebDAV(Pro)"标题，SMB、SFTP、书库文件夹、搜索全都"不见了"。
+- 排查确认是两个叠加的问题：
+  1. **列表被压进一个 220dp 高的小窗**（今日早间一轮为修"网络区霸占整页"引入的回归）："我的文件"清单其实是 OPDS→WebDAV→SMB→SFTP→书库文件夹→搜索的**一整张列表**，被限高后其余内容全部掉到视口外，又没有滚动提示，看起来就像被删掉了。而当年需要防"挤压"的书库列表早在 9-14 就已并入同一张列表内，这个限高已经没有保护对象。
+  2. **冷启动后服务器条目可能为空**（间歇性）：服务器条目的跨设备同步改用专用的 app-NetworkSources.json 后，普通启动只读老的设置文件——一旦设置文件里这些字段缺失（被其他设备的同步覆盖、或本地文件滞后），在下次同步运行前 WebDAV/SFTP 条目就一直空白。MI9 实测复现：磁盘设置文件缺 allWebDavLinks/allSftpLinks，仅因进程存活（此前同步恢复过内存）才显示正常，杀进程重开即空。
+
+**修复**
+- 去掉 220dp 限高：清单恢复整页高度、整页滚动（fillViewport），所有分区一目了然。
+- 每次启动加载完设置后，自动从 app-NetworkSources.json 把本地缺失的条目回灌（与同步流程同一套"逐条目恢复"逻辑；本机删除过的条目仍受墓碑保护，不会被复活）。冷启动不再出现空列表。
+
+**如何验证**
+- MI9 冷启动（重装新包后）："我的文件"里 OPDS 2 条、WebDAV 2 条（HowRead-Test/HowRead）、SMB（HowRead-SMB）、SFTP（HowRead-SFTP2）、书库文件夹（Books、内部存储）全部可见，整页可滚动；
+- AVD（MedicineAVD）冒烟 L0：新包强制安装后 8/8 PASS（冷启动无崩溃）；
+- P20、华为畅享20 Plus 已同步换装新包；
+- 四包（pro/fdroid × debug/release，v1.3.11）已重新构建。
+
+**内部佐证（辅助）**
+- AppState.loadInit：load() 之后调用 ProfileStateIO.importNetworkSources(a) + RemoteTombstones.apply()（与 WebDavSyncer 同步流程中的顺序一致）。
+- fragment_browse2.xml：netSectionScroll 移除 android:maxHeight="220dp"，改为 android:fillViewport="true"（保留 0dp+weight=1）。
+
 ### [2026-09-18] 安卓第二轮代码检视：修复 23 类问题（致命 2 / 严重 10 / 一般 11，37 个文件 96 处补丁）
 
 本轮检视范围：9 月以来新增/修改的全部安卓代码（145 个文件按目录分六个方向并行深读，所有致命/严重候选逐项人工复核后修复）。

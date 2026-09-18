@@ -812,6 +812,20 @@ public class AppState {
             defaults(a);
 
             load(a);
+
+            // config sync keeps the OPDS/WebDAV/SMB/SFTP/library-folder
+            // lists cross-device only in app-NetworkSources.json, while the
+            // local app-State.json can lag behind (a cold start before any
+            // sync ran, or a state file written while the lists were
+            // empty): restore entries missing locally on every first load
+            // so 我的文件 keeps the user's servers/folders, then re-strip
+            // the ones this device explicitly deleted (tombstones).
+            try {
+                ProfileStateIO.importNetworkSources(a);
+                com.foobnix.remote.RemoteTombstones.apply();
+            } catch (Exception e) {
+                LOG.e(e);
+            }
             if (AppState.get().isShowPanelBookNameBookMode && AppState.get().statusBarPosition == com.foobnix.model.AppState.STATUSBAR_POSITION_TOP) {
                 AppState.get().isShowPanelBookNameBookMode = false;
             }
