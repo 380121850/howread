@@ -35,10 +35,16 @@ public class BookWarmer {
         final List<String> todo = new ArrayList<String>();
         synchronized (warmed) {
             for (String path : paths) {
-                if (path != null && warmed.size() < MAX_WARM_BOOKS && !warmed.contains(path) && new File(path).isFile()) {
-                    warmed.add(path);
-                    todo.add(path);
+                if (path == null || warmed.contains(path) || !new File(path).isFile()) {
+                    continue;
                 }
+                // LRU bound: without eviction the first 5 paths pinned the set
+                // forever and every later book was silently never warmed
+                while (warmed.size() >= MAX_WARM_BOOKS) {
+                    warmed.remove(warmed.iterator().next());
+                }
+                warmed.add(path);
+                todo.add(path);
             }
         }
         if (todo.isEmpty()) {
@@ -52,7 +58,15 @@ public class BookWarmer {
                 Thread.currentThread().setPriority(Thread.MIN_PRIORITY);
                 for (String path : todo) {
                     if (TempHolder.readerActive) {
-                        return; // user started reading; don't compete for the native lock
+                        // user started reading; don't compete for the native
+                        // lock. Return the not-yet-warmed paths to the pool so
+                        // a later warmAsync can pick them up again.
+                        synchronized (warmed) {
+                            for (String rest : todo.subList(todo.indexOf(path), todo.size())) {
+                                warmed.remove(rest);
+                            }
+                        }
+                        return;
                     }
                     warmOne(path);
                 }

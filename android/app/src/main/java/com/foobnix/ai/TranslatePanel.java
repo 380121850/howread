@@ -31,6 +31,15 @@ public class TranslatePanel {
     private final TextView progress;
     private final TextView count;
 
+    /** The translation thread driving THIS panel (set by the caller): its own
+     * job only — one panel's dismiss must not stop a newer translation. */
+    private volatile Thread job;
+
+    /** Binds this panel to the translation thread that feeds it. */
+    public void setJob(Thread job) {
+        this.job = job;
+    }
+
     public TranslatePanel(Activity a) {
         this.a = a;
         this.host = (ViewGroup) a.getWindow().getDecorView();
@@ -94,9 +103,15 @@ public class TranslatePanel {
     }
 
     public void dismiss() {
-        // removing the view is not enough: stop the background translation
-        // thread so it stops spending API quota for a dead panel
-        AiTranslator.cancel();
+        // stop THIS panel's translation (a newer translation started
+        // elsewhere keeps running; the old global cancel() killed the wrong
+        // job when two translations overlapped)
+        Thread t = job;
+        if (t != null) {
+            t.interrupt();
+        } else {
+            AiTranslator.cancel();
+        }
         try {
             host.removeView(panel);
         } catch (Exception ignored) {

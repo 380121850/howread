@@ -35,7 +35,7 @@ public class BookmarksData {
     }
 
 
-    public void add(AppBookmark bookmark) {
+    public synchronized void add(AppBookmark bookmark) {
         LOG.d("BookmarksData", "add", bookmark.p, bookmark.text, bookmark.path);
 
 
@@ -59,7 +59,7 @@ public class BookmarksData {
     }
 
 
-    public void remove(AppBookmark bookmark) {
+    public synchronized void remove(AppBookmark bookmark) {
         LOG.d("BookmarksData", "remove", bookmark.t, bookmark.file);
 
         if (bookmark.file == null) {
@@ -311,7 +311,7 @@ public class BookmarksData {
     }
 
 
-    public void cleanBookmarks() {
+    public synchronized void cleanBookmarks() {
         // app-Bookmarks.json is a JSONObject keyed by creation time — the old
         // clearAll() call wrote an empty SimpleMeta ARRAY into it, leaving a
         // file no reader could parse. Clear properly and mark every affected
@@ -336,7 +336,7 @@ public class BookmarksData {
      * the book itself is deleted — without this the remote bookmarks of the
      * deleted book keep resurrecting on every sync.
      */
-    public void removeByBook(String path) {
+    public synchronized void removeByBook(String path) {
         try {
             if (TxtUtils.isEmpty(path)) {
                 return;

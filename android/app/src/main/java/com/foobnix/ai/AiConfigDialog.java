@@ -62,6 +62,10 @@ public class AiConfigDialog {
         }
         refreshProfileLabel(profileValue, selectedName[0]);
 
+        // in-flight dialog tasks (list models / test / chat): cancelled when
+        // the dialog is dismissed; their callbacks also guard isFinishing
+        final java.util.List<AsyncTask> dialogTasks = new java.util.ArrayList<AsyncTask>();
+
         profileValue.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 PopupMenu popup = new PopupMenu(a, v);
@@ -77,7 +81,7 @@ public class AiConfigDialog {
                         // the dialog fields (persisted on save only)
                         savedLocal = e.optString("protocol", AiClient.PROTOCOL_OPENAI);
                         url.setText(e.optString("baseUrl", ""));
-                        apiKey.setText(e.optString("apiKey", ""));
+                        apiKey.setText(AiCredentials.decryptFromPrefixed(e.optString("apiKey", "")));
                         model.setText(e.optString("model", ""));
                         int mt = e.optInt("maxTokens", 4096);
                         maxTokens.setText(String.valueOf(mt > 0 ? mt : 4096));
@@ -93,6 +97,7 @@ public class AiConfigDialog {
                         return true;
                     }
                     AppState.get().aiConfigs = removeProfile(AppState.get().aiConfigs, selectedName[0]);
+                    AppProfile.save(a);
                     selectedName[0] = "";
                     refreshProfileLabel(profileValue, "");
                     return true;
@@ -203,15 +208,21 @@ public class AiConfigDialog {
                 progress.setVisibility(View.VISIBLE);
                 asyncTask = new AsyncTask() {
                     @Override protected Object doInBackground(Object[] params) {
-                        return AiClient.listModels(savedLocal, u, k);
+                        final StringBuilder err = new StringBuilder();
+                        java.util.List<String> ids = AiClient.listModels(savedLocal, u, k, err);
+                        return new Object[]{ids, err.toString()};
                     }
 
                     @Override protected void onPostExecute(Object result) {
+                        if (a.isFinishing() || a.isDestroyed()) {
+                            return; // a dead activity must not show the popup
+                        }
                         progress.setVisibility(View.GONE);
-                        java.util.List<String> ids = (java.util.List<String>) result;
+                        Object[] rr = (Object[]) result;
+                        java.util.List<String> ids = (java.util.List<String>) rr[0];
                         if (ids == null || ids.isEmpty()) {
-                            String err = AiClient.lastError;
-                            String kind = err.isEmpty() ? "other" : err.split(" ")[0];
+                            String err = (String) rr[1];
+                            String kind = err == null || err.isEmpty() ? "other" : err.split(" ")[0];
                             Toast.makeText(a, resultErrorText(a, kind, err), Toast.LENGTH_LONG).show();
                             return;
                         }
@@ -225,6 +236,7 @@ public class AiConfigDialog {
                         popup.show();
                     }
                 }.execute();
+                dialogTasks.add(asyncTask);
             }
         });
 
@@ -252,6 +264,9 @@ public class AiConfigDialog {
                     }
 
                     @Override protected void onPostExecute(Object result) {
+                        if (a.isFinishing() || a.isDestroyed()) {
+                            return;
+                        }
                         progress.setVisibility(View.GONE);
                         AiClient.TestResult r = (AiClient.TestResult) result;
                         if (r.ok) {
@@ -261,6 +276,7 @@ public class AiConfigDialog {
                         }
                     }
                 }.execute();
+                dialogTasks.add(asyncTask);
             }
         });
 
@@ -310,6 +326,9 @@ public class AiConfigDialog {
                     }
 
                     @Override protected void onPostExecute(Object result) {
+                        if (a.isFinishing() || a.isDestroyed()) {
+                            return;
+                        }
                         progress.setVisibility(View.GONE);
                         chatSend.setEnabled(true);
                         AiClient.TestResult r = (AiClient.TestResult) result;
@@ -322,6 +341,7 @@ public class AiConfigDialog {
                         }
                     }
                 }.execute();
+                dialogTasks.add(asyncTask);
             }
         });
 
@@ -367,7 +387,17 @@ public class AiConfigDialog {
                 Keyboards.close(a);
             }
         });
-        builder.show();
+        final android.app.AlertDialog aiDialog = builder.show();
+        aiDialog.setOnDismissListener(new DialogInterface.OnDismissListener() {
+            @Override public void onDismiss(DialogInterface dialog) {
+                for (AsyncTask t : dialogTasks) {
+                    try {
+                        t.cancel(true);
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
+        });
     }
 
     /** protocol chosen inside the dialog (persisted on save only) */
@@ -403,7 +433,8 @@ public class AiConfigDialog {
             e.put("name", name);
             e.put("protocol", protocol);
             e.put("baseUrl", baseUrl);
-            e.put("apiKey", apiKey == null ? "" : apiKey);
+            // store the key encrypted at rest; the sync export strips it
+            e.put("apiKey", AiCredentials.encryptToPrefixed(apiKey == null ? "" : apiKey));
             e.put("model", model);
             e.put("maxTokens", maxTokens);
             e.put("thinking", thinking);

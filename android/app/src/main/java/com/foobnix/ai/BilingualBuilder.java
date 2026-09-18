@@ -68,7 +68,7 @@ public class BilingualBuilder {
     private static volatile String lastOriginalPath;
     private static volatile String lastBasePath;
 
-    public static File baseFor(File originalBook) {
+    public static synchronized File baseFor(File originalBook) {
         if (lastOriginalPath != null && lastBasePath != null
                 && lastOriginalPath.equals(originalBook == null ? null : originalBook.getPath())) {
             return new File(lastBasePath);

@@ -89,6 +89,19 @@
 4. ✅ **离线**：完全缓存的书零网络打开（openOffline 降级，服务器停机实测）；已缓存整本书重取回直接从缓存落地。
 5. ✅ **SMB/SFTP/EPUB DRM 已在阶段 15b 完成（2026-09-12，见下）**。剩余待续：OPDS 认证/分页；计费网络检测接入 wholeBookOnMetered。
 
+### 阶段 16g（2026-09-18）：界面补齐 11 项——统计卡直达/整页子页/命名统一/页面精简 ✅ 已完成（0.9.7）
+
+- 首页统计卡可点（总时间→三档图表弹窗、已读书籍→书库预选已读、书籍总数→书库全部；安卓 DashboardFragment2 对齐），统计区去"更多"（Android statsHeader GONE 对齐）；
+- 首页"更多"改整页子页：`subPage` 1=最近阅读（LibRow 列表）、2=书签笔记（原书签弹层内容抽成共享 buildBookmarkList），onBackPress 先关子页；网上书库"更多"与抽屉"网上书库"→我的文件 tab（addKind 8/9 处理器重写为 9=书签子页 10=最近子页）；
+- 抽屉"设置选项"→"偏好"（复用 tab_prefs 资源），TAB_ICONS[3] ic_wrench→ic_settings（tab 栏与顺序编辑器自动一致）；
+- 书库去 播放列表/标签/分组 chips（libGroupBy 不持久化、保持 0=常规排列；书籍长按菜单的标签/播放列表不受影响）；删全局顶栏 "+"（openFilePicker 失去全部入口，CHANGES 有提醒）；
+- 我的文件：SMB/SFTP 区头 "+添加"（browseSectionHeader addKind 5/6）、书库文件夹区头 "+"（addKind 4）+ 行尾 ✕；删三条"添加/编辑 X 服务器"行与底部 新建文件夹/导入书籍；SMB/SFTP 空态文案改"点击右上角 + 添加"、远程书籍空态 ⚙→⟳；
+- 书库文件夹持久化：Servers.ets 新增 LibFolder + getLibFolders/saveLibFolders（preferences key `libfolder`），initBrowseDir 读取、空则 seed；
+- 本地目录选择器：buildDirPickDialog + openDirPick/listDirPick/dirPickUp/dirPickDrill/dirPickHere + resolveFolderPath（相对路径按 root→filesDir 解析）；备份配置三目录行改 folderPrefRow 点击选择，默认 HowRead/fonts/Download/HowRead + 旧空值迁移（Settings.ets）；
+- 格式设置计数：fmtCount（LibrarySearch 导出 FORMAT_EXTS）按扩展名归族统计 recentBooks；
+- 偏好：阅读提醒/渲染质量/翻页动画/顶栏时钟电量四行移入"阅读配置"；备份配置、在线阅读与缓存改 settingsSubBar 内嵌"常规设置"；
+- 验证：Pura 90 模拟器 x86_64 debug——11 项行为 + 书库文件夹跨重启持久化全过；dist 出 Pro 4 件套 0.9.7（versionCode 45）。
+
 ### 阶段 16f（2026-09-18）：同步安卓「在线阅读设置」合并/提速 + 鸿蒙引擎 NULL 崩溃修复 ✅ 已完成（0.9.6）
 
 - 设置合并：删除 remoteWholeBookOnMetered / remoteCacheExpireDays；合并开关 remotePrefetchWifiOnly（迁移 = 旧 wifiOnly && !旧 metered，经 LegacyRemoteSettings 读一次旧 JSON；新保存不再写旧键）；重试默认 1000→100（存储值 1000 自动跟随新默认，对齐安卓 AppState 迁移；自定义值保留）；Index.ets 设置行 / toggle / numPref / applyNumPref / remoteNumLabel 同步清理；重试行下限 0（对齐安卓 0..30000）。

@@ -928,7 +928,10 @@ public class AppState {
             return;
         }
 
-        int currentHash = Objects.hashCode(instance, false);
+        // honor @IgnoreHashCode: runtime-tweaked fields (brightness sliders,
+        // selection text, TTS state…) must not mark the config "changed" and
+        // trigger pointless saves + sync rounds
+        int currentHash = Objects.hashCode(instance, true);
         if (currentHash != instance.hashCode) {
             hashCode = currentHash;
             IO.writeObj(AppProfile.syncState, instance);

@@ -309,3 +309,32 @@ export async function removeSftpServer(ctx: Context, host: string): Promise<void
   await writeSftp(ctx, kept);
   console.info('[Servers] sftp removed: ' + host);
 }
+
+/** 书库文件夹 entry (我的文件 root; add/delete + persist since 2026-09-18). */
+export interface LibFolder {
+  name: string;
+  path: string;
+}
+
+const KEY_LIBFOLDER = 'libfolder';
+
+async function writeLibFolder(ctx: Context, list: LibFolder[]): Promise<void> {
+  try {
+    const prefs = await getPrefs(ctx);
+    await prefs.put(KEY_LIBFOLDER, JSON.stringify(list));
+    await prefs.flush();
+  } catch (e) {
+    console.error('[Servers] write failed: ' + KEY_LIBFOLDER);
+  }
+}
+
+export async function getLibFolders(ctx: Context): Promise<LibFolder[]> {
+  const json: string = await readRaw(ctx, KEY_LIBFOLDER);
+  const list: LibFolder[] = JSON.parse(json) as LibFolder[];
+  return list;
+}
+
+export async function saveLibFolders(ctx: Context, list: LibFolder[]): Promise<void> {
+  await writeLibFolder(ctx, list);
+  console.info('[Servers] libfolders saved: ' + list.length);
+}

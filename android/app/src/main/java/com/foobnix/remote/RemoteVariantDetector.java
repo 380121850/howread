@@ -345,7 +345,9 @@ public class RemoteVariantDetector {
                 }
             }
         }
-        if (v == null || v[2] > ENTRY_READ_CAP) {
+        // v[1] = csize: the read below allocates it unchecked, so a malformed
+        // zip entry could claim a giant compressed size (memory spike)
+        if (v == null || v[1] > ENTRY_READ_CAP || v[2] > ENTRY_READ_CAP) {
             return null;
         }
         byte[] lh = readRange(s, v[3], 30);

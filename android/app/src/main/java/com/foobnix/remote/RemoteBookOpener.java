@@ -77,7 +77,7 @@ public class RemoteBookOpener {
         if (isHeavyFormat(ext)) {
             // formats that need the whole book before opening (mobi family,
             // djvu, cbr, doc): the user decides between download and cancel
-            confirmUnsupportedFetch(a, remotePath, sizeHint);
+            confirmUnsupportedFetch(a, remotePath, sizeHint, startPercent);
         } else {
             // simple formats (TXT / FB2 / RTF / HTML): silent fetch
             fetchToCacheAndOpen(a, remotePath, sizeHint, startPercent);
@@ -211,12 +211,13 @@ public class RemoteBookOpener {
      * doc): one uniform dialog — 取消 or 下载. DRM-protected books end up
      * here too: their only exit is a download anyway, so no head probe.
      */
-    private static void confirmUnsupportedFetch(final Activity a, final String remotePath, final long sizeHint) {
+    private static void confirmUnsupportedFetch(final Activity a, final String remotePath, final long sizeHint,
+                                                final float startPercent) {
         new AlertDialog.Builder(a)
                 .setTitle(R.string.remote_unsupported_title)
                 .setMessage(R.string.remote_unsupported_msg)
                 .setPositiveButton(R.string.remote_download,
-                        (d, w) -> downloadAndOpen(a, remotePath, sizeHint))
+                        (d, w) -> downloadAndOpen(a, remotePath, sizeHint, startPercent))
                 .setNegativeButton(android.R.string.cancel, null)
                 .show();
     }
@@ -266,6 +267,12 @@ public class RemoteBookOpener {
 
             @Override
             protected void onPostExecute(Object o) {
+                if (a.isFinishing() || a.isDestroyed()) {
+                    // the user left while the probe was running: showing a
+                    // dialog on a dead activity token crashes (BadToken)
+                    android.util.Log.i("REMOTE", "openOnline finished: activity gone, drop verdict");
+                    return;
+                }
                 if (session == null) {
                     android.util.Log.i("REMOTE", "openOnline session null, offer download fallback");
                     offerDownloadFallback(a, remotePath, sizeHint, error);
@@ -327,6 +334,10 @@ public class RemoteBookOpener {
                             .setMessage(R.string.remote_updated_msg)
                             .setPositiveButton(R.string.remote_reload,
                                     (d, w) -> {
+                                        // consume the flag: obtain() reuses the
+                                        // pooled session and the dialog would
+                                        // pop again on every open
+                                        session.versionChanged = false;
                                         ensureMeta(remotePath, session.size);
                                         ExtUtils.showDocumentWithoutDialog2(a, Uri.parse(remotePath), 0, null);
                                     })
@@ -475,7 +486,10 @@ public class RemoteBookOpener {
                     error = e.getMessage();
                     android.util.Log.i("REMOTE", "fetchToCache failed: " + error);
                     new File(target.getPath() + ".part").delete();
-                    if (target.isFile() && target.length() > 0 && tagFile.isFile()) {
+                    if (cancelled.get()) {
+                        // an explicit user cancel must not fall through to
+                        // opening the stale copy below
+                    } else if (target.isFile() && target.length() > 0 && tagFile.isFile()) {
                         // server unreachable but an older complete copy
                         // exists (untouched: this attempt wrote to .part):
                         // open it instead of reporting failure

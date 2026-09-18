@@ -126,7 +126,10 @@ public class BlockCacheStore {
     /** Small in-memory LRU for blocks served through past the per-book cap:
      * scattered small reads of a non-persisted block must not re-download
      * the whole block every time. ~12 blocks (12MB at 1MB blocks). */
-    private static final java.util.LinkedHashMap<Long, byte[]> READ_THROUGH =
+    // per-book instance (NOT static): the key is the bare block index, so a
+    // static map let two books past their per-book cap serve each other's
+    // blocks (silent cross-book data corruption)
+    private final java.util.LinkedHashMap<Long, byte[]> READ_THROUGH =
             new java.util.LinkedHashMap<Long, byte[]>(16, 0.75f, true) {
                 private static final long serialVersionUID = 1L;
 
@@ -503,13 +506,22 @@ public class BlockCacheStore {
 
     // ---------------- book-level management ----------------
 
-    /** Deletes the whole remote-book cache (all protocols, all books). */
+    /** Deletes the whole remote-book cache (all protocols, all books).
+     * Books with an open session are skipped: their data.bin handles would
+     * keep writing into an unlinked file and the running reader would lose
+     * its cache silently. */
     public static void clearAll() {
         File root = rootDir();
-        if (root.exists()) {
-            com.foobnix.ext.CacheZipUtils.deleteDir(root);
-            root.mkdirs();
+        File[] books = root.listFiles();
+        if (books != null) {
+            for (File book : books) {
+                if (pinnedKeys.contains(book.getName())) {
+                    continue;
+                }
+                com.foobnix.ext.CacheZipUtils.deleteDir(book);
+            }
         }
+        root.mkdirs();
     }
 
     /** Deletes one book's cache by key. */

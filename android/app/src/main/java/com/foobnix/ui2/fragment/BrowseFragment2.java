@@ -747,6 +747,8 @@ import java.util.Map;
                                 getString(R.string.moon_remove_folder_hint) + "\n[" + result.getPath() + "]",
                                 getString(R.string.delete), new Runnable() {
                                     @Override public void run() {
+                                        // deletion must survive config sync
+                                        com.foobnix.remote.RemoteTombstones.add("folder:" + result.getPath());
                                         BookCSS.get().searchPathsJson =
                                                 JsonDB.remove(BookCSS.get().searchPathsJson, result.getPath());
                                         // remember the removal: if this was an
@@ -1358,6 +1360,13 @@ import java.util.Map;
                                 @Override public void run() {
                                     WebDavStore.remove(srv);
                                     WebDavCredentials.clear(a, srv.url);
+                                    // same contract as the OPDS-page delete: the
+                                    // server must not come back through config
+                                    // sync, and its shelf books go away with it
+                                    com.foobnix.remote.RemoteTombstones.add("webdav:" + WebDavStore.trimSlash(srv.url));
+                                    com.foobnix.remote.RemoteLibraryCleaner.purgeServer(a,
+                                            com.foobnix.remote.RemoteBook.TYPE_WEBDAV,
+                                            com.foobnix.remote.RemoteSessionFactory.webdavId(srv.url));
                                     AppProfile.save(a);
                                     rebuild.run();
                                 }
@@ -1455,6 +1464,8 @@ import java.util.Map;
                             getString(R.string.moon_remove_folder_hint) + "\n[" + fp + "]",
                             getString(R.string.delete), new Runnable() {
                                 @Override public void run() {
+                                    // deletion must survive config sync
+                                    com.foobnix.remote.RemoteTombstones.add("folder:" + fp);
                                     BookCSS.get().searchPathsJson =
                                             JsonDB.remove(BookCSS.get().searchPathsJson, fp);
                                     BookCSS.get().searchPathsHiddenJson =
@@ -2138,9 +2149,19 @@ import java.util.Map;
         AlertDialogs.showOkDialog(a, getString(R.string.delete_the_directory_all_the_files_in_the_directory_),
                 new Runnable() {
                     @Override public void run() {
-                        final boolean result = ExtUtils.deleteRecursive(new File(path));
-                        AlertDialogs.showResultToasts(a, result);
-                        resetFragment();
+                        // recursive delete of a whole folder can touch thousands
+                        // of files: keep it off the UI thread
+                        AppsConfig.executorServiceSingle.execute(new Runnable() {
+                            @Override public void run() {
+                                final boolean result = ExtUtils.deleteRecursive(new File(path));
+                                a.runOnUiThread(new Runnable() {
+                                    @Override public void run() {
+                                        AlertDialogs.showResultToasts(a, result);
+                                        resetFragment();
+                                    }
+                                });
+                            }
+                        });
                     }
                 });
 

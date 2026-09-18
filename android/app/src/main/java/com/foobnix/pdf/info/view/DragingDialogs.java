@@ -3269,12 +3269,20 @@ public class DragingDialogs {
                     view.findViewById(R.id.mediaAttachmentsScroll).setVisibility(View.VISIBLE);
                     for (final String fname : mediaAttachments) {
                         String[] split = fname.split(",");
+                        if (split.length < 2) {
+                            continue; // malformed attachment row, not a crash
+                        }
                         final String nameFull = split[0];
                         String name = nameFull;
                         if (name.contains("/")) {
                             name = name.substring(name.lastIndexOf("/") + 1);
                         }
-                        long size = Long.parseLong(split[1]);
+                        long size;
+                        try {
+                            size = Long.parseLong(split[1].trim());
+                        } catch (NumberFormatException nfe) {
+                            size = 0;
+                        }
 
                         TextView t = new TextView(anchor.getContext());
                         t.setText(TxtUtils.underline("▶ " + name + " (" + ExtUtils.readableFileSize(size) + ")"));
@@ -5062,11 +5070,11 @@ public class DragingDialogs {
                                              if (load != null) {
                                                  load.setLang(code);
                                                  AppDB.get().update(load);
-                                             }
-                                             final AppBook load1 = SharedBooks.load(load.getPath());
-                                             if (load1 != null) {
-                                                 load.setLang(code);
-                                                 SharedBooks.save(load1);
+                                                 final AppBook load1 = SharedBooks.load(load.getPath());
+                                                 if (load1 != null) {
+                                                     load.setLang(code);
+                                                     SharedBooks.save(load1);
+                                                 }
                                              }
                                              if (AppState.get().isDefaultHyphenLanguage) {
                                                  AppState.get().defaultHyphenLanguageCode = code;

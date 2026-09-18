@@ -75,6 +75,15 @@ public class Fb2Context extends PdfContext {
         } catch (Exception e) {
             LOG.e(e);
             LOG.d("Fb2Context Fix XML true");
+            // recycle the first (probe-failed) document: overwriting the field
+            // used to abandon its native store
+            try {
+                if (muPdfDocument != null) {
+                    muPdfDocument.recycle();
+                }
+            } catch (Exception ignore) {
+            }
+            muPdfDocument = null;
             if (cacheFile.isFile()) {
                 cacheFile.delete();
             }

@@ -81,11 +81,21 @@ public class DocxContext extends PdfContext {
                     html = HypenUtils.applyHypnes(html);
                 }
 
-                FileOutputStream out = new FileOutputStream(cacheFile);
-                out.write("<html><head></head><body>".getBytes());
-                out.write(html.getBytes());
-                out.write("</body></html>".getBytes());
-                out.close();
+                // write via a temp file + rename: a truncated cache (process
+                // killed / disk full) used to be adopted forever after
+                File tmpHtml = new File(cacheFile.getParent(), cacheFile.getName() + ".tmp");
+                FileOutputStream out = new FileOutputStream(tmpHtml);
+                try {
+                    out.write("<html><head></head><body>".getBytes());
+                    out.write(html.getBytes());
+                    out.write("</body></html>".getBytes());
+                } finally {
+                    out.close();
+                }
+                if (!tmpHtml.renameTo(cacheFile)) {
+                    tmpHtml.delete();
+                    throw new IOException("cannot move the converted html into place");
+                }
 
                 MuPdfDocument muPdfDocument = new MuPdfDocument(this, MuPdfDocument.FORMAT_PDF, cacheFile.getPath(), password);
                 return muPdfDocument;

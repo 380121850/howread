@@ -170,6 +170,13 @@ public class ProfileStateIO {
      * device while the network round was running. */
     private static volatile String lastExportedMisc;
 
+    /** Manual backup restore: drop the round-start snapshots so importMisc /
+     * restorePrefsDiff apply the restored values in full instead of skipping
+     * entries that merely look unchanged against a stale last export. */
+    public static void resetSyncSnapshots() {
+        lastExportedMisc = null;
+    }
+
     public static void exportMisc(Context c) {
         try {
             if (AppProfile.syncMisc == null) {
@@ -367,13 +374,18 @@ public class ProfileStateIO {
                 return;
             }
             LinkedJSONObject o = new LinkedJSONObject();
-            o.put(K_API_KEY, AiCredentials.load(c));
+            // SECURITY: never publish the key through the sync file — the
+            // active key lives in the encrypted store on each device
+            o.put(K_API_KEY, "");
             o.put(K_ACTIVE, AppState.get().aiConfigName == null ? "" : AppState.get().aiConfigName);
             LinkedJSONObject vendors = new LinkedJSONObject();
             JSONArray arr = parseAiProfiles(AppState.get().aiConfigs);
             for (int i = 0; i < arr.length(); i++) {
                 LinkedJSONObject p = asLinked(arr.opt(i));
                 if (p != null && TxtUtils.isNotEmpty(p.optString("name"))) {
+                    // drop the (locally encrypted) key material from the copy
+                    // that leaves the device
+                    p.remove("apiKey");
                     vendors.put(p.optString("name"), p);
                 }
             }
@@ -401,7 +413,9 @@ public class ProfileStateIO {
             }
             LinkedJSONObject o = IO.readJsonObject(AppProfile.syncAI);
             String fileKey = o.optString(K_API_KEY, "");
-            if (!fileKey.equals(AiCredentials.load(c))) {
+            // empty means "nothing published" (new-style file): must NOT wipe
+            // the local encrypted key — only a real server value applies
+            if (TxtUtils.isNotEmpty(fileKey) && !fileKey.equals(AiCredentials.load(c))) {
                 AiCredentials.save(c, fileKey);
             }
             // per-vendor restore: every backed-up vendor is upserted into
@@ -427,6 +441,11 @@ public class ProfileStateIO {
                     } else {
                         LinkedJSONObject lp = asLinked(cur.opt(hit));
                         if (lp == null || !lp.toString().equals(v.toString())) {
+                            // the server copy carries no key material (stripped
+                            // on export): keep this device's local key binding
+                            if (lp != null && !v.has("apiKey") && lp.has("apiKey")) {
+                                v.put("apiKey", lp.optString("apiKey"));
+                            }
                             cur.put(hit, v);
                             changed = true;
                             android.util.Log.i("BENCH", "ai restore: vendor updated " + name);
@@ -492,7 +511,7 @@ public class ProfileStateIO {
             AppState.get().aiMaxTokens = tokens;
         }
         AppState.get().aiThinking = p.optBoolean("thinking", AppState.get().aiThinking);
-        String k = p.optString("apiKey", "");
+        String k = AiCredentials.decryptFromPrefixed(p.optString("apiKey", ""));
         if (TxtUtils.isNotEmpty(k)) {
             AiCredentials.save(c, k);
         }
@@ -559,57 +578,7 @@ public class ProfileStateIO {
         }
     }
 
-    // ---------------------------------------------------------- AI model config (inside app-State.json)
 
-    private static final String[] AI_STATE_FIELDS = {"aiProtocol", "aiBaseUrl", "aiModel", "aiMaxTokens", "aiThinking"};
-    /** AppState.aiMaxTokens default — a field equal to it counts as "not set". */
-    private static final int AI_MAX_TOKENS_DEFAULT = 4096;
-
-    /**
-     * Union merge of the AI model config inside app-State.json so the config
-     * survives a device reset: after a reset the freshly created local state
-     * file is always "newer" (its mtime is now), and plain newer-wins would
-     * clobber the server copy with empty fields. A set value beats an unset
-     * one; on a real conflict the newer side wins.
-     */
-    public static LinkedJSONObject mergeAiState(LinkedJSONObject local, LinkedJSONObject remote, boolean remoteNewer) {
-        try {
-            LinkedJSONObject newer = remoteNewer ? remote : local;
-            LinkedJSONObject out = new LinkedJSONObject(newer.toString());
-            for (String k : AI_STATE_FIELDS) {
-                Object lv = local.opt(k);
-                Object rv = remote.opt(k);
-                boolean lSet = aiFieldSet(lv);
-                boolean rSet = aiFieldSet(rv);
-                if (lSet && rSet) {
-                    continue; // real conflict — the newer side (base) keeps it
-                }
-                if (lSet) {
-                    out.put(k, lv);
-                } else if (rSet) {
-                    out.put(k, rv);
-                }
-            }
-            return out;
-        } catch (Exception e) {
-            LOG.e(e);
-            return remoteNewer ? remote : local;
-        }
-    }
-
-    /** "Set" per field type: strings non-empty, tokens ≠ default, thinking always. */
-    static boolean aiFieldSet(Object v) {
-        if (v == null) {
-            return false;
-        }
-        if (v instanceof Integer) {
-            return ((Integer) v) != AI_MAX_TOKENS_DEFAULT;
-        }
-        if (v instanceof Boolean) {
-            return true;
-        }
-        return TxtUtils.isNotEmpty(String.valueOf(v));
-    }
 
     /**
      * Re-read the synced app-State.json into the live AppState (in place), so

@@ -64,11 +64,15 @@ public class SyncChangeLog {
     public static void add(String file, String key, String action, Object oldV, Object newV) {
         final LinkedJSONObject it = new LinkedJSONObject();
         try {
+            // values under a secret-ish path (book passwords, OPDS logins,
+            // API keys) are BARE strings the value-shape mask cannot see —
+            // mask the whole item when the dotted path smells secret
+            final boolean secret = isSecretKey(file) || isSecretKey(key);
             it.put("f", file);
             it.put("k", key);
             it.put("a", action);
-            it.put("o", mask(oldV));
-            it.put("n", mask(newV));
+            it.put("o", secret ? MASK : mask(oldV));
+            it.put("n", secret ? MASK : mask(newV));
         } catch (Exception e) {
             return;
         }
@@ -76,7 +80,19 @@ public class SyncChangeLog {
             ITEMS.add(it);
         }
         android.util.Log.i("BENCH", "syncChange " + file + " " + key + " [" + action + "] "
-                + mask(oldV) + " -> " + mask(newV));
+                + it.optString("o") + " -> " + it.optString("n"));
+    }
+
+    /** True when the dotted file/key path mentions a secret-ish field. */
+    private static boolean isSecretKey(String s) {
+        if (s == null) {
+            return false;
+        }
+        final String l = s.toLowerCase(Locale.US);
+        return l.contains("password") || l.contains("passwd") || l.contains("pwd")
+                || l.contains("api_key") || l.contains("apikey") || l.contains("api-key")
+                || l.contains("token") || l.contains("secret")
+                || l.contains("login") || l.contains("opds");
     }
 
     /** Persist the collected run (newest first) into app-SyncLog.json. */

@@ -82,8 +82,11 @@ public class AiTranslator {
      * @param tgtLang target language (en / zh-CN / ja)
      * @param listener progress callback (background thread)
      */
-    public static void translate(final Context c, final DocumentController dc,
+    public static Thread translate(final Context c, final DocumentController dc,
             final String srcLang, final String tgtLang, final Listener listener) {
+        // a new translation replaces the running one: stop the old thread at
+        // the next boundary so it cannot keep spending quota for a dead panel
+        cancel();
         final Thread thread = new Thread(new Runnable() {
             @Override public void run() {
                 try {
@@ -100,6 +103,7 @@ public class AiTranslator {
         }, "AiTranslate");
         currentJob = thread;
         thread.start();
+        return thread;
     }
 
     private static void doTranslate(Context c, DocumentController dc, String srcLang,

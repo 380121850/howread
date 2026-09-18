@@ -196,10 +196,16 @@ public class WebDavSyncer {
     private static Runnable pendingConfigSync;
     private static Runnable pendingPeriodicSync;
 
+    /** Sync runs on its own single thread: the shared executorServiceSingle
+     * also carries AppState.save's async disk writes — a multi-minute
+     * weak-network sync used to stall every config save behind it. */
+    private static final java.util.concurrent.ExecutorService SYNC_EXEC =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
+
     /** Run the sync on a background thread; callbacks arrive on the main thread. */
     public static void syncAsync(final Context c, final Listener listener) {
         final Handler main = new Handler(Looper.getMainLooper());
-        AppsConfig.executorServiceSingle.execute(() -> {
+        SYNC_EXEC.execute(() -> {
             syncingNow = true;
             try {
                 if (listener != null) {
@@ -310,6 +316,13 @@ public class WebDavSyncer {
         return TxtUtils.isEmpty(dir) ? REMOTE_DIR : dir;
     }
 
+    /** Per-round network health: successful GETs vs failed stages. doSync
+     * runs serialized (single executor + syncingNow), so plain fields are
+     * safe; they drive the "sync failed" reporting instead of the old
+     * unconditional res.ok=true. */
+    private static int roundNetGets = 0;
+    private static int roundNetFails = 0;
+
     public static SyncResult doSync(Context c) {
         SyncResult res = new SyncResult();
         long start = System.currentTimeMillis();
@@ -322,6 +335,8 @@ public class WebDavSyncer {
             String serverUrl = cfg[0];
             boolean trustAll = WebDavCredentials.isTrustAll(c, serverUrl);
             Sardine s = WebDavClient.sardine(cfg[1], cfg[2], trustAll);
+            roundNetGets = 0;
+            roundNetFails = 0;
 
             String root = WebDavStore.trimSlash(serverUrl) + "/" + remoteDir();
             String globalUrl = root + "/" + REMOTE_GLOBAL;
@@ -428,6 +443,7 @@ public class WebDavSyncer {
             final Map<String, LinkedJSONObject> remoteBooks =
                     listRemoteBooks(s, booksUrl, booksListFailed);
             if (booksListFailed[0]) {
+                roundNetFails++;
                 // some book files could not be fetched this round: their
                 // tombstones (if any) stay untouched and are retried next round
                 LOG.d("WebDavSyncer remote book listing incomplete (network error)");
@@ -691,6 +707,15 @@ public class WebDavSyncer {
             // in-memory progress cache is now stale
             SharedBooks.cache.clear();
 
+            if (roundNetGets == 0 && roundNetFails > 0) {
+                // every network stage of this round failed: report failure
+                // instead of a fake "sync ok" (the old code always set ok=true
+                // and refreshed "last synced", hiding real data risk)
+                res.error = "network_failed_round";
+                res.durationMs = System.currentTimeMillis() - start;
+                SyncChangeLog.commit("同步失败：网络不可达或认证失败，本轮未同步任何内容");
+                return res;
+            }
             AppState.get().webdavLastSyncTime = System.currentTimeMillis();
             res.progressDown = pDown;
             res.progressUp = Math.max(0, localP.length() - pDown);
@@ -700,6 +725,7 @@ public class WebDavSyncer {
             res.durationMs = System.currentTimeMillis() - start;
             AppState.get().webdavLastSyncInfo = "\u2191" + res.booksSynced + "\u672c \u00b7 \u5173\u8054" + associated
                     + (res.booksDeleted > 0 ? " \u00b7 \u5220" + res.booksDeleted : "")
+                    + (roundNetFails > 0 ? " \u00b7 \u90e8\u5206\u672a\u540c\u6b65" : "")
                     + " \u00b7 " + res.durationMs + "ms";
             android.util.Log.i("BENCH", "sync books: synced=" + res.booksSynced + " associated=" + associated
                     + " deleted=" + res.booksDeleted);
@@ -838,9 +864,14 @@ public class WebDavSyncer {
             } else if (remoteChanged) {
                 if (rb) {
                     out.put(k, rv);
+                } else if (lb) {
+                    // rb == false while the base had the key: this is an
+                    // OLD-VERSION device that simply does not know the field,
+                    // not a real user deletion (these config files always
+                    // write every field). Keep the local value instead of
+                    // wiping newer fields the old device never had.
+                    out.put(k, lv);
                 }
-                // rb == false: the field was deleted on the server and not
-                // changed locally → the deletion propagates
             } else if (lb) {
                 out.put(k, lv);
             }
@@ -953,9 +984,11 @@ public class WebDavSyncer {
                 // transient GET failure: touch neither the server nor the local
                 // file (and leave the base alone) — otherwise one network error
                 // could publish a stale local snapshot for good
+                roundNetFails++;
                 SyncChangeLog.add(name, "(整个文件)", "down", "(未同步：服务器暂不可达)", null);
                 return;
             }
+            roundNetGets++;
             final LinkedJSONObject localObj = new LinkedJSONObject(localFull);
             final LinkedJSONObject remoteObj = remoteText.trim().isEmpty()
                     ? new LinkedJSONObject() : new LinkedJSONObject(remoteText);
@@ -1138,9 +1171,11 @@ public class WebDavSyncer {
             final String localText = readText(local);
             final String remoteText = fetchText(s, url);
             if (remoteText == null) {
+                roundNetFails++;
                 SyncChangeLog.add(name, "(整个列表)", "down", "(未同步：服务器暂不可达)", null);
                 return false;
             }
+            roundNetGets++;
             final JSONArray localArr = localText.trim().isEmpty() ? new JSONArray() : new JSONArray(localText);
             final JSONArray remoteArr = remoteText.trim().isEmpty() ? new JSONArray() : new JSONArray(remoteText);
             final Map<String, LinkedJSONObject> merged = new LinkedHashMap<String, LinkedJSONObject>();
@@ -1209,9 +1244,11 @@ public class WebDavSyncer {
             final String remoteText = fetchText(s, url);
             if (remoteText == null) {
                 // transient GET failure: touch neither the server nor the local file
+                roundNetFails++;
                 android.util.Log.i("BENCH", "sync " + local.getName() + ": remote error, skipped");
                 return;
             }
+            roundNetGets++;
             if (remoteText.isEmpty()) {
                 if (localObj.length() > 0) {
                     s.put(url, localObj.toString().getBytes("UTF-8"));
@@ -1268,9 +1305,11 @@ public class WebDavSyncer {
             String remoteText = fetchText(s, url);
             if (remoteText == null) {
                 // transient GET failure: touch neither the server nor the local file
+                roundNetFails++;
                 android.util.Log.i("BENCH", "sync " + local.getName() + ": remote error, skipped");
                 return;
             }
+            roundNetGets++;
             if (remoteText.isEmpty()) {
                 if (localObj.length() > 0) {
                     s.put(url, localObj.toString().getBytes("UTF-8"));

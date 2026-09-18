@@ -21,7 +21,7 @@ const BOOK_EXTS: string[] = ['pdf', 'epub', 'txt', 'html', 'htm', 'mobi', 'azw',
 export const FORMAT_KEYS: string[] =
   ['pdf', 'epub', 'fb2', 'txtmd', 'mobi', 'djvu', 'xps', 'doc', 'rtf', 'odt', 'cbz', 'zip', 'html'];
 
-const FORMAT_EXTS: Record<string, string[]> = {
+export const FORMAT_EXTS: Record<string, string[]> = {
   'pdf': ['pdf'],
   'epub': ['epub'],
   'fb2': ['fb2'],

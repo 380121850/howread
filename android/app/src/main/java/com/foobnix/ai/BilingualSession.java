@@ -226,6 +226,15 @@ public class BilingualSession {
             final AppState st = AppState.get();
             BilingualSession existing = attachOrNull(path);
             if (existing != null) {
+                // stale sessions must obey the same gate as new ones: a
+                // leftover session used to resurrect here (translating and
+                // spending quota) with NO ui switch left to stop it
+                if (!st.aiBilingual || TxtUtils.isEmpty(st.aiBilingualBook)
+                        || !st.aiBilingualBook.equals(path)) {
+                    existing.detachHost();
+                    pauseAllExcept(null);
+                    return;
+                }
                 existing.attachHost(hostFor(activity, dc, path));
                 pauseAllExcept(path);
                 existing.onView(dc.getCurentPageFirst1() - 1, dc.getPageCount());
@@ -361,7 +370,10 @@ public class BilingualSession {
     private final AtomicBoolean ensuring = new AtomicBoolean(false);
     private final Set<String> pending = new HashSet<String>();
     private final Set<String> queued = new HashSet<String>();
-    private final Set<String> inFlight = new HashSet<String>();
+    // concurrent set: the three worker lanes add/remove WITHOUT queueLock
+    // (a plain HashSet corrupted under them and stranded paragraphs mid-book)
+    private final Set<String> inFlight =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<String, Boolean>());
     private final Set<String> failed = new HashSet<String>();
     // three translation lanes: current page / ahead pages / back pages, each
     // served by its own worker (stolen from in priority order when idle)
@@ -1448,5 +1460,9 @@ public class BilingualSession {
             LOG.e(e);
         }
         worker = null;
+        // the session can outlive the reader in the static SESSIONS map:
+        // drop the Activity/controller references so they are not pinned
+        host = null;
+        lastDc = null;
     }
 }

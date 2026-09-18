@@ -293,7 +293,7 @@ public class AiTranslateDialog {
         panel.setTitle(a.getString(R.string.ai_translate) + " → "
                 + AiTranslator.targetLangName(tgt));
         panel.setTranslating(true);
-        AiTranslator.translate(a, dc, src, tgt, new AiTranslator.Listener() {
+        panel.setJob(AiTranslator.translate(a, dc, src, tgt, new AiTranslator.Listener() {
             @Override public void onParagraph(String pid, String orig, String tran, String status) {
                 a.runOnUiThread(new Runnable() {
                     @Override public void run() {
@@ -309,6 +309,6 @@ public class AiTranslateDialog {
                     }
                 });
             }
-        });
+        }));
     }
 }

@@ -174,7 +174,9 @@ public class RemoteScanner {
         return new AlertDialog.Builder(a)
                 .setTitle(R.string.remote_scan_title)
                 .setView(body)
-                .setNegativeButton(android.R.string.cancel, null)
+                // the negative button only dismisses: onCancelListener never
+                // fired and the scan kept running after "cancel"
+                .setNegativeButton(android.R.string.cancel, (d, w) -> cancelled = true)
                 .create();
     }
 

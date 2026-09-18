@@ -142,6 +142,9 @@ public class ExportConverter {
             String value = bookmarks.getString(bKeys.next());
             LOG.d(value);
             String[] it = value.split("~");
+            if (it.length < 2) {
+                continue; // malformed legacy entry: skip instead of aborting the import
+            }
 
             AppBookmark bookmark = new AppBookmark();
             final String path = it[0];

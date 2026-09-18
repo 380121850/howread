@@ -64,6 +64,16 @@ def _ensure_home(dev):
     time.sleep(1)
 
 
+def _scroll_net_section(dev, times=4):
+    """在「我的文件」根页的网络/书库区块(MaxHeightScrollView)内向上滑动.
+    2026-09-18 起该区块恢复 220dp 高度上限并改为内部滚动,uiautomator 只能看到
+    视口内节点——下方的书夹卡片/搜索行要先在区块内滚动才可见."""
+    w, h = dev.d.window_size()
+    for _ in range(times):
+        dev.d.swipe(0.5 * w, 0.35 * h, 0.5 * w, 0.12 * h, 0.4)
+        time.sleep(1.0)
+
+
 def _browse_dl_row(dev):
     """「我的文件」页找 Download 行;找不到时先点书库文件夹卡片兜底.
     真出厂态(--reset 删外部状态后)区块页没有文件列表、也没有 Download 行,
@@ -92,6 +102,25 @@ def _browse_dl_row(dev):
         dl = dev.d(text="Download")
         if not dl.exists:
             dl = dev.d(textContains="Download")
+    if dl is None or not dl.exists:
+        # 2026-09-18 根页改版:书库文件夹变成卡片列表(书夹名即文本;存储根
+        # /storage/emulated/0 按末段显示为"0"),位于 MaxHeightScrollView 内部,
+        # 需先在区块内上滑才可见——点"0"卡片进入 /sdcard 根浏览页找 Download 行
+        _scroll_net_section(dev)
+        root_card = dev.d(text="0")
+        if root_card.exists and root_card.count == 1:
+            root_card.click()
+            time.sleep(2.5)
+            dl = dev.d(text="Download")
+            if not dl.exists:
+                dl = dev.d(textContains="Download")
+            if not dl.exists:
+                w, h = dev.d.window_size()
+                dev.d.swipe(0.5 * w, 0.75 * h, 0.5 * w, 0.35 * h, 0.4)
+                time.sleep(1.2)
+                dl = dev.d(text="Download")
+                if not dl.exists:
+                    dl = dev.d(textContains="Download")
     return dl if dl.exists else None
 
 
@@ -422,6 +451,11 @@ def _reveal_search_entry(dev):
     这是已知应用缺陷(fragment_browse2.xml 根视图不可滚动,搜索行被网络区挤出屏幕,
     全文搜索唯一入口不可达),非 autotest 能规避的测试环境问题.检测到裁切时 SKIP 并注明,
     不删用户网络源、不改应用代码(处理方式见 CHANGES 2026-09-12 条目)."""
+    if _try_open_search_page(dev):
+        return True
+    # 直接点不到:先在网络区块内上滑(2026-09-18 起区块恢复高度上限并内部
+    # 滚动,搜索行可能在视口下方),仍点不到才判"被裁切"
+    _scroll_net_section(dev)
     if _try_open_search_page(dev):
         return True
     # 直接点不到:判断是"被裁切"(已知缺陷)还是"入口缺失"

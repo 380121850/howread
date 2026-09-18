@@ -66,6 +66,38 @@ public class AiCredentials {
         }
     }
 
+    /** Prefix marking an API key encrypted by THIS device's Keystore. */
+    public static final String ENC_PREFIX = "enc:v1:";
+
+    /** Encrypts a named-profile key for at-rest storage in aiConfigs; ""
+     * stays "" and a Keystore failure stores "" rather than plaintext. */
+    public static String encryptToPrefixed(String plain) {
+        if (plain == null || plain.isEmpty()) {
+            return "";
+        }
+        try {
+            return ENC_PREFIX + Base64.encodeToString(encrypt(plain), Base64.NO_WRAP);
+        } catch (Exception e) {
+            LOG.e(e);
+            return "";
+        }
+    }
+
+    /** Inverse of {@link #encryptToPrefixed}; plain (legacy) values pass
+     * through unchanged so pre-upgrade profiles keep working. */
+    public static String decryptFromPrefixed(String stored) {
+        if (stored == null || !stored.startsWith(ENC_PREFIX)) {
+            return stored == null ? "" : stored;
+        }
+        try {
+            return new String(decrypt(Base64.decode(stored.substring(ENC_PREFIX.length()), Base64.NO_WRAP)),
+                    "UTF-8");
+        } catch (Exception e) {
+            LOG.e(e);
+            return "";
+        }
+    }
+
     private static byte[] encrypt(String plain) throws Exception {
         SecretKey key = getOrCreateKey();
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");

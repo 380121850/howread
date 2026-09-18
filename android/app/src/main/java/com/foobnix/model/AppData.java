@@ -178,7 +178,7 @@ public class AppData {
 
     }
 
-    public void add(SimpleMeta s, File file) {
+    public synchronized void add(SimpleMeta s, File file) {
         recentCacheTime = 0;
         List<SimpleMeta> current = getSimpleMeta(file);
 

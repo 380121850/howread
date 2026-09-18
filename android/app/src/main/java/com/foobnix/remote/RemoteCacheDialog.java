@@ -94,8 +94,8 @@ public class RemoteCacheDialog {
                 .setPositiveButton(android.R.string.ok, (d, w) -> {
                     if (pro) {
                         try {
-                            st.remoteCacheMaxMB = Math.max(50,
-                                    Integer.parseInt(cacheSize.getText().toString().trim()));
+                            st.remoteCacheMaxMB = Math.max(50, Math.min(65536,
+                                    Integer.parseInt(cacheSize.getText().toString().trim())));
                         } catch (Exception e) {
                             st.remoteCacheMaxMB = 500;
                         }
@@ -124,11 +124,17 @@ public class RemoteCacheDialog {
                     }
                 })
                 .setNeutralButton(R.string.remote_clear_cache, (d, w) -> {
-                    BlockCacheStore.clearAll();
-                    Toast.makeText(a, R.string.remote_cache_cleared, Toast.LENGTH_SHORT).show();
-                    if (onRefresh != null) {
-                        onRefresh.run();
-                    }
+                    // recursive delete of up to hundreds of MB must not run on
+                    // the UI thread
+                    AppsConfig.executorServiceSingle.execute(() -> {
+                        BlockCacheStore.clearAll();
+                        a.runOnUiThread(() -> {
+                            Toast.makeText(a, R.string.remote_cache_cleared, Toast.LENGTH_SHORT).show();
+                            if (onRefresh != null) {
+                                onRefresh.run();
+                            }
+                        });
+                    });
                 })
                 .setNegativeButton(android.R.string.cancel, null)
                 .show();

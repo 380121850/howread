@@ -415,6 +415,7 @@ public class PrefDialogs {
                                 // right after the restart
                                 ProfileStateIO.importStats(activity);
                                 ProfileStateIO.importAi(activity);
+                                ProfileStateIO.resetSyncSnapshots();
                                 ProfileStateIO.importMisc(activity);
                                 AppData.get().getAllRecent(false);
                                 AppData.get().getAllFavoriteFiles(false);

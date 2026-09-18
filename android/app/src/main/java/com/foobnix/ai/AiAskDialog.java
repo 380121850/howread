@@ -74,7 +74,20 @@ public class AiAskDialog {
         dialog.setContentView(view);
         dialog.getWindow().setLayout(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT);
+        // keeps the in-flight task reachable for the dismiss handler
+        final AsyncTask[] runningRef = new AsyncTask[1];
         dialog.show();
+        // stop an in-flight request when the page is dismissed
+        dialog.setOnDismissListener(new android.content.DialogInterface.OnDismissListener() {
+            @Override public void onDismiss(android.content.DialogInterface d) {
+                if (runningRef[0] != null) {
+                    try {
+                        runningRef[0].cancel(true);
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
+        });
 
         back.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
@@ -144,6 +157,9 @@ public class AiAskDialog {
                     }
 
                 @Override protected void onPostExecute(Object r) {
+                    if (a.isFinishing() || a.isDestroyed()) {
+                        return;
+                    }
                     progress.setVisibility(View.GONE);
                     send.setEnabled(true);
                     AiClient.TestResult res = (AiClient.TestResult) r;
@@ -159,6 +175,7 @@ public class AiAskDialog {
                 }
                 };
                 running.execute();
+                runningRef[0] = running;
             }
         });
     }

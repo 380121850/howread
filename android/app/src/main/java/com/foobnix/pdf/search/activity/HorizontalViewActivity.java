@@ -963,7 +963,7 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
         loadinAsyncTask = new CopyAsyncTask() {
             AlertDialog dialog;
             long start = 0;
-            private boolean isCancelled = false;
+            private volatile boolean isCancelled = false;
 
             @Override
             protected void onPreExecute() {
@@ -975,6 +975,9 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
                     @Override
                     public void run() {
                         isCancelled = true;
+                        if (loadinAsyncTask != null) {
+                            loadinAsyncTask.cancel(true);
+                        }
                         CacheZipUtils.removeFiles(CacheZipUtils.CACHE_BOOK_DIR.listFiles());
                         finish();
                     }
@@ -994,7 +997,7 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
                     try {
                         //Thread.sleep(3000);
 
-                        while (viewPager.getHeight() == 0) {
+                        while (viewPager.getHeight() == 0 && !isCancelled()) {
                             Thread.sleep(250);
                         }
                         int count = 0;
@@ -1019,6 +1022,14 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
                         });
 
                     } catch (InterruptedException e) {
+                        if (isCancelled()) {
+                            return 0;
+                        }
+                    }
+                    if (isCancelled()) {
+                        // cancelled while waiting: opening the document now
+                        // would leak it (nobody will close it)
+                        return 0;
                     }
                     LOG.d("viewPager", viewPager.getHeight() + "x" + viewPager.getWidth());
                     initAsync(viewPager.getWidth(), viewPager.getHeight());

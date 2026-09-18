@@ -1523,9 +1523,11 @@ public class ExtUtils {
             List<OutlineLink> outline = doc.getOutline();
 
             final File fileReflowHtml = new File(bookTempRoot, "temp" + REFLOW_HTML);
+            FileWriter fout = null;
+            BufferedWriter out = null;
             try {
-                FileWriter fout = new FileWriter(fileReflowHtml);
-                BufferedWriter out = new BufferedWriter(fout);
+                fout = new FileWriter(fileReflowHtml);
+                out = new BufferedWriter(fout);
                 out.write("<html>");
                 out.write("<head><meta charset=\"utf-8\"/></head>");
                 out.write("<body>");
@@ -1535,7 +1537,7 @@ public class ExtUtils {
                 int imgCount = 0;
                 for (int i = 0; i < pages; i++) {
                     LOG.d("Extract page", i);
-                    CodecPage pageCodec = doc.getPage(i);
+                    CodecPage pageCodec = doc.getOwnedPage(i);
                     String html = pageCodec.getPageHTMLWithImages();
 
                     out.write("<a id=\"" + i + "\"></a>");
@@ -1611,6 +1613,25 @@ public class ExtUtils {
             } catch (Exception e) {
                 LOG.e(e);
                 return null;
+            } finally {
+                // a failed page extract must not leak the native document or
+                // the writers (recycle() is idempotent)
+                try {
+                    if (out != null) {
+                        out.close();
+                    }
+                } catch (Exception ignore) {
+                }
+                try {
+                    if (fout != null) {
+                        fout.close();
+                    }
+                } catch (Exception ignore) {
+                }
+                try {
+                    doc.recycle();
+                } catch (Exception ignore) {
+                }
             }
             new File(BookCSS.get().downlodsPath).mkdirs();
             File epubOutpub = new File(BookCSS.get().downlodsPath, file.getName() + REFLOW_EPUB);
@@ -1823,11 +1844,17 @@ public class ExtUtils {
                 for (String e : es) {
                     line = line.toLowerCase(Locale.US);
                     if (line.contains(e)) {
-                        bufferedReader.close();
                         int index = line.indexOf(e) + e.length();
-                        String encoding = line.substring(index, line.indexOf("\"", index));
-                        LOG.d("extract-encoding-html", encoding);
+                        int end = line.indexOf("\"", index);
+                        // an unquoted value ("charset=utf-8") made indexOf('"')
+                        // return -1 and the whole hit was lost to the catch
+                        String encoding = end > index ? line.substring(index, end)
+                                : line.substring(index).trim();
+                        if (encoding.isEmpty()) {
+                            continue;
+                        }
                         bufferedReader.close();
+                        LOG.d("extract-encoding-html", encoding);
                         LOG.d("determineHtmlEncoding", encoding);
                         fis2.close();
                         return encoding;

@@ -83,7 +83,7 @@ public class WebDavPathPickerDialog {
                                 if (AsyncTasks.isRunning(asyncTask)) {
                                     return;
                                 }
-                                final String target = base + "/" + join(rel[0], name);
+                                final String target = base + "/" + encodePath(join(rel[0], name));
                                 asyncTask = new AsyncTask() {
                                     @Override protected Object doInBackground(Object[] params) {
                                         try {
@@ -130,6 +130,24 @@ public class WebDavPathPickerDialog {
         return TxtUtils.isEmpty(rel) ? name : rel + "/" + name;
     }
 
+    /** Navigation sequence: only the newest directory request may paint its
+     * result (a slow older response used to overwrite the newer list). */
+    private static final java.util.concurrent.atomic.AtomicInteger SEQ =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+    /** Percent-encodes every path segment (server-provided names may contain
+     * spaces, '?', '#', '%'); the '/' separators are kept. */
+    private static String encodePath(String rel) {
+        final StringBuilder sb = new StringBuilder();
+        for (String seg : rel.split("/")) {
+            if (sb.length() > 0) {
+                sb.append('/');
+            }
+            sb.append(android.net.Uri.encode(seg));
+        }
+        return sb.toString();
+    }
+
     private static void load(final Activity a, final String base, final String login, final String password,
             final boolean trustAll, final String[] rel, final List<String> names, final ArrayAdapter<String> adapter,
             final TextView pathView, final MyProgressBar progress, final ListView list) {
@@ -140,13 +158,19 @@ public class WebDavPathPickerDialog {
         adapter.notifyDataSetChanged();
         progress.setVisibility(View.VISIBLE);
 
-        final String target = base + (TxtUtils.isEmpty(rel[0]) ? "/" : "/" + rel[0]);
+        final String target = base + (TxtUtils.isEmpty(rel[0]) ? "/" : "/" + encodePath(rel[0]));
+        final int seq = SEQ.incrementAndGet();
         new AsyncTask() {
             @Override protected Object doInBackground(Object[] params) {
                 return WebDavClient.list(target, login, password, trustAll);
             }
 
             @Override protected void onPostExecute(Object result) {
+                if (seq != SEQ.get()) {
+                    // a newer navigation superseded this request: applying the
+                    // stale response painted list and path out of sync
+                    return;
+                }
                 progress.setVisibility(View.GONE);
                 List<WebDavItem> items = (List<WebDavItem>) result;
                 if (items == null) {

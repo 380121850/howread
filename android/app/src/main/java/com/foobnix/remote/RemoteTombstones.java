@@ -79,8 +79,66 @@ public class RemoteTombstones {
             if (sftp != null) {
                 AppState.get().allSftpLinks = sftp;
             }
+            // OPDS catalogs and library folders are plain unions in the sync
+            // merge (no per-item tombstone there): without this filter a
+            // deleted catalog/folder came back on every sync
+            String opds = rewriteLines(AppState.get().allOPDSLinks, "opds:");
+            if (opds != null) {
+                AppState.get().allOPDSLinks = opds;
+            }
+            String folders = rewriteJsonArray(com.foobnix.pdf.info.model.BookCSS.get().searchPathsJson, "folder:");
+            if (folders != null) {
+                com.foobnix.pdf.info.model.BookCSS.get().searchPathsJson = folders;
+            }
         } catch (Exception e) {
             LOG.e(e);
+        }
+    }
+
+    /** null when nothing was tombstoned. Filters a ';'-separated line list
+     * (OPDS catalogs) by the "opds:<line>" identities. */
+    private static String rewriteLines(String raw, String prefix) {
+        if (raw == null) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder();
+        boolean changed = false;
+        for (String line : raw.split(";")) {
+            if (TxtUtils.isEmpty(line)) {
+                continue;
+            }
+            if (has(prefix + line)) {
+                changed = true;
+                continue;
+            }
+            sb.append(line).append(';');
+        }
+        return changed ? sb.toString() : null;
+    }
+
+    /** null when nothing was tombstoned. Filters the JSON array of library
+     * folder paths by the "folder:<path>" identities. */
+    private static String rewriteJsonArray(String json, String prefix) {
+        try {
+            org.librera.JSONArray in = new org.librera.JSONArray(
+                    json == null || json.trim().isEmpty() ? "[]" : json);
+            org.librera.JSONArray out = new org.librera.JSONArray();
+            boolean changed = false;
+            for (int i = 0; i < in.length(); i++) {
+                String p = in.optString(i);
+                if (TxtUtils.isEmpty(p)) {
+                    continue;
+                }
+                if (has(prefix + p)) {
+                    changed = true;
+                    continue;
+                }
+                out.put(p);
+            }
+            return changed ? out.toString() : null;
+        } catch (Exception e) {
+            LOG.e(e);
+            return null;
         }
     }
 

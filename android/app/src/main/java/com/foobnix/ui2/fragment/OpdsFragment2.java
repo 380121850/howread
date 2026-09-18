@@ -350,6 +350,8 @@ public class OpdsFragment2 extends UIFragment<Entry> {
 
                     @Override
                     public void run() {
+                        // deletion must survive config sync (plain union merge)
+                        com.foobnix.remote.RemoteTombstones.add("opds:" + result.appState);
                         AppState.get().allOPDSLinks = AppState.get().allOPDSLinks.replace(result.appState, "");
                         url = "/";
                         populate();
@@ -407,6 +409,7 @@ public class OpdsFragment2 extends UIFragment<Entry> {
                         }
                     }, entry, false);
                 } else {
+                    com.foobnix.remote.RemoteTombstones.add("opds:" + entry.appState);
                     AppState.get().allOPDSLinks = AppState.get().allOPDSLinks.replace(entry.appState, "");
                     starIcon.setImageResource(R.drawable.glyphicons_50_star_empty);
                     TintUtil.setTintImageWithAlpha(starIcon, Color.WHITE);
@@ -723,6 +726,10 @@ public class OpdsFragment2 extends UIFragment<Entry> {
                 @Override
                 public void run() {
 
+                    // ProgressTask.onPreExecute is a no-op upstream, so the
+                    // progress bar must be shown here — otherwise isInProgress()
+                    // stays false and a second tap starts a parallel download
+                    MyProgressBar.setVisibility(View.VISIBLE);
                     new ProgressTask<>() {
                         @Override
                         public Context getContext() {
@@ -821,6 +828,9 @@ public class OpdsFragment2 extends UIFragment<Entry> {
 
                         @Override
                         protected void onPostExecute(Object result) {
+                            if (!isAdded()) {
+                                return; // detached: no context, no UI to update
+                            }
                             MyProgressBar.setVisibility(View.GONE);
                             if ((Boolean) result == false) {
                                 Toast.makeText(getContext(), R.string.loading_error, Toast.LENGTH_LONG).show();

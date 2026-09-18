@@ -102,11 +102,21 @@ public class SftpDataSource implements RemoteDataSource {
             disconnectQuiet();
             throw new IOException("SFTP connect/auth failed: " + e.getMessage(), e);
         }
-        sftp = ssh.newSFTPClient();
-        // SFTP paths are home-relative ("/" = the login home)
-        remoteFile = sftp.open(SftpClient.toRelative(remotePath), EnumSet.of(OpenMode.READ));
-        net.schmizz.sshj.sftp.FileAttributes attrs = remoteFile.fetchAttributes();
-        size = attrs == null ? -1 : attrs.getSize();
+        try {
+            sftp = ssh.newSFTPClient();
+            // SFTP paths are home-relative ("/" = the login home)
+            remoteFile = sftp.open(SftpClient.toRelative(remotePath), EnumSet.of(OpenMode.READ));
+            net.schmizz.sshj.sftp.FileAttributes attrs = remoteFile.fetchAttributes();
+            size = attrs == null ? -1 : attrs.getSize();
+        } catch (Exception e) {
+            // a failure past the connected client must not abandon the open
+            // SSH session (one leaked connection per retry otherwise)
+            disconnectQuiet();
+            if (e instanceof IOException) {
+                throw (IOException) e;
+            }
+            throw new IOException("SFTP open failed: " + e.getMessage(), e);
+        }
         if (size < 0) {
             disconnectQuiet();
             throw new IOException("SFTP: cannot stat remote file");

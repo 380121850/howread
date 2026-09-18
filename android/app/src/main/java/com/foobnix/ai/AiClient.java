@@ -129,8 +129,12 @@ public class AiClient {
         return c;
     }
 
-    public static java.util.List<String> listModels(String protocol, String baseUrl, String apiKey) {
+    public static java.util.List<String> listModels(String protocol, String baseUrl, String apiKey,
+            StringBuilder errOut) {
         lastError = "";
+        if (errOut != null) {
+            errOut.setLength(0);
+        }
         OkHttpClient client = sharedClient(false);
         String base = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         try {
@@ -147,6 +151,9 @@ public class AiClient {
                 String text = response.body() == null ? "" : response.body().string();
                 if (!response.isSuccessful()) {
                     lastError = classify(response.code()) + " " + response.code();
+                    if (errOut != null) {
+                        errOut.append(lastError);
+                    }
                     return null;
                 }
                 LinkedJSONObject json = new LinkedJSONObject(text);
@@ -184,6 +191,9 @@ public class AiClient {
         } catch (Exception e) {
             LOG.e(e);
             lastError = "other";
+        }
+        if (errOut != null && errOut.length() == 0) {
+            errOut.append(lastError);
         }
         return null;
     }

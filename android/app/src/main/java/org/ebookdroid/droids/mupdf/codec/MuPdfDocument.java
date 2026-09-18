@@ -271,9 +271,15 @@ public class MuPdfDocument extends AbstractCodecDocument {
 
     @Override public String documentToHtml() {
         StringBuilder out = new StringBuilder();
+        if (isRecycled()) {
+            return out.toString();
+        }
         int pages = getPageCount();
         for (int i = 0; i < pages; i++) {
             CodecPage pageCodec = getPage(i);
+            if (pageCodec == null) {
+                break; // document closed mid-export: stop instead of NPE
+            }
             String pageHTML = pageCodec.getPageHTML();
             out.append(pageHTML);
         }

@@ -475,7 +475,9 @@ public class ImageExtractor {
         LOG.d("Bitmap pageInfo.height", pageInfo.width, pageInfo.height);
 
         BitmapRef bitmapRef = null;
-        CodecPage pageCodec = codeCache.getPage(page);
+        // owned page: this method recycles it below — recycling the shared
+        // single-slot cache page pulled the handle from under other readers
+        CodecPage pageCodec = codeCache.getOwnedPage(page);
 
         rectF = new RectF(0, 0, 1f, 1f);
 

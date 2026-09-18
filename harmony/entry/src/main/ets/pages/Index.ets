@@ -26,7 +26,7 @@ import { initProfiles, listProfiles, createProfile, switchProfile, deleteProfile
 import { getTagList, addTagToBook, removeTagFromBook, getSeriesList } from '../model/Tags';
 import { getReadingStats, getDailyStats, getMonthlyStats, ReadingStatsData, DayStat, MonthStat } from '../model/ReadingStats';
 import { fetchOpds, OPDS_PRESETS, OpdsEntry } from '../model/Opds';
-import { OpdsServer, DavServer, SmbServer, SftpServer, getOpdsServers, saveOpdsServer, removeOpdsServer, getDavServers, saveDavServer, removeDavServer, getSmbServers, saveSmbServer, removeSmbServer, getSftpServers, saveSftpServer, removeSftpServer } from '../model/Servers';
+import { OpdsServer, DavServer, SmbServer, SftpServer, getOpdsServers, saveOpdsServer, removeOpdsServer, getDavServers, saveDavServer, removeDavServer, getSmbServers, saveSmbServer, removeSmbServer, getSftpServers, saveSftpServer, removeSftpServer, LibFolder, getLibFolders, saveLibFolders } from '../model/Servers';
 import { SyncConfig, SyncLogEntry, SYNC_CONFLICTS, defaultSyncConfig, loadSyncConfig, saveSyncConfig, getSyncLog, runSync, testSyncConnection } from '../model/Sync';
 import { AiConfig, AiMessage, loadAiConfig, saveAiConfig, chatCompletion, listModels, testChat, aiConfigReady, AI_PROVIDERS, AI_PROVIDER_URLS } from '../model/AiClient';
 import { addNote, AiNote } from '../model/Notes';
@@ -40,7 +40,7 @@ import i18n from '@ohos.i18n';
 import bundleManager from '@ohos.bundle.bundleManager';
 import Want from '@ohos.app.ability.Want';
 import { BUILD_TIME } from '../model/BuildInfo';
-import { parseScanFormats } from '../model/LibrarySearch';
+import { parseScanFormats, FORMAT_EXTS } from '../model/LibrarySearch';
 import {
   RemoteSession, RemoteFileSource, WebDavFileSource, SmbFileSource, SftpFileSource, RemoteBookRec, DavListEntry, RemoteCacheSettings, RemoteUriParts,
   loadRemoteCacheSettings, buildRemoteUri, parseRemoteUri, serverIdOf, sha256Hex,
@@ -53,7 +53,7 @@ import {
 
 /* Round 7: module-level resources & constants (Android PrefFragment2 parity) */
 const THEME_LABELS: Resource[] = [$r('app.string.set_theme_light'), $r('app.string.set_theme_dark'), $r('app.string.set_theme_oled'), $r('app.string.set_theme_ink')];
-const TAB_ICONS: Resource[] = [$r('app.media.ic_home'), $r('app.media.ic_book_open'), $r('app.media.ic_folder'), $r('app.media.ic_wrench')];
+const TAB_ICONS: Resource[] = [$r('app.media.ic_home'), $r('app.media.ic_book_open'), $r('app.media.ic_folder'), $r('app.media.ic_settings')];
 const TAB_NAMES: Resource[] = [$r('app.string.tab_home'), $r('app.string.tab_library'), $r('app.string.tab_my_files'), $r('app.string.tab_prefs')];
 const THEME_PRESETS: string[] = ['#3949AB', '#1565C0', '#00897B', '#2E7D32', '#6D4C41', '#455A64', '#AD1457', '#37474F'];
 const ACCENT_PRESETS: string[] = ['#03A9F4', '#FF4081', '#7CB342', '#FFB300', '#9575CD', '#4DD0E1', '#F06292', '#90A4AE'];
@@ -70,12 +70,6 @@ interface BackupFile {
   settings: ReaderSettings;
   recents: RecentBook[];
   bookmarks: Bookmark[];
-}
-
-/** A configured 书库文件夹 entry (Phase 4). */
-interface LibFolder {
-  name: string;
-  path: string;
 }
 
 /** Home 书签笔记 card model (one per book that has bookmarks). */
@@ -187,6 +181,11 @@ struct Index {
   @State profileInput: string = '';
   /* ---- Round 7: collapsible pref groups ---- */
   @State groupExp: Record<string, boolean> = { 'lib': true, 'gen': true, 'backup': true, 'ui': true, 'fmt': true, 'libset': true, 'libdisp': true, 'cov': true, 'read': true, 'theme': true, 'tabs': true };
+  @State subPage: number = 0;           /* full-screen sub-page: 0=none 1=最近阅读 2=书签笔记 */
+  @State showDirPick: boolean = false;  /* local directory picker dialog */
+  @State dirPickTarget: string = '';    /* root | fonts | downloads | libFolder */
+  @State dirPickPath: string = '';
+  @State dirPickDirs: string[] = [];
   /* ---- Round 7: option popup sheet (orientation/language/columns/font scale/taps) ---- */
   @State showOptSheet: boolean = false;
   @State optTitle: string = '';
@@ -241,8 +240,6 @@ struct Index {
   /** 书库文件夹 list: {name, path} */
   @State libFolders: LibFolder[] = [];
   /** new-folder input dialog */
-  @State showNewFolder: boolean = false;
-  @State newFolderName: string = '';
   /** file/dir long-press ops dialog */
   @State opsFile: string = '';
   @State showFileOps: boolean = false;
@@ -618,14 +615,22 @@ struct Index {
     }
   }
 
-  /** Phase 4: start at the my-files: root and seed the 书库文件夹 list. */
+  /** Phase 4: start at the my-files: root and load the 书库文件夹 list
+   *  (persisted since 2026-09-18; falls back to the 书库 seed). */
   private initBrowseDir(): void {
     try {
       const ctx = getContext(this);
       this.browseCurrentDir = '';
       this.browseDirs = [];
       this.browseFiles = [];
-      this.libFolders = [{ name: this.L($r('app.string.tab_library')), path: ctx.cacheDir }];
+      getLibFolders(ctx).then((list: LibFolder[]) => {
+        if (list.length > 0) {
+          this.libFolders = list;
+        } else {
+          const seed: LibFolder = { name: this.L($r('app.string.tab_library')), path: ctx.cacheDir };
+          this.libFolders = [seed];
+        }
+      });
       console.info('[Index] Browse root initialized');
     } catch (e) {
       this.browseCurrentDir = '';
@@ -1414,12 +1419,6 @@ struct Index {
             .layoutWeight(1)
             .textAlign(TextAlign.Start)
             .padding({ left: 6 })
-          Image($r('app.media.ic_add'))
-            .width(24).height(24).fillColor(Color.White)
-            .width(44).height(44).padding(10)
-            .onClick(() => {
-              this.openFilePicker();
-            })
         }
         .width('100%').height(48)
         .backgroundColor(this.barColor())
@@ -1458,6 +1457,11 @@ struct Index {
       }
       .width('100%')
       .height('100%')
+
+      // ---- full-screen sub-page: 最近阅读 / 书签笔记 (2026-09-18, home 更多) ----
+      if (this.subPage > 0) {
+        this.buildSubPage()
+      }
 
       // ---- FAB "continue last book" (Android fabLastBook: home + library only) ----
       if (this.currentTab === 0 || this.currentTab === 1) {
@@ -1527,6 +1531,10 @@ struct Index {
         this.buildDavBrowseDialog()
       }
 
+      if (this.showDirPick) {
+        this.buildDirPickDialog()
+      }
+
       // ---- SMB/SFTP add/edit dialogs ----
       if (this.showSmbEdit) {
         this.buildSmbEditDialog()
@@ -1566,15 +1574,7 @@ struct Index {
       }
 
       // ---- modal overlays: bookmarks / network(OPDS+WebDAV) / about ----
-      if (this.activeOverlay === 1) {
-        Column() {}
-          .width('100%').height('100%')
-          .backgroundColor('#66000000')
-          .onClick(() => {
-            this.activeOverlay = 0;
-          })
-        this.buildBookmarkOverlay()
-      }
+
       if (this.activeOverlay === 2) {
         Column() {}
           .width('100%').height('100%')
@@ -1691,16 +1691,7 @@ struct Index {
         this.buildLicenses()
       }
 
-      if (this.activeOverlay === 4) {
-        Column() {}
-          .width('100%').height('100%')
-          .backgroundColor('#66000000')
-          .onClick(() => {
-            this.activeOverlay = 0;
-            this.showNewFolder = false;
-          })
-        this.buildNewFolderOverlay()
-      }
+
       if (this.activeOverlay === 5) {
         Column() {}
           .width('100%').height('100%')
@@ -3262,6 +3253,15 @@ struct Index {
 
   // ---- Phase 1: shell helpers (top bar / drawer / dashboard / overlays) ----
 
+  /** 2026-09-18: system back closes the full-screen sub-page first. */
+  onBackPress(): boolean {
+    if (this.subPage > 0) {
+      this.subPage = 0;
+      return true;
+    }
+    return false;
+  }
+
   /** Switch to a TAB ID (0..3): map to its display position first (Round 7). */
   switchTab(index: number): void {
     this.currentTab = index;
@@ -3475,7 +3475,7 @@ struct Index {
   }
 
   /** Section title row: bold dark title + blue 更多 link (Android DashboardFragment2).
-   * moreAction: 0..3 = switch tab, 7 = stats chart dialog, 8 = network overlay, 9 = bookmarks overlay, -1 = none. */
+   * moreAction: 0..3 = switch tab, 2 = my files, 9 = bookmarks sub-page, 10 = recent sub-page, -1 = none. */
   @Builder
   sectionHeader(title: string, moreAction: number) {
     Row() {
@@ -3486,13 +3486,10 @@ struct Index {
         Text($r('app.string.common_more'))
           .fontSize(14).fontColor(this.thm())
           .onClick(() => {
-            if (moreAction === 7) {
-              this.updateChartData();
-              this.showStatsChart = true;
-            } else if (moreAction === 8) {
-              this.activeOverlay = 2;
-            } else if (moreAction === 9) {
-              this.activeOverlay = 1;
+            if (moreAction === 9) {
+              this.subPage = 2;
+            } else if (moreAction === 10) {
+              this.subPage = 1;
             } else {
               this.switchTab(moreAction);
             }
@@ -3547,6 +3544,18 @@ struct Index {
     .justifyContent(FlexAlign.Center)
     .backgroundColor(this.cardBg())
     .borderRadius(4)
+    .onClick(() => {
+      if (kind === 2) {
+        this.updateChartData();
+        this.showStatsChart = true;
+      } else if (kind === 0 || kind === 1) {
+        this.switchTab(1);
+        this.libQuery = '';
+        this.libStarFilter = false;
+        this.activeTagFilter = '';
+        this.libStatusFilter = kind === 1 ? 2 : -1;
+      }
+    })
     .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
   }
 
@@ -3642,7 +3651,7 @@ struct Index {
     Scroll() {
       Column() {
         /* 最近阅读 horizontal cover shelf */
-        this.sectionHeader(this.L($r('app.string.sec_recent')), 0)
+        this.sectionHeader(this.L($r('app.string.sec_recent')), 10)
         Scroll() {
           Row({ space: 12 }) {
             ForEach(this.recentBooks, (book: RecentBook) => {
@@ -3689,7 +3698,7 @@ struct Index {
                 .borderRadius(4)
                 .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
                 .onClick(() => {
-                  this.activeOverlay = 1;
+                  this.subPage = 2;
                 })
               }, (card: BookmarkCard) => card.path)
             }
@@ -3715,7 +3724,7 @@ struct Index {
         }
 
         /* 阅读统计: 3 + 2 white cards */
-        this.sectionHeader(this.L($r('app.string.sec_stats')), 7)
+        this.sectionHeader(this.L($r('app.string.sec_stats')), -1)
         Row({ space: 10 }) {
           this.statCard(0)
           this.statCard(1)
@@ -3741,7 +3750,7 @@ struct Index {
         .padding({ top: 4, bottom: 6 })
 
         /* 网上书库: OPDS circles (persisted server list, first 2) */
-        this.sectionHeader(this.L($r('app.string.sec_online')), 8)
+        this.sectionHeader(this.L($r('app.string.sec_online')), 2)
         Row({ space: 20 }) {
           ForEach(this.opdsServers.slice(0, 2), (s: OpdsServer) => {
             Column({ space: 6 }) {
@@ -3957,39 +3966,6 @@ struct Index {
             .onClick(() => {
               this.libStarFilter = !this.libStarFilter;
               console.info(`[Index] Library star filter: ${this.libStarFilter}`);
-            })
-          Text($r('app.string.chip_playlist'))
-            .fontSize(13)
-            .fontColor(this.thm())
-            .height(28)
-            .padding({ left: 14, right: 14 })
-            .borderRadius(3)
-            .backgroundColor(this.cardBg())
-            .border({ width: 1, color: '#9FA8DA' })
-            .onClick(() => {
-              this.openPlManage();
-            })
-          Text(this.activeTagFilter.length > 0 ? '\u7B5B:' + this.activeTagFilter : $r('app.string.lib_tags'))
-            .fontSize(13)
-            .fontColor(this.activeTagFilter.length > 0 ? Color.White : this.thm())
-            .height(28)
-            .padding({ left: 14, right: 14 })
-            .borderRadius(3)
-            .backgroundColor(this.activeTagFilter.length > 0 ? this.thm() : this.chipBg())
-            .border({ width: 1, color: this.activeTagFilter.length > 0 ? this.thm() : '#9FA8DA' })
-            .onClick(() => {
-              this.showTagFilter = true;
-            })
-          Text(this.groupChipLabel())
-            .fontSize(13)
-            .fontColor(this.libGroupBy > 0 ? Color.White : this.thm())
-            .height(28)
-            .padding({ left: 14, right: 14 })
-            .borderRadius(3)
-            .backgroundColor(this.libGroupBy > 0 ? this.thm() : this.chipBg())
-            .border({ width: 1, color: this.libGroupBy > 0 ? this.thm() : '#9FA8DA' })
-            .onClick(() => {
-              this.libGroupBy = (this.libGroupBy + 1) % 4;
             })
         }
       }
@@ -4207,13 +4183,6 @@ struct Index {
       result.push([keyStr, val]);
     });
     return result;
-  }
-
-  groupChipLabel(): string {
-    return this.libGroupBy === 0 ? this.L($r('app.string.group_off'))
-      : this.libGroupBy === 1 ? this.L($r('app.string.sort_author'))
-        : this.libGroupBy === 2 ? this.L($r('app.string.sort_series'))
-          : this.L($r('app.string.view_genre'));
   }
 
   /** Round 6: grid columns template from the coverColumns pref (1..8). */
@@ -5840,7 +5809,7 @@ struct Index {
       /* bottom bar: 设置选项 / 关于说明 / 晚上模式 / 偏好 (Round 7: prefs entry optional) */
       Row() {
         if (this.settings.showPrefsInDrawer) {
-          this.drawerBottomButton($r('app.media.ic_settings'), this.L($r('app.string.drawer_settings')), 0)
+          this.drawerBottomButton($r('app.media.ic_settings'), this.L($r('app.string.tab_prefs')), 0)
         }
         this.drawerBottomButton($r('app.media.ic_info'), this.L($r('app.string.drawer_about')), 1)
         this.drawerBottomButton($r('app.media.ic_brightness'), this.L($r('app.string.drawer_night')), 2)
@@ -5853,7 +5822,7 @@ struct Index {
     .backgroundColor(this.drawerBg())
   }
 
-  /** One drawer nav row. target: 0/1=library, 2=my files, 3=network, 4=bookmarks. */
+  /** One drawer nav row. target: 0/1=library, 2/3=my files (网上书库), 4=bookmarks sub-page. */
   @Builder
   drawerNavItem(icon: Resource, label: string, target: number) {
     Row({ space: 10 }) {
@@ -5866,12 +5835,10 @@ struct Index {
       this.showDrawer = false;
       if (target === 0 || target === 1) {
         this.switchTab(1);
-      } else if (target === 2) {
+      } else if (target === 2 || target === 3) {
         this.switchTab(2);
-      } else if (target === 3) {
-        this.activeOverlay = 2;
       } else if (target === 4) {
-        this.activeOverlay = 1;
+        this.subPage = 2;
       }
       console.info(`[Index] Drawer nav: ${label}`);
     })
@@ -5902,21 +5869,60 @@ struct Index {
     })
   }
 
-  /** Modal overlay: bookmark manager (drawer 书签笔记). */
+  /** Full-screen sub-page: 1=最近阅读 2=书签笔记 (Android Recent/BookmarksFragment;
+   *  2026-09-18: home 更多 switches the whole page instead of a popup). */
   @Builder
-  buildBookmarkOverlay() {
+  buildSubPage() {
     Column() {
-      Row() {
-        Text($r('app.string.sec_bookmarks'))
-          .fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.txtPri()).layoutWeight(1)
-        Text('\u2716')
-          .fontSize(18).fontColor(this.txtHint()).width(36).height(36).textAlign(TextAlign.Center)
+      Row({ space: 8 }) {
+        Text('\u2039')
+          .fontSize(26).fontColor(this.txtPri())
+          .width(40).height(40).textAlign(TextAlign.Center)
           .onClick(() => {
-            this.activeOverlay = 0;
+            this.subPage = 0;
           })
+        Text(this.subPage === 1 ? this.L($r('app.string.sec_recent')) : this.L($r('app.string.sec_bookmarks')))
+          .fontSize(17).fontWeight(FontWeight.Medium).fontColor(this.txtPri())
+          .layoutWeight(1)
+          .maxLines(1)
       }
-      .width('100%').padding({ left: 12, right: 6, top: 8 })
+      .width('100%').height(48).padding({ left: 4, right: 12 })
+      .backgroundColor(this.cardBg())
       Divider().color(this.divColor())
+      if (this.subPage === 1) {
+        this.buildRecentList()
+      } else {
+        this.buildBookmarkList()
+      }
+    }
+    .width('100%').height('100%')
+    .backgroundColor(this.inputBg())
+  }
+
+  /** 最近阅读 sub-page body: all books, most recent first. */
+  @Builder
+  buildRecentList() {
+    Scroll() {
+      Column({ space: 0 }) {
+        if (this.recentBooks.length === 0) {
+          Text($r('app.string.lib_empty_import'))
+            .fontSize(13).fontColor(this.txtFaint()).margin({ top: 60 })
+        }
+        ForEach(this.recentBooks, (book: RecentBook) => {
+          this.LibRow(book, false)
+          Divider().color(this.inputBg())
+        }, (item: RecentBook) => `${item.path}_${item.page}_${item.status}_${item.star}`)
+      }
+      .width('100%').padding({ left: 8, right: 8, top: 4 })
+    }
+    .width('100%')
+    .layoutWeight(1)
+  }
+
+  /** 书签笔记 body: search + entries (full-screen sub-page content). */
+  @Builder
+  buildBookmarkList() {
+    Column({ space: 8 }) {
       Row({ space: 8 }) {
         TextInput({ placeholder: $r('app.string.bm_search_placeholder') })
           .fontSize(13).height(34).layoutWeight(1)
@@ -5964,12 +5970,9 @@ struct Index {
       .layoutWeight(1)
       .width('100%')
     }
-    .width('92%').height('86%')
-    .backgroundColor(this.cardBg())
-    .borderRadius(12)
-    .align(Alignment.Center)
+    .width('100%')
+    .height('100%')
   }
-
   /** Modal overlay: network library (OPDS 网上书库 + WebDAV 云盘; OPDS in Phase 5). */
   @Builder
   buildNetworkOverlay() {
@@ -6211,39 +6214,6 @@ struct Index {
     .width('100%').layoutWeight(1)
   }
 
-  /** Modal overlay: create a new folder in the current browse dir. */
-  @Builder
-  buildNewFolderOverlay() {
-    Column() {
-      Text($r('app.string.browse_new_folder'))
-        .fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
-        .margin({ top: 16, bottom: 12 })
-      TextInput({ placeholder: $r('app.string.browse_folder_name'), text: this.newFolderName })
-        .fontSize(13).height(38).width('86%')
-        .onChange((v: string) => {
-          this.newFolderName = v;
-        })
-      Row({ space: 12 }) {
-        Button($r('app.string.common_cancel'))
-          .fontSize(13).height(36).layoutWeight(1).backgroundColor(this.chipBg()).fontColor(this.txtPri())
-          .onClick(() => {
-            this.showNewFolder = false;
-            this.activeOverlay = 0;
-          })
-        Button($r('app.string.common_create'))
-          .fontSize(13).height(36).layoutWeight(1).backgroundColor(this.thm()).fontColor(Color.White)
-          .onClick(() => {
-            this.confirmNewFolder();
-            this.activeOverlay = 0;
-          })
-      }
-      .width('86%').margin({ top: 14, bottom: 14 })
-    }
-    .width('80%')
-    .backgroundColor(this.cardBg())
-    .borderRadius(12)
-    .align(Alignment.Center)
-  }
 
   /** Modal overlay: long-press file/dir operations (open / rename / delete / share). */
   @Builder
@@ -6531,21 +6501,7 @@ struct Index {
         .layoutWeight(1).width('100%')
       }
 
-      /* bottom action row */
-      Row({ space: 8 }) {
-        Button($r('app.string.browse_new_folder'))
-          .fontSize(12).height(34).layoutWeight(1).backgroundColor(this.thm()).fontColor(Color.White)
-          .onClick(() => {
-            this.showNewFolder = true;
-            this.activeOverlay = 4;
-          })
-        Button($r('app.string.lib_import'))
-          .fontSize(12).height(34).layoutWeight(1).backgroundColor('#2a7').fontColor(Color.White)
-          .onClick(() => {
-            this.openFilePicker();
-          })
-      }
-      .width('92%').padding({ bottom: 6 })
+
     }
     .width('100%')
     .height('100%')
@@ -6569,8 +6525,12 @@ struct Index {
             this.openOpdsEdit(-1);
           } else if (addKind === 2) {
             this.openDavEdit(-1);
-          } else {
-            this.openFilePicker();
+          } else if (addKind === 4) {
+            this.openDirPick('libFolder');
+          } else if (addKind === 5) {
+            this.openSmbEdit(-1);
+          } else if (addKind === 6) {
+            this.openSftpEdit(-1);
           }
         })
       }
@@ -7196,6 +7156,76 @@ struct Index {
     .width('100%').height('100%')
   }
 
+  /** Local directory picker dialog (备份配置 folder rows + 书库文件夹 add). */
+  @Builder
+  buildDirPickDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showDirPick = false;
+        })
+      Column({ space: 10 }) {
+        Text(this.dirPickTarget === 'libFolder' ? '选择要加入书库的文件夹' : '选择文件夹')
+          .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
+          .width('100%')
+        Text(this.dirPickPath)
+          .fontSize(11).fontColor(this.txtFaint()).maxLines(2).width('100%')
+        Scroll() {
+          Column() {
+            if (this.dirPickDirs.length === 0) {
+              Text('无子文件夹')
+                .fontSize(12).fontColor(this.txtFaint())
+            }
+            ForEach(this.dirPickDirs, (d: string) => {
+              Row({ space: 10 }) {
+                Image($r('app.media.ic_folder')).width(18).height(18).fillColor(this.thm())
+                Text(d).fontSize(14).fontColor(this.txtPri()).layoutWeight(1).maxLines(1)
+                Text('\u203A').fontSize(16).fontColor(this.txtFaint())
+              }
+              .width('100%')
+              .padding({ top: 9, bottom: 9 })
+              .onClick(() => {
+                this.dirPickDrill(d);
+              })
+            }, (d: string) => d)
+          }
+          .width('100%')
+        }
+        .constraintSize({ maxHeight: 300 })
+
+        Row({ space: 8 }) {
+          Button('上一级')
+            .fontSize(12).height(34)
+            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+            .onClick(() => {
+              this.dirPickUp();
+            })
+          Blank()
+          Button($r('app.string.common_cancel'))
+            .fontSize(12).height(34)
+            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+            .onClick(() => {
+              this.showDirPick = false;
+            })
+          Button('选择此处')
+            .fontSize(12).height(34)
+            .backgroundColor(this.thm()).fontColor(Color.White)
+            .onClick(() => {
+              this.dirPickHere();
+            })
+        }
+        .width('100%')
+      }
+      .width('80%')
+      .padding(14)
+      .backgroundColor(this.cardBg())
+      .borderRadius(10)
+    }
+    .width('100%').height('100%')
+  }
+
   /** SMB server row: edit/delete/scan; tap = browse panel (netSection 2). */
   @Builder
   browseSmbRow(s: SmbServer, idx: number) {
@@ -7609,8 +7639,11 @@ struct Index {
         .fontSize(16).fontColor(this.txtSec())
         .maxLines(1)
         .layoutWeight(1)
-      Image($r('app.media.ic_star_border'))
-        .width(20).height(20).fillColor(this.thm())
+      Image($r('app.media.ic_close'))
+        .width(20).height(20).fillColor(this.txtFaint())
+        .onClick(() => {
+          this.removeLibFolder(f.path);
+        })
     }
     .width('94%')
     .padding({ left: 12, right: 12, top: 12, bottom: 12 })
@@ -7650,72 +7683,36 @@ struct Index {
         ForEach(this.davServers, (s: DavServer, idx: number) => {
           this.browseDavRow(s, idx)
         }, (s: DavServer) => s.url)
-        Row({ space: 14 }) {
-          Image($r('app.media.ic_pencil'))
-            .width(22).height(22).fillColor(this.thm())
-          Text('添加 / 编辑 WebDAV 服务器')
-            .fontSize(14).fontColor(this.thm())
-        }
-        .width('94%')
-        .padding({ left: 12, right: 12, top: 8, bottom: 12 })
-        .onClick(() => {
-          this.openDavEdit(-1);
-        })
-
         Divider().color(this.divColor()).margin({ top: 8 })
 
         /* SMB servers (native libsmb2 client) */
-        this.browseSectionHeader('SMB', 0)
+        this.browseSectionHeader('SMB', 5)
         if (this.smbServers.length === 0) {
-          Text('暂无 SMB 服务器，点击下方添加（Windows 共享 / Samba）')
+          Text('暂无 SMB 服务器，点击右上角 + 添加（Windows 共享 / Samba）')
             .fontSize(13).fontColor(this.txtFaint())
             .width('94%').padding({ left: 12, bottom: 8 })
         }
         ForEach(this.smbServers, (s: SmbServer, idx: number) => {
           this.browseSmbRow(s, idx)
         }, (s: SmbServer) => s.host)
-        Row({ space: 14 }) {
-          Image($r('app.media.ic_pencil'))
-            .width(22).height(22).fillColor(this.thm())
-          Text('添加 / 编辑 SMB 服务器')
-            .fontSize(14).fontColor(this.thm())
-        }
-        .width('94%')
-        .padding({ left: 12, right: 12, top: 8, bottom: 12 })
-        .onClick(() => {
-          this.openSmbEdit(-1);
-        })
-
         Divider().color(this.divColor()).margin({ top: 8 })
 
         /* SFTP servers (native libssh2 client) */
-        this.browseSectionHeader('SFTP', 0)
+        this.browseSectionHeader('SFTP', 6)
         if (this.sftpServers.length === 0) {
-          Text('暂无 SFTP 服务器，点击下方添加（SSH 文件服务器）')
+          Text('暂无 SFTP 服务器，点击右上角 + 添加（SSH 文件服务器）')
             .fontSize(13).fontColor(this.txtFaint())
             .width('94%').padding({ left: 12, bottom: 8 })
         }
         ForEach(this.sftpServers, (s: SftpServer, idx: number) => {
           this.browseSftpRow(s, idx)
         }, (s: SftpServer) => s.host)
-        Row({ space: 14 }) {
-          Image($r('app.media.ic_pencil'))
-            .width(22).height(22).fillColor(this.thm())
-          Text('添加 / 编辑 SFTP 服务器')
-            .fontSize(14).fontColor(this.thm())
-        }
-        .width('94%')
-        .padding({ left: 12, right: 12, top: 8, bottom: 12 })
-        .onClick(() => {
-          this.openSftpEdit(-1);
-        })
-
         Divider().color(this.divColor()).margin({ top: 8 })
 
         /* Round 8: remote books (Android RemoteScanner bookshelf) */
         this.browseSectionHeader('远程书籍', 0)
         if (this.remoteBooks.length === 0) {
-          Text('暂无远程书籍，可在服务器行点 ⚙ 扫描，或浏览目录在线打开（支持 WebDAV / SMB / SFTP）')
+          Text('暂无远程书籍，可在服务器行点 ⟳ 扫描，或浏览目录在线打开（支持 WebDAV / SMB / SFTP）')
             .fontSize(12).fontColor(this.txtFaint())
             .width('94%').padding({ left: 12, bottom: 8 })
         }
@@ -7726,7 +7723,7 @@ struct Index {
         Divider().color(this.divColor()).margin({ top: 8 })
 
         /* 书库文件夹 */
-        this.browseSectionHeader(this.L($r('app.string.browse_library_folder')), 0)
+        this.browseSectionHeader(this.L($r('app.string.browse_library_folder')), 4)
         ForEach(this.libFolders, (f: LibFolder) => {
           this.browseFolderRow(f)
         }, (f: LibFolder) => f.path)
@@ -7766,6 +7763,148 @@ struct Index {
     .width('100%')
     .layoutWeight(1)
     .scrollBar(BarState.Off)
+  }
+
+  /* ---- 2026-09-18: local directory picker + 书库文件夹 add/remove ---- */
+
+  /** Relative folder values resolve against the storage root (itself
+   *  app-relative against filesDir); absolute paths pass through. */
+  private resolveFolderPath(v: string): string {
+    if (v.length === 0) {
+      return '';
+    }
+    if (v.startsWith('/')) {
+      return v;
+    }
+    const ctx = getContext(this);
+    let base: string = this.settings.rootFolder;
+    if (base.length === 0) {
+      base = ctx.filesDir;
+    } else if (!base.startsWith('/')) {
+      base = ctx.filesDir + '/' + base;
+    }
+    return base + '/' + v;
+  }
+
+  /** Open the local directory picker. target: root | fonts | downloads | libFolder. */
+  private openDirPick(target: string): void {
+    const ctx = getContext(this);
+    let start: string = ctx.filesDir;
+    if (target === 'fonts' || target === 'downloads') {
+      const cur: string = this.resolveFolderPath(target === 'fonts' ? this.settings.fontsFolder : this.settings.downloadsFolder);
+      if (cur.length > 0) {
+        start = cur;
+      }
+    }
+    this.dirPickTarget = target;
+    this.dirPickPath = start;
+    this.listDirPick();
+    this.showDirPick = true;
+  }
+
+  private listDirPick(): void {
+    this.dirPickDirs = [];
+    try {
+      const entries: string[] = fs.listFileSync(this.dirPickPath);
+      for (let i = 0; i < entries.length; i++) {
+        try {
+          if (fs.statSync(this.dirPickPath + '/' + entries[i]).isDirectory()) {
+            this.dirPickDirs.push(entries[i]);
+          }
+        } catch (e) {
+          /* skip unreadable entry */
+        }
+      }
+      this.dirPickDirs.sort();
+    } catch (e) {
+      console.error('[Index] listDirPick failed');
+    }
+  }
+
+  private dirPickDrill(name: string): void {
+    this.dirPickPath = this.dirPickPath + '/' + name;
+    this.listDirPick();
+  }
+
+  private dirPickUp(): void {
+    const i: number = this.dirPickPath.lastIndexOf('/');
+    if (i > 0) {
+      this.dirPickPath = this.dirPickPath.substring(0, i);
+      this.listDirPick();
+    }
+  }
+
+  private dirPickHere(): void {
+    if (this.dirPickTarget === 'root') {
+      this.settings.rootFolder = this.dirPickPath;
+      this.saveNow();
+    } else if (this.dirPickTarget === 'fonts') {
+      this.settings.fontsFolder = this.dirPickPath;
+      this.saveNow();
+    } else if (this.dirPickTarget === 'downloads') {
+      this.settings.downloadsFolder = this.dirPickPath;
+      this.saveNow();
+    } else if (this.dirPickTarget === 'libFolder') {
+      this.addLibFolder(this.dirPickPath);
+    }
+    this.showDirPick = false;
+  }
+
+  private addLibFolder(path: string): void {
+    for (let i = 0; i < this.libFolders.length; i++) {
+      if (this.libFolders[i].path === path) {
+        return;
+      }
+    }
+    let name: string = path.substring(path.lastIndexOf('/') + 1);
+    if (name.length === 0) {
+      name = path;
+    }
+    const rec: LibFolder = { name: name, path: path };
+    this.libFolders.push(rec);
+    saveLibFolders(getContext(this), this.libFolders);
+    console.info(`[Index] Library folder added: ${path}`);
+  }
+
+  private removeLibFolder(path: string): void {
+    const kept: LibFolder[] = [];
+    for (let i = 0; i < this.libFolders.length; i++) {
+      if (this.libFolders[i].path !== path) {
+        kept.push(this.libFolders[i]);
+      }
+    }
+    this.libFolders = kept;
+    saveLibFolders(getContext(this), this.libFolders);
+    console.info(`[Index] Library folder removed: ${path}`);
+  }
+
+  /** 备份配置 folder row: shows the value, click opens the directory picker
+   *  (value read inside the body so @State refreshes after picking). */
+  @Builder
+  folderPrefRow(target: string) {
+    Row({ space: 6 }) {
+      Text(this.folderPrefValue(target))
+        .fontSize(12).fontColor(this.thm())
+        .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+        .maxLines(1)
+        .layoutWeight(1)
+      Text('\u203A').fontSize(14).fontColor(this.txtHint())
+    }
+    .width('100%')
+    .padding({ top: 4, bottom: 4 })
+    .onClick(() => {
+      this.openDirPick(target);
+    })
+  }
+
+  private folderPrefValue(target: string): string {
+    if (target === 'root') {
+      return this.settings.rootFolder;
+    }
+    if (target === 'fonts') {
+      return this.settings.fontsFolder;
+    }
+    return this.settings.downloadsFolder;
   }
 
   // ---- Phase 4: browse helpers ----
@@ -7865,22 +8004,6 @@ struct Index {
     this.renameInput = name;
     this.showFileOps = true;
     this.activeOverlay = 5;
-  }
-
-  /** Create a new folder in the current browse dir. */
-  private confirmNewFolder(): void {
-    const name: string = this.newFolderName.trim();
-    if (name.length === 0) {
-      return;
-    }
-    try {
-      fs.mkdirSync(this.browseCurrentDir + '/' + name);
-    } catch (e) {
-      console.error('[Index] mkdir failed');
-    }
-    this.newFolderName = '';
-    this.showNewFolder = false;
-    this.listBrowseDir();
   }
 
   /** Delete the selected file/dir. */
@@ -8166,6 +8289,8 @@ struct Index {
                 Row({ space: 8 }) {
                   Text(row[1])
                     .fontSize(this.fsp(13)).fontColor(this.txtPri()).layoutWeight(1)
+                  Text('' + this.fmtCount(row[0]))
+                    .fontSize(11).fontColor(this.txtHint())
                   Toggle({ type: ToggleType.Switch, isOn: this.fmtIsOn(row[0]) })
                     .selectedColor(this.thm())
                     .onChange((v: boolean) => {
@@ -8284,6 +8409,49 @@ struct Index {
             this.settingsToggleRow(this.L($r('app.string.set_open_last')), 'openLastBook', '')
             this.settingsToggleRow(this.L($r('app.string.set_always_p1')), 'alwaysPage1', '')
             this.settingsToggleRow(this.L($r('app.string.set_exit_confirm')), 'showExitDialog', '')
+            Row({ space: 8 }) {
+              Text($r('app.string.set_reminder'))
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
+              Button(this.settings.readReminderMinutes === 0 ? $r('app.string.common_off') : this.settings.readReminderMinutes + ' \u5206\u949F')
+                .fontSize(12).height(32)
+                .backgroundColor(this.settings.readReminderMinutes > 0 ? '#2a7' : this.chipBg())
+                .fontColor(this.settings.readReminderMinutes > 0 ? Color.White : this.txtPri())
+                .onClick(() => {
+                  this.settings.readReminderMinutes = this.settings.readReminderMinutes >= 120 ? 0 : (this.settings.readReminderMinutes === 0 ? 30 : this.settings.readReminderMinutes + 30);
+                  this.saveNow();
+                })
+              Text($r('app.string.set_reminder_hint'))
+                .fontSize(10).fontColor(this.txtFaint())
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            Row({ space: 8 }) {
+              Text($r('app.string.set_quality'))
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
+              Button(this.settings.renderQuality === 0 ? $r('app.string.quality_fast') : (this.settings.renderQuality === 1 ? $r('app.string.quality_balanced') : $r('app.string.quality_high')))
+                .fontSize(12).height(32)
+                .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+                .onClick(() => {
+                  this.settings.renderQuality = (this.settings.renderQuality + 1) % 3;
+                  this.saveNow();
+                })
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            Row({ space: 8 }) {
+              Text($r('app.string.set_flip_anim'))
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
+              Button(this.settings.flipAnimation === 0 ? $r('app.string.anim_slide') : (this.settings.flipAnimation === 1 ? $r('app.string.anim_curl') : $r('app.string.anim_fade')))
+                .fontSize(12).height(32)
+                .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+                .onClick(() => {
+                  this.settings.flipAnimation = (this.settings.flipAnimation + 1) % 3;
+                  this.saveNow();
+                })
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            this.settingsToggleRow(this.L($r('app.string.pref_topbar_info')), 'showTopBarInfo', this.L($r('app.string.set_topbar_hint')))
 
             Text($r('app.string.set_reader_params'))
               .fontSize(12).fontColor(this.txtFaint()).width('100%').padding({ left: 22, top: 6 })
@@ -8507,22 +8675,6 @@ struct Index {
             });
           })
           Row({ space: 8 }) {
-            Text($r('app.string.set_reminder'))
-              .fontSize(this.fsp(13)).fontColor(this.txtSec())
-            Button(this.settings.readReminderMinutes === 0 ? $r('app.string.common_off') : this.settings.readReminderMinutes + ' \u5206\u949F')
-              .fontSize(12).height(32)
-              .backgroundColor(this.settings.readReminderMinutes > 0 ? '#2a7' : this.chipBg())
-              .fontColor(this.settings.readReminderMinutes > 0 ? Color.White : this.txtPri())
-              .onClick(() => {
-                this.settings.readReminderMinutes = this.settings.readReminderMinutes >= 120 ? 0 : (this.settings.readReminderMinutes === 0 ? 30 : this.settings.readReminderMinutes + 30);
-                this.saveNow();
-              })
-            Text($r('app.string.set_reminder_hint'))
-              .fontSize(10).fontColor(this.txtFaint())
-          }
-          .width('100%')
-          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-          Row({ space: 8 }) {
             Text($r('app.string.set_proxy'))
               .fontSize(this.fsp(13)).fontColor(this.txtSec())
             Button(this.settings.proxyType === 0 ? $r('app.string.common_off') : (this.settings.proxyType === 1 ? 'HTTP' : 'SOCKS'))
@@ -8540,121 +8692,78 @@ struct Index {
           }
           .width('100%')
           .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-          Row({ space: 8 }) {
-            Text($r('app.string.set_quality'))
-              .fontSize(this.fsp(13)).fontColor(this.txtSec())
-            Button(this.settings.renderQuality === 0 ? $r('app.string.quality_fast') : (this.settings.renderQuality === 1 ? $r('app.string.quality_balanced') : $r('app.string.quality_high')))
-              .fontSize(12).height(32)
-              .backgroundColor(this.chipBg()).fontColor(this.txtPri())
-              .onClick(() => {
-                this.settings.renderQuality = (this.settings.renderQuality + 1) % 3;
-                this.saveNow();
-              })
+          /* 备份配置 (Android backupConfig; moved into 常规设置, 2026-09-18) */
+          this.settingsSubBar(this.L($r('app.string.set_backup')), 'backup')
+          if (this.groupExp['backup'] === true) {
+            Row({ space: 8 }) {
+              Button($r('app.string.backup_export'))
+                .fontSize(13).height(34).layoutWeight(1)
+                .backgroundColor('#2a7').fontColor(Color.White)
+                .onClick(() => this.doBackup())
+              Button($r('app.string.backup_restore'))
+                .fontSize(13).height(34).layoutWeight(1)
+                .backgroundColor('#ff9800').fontColor(Color.White)
+                .onClick(() => this.doRestore())
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            if (this.backupText.length > 0) {
+              Text(this.backupText)
+                .fontSize(11).fontColor(this.txtHint()).textAlign(TextAlign.Center).width('100%')
+            }
+            Column({ space: 4 }) {
+              Text($r('app.string.set_root_folder'))
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
+              this.folderPrefRow('root')
+              Text($r('app.string.set_fonts_folder'))
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
+              this.folderPrefRow('fonts')
+              Text($r('app.string.set_dl_folder'))
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
+              this.folderPrefRow('downloads')
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            .alignItems(HorizontalAlign.Start)
           }
-          .width('100%')
-          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-          Row({ space: 8 }) {
-            Text($r('app.string.set_flip_anim'))
-              .fontSize(this.fsp(13)).fontColor(this.txtSec())
-            Button(this.settings.flipAnimation === 0 ? $r('app.string.anim_slide') : (this.settings.flipAnimation === 1 ? $r('app.string.anim_curl') : $r('app.string.anim_fade')))
-              .fontSize(12).height(32)
-              .backgroundColor(this.chipBg()).fontColor(this.txtPri())
-              .onClick(() => {
-                this.settings.flipAnimation = (this.settings.flipAnimation + 1) % 3;
-                this.saveNow();
-              })
-          }
-          .width('100%')
-          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-          this.settingsToggleRow(this.L($r('app.string.pref_topbar_info')), 'showTopBarInfo', this.L($r('app.string.set_topbar_hint')))
-        }
 
-        /* ================= 3. 备份配置 (Android backupConfig) ================= */
-        this.settingsGroupBar(this.L($r('app.string.set_backup')), 'backup')
-        if (this.groupExp['backup'] === true) {
-          Row({ space: 8 }) {
-            Button($r('app.string.backup_export'))
-              .fontSize(13).height(34).layoutWeight(1)
-              .backgroundColor('#2a7').fontColor(Color.White)
-              .onClick(() => this.doBackup())
-            Button($r('app.string.backup_restore'))
-              .fontSize(13).height(34).layoutWeight(1)
-              .backgroundColor('#ff9800').fontColor(Color.White)
-              .onClick(() => this.doRestore())
-          }
-          .width('100%')
-          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-          if (this.backupText.length > 0) {
-            Text(this.backupText)
-              .fontSize(11).fontColor(this.txtHint()).textAlign(TextAlign.Center).width('100%')
-          }
-          Column({ space: 4 }) {
-            Text($r('app.string.set_root_folder'))
-              .fontSize(this.fsp(13)).fontColor(this.txtSec())
-            TextInput({ placeholder: $r('app.string.set_folder_hint'), text: this.settings.rootFolder })
-              .fontSize(12).height(32)
-              .onChange((v: string) => {
-                this.settings.rootFolder = v;
-                this.saveNow();
-              })
-            Text($r('app.string.set_fonts_folder'))
-              .fontSize(this.fsp(13)).fontColor(this.txtSec())
-            TextInput({ placeholder: $r('app.string.set_folder_hint'), text: this.settings.fontsFolder })
-              .fontSize(12).height(32)
-              .onChange((v: string) => {
-                this.settings.fontsFolder = v;
-                this.saveNow();
-              })
-            Text($r('app.string.set_dl_folder'))
-              .fontSize(this.fsp(13)).fontColor(this.txtSec())
-            TextInput({ placeholder: $r('app.string.set_folder_hint'), text: this.settings.downloadsFolder })
-              .fontSize(12).height(32)
-              .onChange((v: string) => {
-                this.settings.downloadsFolder = v;
-                this.saveNow();
-              })
-          }
-          .width('100%')
-          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-          .alignItems(HorizontalAlign.Start)
-        }
-
-        /* ================= 4b. 在线阅读与缓存 (Round 8, Android RemoteCacheDialog) ================= */
-        this.settingsGroupBar('在线阅读与缓存', 'remote')
-        if (this.groupExp['remote'] === true) {
-          this.settingsToggleRow('在线优先阅读', 'remoteOnlineFirst', '直开格式直接流式打开')
-          this.settingsToggleRow('仅 WiFi 下预取与整本缓存', 'remotePrefetchWifiOnly', '开：流量下只随读随取；关：流量与 WiFi 同等对待')
-          this.settingsNumRow('缓存上限 (MB)', 'remoteCacheMaxMB', 50, 4096)
-          this.settingsNumRow('整本缓存阈值 (MB)', 'remoteWholeBookThresholdMB', 0, 200)
-          this.settingsNumRow('重试次数', 'remoteRetryCount', 0, 10)
-          this.settingsNumRow('重试间隔 (ms)', 'remoteRetryIntervalMs', 0, 30000)
-          Row() {
-            Text(`缓存用量：${this.remoteCacheUsage}`)
-              .fontSize(14).fontColor(this.txtSec()).layoutWeight(1)
-            Text('清空缓存')
-              .fontSize(13).fontColor('#e57373')
-              .onClick(() => {
-                AlertDialog.show({
-                  title: '清空远程缓存',
-                  message: '删除所有远程书籍的缓存块？已下载到本地的书不受影响。',
-                  primaryButton: {
-                    value: '取消',
-                    action: () => {}
-                  },
-                  secondaryButton: {
-                    value: '清空',
-                    action: () => {
-                      clearRemoteCacheAll(getContext(this)).then(() => {
-                        this.loadRemoteBooks();
-                        promptAction.showToast({ message: '已清空远程缓存' });
-                      });
+          /* 在线阅读与缓存 (Round 8; moved into 常规设置, 2026-09-18) */
+          this.settingsSubBar('在线阅读与缓存', 'remote')
+          if (this.groupExp['remote'] === true) {
+            this.settingsToggleRow('在线优先阅读', 'remoteOnlineFirst', '直开格式直接流式打开')
+            this.settingsToggleRow('仅 WiFi 下预取与整本缓存', 'remotePrefetchWifiOnly', '开：流量下只随读随取；关：流量与 WiFi 同等对待')
+            this.settingsNumRow('缓存上限 (MB)', 'remoteCacheMaxMB', 50, 4096)
+            this.settingsNumRow('整本缓存阈值 (MB)', 'remoteWholeBookThresholdMB', 0, 200)
+            this.settingsNumRow('重试次数', 'remoteRetryCount', 0, 10)
+            this.settingsNumRow('重试间隔 (ms)', 'remoteRetryIntervalMs', 0, 30000)
+            Row() {
+              Text(`缓存用量：${this.remoteCacheUsage}`)
+                .fontSize(14).fontColor(this.txtSec()).layoutWeight(1)
+              Text('清空缓存')
+                .fontSize(13).fontColor('#e57373')
+                .onClick(() => {
+                  AlertDialog.show({
+                    title: '清空远程缓存',
+                    message: '删除所有远程书籍的缓存块？已下载到本地的书不受影响。',
+                    primaryButton: {
+                      value: '取消',
+                      action: () => {}
+                    },
+                    secondaryButton: {
+                      value: '清空',
+                      action: () => {
+                        clearRemoteCacheAll(getContext(this)).then(() => {
+                          this.loadRemoteBooks();
+                          promptAction.showToast({ message: '已清空远程缓存' });
+                        });
+                      }
                     }
-                  }
-                });
-              })
+                  });
+                })
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 9, bottom: 9 })
           }
-          .width('100%')
-          .padding({ left: 12, right: 12, top: 9, bottom: 9 })
         }
 
         /* ================= 4. UI 配置 (Android section4) ================= */
@@ -8881,6 +8990,23 @@ struct Index {
     }
     r[key] = !(this.groupExp[key] === true);
     this.groupExp = r;
+  }
+
+  /** 书库中该格式族的数量（按扩展名归族，2026-09-18）。 */
+  private fmtCount(key: string): number {
+    const exts: string[] | undefined = FORMAT_EXTS[key];
+    if (exts === undefined) {
+      return 0;
+    }
+    let n: number = 0;
+    for (let i = 0; i < this.recentBooks.length; i++) {
+      const pth: string = this.recentBooks[i].path.toLowerCase();
+      const dot: number = pth.lastIndexOf('.');
+      if (dot >= 0 && exts.indexOf(pth.substring(dot + 1)) >= 0) {
+        n++;
+      }
+    }
+    return n;
   }
 
   /** Current scan-format whitelist is empty (everything on)? */
