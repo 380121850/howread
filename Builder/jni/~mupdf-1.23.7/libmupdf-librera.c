@@ -2702,6 +2702,31 @@ Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_setPageTreeNums(JNIEnv *env
 	return ok;
 }
 
+JNIEXPORT jboolean JNICALL
+Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_finishLazyPageTree(JNIEnv *env, jclass clazz, jlong handle)
+{
+	renderdocument_t *doc = (renderdocument_t *)(long)handle;
+	if (!doc || !doc->ctx || !doc->document)
+		return JNI_FALSE;
+	pdf_document *pdf = pdf_document_from_fz_document(doc->ctx, doc->document);
+	if (!pdf)
+		return JNI_FALSE;
+	jboolean ok = JNI_FALSE;
+	fz_try(doc->ctx)
+	{
+		ok = pdf_finish_lazy_page_tree(doc->ctx, pdf) ? JNI_TRUE : JNI_FALSE;
+		if (ok)
+			__android_log_print(ANDROID_LOG_INFO, "REMOTE", "lazy page tree finished: walk %dms",
+				(int)pdf_get_walk_ms(doc->ctx, pdf));
+	}
+	fz_catch(doc->ctx)
+	{
+		__android_log_print(ANDROID_LOG_INFO, "REMOTE", "lazy page tree finish failed");
+		ok = JNI_FALSE;
+	}
+	return ok;
+}
+
 JNIEXPORT jintArray JNICALL
 Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_getPageTreeSizes(JNIEnv *env, jclass clazz, jlong handle)
 {
@@ -2721,6 +2746,15 @@ Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_getPageTreeSizes(JNIEnv *en
 	fz_free(doc->ctx, sizes);
 	__android_log_print(ANDROID_LOG_INFO, "REMOTE", "page sizes exported: %d pages", count);
 	return out;
+}
+
+JNIEXPORT void JNICALL
+Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_setLazyPageTree(JNIEnv *env, jclass clazz, jlong handle, jboolean on)
+{
+	renderdocument_t *doc = (renderdocument_t *)(long)handle;
+	if (!doc || !doc->ctx || !doc->document)
+		return;
+	((pdf_document *)doc->document)->howread_lazy = on ? 1 : 0;
 }
 
 JNIEXPORT jlong JNICALL

@@ -109,3 +109,17 @@ ci\autotest\final_run.bat
 | FN-07 TTS 入口未定位 | 用例 SKIP，待勘探 |
 | KSA 阅读器菜单小屏只有顶栏 | 交互层级兼容性观察项 |
 | MedicineAVD 镜像损坏 | UI-AVD 层挂起，待 wipe data / 新建 AVD |
+
+
+## 8. 远程阅读优化专项(2026-09-19)
+
+- **新增 FN-55~60 + PF-04**(用例设计/日志断言矩阵见 COVERAGE.md 同名小节),
+  运行方式:`python run_all.py --level L1 --serial 48fee174 --cases FN-55,FN-56,FN-57,FN-58,FN-59,FN-60`
+  及 `--level L2 --cases PF-04`。
+- **环境依赖**:50.23 WebDAV/SMB/SFTP 三目录的 `big_pdf.pdf`(500 页/268MB,已投放);
+  MI9 需装含在线阅读优化的 debug pro 包(≥v1.3.13);远程缓存清理 helper 依赖
+  缓存根位于 /sdcard/Download/HowRead/Cache(默认配置,真机已核实)。
+- **判定方式**:UI 仅作操作通道,断言全部落在 REMOTE/BENCH 日志(每动作前
+  `logcat -c` 防残留);性能阈值在 cases.yaml `remote_firstpaint` 按设备/网络调整。
+- **已知边界**:测试书页数 <200 时 FN-55/57/60 SKIP(环境问题);FN-56 的
+  `version verified` 为后台异步校验,用例给 20s 窗口。

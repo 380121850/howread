@@ -125,8 +125,65 @@ def st01_monkey(dev, case_id, cfg=None, fixtures=None, duration_s=None):
             raise AssertionError("monkey 后缓冲区残留 crash/ANR:\n" + out[:600])
 
 
+def pf04_remote_firstpaint(dev, case_id, cfg=None, fixtures=None):
+    """远程首屏性能基线(在线阅读优化):清缓存冷开 WebDAV big_pdf(500页) →
+    记录 BENCH 段耗时(doc-open-done/load-end),断言冷开 ≤3500ms;
+    重开 x3 断言 ≤1000ms 并取中位数(阈值可在 cases.yaml remote_firstpaint 调整)."""
+    from cases.ui import tc_function as tf
+    th = (cfg or {}).get("remote_firstpaint") or {}
+    cold_cap = int(th.get("cold_ms", 3500))
+    warm_cap = int(th.get("warm_ms", 1000))
+    with dev.step(case_id, "cold_open"):
+        dev.clear_remote_cache()
+        title, added = tf._ensure_server(dev, case_id, cfg, "webdav")
+        tf._ensure_home(dev)
+        dev.log_clear()
+        entered = tf._open_remote_book(dev, case_id, title, tf._REMOTE_BIG_BOOK, timeout=90, snap="cold_reader")
+        if not entered:
+            dev.save_dump(case_id, "cold_open_timeout")
+            raise AssertionError("冷开 90s 未进入阅读器")
+        time.sleep(2)
+        log = dev.remote_log()
+        cold = dev.bench_ms(log, "load-end")
+        docopen = dev.bench_ms(log, "doc-open-done")
+        if cold is None:
+            raise AssertionError("无 BENCH 'load-end' 日志")
+        print("  [%s] 冷开: doc-open=%sms load-end=%sms(阈值 %d)" % (dev.serial, docopen, cold, cold_cap))
+        if cold > cold_cap:
+            dev.save_dump(case_id, "cold_slow")
+            raise AssertionError("冷开 load-end %dms > %dms" % (cold, cold_cap))
+    with dev.step(case_id, "exit"):
+        tf._exit_reader(dev, case_id)
+        tf._back_to_main(dev)
+    times = []
+    with dev.step(case_id, "reopen_x3"):
+        for i in range(3):
+            dev.log_clear()
+            entered = tf._open_remote_book(dev, case_id, title, tf._REMOTE_BIG_BOOK, timeout=60)
+            if not entered:
+                raise AssertionError("重开 #%d 未进入阅读器" % (i + 1))
+            time.sleep(2)
+            warm = dev.bench_ms(dev.remote_log(), "load-end")
+            if warm is None:
+                raise AssertionError("重开 #%d 无 BENCH load-end" % (i + 1))
+            times.append(warm)
+            print("  [%s] 重开 #%d: %dms" % (dev.serial, i + 1, warm))
+            tf._exit_reader(dev, case_id)
+            tf._back_to_main(dev)
+        med = statistics.median(times)
+        if med > warm_cap:
+            dev.save_dump(case_id, "warm_slow")
+            raise AssertionError("重开中位数 %dms > %dms(各次=%s)" % (med, warm_cap, times))
+        print("  [%s] 重开中位数 %dms(阈值 %d), 各次=%s" % (dev.serial, med, warm_cap, times))
+    with dev.step(case_id, "cleanup"):
+        if added:
+            if tf._browse_root(dev):
+                tf._click_row_delete(dev, title)
+
+
 ALL = [
     ("PF-01", "冷启动耗时", pf01_cold_start, None),
     ("PF-03", "内存趋势", pf03_meminfo, None),
+    ("PF-04", "远程首屏性能基线", pf04_remote_firstpaint, None),
     ("ST-01", "稳定性 monkey", st01_monkey, None),
 ]

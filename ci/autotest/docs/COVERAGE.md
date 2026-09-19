@@ -257,3 +257,25 @@ L1 自动化已扩展到 **54 个用例**（MI9 基准 **49 PASS / 0 FAIL / 4 SK
     SwiftShader 渲染差异，非应用回归。
 - 好消息：三协议 WebDAV/SMB/SFTP + 远程在线打开(FN-26~30)在 AVD 全过（KSA 的凭据问题未复现）；
   阅读器核心链路（FN-08/09/15/16 类中的 intent 开书、多格式开书 10 格式、书签/全文搜索）全过。
+
+
+## 远程阅读优化专项(2026-09-19,对应 在线阅读优化方案整理-v1.3.12-v1.3.13.md)
+
+新增 7 条用例(FN-55~60 + PF-04),覆盖惰性页树/渐进尺寸/后台补全/cache-first 重开/
+取消秒退/封面持久化链路,判定以 REMOTE/BENCH 日志为准(每断言动作前 logcat -c):
+测试大书 = 50.23 三服务目录共投的 big_pdf.pdf(500 页 / 268MB)。
+
+| 用例 | 覆盖链路 | 关键断言(日志) |
+|---|---|---|
+| FN-55 冷开惰性页树 | 清缓存→冷开大书→退出 | `page tree sidecar not found` → `lazy page sizes: N pages (window…)` → `page-size cache saved`;BENCH `load-end` ≤3500ms;退出 `page tree map saved: N pages (sizes N, walk Xms)` |
+| FN-56 重开零网络快开 | 侧车+尺寸缓存命中 | `cache-first open:` + `page tree map injected: N pages (tree walk skipped, sizes N)` + `page-size cache hit`;`load-end` ≤1000ms;`cache-first: version verified:` |
+| FN-57 后台尺寸补全 | 渐进写盘+断点持久化 | `size completion progress` 递增 → `size completion done: fetched N/N, layout fixed …`;`page-size cache saved` ≥2 次;重开 `page-size cache hit: N pages` |
+| FN-58 打开取消秒退 | 取消响应 | 取消后 ≤3s 离开阅读器;`session abort`/`load cancelled-gate trips`/`openRemoteFile cancelled` 之一;无 crash;正常打开无误触发取消门 |
+| FN-59 封面持久化 | 占位/落盘/复用 | 仅浏览无 `remote cover placeholder failed`、无 `openTask file=`;开书 `remote cover saved` 恰 1 次;重开不再出现 |
+| FN-60 惰性布局页码 | 页码分母/无墙/线程停止 | `page now x/N` 分母 == `lazy page sizes` N;进度条拖底可达末页;翻页 ±1;退出 6s 后无新增 `size completion progress` |
+| PF-04 首屏性能基线 | 冷开/重开耗时 | 冷开 `load-end` ≤3500ms;重开 ×3 各 ≤1000ms 取中位数(阈值 cases.yaml `remote_firstpaint`) |
+
+公共支撑:`Device.clear_remote_cache/log_clear/remote_log/bench_ms`(lib/driver.py,
+缓存路径 /sdcard/Download/HowRead/Cache/{Remote,RemoteCovers} + 外部 cache/Recent,
+2026-09-19 真机核实);`_open_remote_book`(tc_function.py,自 FN-30/46 同款流程抽取,
+FN-30/46 已改为调用,行为不变)。

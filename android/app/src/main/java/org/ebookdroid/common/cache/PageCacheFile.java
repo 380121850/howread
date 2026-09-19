@@ -45,7 +45,9 @@ public class PageCacheFile extends File {
                 for (int i = 0; i < infos.length; i++) {
                     infos[i] = new CodecPageInfo(in.readInt(), in.readInt());
                     if (infos[i].width == -1 || infos[i].height == -1) {
-                        return null;
+                        // unknown slot (lazy partial save): keep the array,
+                        // the caller falls back per page
+                        infos[i] = null;
                     }
                 }
                 android.util.Log.i("REMOTE", "page-size cache hit: " + pages + " pages");

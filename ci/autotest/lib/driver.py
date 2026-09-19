@@ -365,6 +365,40 @@ class Device:
             time.sleep(0.5)
         return False
 
+    # ---------- 远程阅读优化专项 helper(2026-09-19) ----------
+    def log_clear(self):
+        """清空 logcat 缓冲(断言动作前调用,防读到上一场残留)."""
+        self.shell("logcat -c")
+
+    def remote_log(self, lines=4000):
+        """取 REMOTE/BENCH 两个 tag 的最近日志(远程阅读链路断言用)."""
+        r = self.shell("logcat -d -s REMOTE:* -t %d" % lines)
+        b = self.shell("logcat -d -s BENCH:* -t %d" % lines)
+        return (r or "") + "\n" + (b or "")
+
+    def clear_remote_cache(self):
+        """force-stop 后清远程缓存三件套:块缓存+侧车(Remote/)、封面(RemoteCovers/)、
+        页尺寸缓存(外部 cache/Recent)。路径 2026-09-19 真机核实:BookCSS.cachePath
+        默认 /sdcard/Download/HowRead/Cache(/sdcard 直删,无需 run-as);
+        不碰 shared_prefs/DB,服务器条目与 Pro 解锁不受影响。"""
+        self.d.app_stop(self.pkg)
+        time.sleep(1.5)
+        for root in ("/sdcard/Download/HowRead/Cache", "/sdcard/HowRead/Cache"):
+            self.shell("rm -rf '%s/Remote' '%s/RemoteCovers'" % (root, root))
+        self.shell("rm -rf '/sdcard/Android/data/%s/cache/Recent'" % self.pkg)
+        time.sleep(0.5)
+        left = self.shell("ls /sdcard/Download/HowRead/Cache/Remote "
+                          "/sdcard/Download/HowRead/Cache/RemoteCovers "
+                          "/sdcard/Android/data/%s/cache/Recent 2>/dev/null" % self.pkg)
+        if left.strip():
+            raise TestSkip("远程缓存清除后仍存在(路径与预期不符): %s" % left.strip()[:200])
+
+    @staticmethod
+    def bench_ms(logtxt, marker):
+        """从日志文本提取 '<marker> <n>ms' 的毫秒数(如 marker='load-end')."""
+        m = re.search(re.escape(marker) + r" (\d+)ms", logtxt)
+        return int(m.group(1)) if m else None
+
     def grant_setup(self):
         for perm in ("android.permission.READ_EXTERNAL_STORAGE",
                      "android.permission.WRITE_EXTERNAL_STORAGE"):

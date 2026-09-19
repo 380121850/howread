@@ -66,3 +66,4 @@ int pdf_get_page_size_at(fz_context *ctx, pdf_document *doc, int idx, int *out_w
 int *pdf_get_page_sizes(fz_context *ctx, pdf_document *doc, int *count);
 int64_t pdf_get_walk_ms(fz_context *ctx, pdf_document *doc);
 void pdf_set_page_sizes(fz_context *ctx, pdf_document *doc, int n, const int *wh);
+int pdf_finish_lazy_page_tree(fz_context *ctx, pdf_document *doc);

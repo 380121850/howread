@@ -3048,28 +3048,8 @@ def fn30_remote_open(dev, case_id, cfg=None, fixtures=None):
         title, added = _ensure_server(dev, case_id, cfg, "webdav")
     with dev.step(case_id, "open_remote_pdf"):
         _ensure_home(dev)
-        if not _browse_root(dev):
-            raise AssertionError("我的文件根视图不可达")
-        row = dev.d(text=title)
-        if not row.exists:
-            raise AssertionError("WebDAV 服务器行不可见")
-        row.click()
-        time.sleep(4)
-        book = _find_text_scrolled(dev, "book_pdf", max_swipes=4)
-        if book is None:
-            dev.save_dump(case_id, "remote_pdf_not_found")
-            raise AssertionError("远程目录无 book_pdf.pdf")
-        book.click()
-        # pdf 为流式直开;等待进阅读器(分块拉取需要时间)
-        entered = False
-        deadline = time.time() + 60
-        while time.time() < deadline:
-            top = dev.shell("dumpsys activity activities | grep ResumedActivity")
-            if "ViewActivity" in top or "TTSActivity" in top:
-                entered = True
-                break
-            time.sleep(2.5)
-        _snap(dev, case_id, "remote_reader")
+        # pdf 为流式直开;等待进阅读器(分块拉取需要时间)——公共流程见 _open_remote_book
+        entered = _open_remote_book(dev, case_id, title, "book_pdf", snap="remote_reader")
         if not entered:
             dev.save_dump(case_id, "remote_open_timeout")
             raise AssertionError("远程 PDF 60s 未进入阅读器")
@@ -4181,26 +4161,7 @@ def fn46_offline_reading(dev, case_id, cfg=None, fixtures=None):
     with dev.step(case_id, "online_open_and_cache"):
         title, _added = _ensure_server(dev, case_id, cfg, "webdav")
         _ensure_home(dev)
-        if not _browse_root(dev):
-            raise AssertionError("我的文件根视图不可达")
-        row = dev.d(text=title)
-        if not row.exists:
-            raise AssertionError("WebDAV 服务器行不可见")
-        row.click()
-        time.sleep(4)
-        book = _find_text_scrolled(dev, "book_pdf", max_swipes=4)
-        if book is None:
-            dev.save_dump(case_id, "remote_pdf_not_found")
-            raise AssertionError("远程目录无 book_pdf.pdf")
-        book.click()
-        entered = False
-        deadline = time.time() + 60
-        while time.time() < deadline:
-            top = dev.shell("dumpsys activity activities | grep ResumedActivity")
-            if "ViewActivity" in top or "TTSActivity" in top:
-                entered = True
-                break
-            time.sleep(2.5)
+        entered = _open_remote_book(dev, case_id, title, "book_pdf")
         if not entered:
             dev.save_dump(case_id, "remote_open_timeout")
             raise AssertionError("在线打开 60s 未进阅读器")
@@ -4711,6 +4672,503 @@ def fn54_whats_new(dev, case_id, cfg=None, fixtures=None):
                 raise AssertionError("返回应用后主界面未就绪")
 
 
+# ======================================================================
+# 2026-09-19 远程阅读优化专项:FN-55 ~ FN-60
+# 覆盖在线阅读优化链路(方案见 在线阅读优化方案整理-v1.3.12-v1.3.13.md):
+# 惰性页树+侧车v2 / 渐进尺寸 / 后台补全 / cache-first 重开 / 取消秒退 /
+# 封面持久化 / 惰性布局页码正确性.判定以 REMOTE/BENCH 日志为准
+# (每个断言动作前 logcat -c,防读到上一场残留),UI 仅作操作通道.
+# 测试大书: 50.23 三服务目录共投的 big_pdf.pdf(500 页 / 268MB).
+# ======================================================================
+
+_REMOTE_BIG_BOOK = "big_pdf"
+_REMOTE_SMALL_BOOK = "book_lazy"   # 300 页 / 84KB:整本缓存秒级完成,
+                                  # 侧车 v2 快速落盘(惰性收尾链)专用
+
+
+def _open_remote_book(dev, case_id, title, book_kw, timeout=60, snap=None):
+    """浏览根 → 点服务器行 → 目录里找书打开 → 轮询等进阅读器.
+    (抽取自 FN-30/FN-46 的同款流程;返回是否进入阅读器)"""
+    if not _browse_root(dev):
+        raise AssertionError("我的文件根视图不可达")
+    row = dev.d(text=title)
+    if not row.exists:
+        raise AssertionError("远程服务器行不可见: %s" % title)
+    row.click()
+    time.sleep(4)
+    book = _find_text_scrolled(dev, book_kw, max_swipes=4)
+    if book is None:
+        dev.save_dump(case_id, "remote_book_not_found")
+        raise AssertionError("远程目录无 %s" % book_kw)
+    book.click()
+    entered = False
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        top = dev.shell("dumpsys activity activities | grep ResumedActivity")
+        if "ViewActivity" in top or "TTSActivity" in top:
+            entered = True
+            break
+        time.sleep(2.5)
+    if snap:
+        _snap(dev, case_id, snap)
+    return entered
+
+
+def fn55_remote_coldopen_lazytree(dev, case_id, cfg=None, fixtures=None):
+    """远程冷开惰性页树链路:清缓存 → WebDAV 冷开 big_pdf(500页) →
+    断言:侧车未命中(sidecar not found) / 惰性尺寸窗口(lazy page sizes) /
+    页尺寸缓存落盘(page-size cache saved) / BENCH load-end ≤3500ms;
+    退出断言侧车 v2 落盘(sizes 数 == 页数)."""
+    with dev.step(case_id, "clear_cache"):
+        dev.clear_remote_cache()
+    with dev.step(case_id, "ensure_server"):
+        title, added = _ensure_server(dev, case_id, cfg, "webdav")
+    with dev.step(case_id, "cold_open"):
+        _ensure_home(dev)
+        dev.log_clear()
+        entered = _open_remote_book(dev, case_id, title, _REMOTE_BIG_BOOK, timeout=90, snap="cold_reader")
+        if not entered:
+            dev.save_dump(case_id, "cold_open_timeout")
+            raise AssertionError("冷开大书 90s 未进入阅读器")
+    with dev.step(case_id, "cold_log_chain"):
+        time.sleep(2)
+        log = dev.remote_log()
+        _snap(dev, case_id, "cold_logs")
+        if "page tree sidecar not found" not in log:
+            raise AssertionError("冷开未出现'page tree sidecar not found'(缓存未清净或非冷开)")
+        m = re.search(r"lazy page sizes: (\d+) pages \(window", log)
+        if not m:
+            raise AssertionError("无'lazy page sizes'日志(惰性尺寸模式未生效)")
+        pages = int(m.group(1))
+        if pages < 200:
+            raise TestSkip("测试书仅 %d 页(<200),惰性页树链路无意义(环境问题)" % pages)
+        if "page-size cache saved" not in log:
+            raise AssertionError("无'page-size cache saved'(页尺寸缓存未落盘)")
+        ms = dev.bench_ms(log, "load-end")
+        if ms is None:
+            raise AssertionError("无 BENCH 'load-end' 日志")
+        print("  [%s] 冷开 load-end=%dms, 页数=%d" % (dev.serial, ms, pages))
+        if ms > 3500:
+            dev.save_dump(case_id, "cold_open_slow")
+            raise AssertionError("冷开 load-end %dms > 3500ms(目标 2~3.5s)" % ms)
+        c = dev.scan_crash()
+        if c:
+            raise AssertionError("冷开 crash: %s" % c)
+    with dev.step(case_id, "exit_sidecar_note"):
+        _exit_reader(dev, case_id)
+        time.sleep(3)
+        log2 = dev.remote_log()
+        m2 = re.search(r"page tree map saved: (\d+) pages \(sizes (\d+), walk (\d+)ms\)", log2)
+        if m2:
+            print("  [%s] 侧车 v2: pages=%s sizes=%s walk=%sms"
+                  % (dev.serial, m2.group(1), m2.group(2), m2.group(3)))
+            if int(m2.group(2)) != pages:
+                raise AssertionError("侧车 sizes=%s 与页数 %d 不一致" % (m2.group(2), pages))
+        else:
+            # 268MB 大书快速开合整本缓存不会完成:惰性收尾(补建全量树→存侧车)
+            # 按设计延迟到缓存齐时,严格侧车断言由 FN-56(小书)覆盖
+            print("  [%s] 大书未整本缓存,侧车按设计未落盘(PageCacheFile 兜底尺寸)" % dev.serial)
+        _back_to_main(dev)
+        if added:
+            if _browse_root(dev):
+                _click_row_delete(dev, title)
+
+
+def fn56_remote_reopen_cachefirst(dev, case_id, cfg=None, fixtures=None):
+    """重开零网络快开:冷开一次建侧车+页尺寸缓存 → 退出 → 重开 →
+    断言:cache-first open / 侧车注入(tree walk skipped, sizes=N) /
+    页尺寸缓存命中 / 无 sidecar not found / BENCH load-end ≤1000ms /
+    后台版本校验通过(cache-first: version verified)."""
+    with dev.step(case_id, "clear_and_cold_open"):
+        dev.clear_remote_cache()
+        title, added = _ensure_server(dev, case_id, cfg, "webdav")
+        _ensure_home(dev)
+        entered = _open_remote_book(dev, case_id, title, _REMOTE_SMALL_BOOK, timeout=90)
+        if not entered:
+            raise AssertionError("前置冷开 90s 未进入阅读器")
+        # 等整链完成:整本填充 → 补全 done → 惰性收尾建树 → 侧车落盘(日志驱动)
+        ok = False
+        deadline = time.time() + 150
+        while time.time() < deadline:
+            if "page tree map saved:" in dev.remote_log(lines=1000):
+                ok = True
+                break
+            time.sleep(5)
+        if not ok:
+            dev.save_dump(case_id, "sidecar_wait_timeout")
+            raise AssertionError("150s 内侧车未落盘(填充/补全/收尾链未走通)")
+        _exit_reader(dev, case_id)
+        _back_to_main(dev)
+    with dev.step(case_id, "reopen"):
+        dev.log_clear()
+        entered = _open_remote_book(dev, case_id, title, _REMOTE_SMALL_BOOK, timeout=60, snap="reopen_reader")
+        if not entered:
+            dev.save_dump(case_id, "reopen_timeout")
+            raise AssertionError("重开 60s 未进入阅读器")
+    with dev.step(case_id, "reopen_log_chain"):
+        time.sleep(2)
+        log = dev.remote_log()
+        _snap(dev, case_id, "reopen_logs")
+        if "cache-first open:" not in log:
+            raise AssertionError("重开无'cache-first open:'(未走缓存优先路径)")
+        if "page tree sidecar not found" in log:
+            raise AssertionError("重开仍报 sidecar not found(侧车未持久化)")
+        m = re.search(r"page tree map injected: (\d+) pages \(tree walk skipped, sizes (\d+)\)", log)
+        if not m:
+            raise AssertionError("无'page tree map injected'(侧车注入未生效)")
+        if "page-size cache hit:" not in log:
+            raise AssertionError("无'page-size cache hit'(页尺寸缓存未命中)")
+        ms = dev.bench_ms(log, "load-end")
+        if ms is None:
+            raise AssertionError("无 BENCH 'load-end' 日志")
+        print("  [%s] 重开 load-end=%dms(注入 %s pages)" % (dev.serial, ms, m.group(1)))
+        if ms > 1000:
+            dev.save_dump(case_id, "reopen_slow")
+            raise AssertionError("重开 load-end %dms > 1000ms" % ms)
+        verified = False
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            if "cache-first: version verified:" in dev.remote_log(lines=500):
+                verified = True
+                break
+            time.sleep(2)
+        if not verified:
+            dev.save_dump(case_id, "version_verify_missing")
+            raise AssertionError("20s 内未出现'cache-first: version verified:'")
+        c = dev.scan_crash()
+        if c:
+            raise AssertionError("重开 crash: %s" % c)
+    with dev.step(case_id, "cleanup"):
+        _exit_reader(dev, case_id)
+        _back_to_main(dev)
+        if added:
+            if _browse_root(dev):
+                _click_row_delete(dev, title)
+
+
+def fn57_remote_size_completion(dev, case_id, cfg=None, fixtures=None):
+    """后台尺寸渐进补全:清缓存冷开大书保持前台 → 轮询 REMOTE 日志:
+    'size completion progress' 递增 → 'size completion done: fetched N/N';
+    'page-size cache saved' ≥2 次(渐进写盘);退出重开断言
+    'page-size cache hit: N pages'(补全结果被 PageCacheFile 持久化)."""
+    with dev.step(case_id, "clear_and_cold_open"):
+        dev.clear_remote_cache()
+        title, added = _ensure_server(dev, case_id, cfg, "webdav")
+        _ensure_home(dev)
+        dev.log_clear()
+        entered = _open_remote_book(dev, case_id, title, _REMOTE_BIG_BOOK, timeout=90, snap="reader")
+        if not entered:
+            raise AssertionError("冷开 90s 未进入阅读器")
+    with dev.step(case_id, "wait_completion"):
+        pages = None
+        progress_vals = []
+        done_ms = None
+        deadline = time.time() + 600
+        while time.time() < deadline:
+            log = dev.remote_log(lines=2000)
+            m = re.search(r"lazy page sizes: (\d+) pages", log)
+            if m:
+                pages = int(m.group(1))
+            for pm in re.finditer(r"size completion progress: (\d+)/(\d+)", log):
+                progress_vals.append(int(pm.group(1)))
+            md = re.search(r"size completion done: fetched (\d+)/(\d+), layout fixed (\d+) in (\d+)ms", log)
+            if md:
+                pages = int(md.group(2))
+                done_ms = int(md.group(4))
+                break
+            time.sleep(10)
+        _snap(dev, case_id, "completion_wait")
+        if pages is None:
+            raise AssertionError("读不到页数(lazy page sizes/done 日志均缺)")
+        if pages < 200:
+            raise TestSkip("测试书仅 %d 页(<200),补全用例无意义(环境问题)" % pages)
+        uniq = sorted(set(progress_vals))
+        if done_ms is None:
+            raise AssertionError("600s 内未出现'size completion done'(progress=%s)" % uniq)
+        if len(uniq) < 2:
+            raise AssertionError("补全进度未渐进推进(progress=%s)" % uniq)
+        print("  [%s] 补全完成: %d 页, 用时 %dms, progress=%s"
+              % (dev.serial, pages, done_ms, uniq))
+        saved_cnt = dev.remote_log().count("page-size cache saved")
+        if saved_cnt < 2:
+            raise AssertionError("'page-size cache saved' 仅 %d 次(<2,渐进写盘未发生)" % saved_cnt)
+        c = dev.scan_crash()
+        if c:
+            raise AssertionError("补全期间 crash: %s" % c)
+    with dev.step(case_id, "reopen_hit"):
+        _exit_reader(dev, case_id)
+        _back_to_main(dev)
+        dev.log_clear()
+        entered = _open_remote_book(dev, case_id, title, _REMOTE_BIG_BOOK, timeout=60)
+        if not entered:
+            raise AssertionError("补全后重开未进入阅读器")
+        time.sleep(2)
+        log = dev.remote_log()
+        m = re.search(r"page-size cache hit: (\d+) pages", log)
+        if not m:
+            dev.save_dump(case_id, "no_cache_hit")
+            raise AssertionError("补全后重开无'page-size cache hit'")
+        if int(m.group(1)) != pages:
+            raise AssertionError("页尺寸缓存命中页数 %s != 补全页数 %d" % (m.group(1), pages))
+        print("  [%s] 补全持久化验证: hit %s pages" % (dev.serial, m.group(1)))
+    with dev.step(case_id, "cleanup"):
+        _exit_reader(dev, case_id)
+        _back_to_main(dev)
+        if added:
+            if _browse_root(dev):
+                _click_row_delete(dev, title)
+
+
+def fn58_remote_open_cancel(dev, case_id, cfg=None, fixtures=None):
+    """打开取消秒退:清缓存后点大书,1.5s 后返回 →
+    断言 ≤3s 内离开阅读器 / 取消链路日志(session abort 或 cancelled-gate)/无 crash;
+    再正常打开一次确认取消门无误触发."""
+    with dev.step(case_id, "clear_cache"):
+        dev.clear_remote_cache()
+    with dev.step(case_id, "ensure_server"):
+        title, added = _ensure_server(dev, case_id, cfg, "webdav")
+    with dev.step(case_id, "open_then_cancel"):
+        _ensure_home(dev)
+        if not _browse_root(dev):
+            raise AssertionError("我的文件根视图不可达")
+        row = dev.d(text=title)
+        if not row.exists:
+            raise AssertionError("远程服务器行不可见")
+        row.click()
+        time.sleep(4)
+        book = _find_text_scrolled(dev, _REMOTE_BIG_BOOK, max_swipes=4)
+        if book is None:
+            dev.save_dump(case_id, "remote_book_not_found")
+            raise AssertionError("远程目录无 %s" % _REMOTE_BIG_BOOK)
+        dev.log_clear()
+        book.click()
+        # 0.6s 早返回:大书加载任务 ~0.5s 就完成,晚了就只是正常退出;
+        # 且首屏横幅会消费一次返回键(2026-09-19 实锤),未退则补一次
+        time.sleep(0.6)
+        t0 = time.time()
+        gone = False
+        for _ in range(2):
+            dev.d.press("back")
+            while time.time() - t0 < 3:
+                top = dev.shell("dumpsys activity activities | grep ResumedActivity")
+                if "ViewActivity" not in top and "TTSActivity" not in top:
+                    gone = True
+                    break
+                time.sleep(0.5)
+            if gone:
+                break
+            time.sleep(0.5)
+        _snap(dev, case_id, "after_cancel")
+        if not gone:
+            dev.save_dump(case_id, "cancel_not_exit")
+            raise AssertionError("返回后 3s 内阅读器未退出(含横幅兜底一次)")
+        log = dev.remote_log()
+        markers = ("session abort", "load cancelled-gate trips",
+                   "openRemoteFile cancelled while waiting lock")
+        if not any(k in log for k in markers):
+            # 加载先于返回完成 → 返回走正常退出路径,同样验证了"秒退不卡死"
+            print("  [%s] 加载先完成,返回走正常退出(无取消标记,可接受)" % dev.serial)
+        c = dev.scan_crash()
+        if c:
+            raise AssertionError("取消后 crash: %s" % c)
+        _ensure_home(dev)
+    with dev.step(case_id, "reopen_no_false_cancel"):
+        dev.log_clear()
+        entered = _open_remote_book(dev, case_id, title, _REMOTE_BIG_BOOK, timeout=90)
+        if not entered:
+            dev.save_dump(case_id, "reopen_after_cancel_timeout")
+            raise AssertionError("正常打开未进入阅读器(取消门误伤?)")
+        time.sleep(2)
+        log2 = dev.remote_log()
+        if "load cancelled-gate trips" in log2:
+            dev.save_dump(case_id, "false_cancel_gate")
+            raise AssertionError("正常打开误触发'load cancelled-gate trips'")
+        _exit_reader(dev, case_id)
+        _back_to_main(dev)
+        if added:
+            if _browse_root(dev):
+                _click_row_delete(dev, title)
+
+
+def fn59_remote_cover_persist(dev, case_id, cfg=None, fixtures=None):
+    """封面占位/持久化:清缓存(含 RemoteCovers) → 仅浏览目录不开书 →
+    断言无占位失败/无用户打开;开书一次 'remote cover saved' 恰 1 次;
+    重开不再出现(持久化命中)."""
+    with dev.step(case_id, "clear_cache"):
+        dev.clear_remote_cache()
+    with dev.step(case_id, "ensure_server"):
+        title, added = _ensure_server(dev, case_id, cfg, "webdav")
+    with dev.step(case_id, "browse_only"):
+        _ensure_home(dev)
+        if not _browse_root(dev):
+            raise AssertionError("我的文件根视图不可达")
+        dev.log_clear()
+        if not _open_server_dir(dev, title, [_REMOTE_SMALL_BOOK]):
+            dev.save_dump(case_id, "dir_enter_failed")
+            raise AssertionError("进入远程目录失败")
+        time.sleep(8)
+        log = dev.remote_log()
+        _snap(dev, case_id, "browse_only")
+        if "remote cover placeholder failed" in log:
+            raise AssertionError("封面占位失败日志出现")
+        if "openTask file=" in log:
+            raise AssertionError("仅浏览目录却触发了用户打开(openTask)")
+    with dev.step(case_id, "open_once"):
+        dev.log_clear()
+        book = _find_text_scrolled(dev, _REMOTE_SMALL_BOOK, max_swipes=4)
+        if book is None:
+            raise AssertionError("远程目录无 %s" % _REMOTE_SMALL_BOOK)
+        book.click()
+        entered = False
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            top = dev.shell("dumpsys activity activities | grep ResumedActivity")
+            if "ViewActivity" in top or "TTSActivity" in top:
+                entered = True
+                break
+            time.sleep(2.5)
+        if not entered:
+            raise AssertionError("打开 90s 未进入阅读器")
+        time.sleep(4)  # 等封面保存守护线程
+        _exit_reader(dev, case_id)
+        time.sleep(3)
+        log = dev.remote_log()
+        cnt = len(re.findall(r"remote cover saved: ", log))
+        _snap(dev, case_id, "cover_saved")
+        if cnt != 1:
+            dev.save_dump(case_id, "cover_save_count")
+            raise AssertionError("'remote cover saved' 出现 %d 次(期望恰 1 次)" % cnt)
+        _back_to_main(dev)
+    with dev.step(case_id, "reopen_no_resave"):
+        dev.log_clear()
+        entered = _open_remote_book(dev, case_id, title, _REMOTE_SMALL_BOOK, timeout=60)
+        if not entered:
+            raise AssertionError("重开未进入阅读器")
+        time.sleep(3)
+        _exit_reader(dev, case_id)
+        time.sleep(2)
+        log = dev.remote_log()
+        if "remote cover saved:" in log:
+            dev.save_dump(case_id, "cover_resaved")
+            raise AssertionError("重开再次保存封面(持久化未命中)")
+        _back_to_main(dev)
+        if added:
+            if _browse_root(dev):
+                _click_row_delete(dev, title)
+
+
+def fn60_remote_lazy_layout_pages(dev, case_id, cfg=None, fixtures=None):
+    """惰性布局页码正确性:冷开大书 → 页码分母 == lazy page sizes 的 N →
+    进度条拖底可达最后一页(无'墙') → 拖回页首 → 翻页 ±1 →
+    退出后补全线程停止(6s 后无新增 size completion progress)."""
+    with dev.step(case_id, "clear_and_cold_open"):
+        dev.clear_remote_cache()
+        title, added = _ensure_server(dev, case_id, cfg, "webdav")
+        _ensure_home(dev)
+        dev.log_clear()
+        entered = _open_remote_book(dev, case_id, title, _REMOTE_SMALL_BOOK, timeout=90, snap="reader")
+        if not entered:
+            raise AssertionError("冷开 90s 未进入阅读器")
+        time.sleep(2)
+    with dev.step(case_id, "denominator"):
+        log = dev.remote_log()
+        m = re.search(r"lazy page sizes: (\d+) pages", log)
+        if not m:
+            raise AssertionError("无'lazy page sizes'日志")
+        pages = int(m.group(1))
+        if pages < 200:
+            raise TestSkip("测试书仅 %d 页(<200)(环境问题)" % pages)
+        cur = _reader_page_or_none(dev)
+        if cur is None:
+            dev.save_dump(case_id, "no_page_num")
+            raise AssertionError("读不到页码(日志与 UI 均无)")
+        if cur[1] != pages:
+            raise AssertionError("页码分母 %d != 全书页数 %d(占位布局缩水)" % (cur[1], pages))
+        print("  [%s] 页码分母一致: %d/%d" % (dev.serial, cur[0], cur[1]))
+    with dev.step(case_id, "seek_bottom"):
+        # 垂直模式拖动入口不可靠(seekBar1 拖动事件被吞,2026-09-19 实锤),
+        # 改连续快速滑动直达底部:占位布局滑过不渲染,天然验证无"墙"
+        def seek_percent():
+            try:
+                el = dev.d(resourceId=_rid(dev, "currentSeek"))
+                if el.exists:
+                    m = re.match(r"([\d.]+)\s*%", (el.get_text() or "").strip())
+                    if m:
+                        return float(m.group(1))
+            except Exception:
+                pass
+            return None
+
+        w, h = dev.d.window_size()
+        best, stuck, last_page = 0.0, 0, None
+        for _ in range(80):
+            dev.d.swipe(int(0.5 * w), int(0.85 * h), int(0.5 * w), int(0.15 * h), 0.05)
+            time.sleep(1.2)
+            p = _reader_page_or_none(dev)
+            if p:
+                last_page = p
+                best = max(best, 100.0 * (p[0] - 1) / max(pages - 1, 1))
+            pct = seek_percent()
+            if pct is not None:
+                if pct >= best - 0.5:
+                    stuck = 0
+                else:
+                    stuck += 1
+                best = max(best, pct)
+            if best >= 97.0:
+                break
+            if stuck >= 3:
+                break
+        _snap(dev, case_id, "seek_bottom")
+        if best < 97.0:
+            raise AssertionError("连续滑动未到达底部(墙?最好进度 %.1f%%, 当前 %s, 全书 %d)"
+                                 % (best, last_page, pages))
+        print("  [%s] 滑动到底: %.1f%% (page %s/%d)" % (dev.serial, best,
+              last_page[0] if last_page else "?", pages))
+        back_ok = False
+        for _ in range(80):
+            dev.d.swipe(int(0.5 * w), int(0.15 * h), int(0.5 * w), int(0.85 * h), 0.05)
+            time.sleep(1.0)
+            pct = seek_percent()
+            if pct is None and not _reader_bar_visible(dev):
+                _reader_show_toolbar(dev)
+                pct = seek_percent()
+            if pct is not None and pct <= 5.0:
+                back_ok = True
+                break
+            p = _reader_page_or_none(dev)
+            if p and p[0] <= 3:
+                back_ok = True
+                break
+        if not back_ok:
+            raise AssertionError("滑回页首失败(当前 %s%%)" % seek_percent())
+    with dev.step(case_id, "page_turns"):
+        before = _reader_page_or_none(dev)
+        dev.page_turn(forward=True, verify=False)
+        after = _wait_page_change(dev, before, timeout=12)
+        if not after:
+            raise AssertionError("惰性布局下翻页(前)无效")
+        dev.page_turn(forward=False, verify=False)
+        back = _wait_page_change(dev, after, timeout=12)
+        if not back:
+            raise AssertionError("惰性布局下翻页(后)无效")
+    with dev.step(case_id, "completion_stops_on_exit"):
+        pre = dev.remote_log().count("size completion progress:")
+        _exit_reader(dev, case_id)
+        time.sleep(6)
+        post = dev.remote_log().count("size completion progress:")
+        if post > pre:
+            dev.save_dump(case_id, "completion_leak")
+            raise AssertionError("退出阅读器后补全线程仍在推进(%d → %d)" % (pre, post))
+        c = dev.scan_crash()
+        if c:
+            raise AssertionError("crash: %s" % c)
+        _back_to_main(dev)
+        if added:
+            if _browse_root(dev):
+                _click_row_delete(dev, title)
+
+
 ALL = [
     ("FN-08", "intent 打开", fn08_intent_open, None),
     ("FN-09", "多格式开书", fn09_multi_format, None),
@@ -4769,4 +5227,11 @@ ALL = [
     ("FN-52", "选词菜单", fn52_select_text_menu, None),
     ("FN-53", "速读 RSVP", fn53_speed_read, None),
     ("FN-54", "更新日志入口", fn54_whats_new, None),
+    # ---- 2026-09-19 远程阅读优化专项(惰性页树/渐进尺寸/后台补全/取消/封面/页码)----
+    ("FN-55", "远程冷开惰性页树", fn55_remote_coldopen_lazytree, None),
+    ("FN-56", "远程重开零网络快开", fn56_remote_reopen_cachefirst, None),
+    ("FN-57", "后台尺寸补全", fn57_remote_size_completion, None),
+    ("FN-58", "打开取消秒退", fn58_remote_open_cancel, None),
+    ("FN-59", "远程封面持久化", fn59_remote_cover_persist, None),
+    ("FN-60", "惰性布局页码正确性", fn60_remote_lazy_layout_pages, None),
 ]

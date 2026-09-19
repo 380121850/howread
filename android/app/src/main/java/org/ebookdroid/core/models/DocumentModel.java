@@ -53,6 +53,13 @@ public class DocumentModel extends ListenerProxy {
      * the whole document.
      */
     private int progressiveUpto = -1;
+    /** HowRead: lazy page sizes (remote page-format books) — only the reading
+     * window gets real sizes, the rest use its aspect as a placeholder. */
+    private boolean lazySizes;
+
+    public void setLazySizes(final boolean v) {
+        this.lazySizes = v;
+    }
 
     private IActivityController pageBase;
 
@@ -207,6 +214,11 @@ public class DocumentModel extends ListenerProxy {
         try {
             final ArrayList<Page> list = new ArrayList<Page>();
             final CodecPageInfo[] infos = retrievePagesInfo(base, bs, task);
+        if (infos == null) {
+            // cancelled/corrupt: keep EMPTY_PAGES — the load task's cancel
+            // gate closes the reader
+            return;
+        }
 
             for (int docIndex = 0; docIndex < infos.length; docIndex++) {
                 if (TempHolder.get().loadingCancelled.get()) {
@@ -238,11 +250,72 @@ public class DocumentModel extends ListenerProxy {
         }
     }
 
+    /**
+     * HowRead: lazy page sizes for remote page-format books (pdf/cbz/xps…).
+     * Page objects are scattered across the whole file — fetching every
+     * page's real size would download the entire book before the first
+     * paint. Only the reading window gets real sizes; the rest use the
+     * reading page's aspect as a placeholder (uniform scan books: exact).
+     * Merged with any partial PageCacheFile content and saved back.
+     */
+    private CodecPageInfo[] retrieveLazySizesInfo(final AppBook bs) {
+        final int pagesCount = decodeService.getPageCount();
+        if (pagesCount <= 0) {
+            return null;
+        }
+        final PageCacheFile pagesFile = PageCacheFile.getPageFile(bs.path, pagesCount);
+        CodecPageInfo[] infos = null;
+        if (pagesFile.exists()) {
+            infos = pagesFile.load(); // partial content: unknown slots are null
+        }
+        if (infos == null || infos.length != pagesCount) {
+            infos = new CodecPageInfo[pagesCount];
+        }
+        final int center = bs != null && bs.pg >= 0 && bs.pg < pagesCount ? bs.pg : 0;
+        CodecPageInfo template = null;
+        for (int d = -2; d <= 4; d++) {
+            final int i = center + d;
+            if (i < 0 || i >= pagesCount) {
+                continue;
+            }
+            if (infos[i] == null) {
+                try {
+                    infos[i] = decodeService.getPageInfo(i);
+                } catch (Exception e) {
+                    LOG.w(e);
+                }
+            }
+            if (template == null && infos[i] != null) {
+                template = infos[i];
+            }
+        }
+        for (int i = 0; i < pagesCount; i++) {
+            if (infos[i] == null && template != null) {
+                infos[i] = new CodecPageInfo(template.width, template.height);
+            }
+        }
+        try {
+            pagesFile.save(infos);
+        } catch (Exception e) {
+            LOG.w(e);
+        }
+        android.util.Log.i("REMOTE", "lazy page sizes: " + pagesCount
+                + " pages (window " + Math.max(0, center - 2) + ".."
+                + Math.min(pagesCount - 1, center + 4) + ")");
+        return infos;
+    }
+
     private CodecPageInfo[] retrievePagesInfo(final IActivityController base, final AppBook bs,
                                               final IProgressIndicator task) {
         final int upto = progressiveUpto;
         final boolean requested = progressiveUpto >= 0;
         progressiveUpto = -1;
+        final boolean lazySizes = this.lazySizes;
+        this.lazySizes = false;
+
+        if (lazySizes) {
+            return retrieveLazySizesInfo(bs);
+        }
 
         int pagesCount;
         boolean progressive = requested;

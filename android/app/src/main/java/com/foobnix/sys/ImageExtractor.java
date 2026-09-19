@@ -164,6 +164,23 @@ public class ImageExtractor {
         }
     }
 
+    /** Runs the deferred lazy page-tree finish + v2 sidecar save for the
+     * currently cached remote book (size-completion done path). */
+    public static void finishLazyTreeIfPossible() {
+        try {
+            final String path = pathCache;
+            if (codeCache == null || path == null
+                    || !(codeCache instanceof org.ebookdroid.droids.mupdf.codec.MuPdfDocument)) {
+                android.util.Log.i("REMOTE", "lazy tree finish skip: codec " + codeCache + " path " + path);
+                return;
+            }
+            ((org.ebookdroid.droids.mupdf.codec.MuPdfDocument) codeCache)
+                    .finishLazyTreeAndSaveSidecar(path);
+        } catch (Throwable t) {
+            android.util.Log.i("REMOTE", "lazy tree finish skipped: " + t);
+        }
+    }
+
     public static void savePageTreeIfPossible(String bookPath) {
         try {
             if (codeCache == null || pathCache == null || !bookPath.equals(pathCache)

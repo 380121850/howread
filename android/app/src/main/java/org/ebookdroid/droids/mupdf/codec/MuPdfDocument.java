@@ -210,7 +210,13 @@ public class MuPdfDocument extends AbstractCodecDocument {
                 // inject the persisted page tree map (key book info from the
                 // block cache): the first page access then skips the
                 // O(pages) object walk over the network entirely
-                loadPageTreeSidecar(open, fname, session.versionTag, session.size);
+                boolean injected = loadPageTreeSidecar(open, fname, session.versionTag, session.size);
+                if (!injected) {
+                    // no complete map: resolve pages lazily (one tree path
+                    // per access) — a full map build would pull the whole
+                    // book before the first paint on scattered page trees
+                    setLazyPageTree(open, true);
+                }
             }
             LOG.d("MUPDF! >>> openStream [document]", open, fname);
             if (open == -1) {
@@ -256,6 +262,8 @@ public class MuPdfDocument extends AbstractCodecDocument {
 
     private static native int[] getPageTreeSizes(long handle);
 
+    private static native void setLazyPageTree(long handle, boolean on);
+
     private static native long getWalkMs(long handle);
 
     private static native boolean setPageTreeSizes(long handle, int[] sizes);
@@ -279,6 +287,82 @@ public class MuPdfDocument extends AbstractCodecDocument {
 
     private static native boolean setPageTreeNums(long handle, int[] nums);
 
+    private static native boolean finishLazyPageTree(long handle);
+
+    /** True when the block cache meta marks the whole book cached (the
+     * filler finished uncapped) — the precondition for finishing the lazy
+     * page tree with zero network traffic. */
+    private static boolean isBookFullyCached(String bookPath) {
+        try {
+            java.io.File metaF = new java.io.File(new java.io.File(
+                    com.foobnix.remote.BlockCacheStore.rootDir(),
+                    com.foobnix.remote.RemoteBook.cacheKey(bookPath)), "meta.json");
+            if (!metaF.isFile()) {
+                return false;
+            }
+            return new org.json.JSONObject(com.foobnix.android.utils.IO.readString(metaF))
+                    .optBoolean("fullyCached", false);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * Runs the deferred full page-tree walk of a lazy session and persists
+     * the v2 sidecar. Called from the size-completion thread while the book
+     * is open: only when the block cache covers the whole book (the walk is
+     * then all cache hits) and always under the native lock — a lazy
+     * session otherwise never completes its page map, and doing this at
+     * reader close races the teardown.
+     */
+    public void finishLazyTreeAndSaveSidecar(String bookPath) {
+        boolean locked = false;
+        try {
+            locked = TempHolder.lock.tryLock(5, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            return;
+        }
+        if (!locked) {
+            android.util.Log.i("REMOTE", "lazy tree finish skipped: native lock busy");
+            return;
+        }
+        try {
+            if (documentHandle == 0 || isRecycled()) {
+                android.util.Log.i("REMOTE", "lazy tree finish skip: doc handle=" + documentHandle);
+                return;
+            }
+            if (!isBookFullyCached(bookPath)) {
+                android.util.Log.i("REMOTE", "lazy tree finish skip: not fully cached");
+                return;
+            }
+            int[] nums = getPageTreeNums();
+            if (nums == null || nums.length == 0) {
+                if (!finishLazyPageTree(documentHandle)) {
+                    android.util.Log.i("REMOTE", "lazy tree finish skip: walk failed");
+                    return;
+                }
+                android.util.Log.i("REMOTE", "lazy page tree finished: full walk done");
+            } else {
+                android.util.Log.i("REMOTE", "lazy tree finish: nums already present " + nums.length);
+            }
+        } finally {
+            TempHolder.lock.unlock();
+        }
+        boolean saved = false;
+        for (com.foobnix.remote.RemoteBookSession s
+                : com.foobnix.remote.RemoteSessionFactory.liveSessions()) {
+            android.util.Log.i("REMOTE", "lazy tree finish: live session " + s.remotePath);
+            if (bookPath.equals(s.remotePath)) {
+                savePageTreeSidecar(bookPath, s.versionTag, s.size);
+                saved = true;
+                break;
+            }
+        }
+        if (!saved) {
+            android.util.Log.i("REMOTE", "lazy tree finish: no live session for " + bookPath);
+        }
+    }
+
     private static java.io.File pageMapFile(String bookPath) {
         return new java.io.File(new java.io.File(
                 com.foobnix.remote.BlockCacheStore.rootDir(),
@@ -292,6 +376,18 @@ public class MuPdfDocument extends AbstractCodecDocument {
      */
     public void savePageTreeSidecar(String bookPath, String versionTag, long fileSize) {
         if (!com.foobnix.remote.RemoteBook.isRemotePathLoose(bookPath)) {
+            return;
+        }
+        // Native document access must be serialized (fz_context is not
+        // thread-safe): skip the best-effort save when the lock stays busy.
+        boolean locked = false;
+        try {
+            locked = TempHolder.lock.tryLock(3, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            return;
+        }
+        if (!locked) {
+            android.util.Log.i("REMOTE", "page tree save skipped: native lock busy");
             return;
         }
         try {
@@ -332,6 +428,8 @@ public class MuPdfDocument extends AbstractCodecDocument {
             }
         } catch (Exception e) {
             android.util.Log.i("REMOTE", "page tree map save failed: " + e);
+        } finally {
+            TempHolder.lock.unlock();
         }
     }
 

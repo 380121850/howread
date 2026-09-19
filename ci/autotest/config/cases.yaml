@@ -25,6 +25,11 @@ stability_monkey:
   throttle_ms: 300
   seed: 20260906
 
+# 远程首屏性能阈值(ms,2026-09-19 在线阅读优化专项 PF-04;MI9+局域网实测冷开 ~3.2s/重开 ~0.4s)
+remote_firstpaint:
+  cold_ms: 3500
+  warm_ms: 1000
+
 webdav:
   server_py: Z:/opt/librera/test_webdav.py
   port: 8765
@@ -132,3 +137,11 @@ case_meta:
   PF-01: { layer: ui, priority: P1, timeout: 300, retries: 0 }
   PF-03: { layer: ui, priority: P1, timeout: 300, retries: 0 }
   ST-01: { layer: ui, priority: P0, timeout: 1900, retries: 0 }
+  # --- 2026-09-19 远程阅读优化专项(惰性页树/渐进尺寸/后台补全/取消/封面/页码)---
+  FN-55: { layer: ui, priority: P1, timeout: 600, retries: 1 }   # 远程冷开惰性页树链路
+  FN-56: { layer: ui, priority: P1, timeout: 420, retries: 1 }   # 重开零网络快开
+  FN-57: { layer: ui, priority: P1, timeout: 900, retries: 1 }   # 后台尺寸渐进补全
+  FN-58: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 打开取消秒退
+  FN-59: { layer: ui, priority: P2, timeout: 420, retries: 1 }   # 封面占位持久化
+  FN-60: { layer: ui, priority: P1, timeout: 600, retries: 1 }   # 惰性布局页码正确性
+  PF-04: { layer: ui, priority: P1, timeout: 900, retries: 1 }   # 远程首屏性能基线

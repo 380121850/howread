@@ -169,6 +169,29 @@ pdf_load_page_tree_internal(fz_context *ctx, pdf_document *doc)
 	}
 }
 
+/* HowRead: deferred full page-tree walk for lazy sessions. Called at sidecar
+ * save time when the block cache covers the whole book — every fetched page
+ * object is then a local cache hit, so the walk is sub-second even for
+ * 1000-page books. The lazy sparse map must be dropped first:
+ * pdf_load_page_tree_internal no-ops when fwd_page_map already exists. */
+int
+pdf_finish_lazy_page_tree(fz_context *ctx, pdf_document *doc)
+{
+	if (!doc)
+		return 0;
+	if (doc->howread_walk_done)
+		return 1;
+	if (doc->page_tree_broken)
+		return 0;
+	if (doc->fwd_page_map)
+		return 1; /* map already built */
+	/* A lazy session keeps fwd_page_map NULL (page lookups take the
+	 * one-path route), so there is nothing to drop — just build it. */
+	doc->howread_lazy = 0;
+	pdf_load_page_tree_internal(ctx, doc);
+	return doc->howread_walk_done;
+}
+
 void
 pdf_drop_page_tree(fz_context *ctx, pdf_document *doc)
 {
@@ -273,7 +296,10 @@ pdf_lookup_page_loc(fz_context *ctx, pdf_document *doc, int needle, pdf_obj **pa
 pdf_obj *
 pdf_lookup_page_obj(fz_context *ctx, pdf_document *doc, int needle)
 {
-	if (doc->fwd_page_map == NULL && !doc->page_tree_broken)
+	/* HowRead: lazy mode resolves pages one path at a time below — the
+	 * full map build (one fetch per page object) would pull the whole
+	 * book before the first paint on scattered page trees. */
+	if (doc->fwd_page_map == NULL && !doc->page_tree_broken && !doc->howread_lazy)
 	{
 		fz_try(ctx)
 			pdf_load_page_tree_internal(ctx, doc);
@@ -376,7 +402,7 @@ pdf_lookup_page_number_fast(fz_context *ctx, pdf_document *doc, int needle)
 int
 pdf_lookup_page_number(fz_context *ctx, pdf_document *doc, pdf_obj *page)
 {
-	if (doc->rev_page_map == NULL && !doc->page_tree_broken)
+	if (doc->rev_page_map == NULL && !doc->page_tree_broken && !doc->howread_lazy)
 	{
 		fz_try(ctx)
 			pdf_load_page_tree_internal(ctx, doc);

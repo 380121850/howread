@@ -247,6 +247,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
     /** Stops the background phase-two layout of this book, if running. */
     public void cancelPhase2() {
         phase2Gen.incrementAndGet();
+        sizeCompletionGen++; // the reader is going away: stop size completion
     }
 
     /** Alias used when the reader goes to the background. */
@@ -261,9 +262,168 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
         }
     }
 
+    // ---- HowRead: background completion of lazy page sizes ----
+    private volatile long sizeCompletionGen = 0;
+    private volatile boolean lastLoadLazySizes = false;
+
+    /** Stops the background size completion (reader teardown). */
+    public void cancelSizeCompletion() {
+        sizeCompletionGen++;
+    }
+
+    /**
+     * HowRead: background completion of lazy page sizes (remote page-format
+     * books): walks all pages at low priority, replaces placeholder sizes
+     * with real ones (pages BELOW the reading position first — their
+     * re-stacking cannot shift the viewport), and persists the results to
+     * the page-size cache for the next open.
+     */
+    private void startSizeCompletion() {
+        final long gen = ++sizeCompletionGen;
+        final DocumentModel dm = documentModel;
+        final AppBook bs = SettingsManager.getBookSettings();
+        if (dm == null || bs == null || dm.getPageCount() <= 0) {
+            return;
+        }
+        final int startPage = Math.max(0, Math.min(bs.pg, dm.getPageCount() - 1));
+        final int count = dm.getPageCount();
+        final org.ebookdroid.common.cache.PageCacheFile pagesFile =
+                org.ebookdroid.common.cache.PageCacheFile.getPageFile(bs.path, count);
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_LESS_FAVORABLE);
+                try {
+                    // let the first screen and its decodes settle first
+                    Thread.sleep(10000);
+                } catch (InterruptedException e) {
+                    return;
+                }
+                org.ebookdroid.core.codec.CodecPageInfo[] infos = null;
+                if (pagesFile.exists()) {
+                    infos = pagesFile.load(); // partial: unknown slots are null
+                }
+                if (infos == null || infos.length != count) {
+                    infos = new org.ebookdroid.core.codec.CodecPageInfo[count];
+                }
+                final long t0 = android.os.SystemClock.elapsedRealtime();
+                int fetched = 0;
+                int layoutFixed = 0;
+                int batchFirstChanged = -1;
+                // pass 1: pages BELOW the reading position (ascending) — their
+                // re-stacking cannot shift the viewport; pass 2: current + above
+                // pages — page-size cache data only (no layout change)
+                for (int pass = 0; pass < 2 && sizeCompletionGen == gen; pass++) {
+                    for (int n = 0; n < count; n++) {
+                        if (sizeCompletionGen != gen) {
+                            return;
+                        }
+                        final int i;
+                        if (pass == 0) {
+                            i = startPage + 1 + n;
+                            if (i >= count) {
+                                break;
+                            }
+                        } else {
+                            i = startPage - n;
+                            if (i < 0) {
+                                break;
+                            }
+                        }
+                        final android.app.Activity act = getActivity();
+                        if (act == null || act.isDestroyed() || act.isFinishing()) {
+                            return;
+                        }
+                        int yield = 0;
+                        while (sizeCompletionGen == gen && TempHolder.lock.hasQueuedThreads()
+                                && yield++ < 50) {
+                            try {
+                                Thread.sleep(100);
+                            } catch (InterruptedException e) {
+                                return;
+                            }
+                        }
+                        if (sizeCompletionGen != gen) {
+                            return;
+                        }
+                        org.ebookdroid.core.codec.CodecPageInfo info = null;
+                        try {
+                            info = dm.decodeService.getPageInfo(i);
+                        } catch (Throwable t) {
+                            LOG.w(t);
+                        }
+                        if (info == null || info.width <= 0 || info.height <= 0) {
+                            continue;
+                        }
+                        infos[i] = info;
+                        fetched++;
+                        if (fetched % 64 == 0) {
+                            android.util.Log.i("REMOTE", "size completion progress: "
+                                    + fetched + "/" + count);
+                        }
+                        if (pass == 0) {
+                            final Page page = dm.getPageObject(i);
+                            if (page != null && page.setAspectRatio(info)) {
+                                layoutFixed++;
+                                if (batchFirstChanged < 0) {
+                                    batchFirstChanged = i;
+                                }
+                            }
+                            if (batchFirstChanged >= 0 && layoutFixed % 32 == 0) {
+                                final Page marker = dm.getPageObject(batchFirstChanged);
+                                final int cur = dm.getCurrentIndex() != null
+                                        ? dm.getCurrentIndex().docIndex : 0;
+                                if (marker != null && batchFirstChanged >= cur) {
+                                    final Page mk = marker;
+                                    getActivity().runOnUiThread(new Runnable() {
+                                        @Override
+                                        public void run() {
+                                            try {
+                                                getDocumentController().invalidatePageSizes(
+                                                        IViewController.InvalidateSizeReason.PAGE_LOADED, mk);
+                                            } catch (Throwable e) {
+                                                LOG.e(e);
+                                            }
+                                        }
+                                    });
+                                }
+                                batchFirstChanged = -1;
+                            }
+                        }
+                        try {
+                            Thread.sleep(30);
+                        } catch (InterruptedException e) {
+                            return;
+                        }
+                    }
+                }
+                try {
+                    pagesFile.save(infos);
+                } catch (Exception e) {
+                    LOG.w(e);
+                }
+                android.util.Log.i("REMOTE", "size completion done: fetched " + fetched
+                        + "/" + count + ", layout fixed " + layoutFixed + " in "
+                        + (android.os.SystemClock.elapsedRealtime() - t0) + "ms");
+                // Lazy-tree finish: once every size is known and the block
+                // cache covers the whole book, rebuild the full page map
+                // (all cache hits, native lock held) and persist the v2
+                // sidecar while the document is still alive — doing this at
+                // reader close races the teardown, and a lazy session
+                // otherwise never completes its page map.
+                try {
+                    com.foobnix.sys.ImageExtractor.finishLazyTreeIfPossible();
+                } catch (Throwable t) {
+                    LOG.w(t);
+                }
+            }
+        }, "@T sizeCompletion").start();
+    }
+
     public void startDecoding(final String fileName, final String password) {
         // A new load invalidates any still-running phase-two of a previous book.
         phase2Gen.incrementAndGet();
+        sizeCompletionGen++;
         getManagedComponent().view.getView()
                                   .post(new BookLoadTask(fileName, password, new Runnable() {
 
@@ -876,10 +1036,15 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                 // screen after only a few pages are laid out, with the rest
                 // of the layout continuing in the background.
                 final boolean remoteBook = com.foobnix.remote.RemoteBook.isRemotePath(m_fileName);
-                if ((remoteBook || AppState.get().isFastOpen) && ExtUtils.isTextFomat(m_fileName)
+                // Remote page-format books (pdf/cbz/xps…): lazy page sizes —
+                // fetching every page's real size would download the whole
+                // book before the first paint on scattered page trees.
+                final boolean remoteLazySizes = remoteBook && !ExtUtils.isTextFomat(m_fileName);
+                if ((remoteBook || AppState.get().isFastOpen)
+                        && (ExtUtils.isTextFomat(m_fileName) || remoteLazySizes)
                         && (intent == null || intent.getStringExtra(DocumentController.EXTRA_PERCENT) == null)) {
                     final AppBook bs = SettingsManager.getBookSettings();
-                    if (bs != null) {
+                    if (bs != null && !remoteLazySizes) {
                         if (bs.pg >= 0) {
                             // remote: tiny first window (saved page + a few)
                             // so the first screen appears fast; the rest of
@@ -908,6 +1073,12 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                             }
                         }
                     }
+                }
+                if (remoteLazySizes) {
+                    documentModel.setLazySizes(true);
+                    lastLoadLazySizes = true;
+                } else {
+                    lastLoadLazySizes = false;
                 }
                 if (uptoPage > 0) {
                     progressiveLoad = true;
@@ -951,6 +1122,10 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                     final AppBook bsC = SettingsManager.getBookSettings();
                     final int coverPage = bsC == null ? 0 : Math.max(0, bsC.pg - 1);
                     com.foobnix.sys.ImageExtractor.maybeSaveRemoteCover(m_fileName, coverPage);
+                }
+                if (result == null && lastLoadLazySizes) {
+                    // placeholder sizes converge to real ones in the background
+                    startSizeCompletion();
                 }
                 if (result == null) {
                     try {

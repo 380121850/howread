@@ -441,6 +441,10 @@ struct pdf_document
 	/* 1 only when the walk COMPLETED (or the map was fully injected):
 	 * exporting a map/sizes mid-walk would persist zero-filled entries. */
 	int howread_walk_done;
+	/* HowRead: lazy page-tree mode (remote books) — page lookups resolve
+	 * only the requested page's tree path instead of building the full
+	 * map, so the first paint needs just the visible page's data. */
+	int howread_lazy;
 	int page_tree_broken;
 
 	int repair_attempted;
