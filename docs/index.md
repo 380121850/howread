@@ -2,9 +2,9 @@
 layout: home
 lang_key: zh
 lang_key_link: zh
-seo_title: "HowRead 好好读 — 专注于个人阅读体验的开源电子书阅读软件"
-seo_description: "HowRead（好好读）是一个专注于个人阅读体验的开源电子书阅读软件，支持 Android / HarmonyOS 阅读 PDF、EPUB、MOBI、DjVu、TXT 等格式，WebDAV 多设备同步，并提供免安装的在线阅读器。"
-hero_title: "HowRead 好好读"
+seo_title: "HowRead Pro 好好读 — 专注于个人阅读体验的开源电子书阅读软件"
+seo_description: "HowRead Pro（好好读）是一个专注于个人阅读体验的开源电子书阅读软件，支持 Android / HarmonyOS 阅读 PDF、EPUB、MOBI、DjVu、TXT 等格式，WebDAV 多设备同步，并提供免安装的在线阅读器。"
+hero_title: "HowRead Pro 好好读"
 hero_subtitle: "一个专注于个人阅读体验的开源电子书阅读软件"
 hero_description: "在 Android / HarmonyOS 设备上畅读 PDF、EPUB、MOBI、DjVu、FB2、TXT、CBZ 等格式。界面直观、功能强大，还带有独特的免提自动滚动「音乐家模式」，更有免安装的在线阅读器。"
 hero_btn_primary: "立即下载"
@@ -31,9 +31,9 @@ features:
     description: "无需安装，浏览器直接打开 PDF / EPUB / FB2 / CBZ，支持滚轮/点击翻页与进度记忆。"
     tooltip: "点击顶部「在线阅读」立即体验。"
 screenshots: ["1.webp", "2.webp", "3.webp"]
-about_title: "关于 HowRead"
+about_title: "关于 HowRead Pro"
 about_paragraphs:
-  - "HowRead（好好读）是一款专注于个人阅读体验的开源电子书阅读器，由 Librera Reader fork 而来。你可以指定要收录的格式与要扫描的文件夹，轻松建立自维护的书库：列表或网格视图、可调大小的缩略图封面、按路径/名称/大小/日期排序与筛选。"
+  - "HowRead Pro（好好读）是一款专注于个人阅读体验的开源电子书阅读器，由 Librera Reader fork 而来。你可以指定要收录的格式与要扫描的文件夹，轻松建立自维护的书库：列表或网格视图、可调大小的缩略图封面、按路径/名称/大小/日期排序与筛选。"
   - "阅读时可将文档锁定为仅垂直滚动模式，按页或按屏翻页；文本可重排、可批注；音量键功能可配置，背景与字体可在直观的设置窗口中自定义；摘录可在文档内或互联网上翻译、共享、复制和搜索。"
 stats:
   - number: "12+"
@@ -45,20 +45,15 @@ stats:
 changelog_title: "更新日志"
 changelog_more: "查看完整更新日志 →"
 download_title: "立即下载"
-download_subtitle: "选择适合你的渠道 · 当前版本 1.0.0"
+download_subtitle: "选择适合你的渠道 · 当前版本 1.3.13"
 downloads:
-  - title: "Google Play"
-    version: "版本 1.0.0"
-    size: "Android · 官方商店"
-    url: "https://play.google.com/store/apps/details?id=com.howread.reader"
-    button: "前往 Google Play"
   - title: "F-Droid"
-    version: "版本 1.0.0"
+    version: "版本 1.3.13"
     size: "无广告 · 无 Google 依赖"
     url: "https://f-droid.org/packages/com.howread.reader/"
     button: "前往 F-Droid"
   - title: "GitHub Releases"
-    version: "版本 1.0.0"
+    version: "版本 1.3.13"
     size: "APK 直接下载"
     url: "https://github.com/380121850/howread/releases/latest"
     blank: true

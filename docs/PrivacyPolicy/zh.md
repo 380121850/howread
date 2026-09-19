@@ -4,7 +4,7 @@ layout: page
 
 # 隐私政策
 
-## HowRead 好好读 (com.howread.reader)
+## HowRead Pro 好好读 (com.howread.reader)
 
 * [隐私政策（中文）]({{ site.baseurl }}/PrivacyPolicy/com.howread.reader.zh)
 * [Privacy Policy (English)]({{ site.baseurl }}/PrivacyPolicy/com.howread.reader)

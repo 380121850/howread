@@ -41,8 +41,8 @@
 <nav class="navbar" role="navigation">
   <div class="nav-container">
     <a class="nav-logo" href="{{ home_href }}">
-      <img src="{{ site.baseurl }}/web/256.webp" alt="HowRead" class="logo-icon">
-      <span class="logo-text">HowRead{% if full == '中文' %} · 好好读{% endif %}</span>
+      <img src="{{ site.baseurl }}/web/256.webp" alt="HowRead Pro" class="logo-icon">
+      <span class="logo-text">HowRead Pro{% if full == '中文' %} · 好好读{% endif %}</span>
     </a>
     <div class="nav-links">
       {% if full == '中文' %}

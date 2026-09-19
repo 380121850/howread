@@ -4,16 +4,16 @@ layout: page
 
 # 常见问题
 
-## HowRead 好好读（当前版本）
+## HowRead Pro 好好读（当前版本）
 
-* [HowRead在线阅读 — 无需安装，浏览器直接阅读 PDF / EPUB / FB2 / CBZ]({{ site.baseurl }}/online-book-reader/)
-* [下载 HowRead（Google Play / F-Droid / GitHub Releases）]({{ site.baseurl }}/download/zh)
+* [HowRead Pro在线阅读 — 无需安装，浏览器直接阅读 PDF / EPUB / FB2 / CBZ]({{ site.baseurl }}/online-book-reader/)
+* [下载 HowRead Pro（F-Droid / GitHub Releases）]({{ site.baseurl }}/download/zh)
 * [隐私政策]({{ site.baseurl }}/PrivacyPolicy/zh)
 * [问题反馈（GitHub Issues）](https://github.com/380121850/howread/issues)
 
 ## 旧版 Librera FAQ（存档）
 
-> 以下文章基于旧版 Librera Reader 编写。大部分功能概念在 HowRead 中仍然适用，但界面菜单和图标可能有所不同。
+> 以下文章基于旧版 Librera Reader 编写。大部分功能概念在 HowRead Pro 中仍然适用，但界面菜单和图标可能有所不同。
 
 * [配置标签区域左/右/上/下尺寸]({{ site.baseurl }}/faq/tap-zones-configuration/zh)
 * [使用 _Librera_ 的个人资料]({{ site.baseurl }}/faq/working-with-profiles/zh)

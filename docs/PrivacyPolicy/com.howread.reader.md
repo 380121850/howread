@@ -1,9 +1,9 @@
 ---
 layout: page
 ---
-# Privacy Policy — HowRead (com.howread.reader)
+# Privacy Policy — HowRead Pro (com.howread.reader)
 
-HowRead (好好读) is a free ebook reader application. This SERVICE is provided at no cost and is intended for use as is.
+HowRead Pro (好好读) is a free ebook reader application. This SERVICE is provided at no cost and is intended for use as is.
 
 This page is used to inform visitors regarding our policies with the collection, use, and disclosure of Personal Information if anyone decided to use our Service.
 
@@ -11,7 +11,7 @@ If you choose to use our Service, then you agree to the collection and use of in
 
 **Information Collection and Use**
 
-HowRead is first and foremost an offline reader:
+HowRead Pro is first and foremost an offline reader:
 
 * The documents you open (PDF, EPUB, MOBI, DjVu, FB2, TXT, CBZ, etc.) are stored and processed **locally on your device**. They are never uploaded to us.
 * Reading progress, bookmarks, annotations and settings are stored locally. If you enable **WebDAV synchronization**, this data is transferred **directly between your devices and your own WebDAV server**. We do not operate, access, or store any sync data.

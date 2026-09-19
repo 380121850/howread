@@ -3,7 +3,7 @@ layout: page
 ---
 # Privacy Policies
 
-## HowRead 好好读 (com.howread.reader)
+## HowRead Pro 好好读 (com.howread.reader)
 
 * [Privacy Policy (English)]({{ site.baseurl }}/PrivacyPolicy/com.howread.reader)
 * [隐私政策（中文）]({{ site.baseurl }}/PrivacyPolicy/com.howread.reader.zh)

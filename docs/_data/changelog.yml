@@ -1,51 +1,47 @@
-# HowRead 官网首页"更新日志"手风琴数据（最近 3 条，完整历史见 what-is-new 页）
+# HowRead Pro 官网首页"更新日志"手风琴数据（最近 3 条，完整历史见 what-is-new 页）
 recent:
   - date:
-      zh: "2026-09-05"
-      en: "2026-09-05"
+      zh: "2026-09-19"
+      en: "2026-09-19"
     title:
-      zh: "在线阅读器体验升级"
-      en: "Online reader experience upgrade"
+      zh: "在线阅读全面提速（v1.3.13）"
+      en: "Online reading, fully accelerated (v1.3.13)"
     items:
       zh:
-        - "重构为浏览器原生引擎（pdf.js + foliate-js），彻底解决中文乱码，体积从 7.7MB 降到 <2MB"
-        - "支持鼠标滚轮 / 点击翻页，可调明亮度主题"
-        - "刷新后自动恢复上次阅读的书籍与位置（IndexedDB 会话）"
-        - "非内嵌字体的中文 PDF 新增\"兼容模式\"（调用浏览器原生查看器）"
+        - "大书打开几乎不等待，内容边下边显；翻页更省流量"
+        - "已缓存的书断网也能继续读；退出或取消下载立即生效"
+        - "缓存管理更透明，\"清空缓存\"真正可用"
       en:
-        - "Rebuilt on browser-native engines (pdf.js + foliate-js) — fixed garbled CJK text, payload cut from 7.7MB to <2MB"
-        - "Mouse wheel / click page-turning and an adjustable brightness theme"
-        - "Reopening restores the last book and reading position (IndexedDB session)"
-        - "\"Compatibility mode\" for CJK PDFs with non-embedded fonts (uses the browser's native viewer)"
+        - "Huge books open almost instantly with content streaming in; page-turning uses far less data"
+        - "Already-cached books stay readable offline; exiting or cancelling takes effect immediately"
+        - "Clearer cache management with a \"clear cache\" that really works"
   - date:
-      zh: "2026-09-05"
-      en: "2026-09-05"
+      zh: "2026-09-16"
+      en: "2026-09-16"
     title:
-      zh: "全量 BUG 修复（约 40 项）"
-      en: "Comprehensive bug fix pass (~40 items)"
+      zh: "大书边下边读（v1.3.7 – 1.3.9）"
+      en: "Big books stream in (v1.3.7 – 1.3.9)"
     items:
       zh:
-        - "覆盖同步引擎、持久化、AI 简介、阅读引擎、UI 五个板块"
-        - "软件说明页改版：官网、更新日志入口与左对齐排版优化"
-        - "书籍菜单新增\"AI 简介书籍\"；书签/我的文件页多项交互修复"
+        - "上百 MB 的在线书秒进阅读器，剩余内容后台下载"
+        - "整本扫描书按需逐页加载，从数分钟等待变成秒级打开"
+        - "TXT / FB2 / HTML 支持在线直开；打不开的书提前提示"
       en:
-        - "Covers sync engine, persistence, AI book intro, reading engine and UI"
-        - "Redesigned About screen: site link, changelog entry and alignment fixes"
-        - "New \"AI book intro\" menu action; many bookmark/library interaction fixes"
+        - "Online books of hundreds of MB open instantly; the rest downloads in the background"
+        - "Fully scanned books load page by page — seconds instead of minutes"
+        - "TXT / FB2 / HTML open online with streaming; unopenable books warn up front"
   - date:
-      zh: "2026-09-02"
-      en: "2026-09-02"
+      zh: "2026-09-10"
+      en: "2026-09-10"
     title:
-      zh: "品牌焕新与架构升级（v0.9.0）"
-      en: "Rebrand & architecture upgrade (v0.9.0)"
+      zh: "畅读 NAS 与网盘（v1.3.0）"
+      en: "Read from your NAS (v1.3.0)"
     items:
       zh:
-        - "Librera Reader 正式更名 HowRead（好好读），包名 com.howread.reader"
-        - "仓库平台化：android / harmony / ios / desktop 一级目录"
-        - "彻底移除 Google Drive/GMS 依赖，多设备同步改为 WebDAV 直连"
-        - "新增 HarmonyOS（鸿蒙）版本，全渠道版本号统一为 0.9.0"
+        - "新增 SMB（Windows 共享）与 SFTP 支持，与 WebDAV 一并打通"
+        - "网络书点开即读、边下边读，无需先下载整本"
+        - "小书自动整本缓存，断网也能从最近阅读秒开"
       en:
-        - "Librera Reader is now HowRead, package com.howread.reader"
-        - "Platform-aligned repo layout: android / harmony / ios / desktop"
-        - "Google Drive/GMS dependencies fully removed; sync switched to direct WebDAV"
-        - "New HarmonyOS build; unified version 0.9.0 across all channels"
+        - "New SMB (Windows shared folders) and SFTP support alongside WebDAV"
+        - "Network books open right away and stream as you read — no full download needed"
+        - "Small books cache automatically and reopen instantly, even offline"

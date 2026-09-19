@@ -1,15 +1,11 @@
 ---
 layout: page
 ---
-# Download HowRead
-
-## Google Play
-
-[HowRead on Google Play](https://play.google.com/store/apps/details?id=com.howread.reader)
+# Download HowRead Pro
 
 ## F-Droid (no ads, no Google dependencies)
 
-[HowRead on F-Droid](https://f-droid.org/packages/com.howread.reader/)
+[HowRead Pro on F-Droid](https://f-droid.org/packages/com.howread.reader/)
 
 ## GitHub Releases (direct APK download)
 

@@ -1,15 +1,11 @@
 ---
 layout: page
 ---
-# 下载 HowRead 好好读
-
-## Google Play
-
-[Google Play · HowRead 好好读](https://play.google.com/store/apps/details?id=com.howread.reader)
+# 下载 HowRead Pro 好好读
 
 ## F-Droid（无广告、无 Google 依赖）
 
-[F-Droid · HowRead 好好读](https://f-droid.org/packages/com.howread.reader/)
+[F-Droid · HowRead Pro 好好读](https://f-droid.org/packages/com.howread.reader/)
 
 ## GitHub Releases（APK 直接下载）
 
