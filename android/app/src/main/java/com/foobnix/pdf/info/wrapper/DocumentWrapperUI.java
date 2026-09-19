@@ -1547,6 +1547,15 @@ public class DocumentWrapperUI {
                     }
                 });
                 dc.closeActivity();
+            } else if (AppState.get().doubleClickAction1 == AppState.DOUBLE_CLICK_CROP) {
+                // toggle crop-white-borders, same as long-pressing the crop
+                // button (onCropLong)
+                AppSP.get().isCrop = !AppSP.get().isCrop;
+                dc.onCrop();
+                updateUI();
+                AppState.get().isEditMode = false;
+                hideShow();
+                hideShowEditIcon();
             } else if (AppState.get().doubleClickAction1 == AppState.DOUBLE_CLICK_SHOW_HIDE_UI) {
                 doShowHideWrapperControlls();
             }

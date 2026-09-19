@@ -508,13 +508,13 @@
                 android:id="@+id/configSingeClick"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                my:text="@string/single_tap" />
+                my:text="@string/single_tap_reading" />
 
             <com.foobnix.pdf.info.view.confline.ConfLineView
-                android:id="@+id/configLongClick"
+                android:id="@+id/configDoubleClick"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                my:text="@string/long_tap" />
+                my:text="@string/double_tap_reading" />
 
             <LinearLayout
                 android:layout_width="match_parent"

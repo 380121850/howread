@@ -689,6 +689,9 @@
    <string name="current_folder">目前資料夾</string>
    <string name="search_error_msg1">搜尋未完成。請選擇其他資料夾或重試。</string>
    <string name="single_tap">點選</string>
+   <string name="single_tap_reading">閱讀時點選</string>
+   <string name="double_tap_reading">閱讀時雙擊</string>
+   <string name="zoom_to_fit_reading">縮放到合適大小</string>
    <string name="long_tap">長按</string>
    <string name="select_mode">選擇模式</string>
    <string name="msg_migration">將 HowRead 目錄傳輸到另一台裝置以遷移您的資料。</string>
@@ -726,6 +729,11 @@
     <string name="pro_refund_title">模擬退款（IAP 樁）</string>
     <string name="pro_refund_msg">將清除本機解鎖標記，Pro 回到未解鎖狀態。繼續？</string>
     <string name="pro_channel_local_key">本地 key</string>
+    <string name="pro_channel_huawei">華為應用市場</string>
+    <string name="pro_toast_purchased_real">購買成功，Pro 已激活</string>
+    <string name="pro_toast_restored_real">已恢復購買，Pro 已激活</string>
+    <string name="pro_toast_no_purchases">未查詢到已購項目</string>
+    <string name="pro_iap_unavailable">當前設備不支援華為 IAP</string>
     <string name="remote_config_row">線上閱讀(Pro)</string>
     <string name="remote_cache_row">線上閱讀快取(Pro)</string>
     <string name="remote_state_on">已開啟</string>

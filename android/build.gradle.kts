@@ -1,5 +1,8 @@
 import nl.littlerobots.vcu.plugin.resolver.VersionSelectors
 
+// buildscript classpath for agcp was removed: the plugin cannot coexist with
+// flavors that have no agconnect-services.json (see app/build.gradle note).
+
 plugins {
     id("nl.littlerobots.version-catalog-update") version "1.0.1"
     alias(libs.plugins.androidApplication) apply false

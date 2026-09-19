@@ -34,9 +34,13 @@ public class AppsConfig {
     public static final String FDROID_LIBRERA_READER = "com.leestudio.howread.fd.reader";
     public static final String LIBRERA_READER = "com.leestudio.howread.reader";
     public static final boolean ADS_ON_PAGE = false;
+    // fdroid-only gates (.cbr/junrar licensing, rate/link targets, crash logs).
+    // huawei (2026-09-19) is a pro-like ad+IAP channel (Huawei IAP/Ads, junrar
+    // via libDepPro), so it is NOT fdroid-like even though AppGallery devices
+    // lack GMS.
     public static final boolean
             IS_FDROID =
-            LibreraBuildConfig.FLAVOR.equals("fdroid") || LibreraBuildConfig.FLAVOR.equals("huawei");
+            LibreraBuildConfig.FLAVOR.equals("fdroid");
     public static final List<String> testDevices = Arrays.asList(
             "0E97B0A7D10574E204947584CD0F713C"
 
@@ -156,9 +160,12 @@ public class AppsConfig {
         return BillingManager.isProUnlocked();
     }
 
-    /** True in the pro (ad+IAP flagship) flavor, false in fdroid and others. */
+    /**
+     * True in the ad+IAP flagship flavors: pro (Google/Play channel) and
+     * huawei (AppGallery channel, same applicationId). fdroid never unlocks.
+     */
     public static boolean isProFlavor() {
-        return FLAVOR.equals("pro");
+        return FLAVOR.equals("pro") || FLAVOR.equals("huawei");
     }
 
     public static boolean isPackageExisted(final Context a, final String targetPackage) {

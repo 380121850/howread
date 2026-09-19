@@ -690,6 +690,9 @@
    <string name="current_folder">当前文件夹</string>
    <string name="search_error_msg1">搜索未完成。请选择其他文件夹或重试。</string>
    <string name="single_tap">单击</string>
+   <string name="single_tap_reading">阅读时单击</string>
+   <string name="double_tap_reading">阅读时双击</string>
+   <string name="zoom_to_fit_reading">缩放到合适大小</string>
    <string name="long_tap">长按</string>
    <string name="select_mode">选择模式</string>
    <string name="msg_migration">将 HowRead 目录传输到另一台设备以迁移您的数据。</string>
@@ -903,6 +906,11 @@
     <string name="pro_refund_title">模拟退款（IAP 桩）</string>
     <string name="pro_refund_msg">将清除本机解锁标记，Pro 回到未解锁状态。继续？</string>
     <string name="pro_channel_local_key">本地 key</string>
+    <string name="pro_channel_huawei">华为应用市场</string>
+    <string name="pro_toast_purchased_real">购买成功，Pro 已激活</string>
+    <string name="pro_toast_restored_real">已恢复购买，Pro 已激活</string>
+    <string name="pro_toast_no_purchases">未查询到已购项目</string>
+    <string name="pro_iap_unavailable">当前设备不支持华为 IAP</string>
     <string name="remote_config_row">在线阅读(Pro)</string>
     <string name="remote_cache_row">在线阅读缓存(Pro)</string>
     <string name="remote_state_on">已开启</string>

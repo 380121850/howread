@@ -193,6 +193,14 @@ android {
         project.findProperty("pro_${base}") ?: project.findProperty("howread_${base}") ?: project.findProperty("google_${base}")
     }
 
+    // Huawei-channel property lookup: hw_* keys on the build server's
+    // ~/.gradle/gradle.properties (hw_bannerId / hw_fullId / hw_rewardId /
+    // hw_iapProductId). Empty defaults keep ads dormant + IAP on the default
+    // product id, same idea as the pro_admob* keys above.
+    def hwProp = { String base ->
+        project.findProperty("hw_${base}")
+    }
+
     flavorDimensions.add("version")
     productFlavors {
         fdroid {
@@ -235,6 +243,31 @@ android {
                     admobFullId  : flavorProp('admobFullId') ?: '',
                     admobRewardId  : flavorProp('admobRewardId') ?: '',
                     appSafeMode  : "false"
+            ]
+        }
+
+        // Huawei AppGallery channel (Android APK, 2026-09-19). Same
+        // applicationId as pro: the AGC app is bound to this package name
+        // (agconnect-services.json in src/huawei), the two stores never need
+        // both APKs installed side by side. Ads = Huawei Ads Kit through
+        // src/hmsAds (wired-but-dormant: hw_* placeholders default to EMPTY,
+        // HuaweiAdsProvider's empty-ID guards keep every load/show a no-op).
+        // IAP = HMS IAP through HuaweiBillingDelegate; buying the
+        // non-consumable product unlocks the pro features via the
+        // BillingManager delegate chain (AppsConfig.isProFeaturesEnabled etc.).
+        huawei {
+            dimension = "version"
+            applicationId = "com.leestudio.howread.pro.reader"
+            manifestPlaceholders = [
+                    appName        : "HowRead Pro",
+                    appIcon        : "@mipmap/icon_pdf_pro",
+                    appRoundIcon   : "@mipmap/icon_pdf_pro",
+                    appGdriveKey   : project.findProperty('pro_appGdriveKey') ?: '',
+                    hwBannerId     : hwProp('bannerId') ?: '',
+                    hwFullId       : hwProp('fullId') ?: '',
+                    hwRewardId     : hwProp('rewardId') ?: '',
+                    hwIapProductId : hwProp('iapProductId') ?: 'howread_pro_unlock',
+                    appSafeMode    : "false"
             ]
         }
     }
@@ -299,6 +332,11 @@ android {
         // same variant.
         pro { java.srcDirs += ['src/admobAds/java'] }
         pro { manifest.srcFile('src/admobAds/AndroidManifest.xml') }
+        // huawei compiles the Huawei Ads provider (src/hmsAds) exactly the way
+        // pro compiles AdMob (src/admobAds): manifest overlay + the same
+        // AdsProviderFactory class name, never both in one variant.
+        huawei { java.srcDirs += ['src/hmsAds/java'] }
+        huawei { manifest.srcFile('src/hmsAds/AndroidManifest.xml') }
         // Native libraries are vendored under prebuilt/native/ at the REPO ROOT
         // (committed .so for all 4 ABIs, shared layer beside Builder/). Setting
         // srcDirs replaces the default src/main/jniLibs lookup so Gradle packages
@@ -412,6 +450,15 @@ dependencies {
     // libDepPro carries junrar + Play Review (non-ad GMS deps).
     proImplementation dep_pro
 
+    // huawei channel: junrar via libDepPro (same as pro — fdroid vendors its
+    // own copy; .cbr stays enabled) + HMS Core SDKs from the Huawei Maven repo
+    // (see settings.gradle.kts). NO Google ads/UMP on this channel: Huawei
+    // devices have no GMS, ads come from Huawei Ads Kit through src/hmsAds.
+    huaweiImplementation dep_pro
+    huaweiImplementation(libs.agconnect.core)
+    huaweiImplementation(libs.hms.iap)
+    huaweiImplementation(libs.hms.ads.prime)
+
 /** Testing **/
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
@@ -504,3 +551,12 @@ tasks.register("incVersion") {
         println "My Task: [incVersion]"
     }
 }
+
+// NOTE: the AGConnect Gradle plugin (agcp) is deliberately NOT applied.
+// 1.9.5.302 (AGP-8 line) throws "No value present" at apply time on a
+// project where ANY flavor lacks agconnect-services.json (only src/huawei
+// has one), so pro/fdroid builds would break. HMS IAP and the Ads Kit do
+// NOT read the json at runtime (that is AGC cloud services like push/auth);
+// IAP only needs the app's signing-certificate fingerprint registered in
+// the AGC console. If a future AGC service ever needs the json resources,
+// convert it manually into src/huawei/res/raw/ instead of applying agcp.

@@ -279,3 +279,45 @@ L1 自动化已扩展到 **54 个用例**（MI9 基准 **49 PASS / 0 FAIL / 4 SK
 缓存路径 /sdcard/Download/HowRead/Cache/{Remote,RemoteCovers} + 外部 cache/Recent,
 2026-09-19 真机核实);`_open_remote_book`(tc_function.py,自 FN-30/46 同款流程抽取,
 FN-30/46 已改为调用,行为不变)。
+
+### 全量#5（2026-09-19，v1.3.13，四台真机 --reset 全量 L1）
+
+- 用例集：59 FN + ENV = 60/台（FN-49~54 手势/选词/速读/更新日志 + FN-55~60 远程阅读优化专项）。
+- 结果目录：`results/20260919-192524_L1_ui-device/`（主跑，4 台并行）+
+  `results/20260919-212427_L1_ui-device/`（P20 补跑）。
+- **P20（3JJ4C18904004595）主跑开跑约 30s 后 USB 掉线**，58 例全部 "device not found" 无效、弃用；
+  重连后单独 `--reset` 补跑取有效数。其余三台主跑有效。
+
+| 设备 | 结果（P/F/S） | 有效失败 |
+|---|---|---|
+| MI9 (48fee174, SDK30) | 47 / 11 / 2 | FN-03/16/17/22/39/41/43/47/55/56/57/59/60 |
+| P30 (Q5S5T19605008064, SDK29) | 45 / 13 / 2 | FN-03/16/17/22/26/29/39/40/41/47/55/56/57/59/60 |
+| KSA (NETNU20617301956, SDK28) | 49 / 9 / 2 | FN-03/13/16/17/22/47/55/56/57/59/60 |
+| P20 (3JJ4C18904004595, SDK29) | 47 / 12 / 1（补跑） | FN-03/16/17/22/39/41/42/47/55/56/57/59/60 |
+
+> 四台有效合计：**188 PASS / 45 FAIL / 7 SKIP**（240）。FN-47（fdroid 门禁）在 pro 包为设计内跳过，
+> 各机 SKIP 计数含之。
+
+**失败归因（按跨机一致性）**
+- **FN-55/56/57/59/60（远程阅读优化专项，新增）——四台全 FAIL，定性为测试侧断言方向错配，非应用回归**：
+  用例断言竖屏专属日志链（`lazy page sizes`/`page tree map saved`/`size completion done`/
+  `remote cover saved`，全部只存在于 `ViewerActivityController` 竖屏路径），但测试书
+  big_pdf.pdf / book_lazy.pdf 是 PDF，打开走 `HorizontalViewActivity` 横屏阅读器
+  （日志链 `deferRemoteLayout`→`remote-layout-end total=500`/`filler done whole=true`），
+  横屏路径合法地不产生竖屏日志。设计文档（在线阅读优化方案整理-v1.3.12-v1.3.13.md）明确：
+  惰性页树+渐进尺寸+后台补全+封面持久化是**竖屏**特性（P23/需求15），PDF 横屏走"外壳 0.4s
+  边下边显"的简单流式路径（实测 531MB PDF 横向打开 0.4s）。横屏打开本身完全正常：big_pdf
+  500 页 `h-load-end` 397~660ms（远优于 3500ms 目标）、book_lazy `filler done whole=true`。
+  **待决策**：①测试侧改用竖屏文本格式远程书（epub/txt）测 FN-55~60；②或按需求4"所有阅读模式"
+  给横屏路径补侧车/封面持久化后再测。
+- **FN-03 书签（P0）——四台全 FAIL，v1.3.11→v1.3.13 新回归**：09-14(v1.3.4)/09-18(v1.3.11) 均 PASS。
+  无 FATAL/ANR/OOM；logcat 时间线：点中央唤工具栏时刻应用已退后台（`forePkg: com.miui.home,
+  preForePkg: howread`），重开书后 5s 内 `pagesBookmark`/`imageToolbar`/`onBookmarks` 仍不可见。
+  资源 ID 在 v1.3.13 源码存在（activity_horiziontal_view.xml:49）。指向工具栏唤起时序/前台竞态
+  （测试侧 toggle 逻辑 vs 阅读器打开时序），需单机带逐步截图复测定界。
+- **FN-16 跳页 / FN-17 目录大纲 / FN-22 笔记——四台全 FAIL**：FN-16 已知 flaky（滚动位置敏感，
+  见 memory）；FN-17 自 09-18 起持续 FAIL（点章节后副标题/页码指示器未变）；FN-22 抖动
+  （09-18 PASS / 09-14 FAIL / 本轮 FAIL）。
+- **设备差异项**：P30 FN-26/29（WebDAV/SFTP 目录未列测试书，凭据入库链路，KSA 09-14 同款存量）、
+  P30 FN-40/41（页码格式/进度条入口）、KSA FN-13（小屏旧布局标签入口，存量待勘探）、
+  各机 FN-39（行距入口 prefTop 不可见 / 数值未变）、P20 FN-42（统计详情月度元素）。

@@ -12,6 +12,7 @@ pluginManagement {
         }
         mavenCentral()
         gradlePluginPortal()
+        maven { url = uri("https://developer.huawei.com/repo/") } // HMS Core SDKs (IAP / Ads Kit) + agcp
     }
 }
 
@@ -26,6 +27,7 @@ dependencyResolutionManagement {
         }
         mavenCentral()
         maven { url = uri("https://jitpack.io") }
+        maven { url = uri("https://developer.huawei.com/repo/") } // HMS Core SDKs (IAP / Ads Kit) + agcp
     }
 }
 plugins {

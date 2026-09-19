@@ -112,6 +112,11 @@ public abstract class AdsFragmentActivity extends FragmentActivity {
             ADS.get().loadRewardedAd(this, onRewardLoaded);
             ADS.get().loadInterstitial(this);
 
+        } else if (this instanceof MainTabs2) {
+            // pro unlock was purchased in this session (or the reward grace is
+            // active): drop a banner that is still mounted from before, so ads
+            // disappear immediately instead of lingering until recreation
+            ADS.get().onDestroyBanner();
         }
 
     }

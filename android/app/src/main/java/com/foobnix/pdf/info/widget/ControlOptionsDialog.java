@@ -54,10 +54,10 @@ public class ControlOptionsDialog {
         int[] doubleConstants = {AppState.DOUBLE_CLICK_AUTOSCROLL, AppState.DOUBLE_CLICK_ADJUST_PAGE, AppState.DOUBLE_CLICK_CENTER_HORIZONTAL,
                 AppState.DOUBLE_CLICK_ZOOM_IN_OUT, AppState.DOUBLE_CLICK_CLOSE_BOOK, AppState.DOUBLE_CLICK_CLOSE_BOOK_AND_APP,
                 AppState.DOUBLE_CLICK_CLOSE_HIDE_APP, AppState.DOUBLE_CLICK_NOTHING, AppState.DOUBLE_CLICK_START_STOP_TTS,
-                AppState.DOUBLE_CLICK_SHARE_PAGE, AppState.DOUBLE_CLICK_SHOW_HIDE_UI};
+                AppState.DOUBLE_CLICK_SHARE_PAGE, AppState.DOUBLE_CLICK_SHOW_HIDE_UI, AppState.DOUBLE_CLICK_CROP};
         int[] doubleStrings = {R.string.db_auto_scroll, R.string.db_auto_alignemnt, R.string.db_auto_center_horizontally, R.string.zoom_in_zoom_out,
                 R.string.close_book, R.string.close_book_and_application, R.string.hide_app, R.string.db_do_nothing,
-                R.string.read_out_loud_with_tts, R.string.share_as_image, R.string.moon_tap_show_hide_ui};
+                R.string.read_out_loud_with_tts, R.string.share_as_image, R.string.moon_tap_show_hide_ui, R.string.crop_white_borders};
         for (int i = 0; i < doubleConstants.length; i++) {
             doubleIds.add(doubleConstants[i]);
             doubleNames.add(c.getString(doubleStrings[i]));

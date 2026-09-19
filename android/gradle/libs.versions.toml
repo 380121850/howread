@@ -63,6 +63,13 @@ workRuntime="2.11.2"
 jcifsNg = "2.1.10"
 sshjVersion = "0.38.0"
 
+# HMS Core for the huawei AppGallery channel (app/src/huawei + src/hmsAds):
+# agconnect-core = AGC base SDK, hms iap = Huawei IAP, ads-prime = Huawei Ads.
+# Versions are whatever the Huawei Maven repo currently serves (2026-09-19).
+agconnectCore = "1.9.5.302"
+hmsIap = "6.16.6.305"
+hmsAdsPrime = "3.4.90.302"
+
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }
 androidLibrary = { id = "com.android.library", version.ref = "agp" }
@@ -130,6 +137,11 @@ sardine-android = { module = "com.github.thegrizzlylabs:sardine-android", versio
 # online reading (SMB / SFTP data sources, see com.foobnix.remote)
 jcifs-ng = { module = "eu.agno3.jcifs:jcifs-ng", version.ref = "jcifsNg" }
 sshj = { module = "com.hierynomus:sshj", version.ref = "sshjVersion" }
+
+# HMS Core (huawei flavor only, see app/build.gradle huaweiImplementation)
+agconnect-core = { module = "com.huawei.agconnect:agconnect-core", version.ref = "agconnectCore" }
+hms-iap = { module = "com.huawei.hms:iap", version.ref = "hmsIap" }
+hms-ads-prime = { module = "com.huawei.hms:ads-prime", version.ref = "hmsAdsPrime" }
 
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }

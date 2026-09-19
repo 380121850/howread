@@ -100,8 +100,7 @@ public class AppState {
             "#FFFFFF", //
             "#000000");
     public final static String OPDS_DEFAULT = "" + //
-            "https://www.gutenberg.org/ebooks/search.opds/,Project Gutenberg,Project Gutenberg,assets://opds/opds.png;" +
-            "https://archive2.cbeta.org/opds/,CBETA 电子佛典,CBETA 电子佛典,assets://opds/opds.png;"
+            "https://www.gutenberg.org/ebooks/search.opds/,Project Gutenberg,Project Gutenberg,assets://opds/opds.png;"
             //
             // end
             ;
@@ -155,6 +154,8 @@ public class AppState {
     public final static int DOUBLE_CLICK_START_STOP_TTS = 8;
     public final static int DOUBLE_CLICK_SHARE_PAGE = 9;
     public final static int DOUBLE_CLICK_SHOW_HIDE_UI = 10;
+    // toggle crop-white-borders on double tap (阅读时双击 pref)
+    public final static int DOUBLE_CLICK_CROP = 11;
     public final static int BR_SORT_BY_PATH = 0;
     public final static int BR_SORT_BY_DATE = 1;
     public final static int BR_SORT_BY_SIZE = 2;
@@ -402,7 +403,7 @@ public class AppState {
     // Color.parseColor(STYLE_COLORS.get(STYLE_COLORS.size() - 2));
     public int userColor = Color.MAGENTA;
     public int helpHash = 0;
-    @IgnoreHashCode public int doubleClickAction1 = DOUBLE_CLICK_SHOW_HIDE_UI;
+    @IgnoreHashCode public int doubleClickAction1 = DOUBLE_CLICK_ADJUST_PAGE;
     @IgnoreHashCode public int inactivityTime = 5;
     @IgnoreHashCode public int remindRestTime = -1;
     public int flippingInterval = 10;
@@ -922,6 +923,33 @@ public class AppState {
                 if (AppState.get().remoteRetryIntervalMs == 1000) {
                     AppState.get().remoteRetryIntervalMs = 100;
                     LOG.d("migration", "remoteRetryIntervalMs 1000 -> 100");
+                }
+            } catch (Exception e) {
+                LOG.e(e);
+            }
+
+            // The 阅读时双击 pref ships with a new default: the old factory
+            // default (show/hide UI) follows the new one (zoom to fit); any
+            // user-chosen other action stays untouched.
+            try {
+                if (AppState.get().doubleClickAction1 == AppState.DOUBLE_CLICK_SHOW_HIDE_UI) {
+                    AppState.get().doubleClickAction1 = AppState.DOUBLE_CLICK_ADJUST_PAGE;
+                    LOG.d("migration", "doubleClickAction1 old default -> ADJUST_PAGE");
+                }
+            } catch (Exception e) {
+                LOG.e(e);
+            }
+
+            // The single-tap-while-reading config no longer offers musician /
+            // tag manager / open-with; a stored value in those modes falls
+            // back to select mode so the shown setting matches the behavior.
+            try {
+                int rm = AppSP.get().readingMode;
+                if (rm == READING_MODE_MUSICIAN || rm == READING_MODE_TAG_MANAGER
+                        || rm == READING_MODE_OPEN_WITH) {
+                    AppSP.get().readingMode = READING_MODE_SELECT_MODE;
+                    AppState.get().isRememberMode = false;
+                    LOG.d("migration", "readingMode removed option -> SELECT_MODE");
                 }
             } catch (Exception e) {
                 LOG.e(e);

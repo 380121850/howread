@@ -364,6 +364,10 @@ public class MainTabs2 extends AdsFragmentActivity {
             return;
         }
 
+        // huawei channel: re-check the purchased entitlement in the background
+        // so refunds revoke the pro unlock on the next launch (no-op elsewhere)
+        mobi.librera.libgoogle.BillingManager.syncOwnershipSilently(this);
+
 //        if (!Android6.canWrite(this) ) {
 //            Android6.checkPermissions(this, true);
 //            //return;

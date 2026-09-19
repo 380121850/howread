@@ -1020,12 +1020,6 @@ public class PrefFragment2 extends UIFragment {
 
         // onMailSupport / whatIsNew / rate / web / pro / licences rows moved
         // into the 软件说明 dialog (AboutSectionBinder)
-        ((ConfLineView) inflate.findViewById(R.id.configLongClick)).init(//
-                () -> AppState.get().defaultLongClick,//
-                value -> AppState.get().defaultLongClick = value,//
-                of(R.string.file_info, AppState.ACTION_BOOK_INFORMATION),//
-                of(R.string.book_menu, AppState.ACTION_BOOK_MENU));
-
         configSingleClick = (ConfLineView) inflate.findViewById(R.id.configSingeClick);
         configSingleClick.init(//
                 () -> AppState.get().isRememberMode ? AppSP.get().readingMode:AppState.READING_MODE_SELECT_MODE,//
@@ -1040,11 +1034,16 @@ public class PrefFragment2 extends UIFragment {
                 },//
                 of(getString(R.string.select_mode), AppState.READING_MODE_SELECT_MODE),//
                 of(AppState.get().nameVerticalMode, AppState.READING_MODE_SCROLL),//
-                of(AppState.get().nameHorizontalMode, AppState.READING_MODE_BOOK),//
-                of(AppState.get().nameMusicianMode, AppState.READING_MODE_MUSICIAN),//
-                of(getString(R.string.tag_manager), AppState.READING_MODE_TAG_MANAGER),//
-                of(getString(R.string.open_with), AppState.READING_MODE_OPEN_WITH)//
+                of(AppState.get().nameHorizontalMode, AppState.READING_MODE_BOOK)//
                               );
+
+        // 阅读时双击: zoom-to-fit (the existing ADJUST_PAGE double-tap path)
+        // or toggle crop-white-borders (DOUBLE_CLICK_CROP)
+        ((ConfLineView) inflate.findViewById(R.id.configDoubleClick)).init(//
+                () -> AppState.get().doubleClickAction1,//
+                value -> AppState.get().doubleClickAction1 = value,//
+                of(R.string.zoom_to_fit_reading, AppState.DOUBLE_CLICK_ADJUST_PAGE),//
+                of(R.string.crop_white_borders, AppState.DOUBLE_CLICK_CROP));
 
         inflate.findViewById(R.id.moreModeSettings)
                .

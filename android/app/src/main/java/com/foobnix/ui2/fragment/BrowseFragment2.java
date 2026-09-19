@@ -838,6 +838,11 @@ import java.util.Map;
             // detached folder page: browse this path, the tab keeps its root
             browsePath = folderArg;
             startFolder = folderArg;
+            // folder subpage keeps a minimal toolbar: only back / path /
+            // sort / view-toggle stay (no home shortcut, no paste, no
+            // new-folder)
+            view.findViewById(R.id.onHome).setVisibility(View.GONE);
+            createFolder.setVisibility(View.GONE);
             displayAnyPath(folderArg);
         } else {
             displayAnyPath(getInitPath());
@@ -1833,7 +1838,10 @@ import java.util.Map;
         // the quick-dir chip strip only makes sense inside a directory; on
         // the root view it would break the OPDS / WebDAV / folders grouping
         if (quickDirChipsRow != null) {
-            quickDirChipsRow.setVisibility(ROOT_PATH.equals(path) ? View.GONE : View.VISIBLE);
+            // the library-folder subpage (detached instance) never shows
+            // the quick-dir chips row
+            quickDirChipsRow.setVisibility(!ROOT_PATH.equals(path) && browsePath == null
+                                                   ? View.VISIBLE : View.GONE);
         }
         // the browse toolbar (back / paste / sort / ...) belongs to directory
         // browsing; the "My files" root page is a plain configuration list
@@ -1985,7 +1993,7 @@ import java.util.Map;
 
             pasteFrom.setOnClickListener(
                     v -> ShareDialog.dirLongPress(getActivity(), path(), () -> resetFragment()));
-            Views.visible(pasteFrom, TempHolder.get().copyFromPath != null);
+            Views.visible(pasteFrom, TempHolder.get().copyFromPath != null && browsePath == null);
 
             for (int i = 0; i < split.length; i++) {
                 final int index = i;

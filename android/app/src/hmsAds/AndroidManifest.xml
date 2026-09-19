@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Huawei AppGallery channel overlay (compiled into the huawei flavor
+         only, see app/build.gradle sourceSets). Mirrors src/admobAds:
+         the hw_* ad-unit ids default to EMPTY (wired-but-dormant —
+         HuaweiAdsProvider's empty-ID guards keep every load/show call a
+         no-op); activate with hw_bannerId / hw_fullId / hw_rewardId in
+         ~/.gradle/gradle.properties. HMS Ads needs no APPLICATION_ID
+         meta-data (unlike AdMob). HW_IAP_PRODUCT_ID feeds
+         HuaweiBillingDelegate (HMS IAP non-consumable pro unlock). -->
+    <application>
+        <meta-data
+            android:name="librera.HW_BANNER_ID"
+            android:value="${hwBannerId}" />
+        <meta-data
+            android:name="librera.HW_FULLSCREEN_ID"
+            android:value="${hwFullId}" />
+        <meta-data
+            android:name="librera.HW_REWARD"
+            android:value="${hwRewardId}" />
+        <meta-data
+            android:name="librera.HW_IAP_PRODUCT_ID"
+            android:value="${hwIapProductId}" />
+
+        <!-- Transparent helper that owns the HMS IAP cashier round-trip
+             (isEnvReady -> createPurchaseIntent -> startResolutionForResult ->
+             onActivityResult), so no call-site Activity needs an
+             onActivityResult override. -->
+        <activity
+            android:name="mobi.librera.libgoogle.IapPurchaseActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- HMS IAP and the Ads Kit do NOT use AGConnect (verified: neither
+             com.huawei.hms.iap nor com.huawei.hms.ads references
+             AGConnectInstance; agconnect-core only arrives transitively via
+             hms:device). The auto-init provider would fail without the
+             agconnect-services.json resources only the agcp plugin can
+             generate — and agcp cannot coexist with flavors lacking the
+             json. Remove the provider; nothing here needs AGC cloud. -->
+        <provider
+            android:name="com.huawei.agconnect.core.provider.AGConnectInitializeProvider"
+            tools:node="remove" />
+    </application>
+
+    <!-- AD_ID (com.google.android.gms.permission.AD_ID) is auto-declared by
+         the Huawei ads SDK (ads-core-prime) but is meaningless on GMS-free
+         AppGallery devices; removed for a clean store manifest (2026-09-20,
+         user-confirmed). NOTE: uses-permission must be a DIRECT child of
+         <manifest> — inside <application> the merger treats it as a normal
+         add and the remove rule never fires. -->
+    <uses-permission
+        android:name="com.google.android.gms.permission.AD_ID"
+        tools:node="remove" />
+
+</manifest>

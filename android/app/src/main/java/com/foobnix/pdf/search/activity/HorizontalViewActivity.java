@@ -1791,6 +1791,11 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
             updateLockMode();
             if (AppState.get().doubleClickAction1 == AppState.DOUBLE_CLICK_SHOW_HIDE_UI) {
                 doShowHideWrapperControlls();
+            } else if (AppState.get().doubleClickAction1 == AppState.DOUBLE_CLICK_CROP) {
+                // toggle crop-white-borders, same as long-pressing the crop
+                // button (onCropChange)
+                AppSP.get().isCrop = !AppSP.get().isCrop;
+                onCropChange.run();
             }
             // Toast.makeText(this, "DB", Toast.LENGTH_SHORT).show();
         } else if (ev.getMessage().equals(MessageEvent.MESSAGE_PLAY_PAUSE)) {

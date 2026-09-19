@@ -40,7 +40,7 @@ public class AndroidWhatsNew {
     public static final String DETAIL_URL_RU = (SDK_INT >= 24 ? "https" : "http") + "://github.com/380121850/LibreraReader";
     private static final String BETA_TXT = "changelog.txt";
     private static final String BETA = "beta-";
-    private static final String WHATSNEW_URL = (SDK_INT >= 24 ? "https" : "http") + "://github.com/380121850/howread/blob/master/CHANGES.md";
+    private static final String WHATSNEW_URL = "https://380121850.github.io/howread/what-is-new/zh.html";
     public static final String DOWNLOAD_LINK = "https://github.com/380121850/LibreraReader/releases";
 
     public static String getLangUrl(Context c) {

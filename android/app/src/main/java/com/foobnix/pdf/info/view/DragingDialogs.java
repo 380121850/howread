@@ -4646,7 +4646,8 @@ public class DragingDialogs {
                                                                   //
                                                                   controller.getString(R.string.share_as_image),
                                                                   //
-                                                                  controller.getString(R.string.moon_tap_show_hide_ui)
+                                                                  controller.getString(R.string.moon_tap_show_hide_ui),
+                                                                  controller.getString(R.string.crop_white_borders)
                                                                   //
 
                 );
@@ -4662,7 +4663,8 @@ public class DragingDialogs {
                                                                  AppState.DOUBLE_CLICK_NOTHING, //
                                                                  AppState.DOUBLE_CLICK_START_STOP_TTS, //
                                                                  AppState.DOUBLE_CLICK_SHARE_PAGE, //
-                                                                 AppState.DOUBLE_CLICK_SHOW_HIDE_UI //
+                                                                 AppState.DOUBLE_CLICK_SHOW_HIDE_UI, //
+                                                                 AppState.DOUBLE_CLICK_CROP //
                 );//
                 final TextView doubleClickAction1 = inflate.findViewById(R.id.doubleTapValue);
                 doubleClickAction1.setText(doubleTapNames.get(doubleTapIDS.indexOf(AppState.get().doubleClickAction1)));
