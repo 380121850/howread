@@ -73,3 +73,10 @@ harmony/*.csr
 /Builder/libsmb2/
 /Builder/libssh2/
 /Builder/openssl/
+
+# native build intermediates (2026-09-19 cleanup)
+*.o
+*.d
+/Builder/jni/obj/
+/Builder/jni/libs/
+/Builder/openssl/build-*

@@ -916,6 +916,12 @@
     <string name="remote_updated_title">File updated</string>
     <string name="remote_updated_msg">The remote file has changed. Reload it online with a fresh cache, or download the new version?</string>
     <string name="remote_open_failed">Cannot open online</string>
+    <string name="offline_partial_toast">Offline: reading cached part only (%1$s); uncached pages are blank</string>
+    <string name="remote_cache_net_wifi">Network: Wi-Fi (background book caching on)</string>
+    <string name="remote_cache_net_metered">Network: metered (background book caching off)</string>
+    <string name="remote_cache_capacity">Usage: %1$s of %2$s budget</string>
+    <string name="remote_window_before">Cache range BEFORE the reading position (%)</string>
+    <string name="remote_window_after">Cache range AFTER the reading position (%)</string>
     <string name="remote_open_failed_msg">Error: %1$s</string>
     <string name="remote_download_and_open">Download and open</string>
     <string name="remote_variant_drm_title">Protected book</string>

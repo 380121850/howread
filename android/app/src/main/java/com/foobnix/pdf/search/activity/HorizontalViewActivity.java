@@ -969,12 +969,19 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
             protected void onPreExecute() {
 
                 start = System.currentTimeMillis();
+                android.util.Log.i("BENCH", "h-load-begin "
+                        + com.foobnix.android.utils.Apps.getBookPathFromActivity(HorizontalViewActivity.this));
 
                 dialog = Dialogs.loadingBook(HorizontalViewActivity.this, new Runnable() {
 
                     @Override
                     public void run() {
                         isCancelled = true;
+                        // stop in-flight remote reads now: the open task may be
+                        // inside a network read holding the global native lock
+                        com.foobnix.remote.RemoteSessionFactory.abortSession(
+                                com.foobnix.android.utils.Apps
+                                        .getBookPathFromActivity(HorizontalViewActivity.this));
                         if (loadinAsyncTask != null) {
                             loadinAsyncTask.cancel(true);
                         }
@@ -1057,6 +1064,9 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
 
             @Override
             protected void onPostExecute(Object result) {
+                android.util.Log.i("BENCH", "h-load-end "
+                        + (System.currentTimeMillis() - start) + "ms result=" + result);
+                com.foobnix.remote.RemoteTimeline.mark("reader shell ready (horizontal)");
                 if (AppsConfig.IS_LOG) {
                     long time = System.currentTimeMillis() - start;
                     float sec = (float) time / 1000;
@@ -1076,6 +1086,17 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
                     return;
                 }
                 if ((Integer) result == -2) {
+                    final String failedPath = com.foobnix.android.utils.Apps
+                            .getBookPathFromActivity(HorizontalViewActivity.this);
+                    android.util.Log.i("REMOTE", "open failed (-2): " + failedPath);
+                    if (com.foobnix.remote.RemoteBook.isRemotePathLoose(failedPath)) {
+                        // a remote book that failed to decode gets a recovery
+                        // dialog (retry / download-and-open) instead of a
+                        // silent empty reader shell
+                        com.foobnix.remote.RemoteBookOpener.offerDownloadFallback(
+                                HorizontalViewActivity.this, failedPath, 0, null);
+                        return;
+                    }
                     Toast.makeText(HorizontalViewActivity.this, R.string.msg_unexpected_error, Toast.LENGTH_SHORT)
                          .show();
                     AppState.get().isEditMode = true;
@@ -1976,7 +1997,10 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
                     int total = 0;
                     int guard = 0;
                     while (!isFinishing() && guard++ < 2000) {
+                        final long chunkT0 = android.os.SystemClock.elapsedRealtime();
                         final int n = dc.runRemoteLayoutChunk(upto);
+                        android.util.Log.i("BENCH", "remote-layout-chunk upto=" + upto + " n=" + n
+                                + " " + (android.os.SystemClock.elapsedRealtime() - chunkT0) + "ms");
                         if (n <= 0) {
                             break;
                         }
@@ -2013,6 +2037,10 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
                 ui.removeCallbacks(tick);
                 removeRemoteOverlay();
                 hideRemoteLocateBanner();
+                android.util.Log.i("BENCH", "remote-layout-end " + book
+                        + " total=" + o + " overlay "
+                        + (android.os.SystemClock.elapsedRealtime() - t0) + "ms");
+                com.foobnix.remote.RemoteTimeline.mark("deferred layout done, content shown");
                 if (dc == null) {
                     return;
                 }
@@ -2025,9 +2053,13 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
                     return;
                 }
                 final int total = o instanceof Integer ? (Integer) o : 0;
-                if (total <= 0 && dc.getPagesCount() == 0) {
+                // deferred remote opens start with a provisional page count of
+                // 1, so the old pagesCount==0 guard never fired and a failed
+                // layout stayed a silent black overlay forever
+                if (total <= 0 && dc.getPagesCount() <= 1) {
                     // layout failed (network / engine error): recovery panel
                     // instead of a silently empty shell
+                    android.util.Log.i("REMOTE", "remote layout produced no pages, showing recovery: " + book);
                     showLayoutFailure(overlay, tv, ui, tick, book);
                     return;
                 }
@@ -2438,13 +2470,23 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
 
         progressDraw.updatePageCount(dc.getPageCount());
 
-        dc.getOutline(result -> {
-            onClose.setVisibility(View.VISIBLE);
-            progressDraw.updateDivs(result);
-            updateUI(dc.getCurrentPage());
-            showPagesHelper();
-            return false;
-        }, false);
+        if (!com.foobnix.remote.RemoteBook.isRemotePathLoose(
+                com.foobnix.android.utils.Apps.getBookPathFromActivity(this))) {
+            dc.getOutline(result -> {
+                onClose.setVisibility(View.VISIBLE);
+                progressDraw.updateDivs(result);
+                updateUI(dc.getCurrentPage());
+                showPagesHelper();
+                return false;
+            }, false);
+        } else {
+            // remote books: the outline preload walks the outline tree over
+            // the network (this file's damaged outline repairs by fetching
+            // scattered objects) — it must not sit on the open path. The TOC
+            // panel loads it on demand instead.
+            android.util.Log.i("REMOTE", "outline preload deferred to TOC open: "
+                    + com.foobnix.android.utils.Apps.getBookPathFromActivity(this));
+        }
 
         showHelp();
         tinUI();
@@ -3075,6 +3117,12 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
         }
         nullAdapter();
 
+        // fail in-flight remote reads before the codec close below can wait
+        // on the global native lock: a stuck WebDAV read used to block the UI
+        // thread here until force-stop (the "app cannot be exited" ANR)
+        com.foobnix.remote.RemoteSessionFactory.abortSession(
+                com.foobnix.android.utils.Apps.getBookPathFromActivity(this));
+
         if (dc != null && dc.isRemoteLayoutRunning()) {
             // the background layout holds the native lock: closing the codec
             // here would block the UI until the layout finishes. Finish the
@@ -3146,6 +3194,8 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
             }
             PageImageState.currentPage = pos;
             dc.setCurrentPage(viewPager.getCurrentItem());
+            android.util.Log.i("REMOTE", "page now " + (pos + 1) + "/"
+                    + dc.getPageCount());
             updateUI(pos);
 
             if (PageImageState.get().isAutoFit) {

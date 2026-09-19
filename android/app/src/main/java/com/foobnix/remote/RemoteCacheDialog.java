@@ -34,6 +34,8 @@ public class RemoteCacheDialog {
         final EditText threshold;
         final EditText retryCount;
         final EditText retryInterval;
+        final EditText windowBefore;
+        final EditText windowAfter;
 
         LinearLayout body = new LinearLayout(a);
         body.setOrientation(LinearLayout.VERTICAL);
@@ -69,6 +71,14 @@ public class RemoteCacheDialog {
             threshold = numberField(a, st.remoteWholeBookThresholdMB);
             body.addView(threshold, row());
 
+            // windowed caching of big books (percent around the position)
+            body.addView(label(a, R.string.remote_window_before));
+            windowBefore = numberField(a, st.remoteWindowBeforePct);
+            body.addView(windowBefore, row());
+            body.addView(label(a, R.string.remote_window_after));
+            windowAfter = numberField(a, st.remoteWindowAfterPct);
+            body.addView(windowAfter, row());
+
             body.addView(label(a, R.string.remote_retry_count));
             retryCount = numberField(a, st.remoteRetryCount);
             body.addView(retryCount, row());
@@ -81,12 +91,27 @@ public class RemoteCacheDialog {
             threshold = null;
             retryCount = null;
             retryInterval = null;
+            windowBefore = null;
+            windowAfter = null;
         }
 
         body.addView(label(a, R.string.remote_cache_usage));
         TextView usage = new TextView(a);
         usage.setText(com.foobnix.pdf.info.ExtUtils.readableFileSize(BlockCacheStore.totalBytes()));
         body.addView(usage, row());
+
+        // constraints at a glance: network (metered disables background
+        // whole-book caching) and the capacity water level
+        body.addView(label(a, com.foobnix.remote.RemoteBookSession.isNetworkMetered()
+                ? R.string.remote_cache_net_metered : R.string.remote_cache_net_wifi));
+        TextView cap = new TextView(a);
+        cap.setText(a.getString(R.string.remote_cache_capacity,
+                com.foobnix.pdf.info.ExtUtils.readableFileSize(BlockCacheStore.totalBytes()),
+                com.foobnix.pdf.info.ExtUtils.readableFileSize(
+                        (long) st.remoteCacheMaxMB * 1024L * 1024L)));
+        cap.setTextSize(15);
+        cap.setPadding(0, Dips.dpToPx(10), 0, Dips.dpToPx(2));
+        body.addView(cap, row());
 
         new AlertDialog.Builder(a)
                 .setTitle(R.string.remote_settings_title)
@@ -104,6 +129,18 @@ public class RemoteCacheDialog {
                                     Integer.parseInt(threshold.getText().toString().trim()));
                         } catch (Exception e) {
                             st.remoteWholeBookThresholdMB = 20;
+                        }
+                        try {
+                            st.remoteWindowBeforePct = Math.max(1, Math.min(90,
+                                    Integer.parseInt(windowBefore.getText().toString().trim())));
+                        } catch (Exception e) {
+                            st.remoteWindowBeforePct = 20;
+                        }
+                        try {
+                            st.remoteWindowAfterPct = Math.max(1, Math.min(90,
+                                    Integer.parseInt(windowAfter.getText().toString().trim())));
+                        } catch (Exception e) {
+                            st.remoteWindowAfterPct = 30;
                         }
                         try {
                             st.remoteRetryCount = Math.max(0, Math.min(10,
@@ -124,9 +161,13 @@ public class RemoteCacheDialog {
                     }
                 })
                 .setNeutralButton(R.string.remote_clear_cache, (d, w) -> {
-                    // recursive delete of up to hundreds of MB must not run on
-                    // the UI thread
-                    AppsConfig.executorServiceSingle.execute(() -> {
+                    // recursive delete of hundreds of MB must not run on the UI
+                    // thread; run on a dedicated thread (NOT the shared single
+                    // executor — a stuck task there silently swallowed the
+                    // clear) and close every live session first, otherwise the
+                    // books just read stay pinned and survive the clear
+                    new Thread(() -> {
+                        com.foobnix.remote.RemoteSessionFactory.closeAllSessions();
                         BlockCacheStore.clearAll();
                         a.runOnUiThread(() -> {
                             Toast.makeText(a, R.string.remote_cache_cleared, Toast.LENGTH_SHORT).show();
@@ -134,7 +175,7 @@ public class RemoteCacheDialog {
                                 onRefresh.run();
                             }
                         });
-                    });
+                    }, "@T ClearRemoteCache").start();
                 })
                 .setNegativeButton(android.R.string.cancel, null)
                 .show();

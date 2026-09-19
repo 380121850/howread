@@ -811,7 +811,18 @@ def _open_reader(dev, case_id, fixtures, fmt):
 def _reader_page_no_back(dev):
     """读当前页码,**不 press back**(driver.reader_page_num 的 back 会收起工具条/退出阅读器/退桌面,
     连续调用会把 app 退到桌面--FN-16 首跑即因此失败).返回 (cur, total) 或 None.
-    水平(Book)模式页码在 pagesCountIndicator(「11 ∕ 14」,U+2215 除号)."""
+    水平(Book)模式页码在 pagesCountIndicator(「11 ∕ 14」,U+2215 除号).
+    优先从 logcat 的 REMOTE "page now X/N" 读取(阅读器翻页即打印,MIUI 打断
+    uiautomator 导致 dump 无文本时依旧可用),失败再回退 UI 控件读取."""
+    try:
+        out = dev.shell("logcat -d -s REMOTE:* -t 300")
+        best = None
+        for m in re.finditer(r'page now (\d+)/(\d+)', out or ""):
+            best = (int(m.group(1)), int(m.group(2)))
+        if best:
+            return best
+    except Exception:
+        pass
     for rid, pat in (("currentPageIndex", r"(\d+)\s*/\s*(\d+)"),
                      ("pagesCountIndicator", r"(\d+)\s*[∕/]\s*(\d+)")):
         try:

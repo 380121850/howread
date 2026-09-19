@@ -148,7 +148,13 @@ public abstract class HorizontalModeController extends DocumentController {
             imageWidth = Dips.screenWidth() / 2;
         }
 
-        final boolean remoteText = com.foobnix.remote.RemoteBook.isRemotePath(bookPath) && isTextFormat;
+        final String rext0 = com.foobnix.remote.RemoteBook.getExt(bookPath);
+        // PDF is lazy in the engine (page objects load per render) and its
+        // page count is cheap, so a remote PDF can defer exactly like the
+        // text formats instead of blocking the open on network reads
+        final boolean remoteDeferFormat = isTextFormat || "pdf".equals(rext0);
+        final boolean remoteText = com.foobnix.remote.RemoteBook.isRemotePath(bookPath)
+                && remoteDeferFormat;
         final boolean deferRemote = remoteText && deferRemoteLayout();
         android.util.Log.i("REMOTE", "hcontroller remoteText=" + remoteText
                 + " isTextFormat=" + isTextFormat + " deferRemote=" + deferRemote
@@ -162,13 +168,14 @@ public abstract class HorizontalModeController extends DocumentController {
             // laid out / cached afterwards.
             pendingRemoteLayout = true;
             pagesCount = 1;
-            // epub is a zip container the engine walks chapter by chapter:
-            // the progressive chunked layout can show the first screen after
-            // the first few MB of cache. fb2/mobi/txt are single-file parses
-            // (the engine reads the whole file at open) — the one-shot
-            // background layout is their ceiling without engine changes.
-            String rext = com.foobnix.remote.RemoteBook.getExt(bookPath);
-            remoteProgressive = "epub".equals(rext) || "epub2".equals(rext);
+            // epub is a zip container the engine walks chapter by chapter,
+            // and the chunked-txt document serves plain text as byte-range
+            // pseudo-chapters — both take the progressive chunked layout,
+            // which can show the first screen after a small part is cached.
+            // fb2/mobi (whole-file parse) and pdf (lazy pages, cheap count)
+            // use the one-shot background layout, which returns in seconds.
+            remoteProgressive = "epub".equals(rext0) || "epub2".equals(rext0)
+                    || "txt".equals(rext0);
         } else if (codeDocument != null) {
             pagesCount = codeDocument.getPageCount(imageWidth, imageHeight, BookCSS.get().fontSizeSp);
         } else {
@@ -526,8 +533,13 @@ public abstract class HorizontalModeController extends DocumentController {
             @Override public void run() {
                 isClosed = true;
                 if (codeDocument != null) {
+                    final long recycleT0 = android.os.SystemClock.elapsedRealtime();
                     codeDocument.recycle();
                     codeDocument = null;
+                    final long recycleMs = android.os.SystemClock.elapsedRealtime() - recycleT0;
+                    if (recycleMs > 500) {
+                        android.util.Log.i("REMOTE", "codec recycle blocked UI " + recycleMs + "ms");
+                    }
                 }
                 try {
                     if (!ExtUtils.isTextFomat(bookPath)) {
@@ -597,7 +609,8 @@ public abstract class HorizontalModeController extends DocumentController {
             return codeDocument.getPageCount(imageWidth, imageHeight, BookCSS.get().fontSizeSp);
         } catch (Throwable t) {
             LOG.e(t);
-            return pagesCount;
+            android.util.Log.i("REMOTE", "one-shot remote layout failed: " + t);
+            return 0;
         } finally {
             remoteLayoutRunning = false;
         }

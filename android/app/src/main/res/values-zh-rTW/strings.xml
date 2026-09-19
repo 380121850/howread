@@ -741,6 +741,12 @@
     <string name="remote_updated_title">檔案已更新</string>
     <string name="remote_updated_msg">遠端檔案已更新。是否清除舊快取並重新載入？也可下載新版本後開啟。</string>
     <string name="remote_open_failed">無法線上開啟</string>
+    <string name="offline_partial_toast">離線模式：僅可讀已快取部分（%1$s），未快取頁暫為空白</string>
+    <string name="remote_cache_net_wifi">當前網絡：WiFi（後台整本快取開啟）</string>
+    <string name="remote_cache_net_metered">當前網絡：流量（後台整本快取已停用）</string>
+    <string name="remote_cache_capacity">容量：已用 %1$s / 預算 %2$s</string>
+    <string name="remote_window_before">閱讀位置前快取範圍（%）</string>
+    <string name="remote_window_after">閱讀位置後快取範圍（%）</string>
     <string name="remote_open_failed_msg">錯誤：%1$s</string>
     <string name="remote_download_and_open">下載後開啟</string>
     <string name="remote_variant_drm_title">加密書籍</string>

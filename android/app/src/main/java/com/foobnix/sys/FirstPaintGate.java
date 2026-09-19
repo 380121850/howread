@@ -27,6 +27,28 @@ public class FirstPaintGate {
     private static volatile long armAt;
     private static volatile long firstDecodeAt;
     private static volatile long lastDecodeAt;
+    /** Remote books pass a short cap: the reader shell shows at once (same
+     * feel as the horizontal deferred path) and the slow-paint banner takes
+     * over the progress feedback while the first screen streams in. */
+    public static final long REMOTE_HARD_CAP_MS = 500;
+    private static volatile long hardCapMs = HARD_CAP_MS;
+    /** True once any page bitmap has been set since {@link #arm}. */
+    private static volatile boolean firstBitmapSeen;
+    private static volatile ReleaseListener releaseListener;
+
+    /** Notified on the UI thread when the gate releases. */
+    public interface ReleaseListener {
+        void onReleased(boolean decoded);
+    }
+
+    public static void setOnRelease(ReleaseListener l) {
+        releaseListener = l;
+    }
+
+    /** True when at least one page bitmap has arrived since arm(). */
+    public static boolean hasFirstBitmap() {
+        return firstBitmapSeen;
+    }
 
     private static final Runnable TICK = new Runnable() {
 
@@ -47,22 +69,30 @@ public class FirstPaintGate {
 
     /** Keep the loading dialog visible until the first screen is decoded. */
     public static void arm(final AlertDialog loadingDialog) {
+        arm(loadingDialog, HARD_CAP_MS);
+    }
+
+    public static void arm(final AlertDialog loadingDialog, final long capMs) {
         UI.removeCallbacks(TICK);
         UI.removeCallbacks(HARD_CAP);
         dialog = loadingDialog;
         armed = loadingDialog != null;
+        hardCapMs = capMs;
+        firstBitmapSeen = false;
         if (armed) {
             armAt = android.os.SystemClock.elapsedRealtime();
             firstDecodeAt = 0;
             lastDecodeAt = 0;
-            android.util.Log.i("BENCH", "FirstPaintGate arm");
+            android.util.Log.i("BENCH", "FirstPaintGate arm cap=" + capMs + "ms");
             UI.postDelayed(TICK, TICK_MS);
-            UI.postDelayed(HARD_CAP, HARD_CAP_MS);
+            UI.postDelayed(HARD_CAP, hardCapMs);
         }
     }
 
     /** Called on the UI thread when a page bitmap has been set. */
     public static void notifyDecoded() {
+        firstBitmapSeen = true;
+        com.foobnix.remote.RemoteTimeline.markOnce("firstRender", "first page bitmap rendered");
         if (armed) {
             final long now = android.os.SystemClock.elapsedRealtime();
             if (firstDecodeAt == 0) {
@@ -106,6 +136,15 @@ public class FirstPaintGate {
         if (d != null && d.isShowing()) {
             try {
                 d.dismiss();
+            } catch (final Exception e) {
+                LOG.e(e);
+            }
+        }
+        final ReleaseListener l = releaseListener;
+        releaseListener = null;
+        if (l != null) {
+            try {
+                l.onReleased(firstDecodeAt > 0);
             } catch (final Exception e) {
                 LOG.e(e);
             }

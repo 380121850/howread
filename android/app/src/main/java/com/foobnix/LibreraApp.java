@@ -152,7 +152,8 @@ public class LibreraApp extends MultiDexApplication {
         IMG.clearMemoryCache();
         TintUtil.clean();
         HypenUtils.cache.clear();
-        TempHolder.get().loadingCancelled.set(true);
+        // no loadingCancelled here: memory callbacks fire during NORMAL
+        // activity transitions and were silently aborting in-flight loads
     }
 
     @Override
@@ -160,7 +161,7 @@ public class LibreraApp extends MultiDexApplication {
         super.onTrimMemory(level);
         LOG.d("onTrimMemory", level);
         IMG.clearMemoryCache();
-        TempHolder.get().loadingCancelled.set(true);
+        // no loadingCancelled here (see onLowMemory)
     }
 
     @Override
@@ -168,7 +169,6 @@ public class LibreraApp extends MultiDexApplication {
         super.onTerminate();
         IMG.clearMemoryCache();
         LOG.d("onTerminate", "onTerminate APP");
-        TempHolder.get().loadingCancelled.set(true);
         AppsConfig.executorService.shutdown();
     }
 }

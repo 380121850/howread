@@ -42,4 +42,13 @@ public interface RemoteDataSource extends Closeable {
     default boolean supportsRange() {
         return true;
     }
+
+    /**
+     * Best-effort cancellation of all in-flight reads: called when the
+     * consumer (viewer / download task) goes away, so a stuck network read
+     * fails within milliseconds instead of blocking until the request
+     * timeout while holding the global native lock.
+     */
+    default void abort() {
+    }
 }

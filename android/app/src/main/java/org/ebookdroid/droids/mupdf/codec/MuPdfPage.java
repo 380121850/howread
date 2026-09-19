@@ -228,6 +228,7 @@ public class MuPdfPage extends AbstractCodecPage {
 
     public BitmapRef render(final Rect viewbox, final float[] ctm, boolean cache) {
         TempHolder.lock.lock();
+        final long renderT0 = android.os.SystemClock.elapsedRealtime();
         try {
 
 
@@ -296,6 +297,12 @@ public class MuPdfPage extends AbstractCodecPage {
                 b.setBitmap(dst);
             }
 
+            final long renderMs = android.os.SystemClock.elapsedRealtime() - renderT0;
+            if (renderMs > 2000) {
+                // remote books render over the network: this is the per-page
+                // cost signal on a real device (logcat -s BENCH)
+                android.util.Log.i("BENCH", "page render " + renderMs + "ms");
+            }
             return b;
         } finally {
             TempHolder.lock.unlock();

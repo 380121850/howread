@@ -48,12 +48,14 @@ public class RemoteRetry {
         return false;
     }
 
-    /** Failures that will never succeed on retry (auth / missing file). */
+    /** Failures that will never succeed on retry (auth / missing file /
+     * offline cache miss — no network call can fill them here). */
     private static boolean isFinalMessage(String msg) {
         if (msg == null) {
             return false;
         }
         String m = msg.toLowerCase();
-        return m.contains("auth failed") || m.contains("404") || m.contains("not found");
+        return m.contains("auth failed") || m.contains("404") || m.contains("not found")
+                || m.contains("offline block not found");
     }
 }

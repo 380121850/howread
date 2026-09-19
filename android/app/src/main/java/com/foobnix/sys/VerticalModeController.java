@@ -785,9 +785,28 @@ public class VerticalModeController extends DocumentController {
 
     @Override
     public synchronized void onCloseActivityAdnShowInterstial() {
-        TempHolder.get().loadingCancelled.set(true);
+        // a close triggered by opening ANOTHER book must not poison the new
+        // load's cancel checks (the stale flag aborted its page-size loop
+        // and left a blank reader)
+        if (!com.foobnix.remote.OpenGate.userOpenPending.get()) {
+            android.util.Log.i("CANCEL", "loadingCancelled set by onCloseActivityAdnShowInterstial");
+            TempHolder.get().loadingCancelled.set(true);
+        }
         handler.removeCallbacksAndMessages(null);
         if (ctr == null || ctr.getDecodeService() == null) {
+            // the document never opened (e.g. a stuck/failed remote open):
+            // a plain return here made the reader un-exitable — Back did
+            // nothing on a blank screen. Abort in-flight remote reads, close.
+            final Object book = getCurrentBook();
+            android.util.Log.i("REMOTE", "close with no decode service: " + book);
+            if (book != null && com.foobnix.remote.RemoteBook.isRemotePathLoose(String.valueOf(book))) {
+                com.foobnix.remote.RemoteSessionFactory.abortSession(String.valueOf(book));
+            }
+            if (ctr != null) {
+                ctr.closeActivity1(null);
+            } else if (getActivity() != null) {
+                getActivity().finish();
+            }
             return;
         }
         final StringBuilder path = new StringBuilder(getCurrentBook().getAbsolutePath());

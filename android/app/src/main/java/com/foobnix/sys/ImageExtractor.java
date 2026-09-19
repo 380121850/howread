@@ -149,9 +149,46 @@ public class ImageExtractor {
         }
     }
 
+    /** Saves the outgoing remote pdf's persisted page tree map while its
+     * session (and version info) is still alive. */
+    public static void savePageTreeIfPossible(String bookPath, String versionTag, long fileSize) {
+        try {
+            if (codeCache == null || pathCache == null || !bookPath.equals(pathCache)
+                    || !(codeCache instanceof org.ebookdroid.droids.mupdf.codec.MuPdfDocument)) {
+                return;
+            }
+            ((org.ebookdroid.droids.mupdf.codec.MuPdfDocument) codeCache)
+                    .savePageTreeSidecar(bookPath, versionTag, fileSize);
+        } catch (Throwable t) {
+            android.util.Log.i("REMOTE", "page tree save skipped: " + t);
+        }
+    }
+
+    public static void savePageTreeIfPossible(String bookPath) {
+        try {
+            if (codeCache == null || pathCache == null || !bookPath.equals(pathCache)
+                    || !(codeCache instanceof org.ebookdroid.droids.mupdf.codec.MuPdfDocument)) {
+                return;
+            }
+            for (com.foobnix.remote.RemoteBookSession s
+                    : com.foobnix.remote.RemoteSessionFactory.liveSessions()) {
+                if (bookPath.equals(s.remotePath)) {
+                    ((org.ebookdroid.droids.mupdf.codec.MuPdfDocument) codeCache)
+                            .savePageTreeSidecar(bookPath, s.versionTag, s.size);
+                    break;
+                }
+            }
+        } catch (Throwable t) {
+            android.util.Log.i("REMOTE", "page tree save skipped: " + t);
+        }
+    }
+
     public static synchronized void clearCodeDocument() {
         android.util.Log.i("REMOTE", "ImageExtractor.clearCodeDocument enter");
         if (codeCache != null) {
+            if (pathCache != null) {
+                savePageTreeIfPossible(pathCache);
+            }
             codeCache.recycle();
             codeCache = null;
             pathCache = null;
@@ -281,7 +318,41 @@ public class ImageExtractor {
 
 
     public Bitmap proccessCoverPage(PageUrl pageUrl) {
+        // every cover request is a "probe": it must not fire the wide
+        // read-ahead and must yield to user opens
+        com.foobnix.remote.OpenGate.enterProbe();
+        try {
+            return proccessCoverPageInner(pageUrl);
+        } finally {
+            com.foobnix.remote.OpenGate.exitProbe();
+        }
+    }
+
+    private Bitmap proccessCoverPageInner(PageUrl pageUrl) {
         String path = pageUrl.getPath();
+
+        // HowRead: never open a remote document just to draw a list cover —
+        // a probe chain used to hold the global native lock for tens of
+        // seconds. Show the persisted cover once available, otherwise a
+        // generated title placeholder; the real cover is captured and
+        // persisted when the book is opened for reading.
+        if (com.foobnix.remote.RemoteBook.isRemotePathLoose(path)) {
+            try {
+                File cf = remoteCoverFile(path);
+                if (cf.isFile()) {
+                    Bitmap saved = BitmapFactory.decodeFile(cf.getPath());
+                    if (saved != null) {
+                        return saved;
+                    }
+                }
+                com.foobnix.remote.OpenGate.waitIfUserOpen();
+                FileMeta fm0 = AppDB.get().getOrCreate(path);
+                pageUrl.tempWithWatermakr = true;
+                return BaseExtractor.getBookCoverWithTitle(fm0.getAuthor(), fm0.getTitle(), true);
+            } catch (Throwable t) {
+                android.util.Log.i("REMOTE", "remote cover placeholder failed: " + t);
+            }
+        }
 
         if (pageUrl.getHeight() == 0) {
             pageUrl.setHeight((int) (pageUrl.getWidth() * 1.5));
@@ -405,6 +476,50 @@ public class ImageExtractor {
         LOG.d("udpateFullMeta ImageExtractor", fileMeta.getAuthor());
 
         return cover;
+    }
+
+    /** Cover file of a remote book (persisted after the first open). */
+    public static File remoteCoverFile(String bookPath) {
+        return new File(new File(com.foobnix.pdf.info.model.BookCSS.get().cachePath,
+                "RemoteCovers"), com.foobnix.remote.RemoteBook.cacheKey(bookPath) + ".jpg");
+    }
+
+    /** Renders and persists the current page as the remote book's cover
+     * right after a successful open: the document is already open and the
+     * page data is cached, so this is local-only work. */
+    public static void maybeSaveRemoteCover(final String bookPath, final int page) {
+        Thread th = new Thread(() -> {
+            try {
+                if (bookPath == null || !com.foobnix.remote.RemoteBook.isRemotePathLoose(bookPath)) {
+                    return;
+                }
+                File f = remoteCoverFile(bookPath);
+                if (f.isFile()) {
+                    return;
+                }
+                com.foobnix.pdf.info.PageUrl pu = new com.foobnix.pdf.info.PageUrl();
+                pu.setPath(bookPath);
+                pu.setPage(Math.max(0, page));
+                pu.setWidth(400);
+                pu.setHeight(600);
+                Bitmap cover = ImageExtractor.getInstance(LibreraApp.context).proccessOtherPage(pu);
+                if (cover == null) {
+                    return;
+                }
+                f.getParentFile().mkdirs();
+                java.io.FileOutputStream o = new java.io.FileOutputStream(f);
+                try {
+                    cover.compress(Bitmap.CompressFormat.JPEG, 85, o);
+                } finally {
+                    o.close();
+                }
+                android.util.Log.i("REMOTE", "remote cover saved: " + f.getName());
+            } catch (Throwable t) {
+                android.util.Log.i("REMOTE", "remote cover save skipped: " + t);
+            }
+        }, "RemoteCoverSave");
+        th.setDaemon(true);
+        th.start();
     }
 
     public Bitmap generalCoverWithEffect(PageUrl pageUrl, Bitmap cover) {

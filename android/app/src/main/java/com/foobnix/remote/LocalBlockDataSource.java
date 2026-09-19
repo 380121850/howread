@@ -29,8 +29,8 @@ class LocalBlockDataSource implements RemoteDataSource {
 
     @Override
     public int readAt(long offset, byte[] buffer, int off, int len) throws IOException {
-        // fully-cached books are served block-by-block in
-        // RemoteBookSession.readAt; this only covers stray direct reads
+        // partial offline books hit this for uncached regions; the message is
+        // on RemoteRetry's final list so a miss never burns retry rounds
         int total = 0;
         final int bs = cache.getBlockSize();
         while (total < len) {
@@ -40,7 +40,7 @@ class LocalBlockDataSource implements RemoteDataSource {
             }
             byte[] block = cache.getBlock(pos / bs, cache.getVersionTag());
             if (block == null) {
-                throw new IOException("Offline cache miss at block " + pos / bs);
+                throw new IOException("Offline block not found: " + pos / bs);
             }
             int inOff = (int) (pos % bs);
             int n = (int) Math.min(Math.min(len - total, bs - inOff), block.length - inOff);

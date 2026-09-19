@@ -45,6 +45,10 @@ public class WebDavRangeDataSource implements RemoteDataSource {
     private final boolean trustAll;
 
     private OkHttpClient client;
+    /** Range GETs currently in flight, cancelled by {@link #abort()}. */
+    private final java.util.Set<okhttp3.Call> inflight =
+            java.util.Collections.newSetFromMap(
+                    new java.util.concurrent.ConcurrentHashMap<okhttp3.Call, Boolean>());
     private long size = -1;
     private String etag = "";
     private String lastModified = "";
@@ -79,7 +83,10 @@ public class WebDavRangeDataSource implements RemoteDataSource {
         OkHttpClient.Builder builder = new OkHttpClient.Builder()
                 .connectTimeout(15, TimeUnit.SECONDS)
                 .writeTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(30, TimeUnit.SECONDS);
+                .readTimeout(30, TimeUnit.SECONDS)
+                // overall per-request budget: a slow-trickling server keeps
+                // resetting readTimeout, only callTimeout bounds the request
+                .callTimeout(60, TimeUnit.SECONDS);
         if (trustAll) {
             applyTrustAll(builder);
         }
@@ -196,7 +203,28 @@ public class WebDavRangeDataSource implements RemoteDataSource {
     /** Executes the 1-byte Range probe against {@code u} (caller closes). */
     private Response probe(String u) throws IOException {
         Request req = new Request.Builder().url(u).header("Range", "bytes=0-0").build();
-        return client.newCall(req).execute();
+        final okhttp3.Call call = client.newCall(req);
+        inflight.add(call);
+        try {
+            return call.execute();
+        } finally {
+            inflight.remove(call);
+        }
+    }
+
+    @Override
+    public void abort() {
+        // fail every in-flight Range read at once: the viewer close path and
+        // the download-cancel button call this so a stuck WebDAV read stops
+        // holding the global native lock for its whole (formerly unbounded)
+        // duration
+        for (okhttp3.Call c : inflight) {
+            try {
+                c.cancel();
+            } catch (Exception ignore) {
+            }
+        }
+        inflight.clear();
     }
 
     private static long parseTotal(String contentRange) {
@@ -234,9 +262,12 @@ public class WebDavRangeDataSource implements RemoteDataSource {
         if (offset > 0 || end < size - 1) {
             rb.header("Range", "bytes=" + offset + "-" + end);
         }
+        final long readT0 = android.os.SystemClock.elapsedRealtime();
         Response resp = null;
+        final okhttp3.Call call = client.newCall(rb.build());
+        inflight.add(call);
         try {
-            resp = client.newCall(rb.build()).execute();
+            resp = call.execute();
             if (resp.code() == 416) {
                 return 0; // range past EOF
             }
@@ -268,8 +299,22 @@ public class WebDavRangeDataSource implements RemoteDataSource {
                 }
                 total += n;
             }
+            final long expected = Math.min(offset + (long) len, size) - offset;
+            if (total < expected) {
+                // a short body is a broken transfer, never valid data: serving
+                // it used to poison the block cache with a truncated block that
+                // then never healed ("cached tens of MB but never opens")
+                throw new IOException("WebDAV body truncated at offset " + offset
+                        + ": got " + total + " of " + expected);
+            }
+            final long readMs = android.os.SystemClock.elapsedRealtime() - readT0;
+            if (readMs > 3000) {
+                android.util.Log.i("REMOTE", "slow range read off=" + offset
+                        + " len=" + len + " " + readMs + "ms");
+            }
             return total;
         } finally {
+            inflight.remove(call);
             if (resp != null) {
                 resp.close();
             }

@@ -770,6 +770,31 @@ JNIEXPORT jint
     jclass clazz;
     jfieldID fid;
 
+    /* HowRead: serve from harvested/injected page sizes when available —
+     * skips the per-page object load entirely (remote vertical layout). */
+    {
+        pdf_document* hpdf = pdf_document_from_fz_document(doc->ctx, doc->document);
+        int hw = 0, hh = 0;
+        if (hpdf && pdf_get_page_size_at(doc->ctx, hpdf, pageNumber - 1, &hw, &hh))
+        {
+            clazz = (*env)->GetObjectClass(env, cpi);
+            if (0 == clazz) {
+                return (-1);
+            }
+            fid = (*env)->GetFieldID(env, clazz, "width", "I");
+            (*env)->SetIntField(env, cpi, fid, hw);
+            fid = (*env)->GetFieldID(env, clazz, "height", "I");
+            (*env)->SetIntField(env, cpi, fid, hh);
+            fid = (*env)->GetFieldID(env, clazz, "dpi", "I");
+            (*env)->SetIntField(env, cpi, fid, 0);
+            fid = (*env)->GetFieldID(env, clazz, "rotation", "I");
+            (*env)->SetIntField(env, cpi, fid, 0);
+            fid = (*env)->GetFieldID(env, clazz, "version", "I");
+            (*env)->SetIntField(env, cpi, fid, 0);
+            return 0;
+        }
+    }
+
     fz_try(doc->ctx)
     {
         page = fz_load_page(doc->ctx, doc->document, pageNumber - 1);
@@ -2614,4 +2639,124 @@ JNIEXPORT jbyteArray
     }
 
     return bArray;
+}
+
+/* HowRead: persisted page-tree map (page index -> xref object number) so a
+ * remote pdf's O(pages) tree walk runs at most once per file version; the
+ * app persists the map beside its block cache and re-injects it here. */
+
+JNIEXPORT jintArray JNICALL
+Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_getPageTreeNums(JNIEnv *env, jclass clazz, jlong handle)
+{
+	renderdocument_t *doc = (renderdocument_t *)(long)handle;
+	if (!doc || !doc->ctx || !doc->document)
+		return NULL;
+	int count = 0;
+	int *nums = pdf_get_page_object_numbers(doc->ctx, (pdf_document *)doc->document, &count);
+	if (!nums || count <= 0)
+	{
+		if (nums)
+			fz_free(doc->ctx, nums);
+		return NULL;
+	}
+	jintArray out = (*env)->NewIntArray(env, count);
+	(*env)->SetIntArrayRegion(env, out, 0, count, nums);
+	fz_free(doc->ctx, nums);
+	return out;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_setPageTreeNums(JNIEnv *env, jclass clazz, jlong handle, jintArray arr)
+{
+	renderdocument_t *doc = (renderdocument_t *)(long)handle;
+	if (!doc || !doc->ctx || !doc->document || !arr)
+		return JNI_FALSE;
+	pdf_document *pdf = pdf_document_from_fz_document(doc->ctx, doc->document);
+	if (!pdf)
+		return JNI_FALSE;
+	jsize n = (*env)->GetArrayLength(env, arr);
+	jint *a = (*env)->GetIntArrayElements(env, arr, NULL);
+	jboolean ok = JNI_FALSE;
+	fz_try(doc->ctx)
+	{
+		int i;
+		for (i = 0; i < n; ++i)
+			if (a[i] <= 0)
+			{
+				n = 0;
+				break;
+			}
+		if (n > 0)
+		{
+			pdf_set_page_object_numbers(doc->ctx, pdf, n, a);
+			__android_log_print(ANDROID_LOG_INFO, "REMOTE", "page tree map injected: %d pages", n);
+			ok = JNI_TRUE;
+		}
+	}
+	fz_catch(doc->ctx)
+	{
+		__android_log_print(ANDROID_LOG_INFO, "REMOTE", "page tree map inject failed");
+		ok = JNI_FALSE;
+	}
+	(*env)->ReleaseIntArrayElements(env, arr, a, JNI_ABORT);
+	return ok;
+}
+
+JNIEXPORT jintArray JNICALL
+Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_getPageTreeSizes(JNIEnv *env, jclass clazz, jlong handle)
+{
+	renderdocument_t *doc = (renderdocument_t *)(long)handle;
+	if (!doc || !doc->ctx || !doc->document)
+		return NULL;
+	int count = 0;
+	int *sizes = pdf_get_page_sizes(doc->ctx, (pdf_document *)doc->document, &count);
+	if (!sizes || count <= 0)
+	{
+		if (sizes)
+			fz_free(doc->ctx, sizes);
+		return NULL;
+	}
+	jintArray out = (*env)->NewIntArray(env, count * 2);
+	(*env)->SetIntArrayRegion(env, out, 0, count * 2, sizes);
+	fz_free(doc->ctx, sizes);
+	__android_log_print(ANDROID_LOG_INFO, "REMOTE", "page sizes exported: %d pages", count);
+	return out;
+}
+
+JNIEXPORT jlong JNICALL
+Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_getWalkMs(JNIEnv *env, jclass clazz, jlong handle)
+{
+	renderdocument_t *doc = (renderdocument_t *)(long)handle;
+	if (!doc || !doc->ctx || !doc->document)
+		return 0;
+	return (jlong)pdf_get_walk_ms(doc->ctx, (pdf_document *)doc->document);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_setPageTreeSizes(JNIEnv *env, jclass clazz, jlong handle, jintArray arr)
+{
+	renderdocument_t *doc = (renderdocument_t *)(long)handle;
+	if (!doc || !doc->ctx || !doc->document || !arr)
+		return JNI_FALSE;
+	pdf_document *pdf = pdf_document_from_fz_document(doc->ctx, doc->document);
+	if (!pdf)
+		return JNI_FALSE;
+	jsize n = (*env)->GetArrayLength(env, arr);
+	if (n <= 0 || (n % 2) != 0)
+		return JNI_FALSE;
+	jint *a = (*env)->GetIntArrayElements(env, arr, NULL);
+	jboolean ok = JNI_FALSE;
+	fz_try(doc->ctx)
+	{
+		pdf_set_page_sizes(doc->ctx, pdf, n / 2, a);
+		__android_log_print(ANDROID_LOG_INFO, "REMOTE", "page sizes injected: %d pages", n / 2);
+		ok = JNI_TRUE;
+	}
+	fz_catch(doc->ctx)
+	{
+		__android_log_print(ANDROID_LOG_INFO, "REMOTE", "page sizes inject failed");
+		ok = JNI_FALSE;
+	}
+	(*env)->ReleaseIntArrayElements(env, arr, a, JNI_ABORT);
+	return ok;
 }

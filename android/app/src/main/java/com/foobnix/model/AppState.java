@@ -319,6 +319,11 @@ public class AppState {
     public boolean remotePrefetchWifiOnly = true;
     // progressive whole-book fill threshold in MB, 0 = off
     public int remoteWholeBookThresholdMB = 20;
+    /** Windowed caching of big books: percent of the book cached before and
+     * after the reading position (WiFi; metered networks use a fixed
+     * 10%/20% window). */
+    public int remoteWindowBeforePct = 20;
+    public int remoteWindowAfterPct = 30;
     // network retry policy (RemoteRetry): attempts and initial backoff (ms,
     // exponential base×2ⁿ)
     public int remoteRetryCount = 3;

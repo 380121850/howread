@@ -163,9 +163,28 @@ public class MuPdfDocument extends AbstractCodecDocument {
      * (no local file, no accelerator file — accelerators require a path).
      */
     private static long openRemoteFile(final int format, final String fname, final String pwd, final String css) {
+        final long lockT0 = android.os.SystemClock.elapsedRealtime();
         android.util.Log.i("REMOTE", "openRemoteFile enter, waiting lock");
-        TempHolder.lock.lock();
-        android.util.Log.i("REMOTE", "openRemoteFile locked");
+        // cancellable wait: a plain lock() left "cancel/back" unresponsive
+        // for as long as other work (cover probes, renders) held the lock
+        while (true) {
+            if (!com.foobnix.remote.OpenGate.isProbe()
+                    && TempHolder.get().loadingCancelled.get()) {
+                android.util.Log.i("REMOTE", "openRemoteFile cancelled while waiting lock ("
+                        + (android.os.SystemClock.elapsedRealtime() - lockT0) + "ms)");
+                throw new RuntimeException("Open cancelled");
+            }
+            try {
+                if (TempHolder.lock.tryLock(200, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                    break;
+                }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Open interrupted while waiting lock", ie);
+            }
+        }
+        final long lockedT0 = android.os.SystemClock.elapsedRealtime();
+        android.util.Log.i("REMOTE", "openRemoteFile locked, waited " + (lockedT0 - lockT0) + "ms");
         try {
             int allocatedMemory = AppState.get().allocatedMemorySize * 1024 * 1024;
             int isImageScale = AppState.get().enableImageScale ? 1 : 0;
@@ -178,14 +197,30 @@ public class MuPdfDocument extends AbstractCodecDocument {
                 throw new RuntimeException("Cannot open remote book: " + e.getMessage(), e);
             }
             com.foobnix.remote.RemoteSeekableStream stream = new com.foobnix.remote.RemoteSeekableStream(session);
+            final long openT0 = android.os.SystemClock.elapsedRealtime();
             android.util.Log.i("REMOTE", "native openStream begin size=" + session.size);
             final long open = openStream(allocatedMemory, format, com.foobnix.remote.RemoteBook.magicFor(fname),
                     pwd, css,
                     BookCSS.get().documentStyle == BookCSS.STYLES_ONLY_USER ? 0 : 1, BookCSS.get().imageScale,
                     AppState.get().antiAliasLevel, isImageScale, stream);
-            android.util.Log.i("REMOTE", "native openStream done handle=" + open);
+            android.util.Log.i("REMOTE", "native openStream done handle=" + open
+                    + " in " + (android.os.SystemClock.elapsedRealtime() - openT0) + "ms");
+            com.foobnix.remote.RemoteTimeline.mark("MuPDF document open done");
+            if (session != null) {
+                // inject the persisted page tree map (key book info from the
+                // block cache): the first page access then skips the
+                // O(pages) object walk over the network entirely
+                loadPageTreeSidecar(open, fname, session.versionTag, session.size);
+            }
             LOG.d("MUPDF! >>> openStream [document]", open, fname);
             if (open == -1) {
+                // the streaming open reads straight from the block cache: one
+                // structurally important block may be bad. Drop the cache so
+                // the next attempt re-downloads instead of failing forever.
+                if (!session.isOffline()) {
+                    session.invalidateCache();
+                }
+                android.util.Log.i("REMOTE", "openStream failed, block cache invalidated: " + fname);
                 throw new RuntimeException("Document is corrupted");
             }
             return open;
@@ -195,6 +230,194 @@ public class MuPdfDocument extends AbstractCodecDocument {
     }
 
     public static native String getFzVersion();
+
+    // ---- persisted page tree map (remote pdf, key book info) ----
+
+    /** Persists the page index -> xref object number map of the currently
+     * open document; returns the entry count or -1 (not a pdf / not loaded). */
+    public int savePageTreeMap(String path) {
+        if (documentHandle == 0 || isRecycled()) {
+            return -1;
+        }
+        return savePageTreeMap(documentHandle, path);
+    }
+
+    /** Injects a persisted page tree map; true when accepted. */
+    public boolean loadPageTreeMap(String path) {
+        if (documentHandle == 0 || isRecycled()) {
+            return false;
+        }
+        return loadPageTreeMap(documentHandle, path);
+    }
+
+    private static native int savePageTreeMap(long handle, String path);
+
+    private static native boolean loadPageTreeMap(long handle, String path);
+
+    private static native int[] getPageTreeSizes(long handle);
+
+    private static native long getWalkMs(long handle);
+
+    private static native boolean setPageTreeSizes(long handle, int[] sizes);
+
+    /** Page index -> xref object number of the currently open document. */
+    public int[] getPageTreeNums() {
+        if (documentHandle == 0 || isRecycled()) {
+            return null;
+        }
+        return getPageTreeNums(documentHandle);
+    }
+
+    private static native int[] getPageTreeNums(long handle);
+
+    public boolean setPageTreeNums(int[] nums) {
+        if (documentHandle == 0 || isRecycled() || nums == null) {
+            return false;
+        }
+        return setPageTreeNums(documentHandle, nums);
+    }
+
+    private static native boolean setPageTreeNums(long handle, int[] nums);
+
+    private static java.io.File pageMapFile(String bookPath) {
+        return new java.io.File(new java.io.File(
+                com.foobnix.remote.BlockCacheStore.rootDir(),
+                com.foobnix.remote.RemoteBook.cacheKey(bookPath)), "pagemap.bin");
+    }
+
+    /**
+     * Saves the page tree map of this open remote pdf beside its block
+     * cache — the map is the "key book info" that lets the next open render
+     * cached blocks with zero tree traffic.
+     */
+    public void savePageTreeSidecar(String bookPath, String versionTag, long fileSize) {
+        if (!com.foobnix.remote.RemoteBook.isRemotePathLoose(bookPath)) {
+            return;
+        }
+        try {
+            int[] nums = getPageTreeNums();
+            if (nums == null || nums.length == 0) {
+                return;
+            }
+            java.io.File f = pageMapFile(bookPath);
+            f.getParentFile().mkdirs();
+            java.io.DataOutputStream o = new java.io.DataOutputStream(
+                    new java.io.FileOutputStream(f));
+            try {
+                o.writeInt(0x50474D31); // 'PGM1'
+                o.writeLong(fileSize);
+                o.writeUTF(versionTag == null ? "" : versionTag);
+                o.writeInt(nums.length);
+                for (int v : nums) {
+                    o.writeInt(v);
+                }
+                // v2: per-page [w,h] harvested at tree-walk time (zero extra
+                // I/O); the next open injects them and the vertical layout
+                // loop runs entirely from memory
+                int[] sizes = (documentHandle != 0 && !isRecycled())
+                        ? getPageTreeSizes(documentHandle) : null;
+                int m = sizes == null ? 0 : sizes.length / 2;
+                o.writeInt(m);
+                if (sizes != null) {
+                    for (int v : sizes) {
+                        o.writeInt(v);
+                    }
+                }
+                long walkMs = (documentHandle != 0 && !isRecycled())
+                        ? getWalkMs(documentHandle) : 0;
+                android.util.Log.i("REMOTE", "page tree map saved: " + nums.length
+                        + " pages (sizes " + m + ", walk " + walkMs + "ms) -> " + f.getName());
+            } finally {
+                o.close();
+            }
+        } catch (Exception e) {
+            android.util.Log.i("REMOTE", "page tree map save failed: " + e);
+        }
+    }
+
+    /**
+     * Loads and injects the persisted page tree map. versionTag and size
+     * must match the current remote file or the sidecar is ignored (a
+     * changed file would otherwise render wrong pages silently).
+     */
+    private static boolean loadPageTreeSidecar(long handle, String bookPath,
+                                                String versionTag, long fileSize) {
+        if (handle == 0) {
+            return false;
+        }
+        try {
+            java.io.File f = pageMapFile(bookPath);
+            if (!f.isFile() || f.length() < 24) {
+                android.util.Log.i("REMOTE", "page tree sidecar not found: "
+                        + f.getAbsolutePath() + " (exists=" + f.exists()
+                        + ", len=" + f.length() + ")");
+                return false;
+            }
+            java.io.DataInputStream in = new java.io.DataInputStream(
+                    new java.io.FileInputStream(f));
+            try {
+                if (in.readInt() != 0x50474D31) {
+                    android.util.Log.i("REMOTE", "page tree sidecar magic mismatch: " + f);
+                    return false;
+                }
+                if (in.readLong() != fileSize) {
+                    android.util.Log.i("REMOTE", "page tree map size mismatch, ignored");
+                    return false;
+                }
+                String tag = in.readUTF();
+                if (!tag.equals(versionTag == null ? "" : versionTag)) {
+                    android.util.Log.i("REMOTE", "page tree map version mismatch, ignored");
+                    return false;
+                }
+                int n = in.readInt();
+                if (n <= 0 || n > 200000) {
+                    android.util.Log.i("REMOTE", "page tree sidecar bad count: " + n);
+                    return false;
+                }
+                int[] nums = new int[n];
+                for (int i = 0; i < n; i++) {
+                    nums[i] = in.readInt();
+                }
+                // v2 sidecar: per-page [w,h] follows the map. A sidecar
+                // without sizes (v1) is ignored on purpose: injecting only
+                // the map would still leave the page-size loop on the
+                // network, and the walk would never run to harvest sizes.
+                // Ignoring it lets this open rebuild the sidecar as v2.
+                int m;
+                try {
+                    m = in.readInt();
+                } catch (java.io.EOFException eof) {
+                    m = 0; // v1 sidecar: no sizes appended
+                }
+                if (m <= 0 || m > n) {
+                    android.util.Log.i("REMOTE",
+                            "page tree sidecar has no sizes (v1), ignored for rebuild: " + n + " pages");
+                    return false;
+                }
+                int[] wh = new int[m * 2];
+                for (int i = 0; i < wh.length; i++) {
+                    wh[i] = in.readInt();
+                }
+                boolean ok = setPageTreeNums(handle, nums);
+                if (ok) {
+                    if (setPageTreeSizes(handle, wh)) {
+                        android.util.Log.i("REMOTE", "page tree map injected: " + n
+                                + " pages (tree walk skipped, sizes " + m + ")");
+                    } else {
+                        android.util.Log.i("REMOTE", "page tree map injected: " + n
+                                + " pages (tree walk skipped, sizes inject failed)");
+                    }
+                }
+                return ok;
+            } finally {
+                in.close();
+            }
+        } catch (Exception e) {
+            android.util.Log.i("REMOTE", "page tree map load skipped: " + e);
+            return false;
+        }
+    }
+
 
     private static native long open(int storememory, int format, String fname, String pwd, String css, int useDocStyle,
                                     float scale, int antialias, String accel, int isImageScale, int deferHtmlImages);

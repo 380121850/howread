@@ -164,7 +164,12 @@ public abstract class AdsFragmentActivity extends FragmentActivity {
     }
 
     public void showInterstitial() {
-        TempHolder.get().loadingCancelled.set(true);
+        // the interstitial closes while the NEXT book may already be loading:
+        // its cancel flag must not abort that load (blank reader)
+        if (!com.foobnix.remote.OpenGate.userOpenPending.get()) {
+            android.util.Log.i("CANCEL", "loadingCancelled set by AdsFragmentActivity");
+            TempHolder.get().loadingCancelled.set(true);
+        }
         IMG.pauseRequests(this);
         TTSNotification.hideNotification();
         TTSEngine.get().shutdown();

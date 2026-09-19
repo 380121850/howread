@@ -101,12 +101,62 @@ public class RemoteSessionFactory {
      * case a broken network open falls back to an offline session served
      * from the block cache.
      */
+    /** Marks a user-initiated open: pauses the background (fill/prefetch)
+     * work of every OTHER live session — their windows were saturating the
+     * link and stretched the new book's tree walk from ~2s to ~20s. */
+    public static void userOpenStart(String remotePath) {
+        OpenGate.userOpenPending.set(true);
+        synchronized (LOCK) {
+            for (RemoteBookSession s : SESSIONS.values()) {
+                s.backgroundPaused = !s.remotePath.equals(remotePath);
+            }
+        }
+    }
+
+    public static void userOpenEnd() {
+        OpenGate.userOpenPending.set(false);
+        synchronized (LOCK) {
+            for (RemoteBookSession s : SESSIONS.values()) {
+                s.backgroundPaused = false;
+            }
+        }
+    }
+
     public static RemoteBookSession obtain(String remotePath) throws IOException {
         synchronized (LOCK) {
             RemoteBookSession existing = SESSIONS.get(remotePath);
             if (existing != null && !existing.isClosed()) {
                 return existing;
             }
+            // cache-first: a usable block cache opens the book instantly from
+            // the persisted book info (size/versionTag in meta.json) — cached
+            // blocks render with zero network; the source connects lazily on
+            // the first miss and the stored version is verified in background
+            BlockCacheStore cached = null;
+            try {
+                cached = BlockCacheStore.openExisting(RemoteBook.cacheKey(remotePath));
+            } catch (Exception ignore) {
+            }
+            if (cached != null) {
+                RemoteBookSession cachedSession = null;
+                try {
+                    cachedSession = RemoteBookSession.openCachedFirst(remotePath,
+                            createSource(remotePath), cached);
+                } catch (Exception e) {
+                    LOG.w(e);
+                    try {
+                        cached.close();
+                    } catch (Exception ignore2) {
+                    }
+                }
+                if (cachedSession != null) {
+                    SESSIONS.put(remotePath, cachedSession);
+                    verifyVersionAsync(remotePath, cached.getVersionTag(), cached.getFileSize());
+                    android.util.Log.i("REMOTE", "cache-first open: " + remotePath);
+                    return cachedSession;
+                }
+            }
+            com.foobnix.remote.RemoteBookSession.freeForOpen();
             RemoteBookSession session;
             try {
                 session = open(remotePath);
@@ -122,9 +172,116 @@ public class RemoteSessionFactory {
         }
     }
 
+    /** One background version verification per path at a time. */
+    private static final java.util.Set<String> verifying =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<String, Boolean>());
+
+    /**
+     * Cache-first sessions serve possibly-stale bytes until proven otherwise:
+     * probe the remote file (short-lived source, daemon thread) and when the
+     * version moved, drop the session and the cache so the next open is
+     * fresh. Offline / unreachable server: the cache simply stays.
+     */
+    private static void verifyVersionAsync(final String remotePath, final String expectTag,
+                                           final long expectSize) {
+        if (!verifying.add(remotePath)) {
+            return;
+        }
+        final Thread t = new Thread(() -> {
+            try {
+                RemoteDataSource src = createSource(remotePath);
+                try {
+                    src.open();
+                    String tag = src.versionTag();
+                    long size = src.size();
+                    if (size != expectSize || !tag.equals(expectTag)) {
+                        android.util.Log.i("REMOTE", "cache-first: remote version changed, invalidating: "
+                                + remotePath);
+                        RemoteBookSession s;
+                        synchronized (LOCK) {
+                            s = SESSIONS.remove(remotePath);
+                        }
+                        if (s != null) {
+                            try {
+                                s.abort();
+                            } catch (Exception ignore) {
+                            }
+                            try {
+                                s.close();
+                            } catch (Exception ignore) {
+                            }
+                        }
+                        BlockCacheStore.clearBook(RemoteBook.cacheKey(remotePath));
+                    } else {
+                        android.util.Log.i("REMOTE", "cache-first: version verified: " + remotePath);
+                    }
+                } finally {
+                    src.close();
+                }
+            } catch (Throwable ignore) {
+                android.util.Log.i("REMOTE", "cache-first: version verify skipped (offline?): " + remotePath);
+            } finally {
+                verifying.remove(remotePath);
+            }
+        }, "@T CacheVerify");
+        t.setDaemon(true);
+        t.setPriority(Thread.MIN_PRIORITY);
+        t.start();
+    }
+
     /** Opens a fresh session bypassing the reuse pool. */
     public static RemoteBookSession open(String remotePath) throws IOException {
         return RemoteBookSession.open(remotePath, createSource(remotePath));
+    }
+
+    /**
+     * Aborts and forgets the live session of a path (viewer closed /
+     * cancelled): in-flight network reads fail immediately, freeing the
+     * global native lock that the open/render path holds while reading.
+     */
+    public static void abortSession(String remotePath) {
+        final RemoteBookSession s;
+        synchronized (LOCK) {
+            s = SESSIONS.remove(remotePath);
+        }
+        if (s != null) {
+            // persist the outgoing book's page tree map while its session is
+            // still alive (version info lives on the session)
+            com.foobnix.sys.ImageExtractor.savePageTreeIfPossible(remotePath, s.versionTag, s.size);
+            try {
+                s.abort();
+            } catch (Exception e) {
+                LOG.w(e);
+            }
+            try {
+                // full close: releases the cache pin and handles — an aborted
+                // session left pinned kept its cache un-clearable forever
+                s.close();
+            } catch (Exception e) {
+                LOG.w(e);
+            }
+        }
+    }
+
+    /** Closes every live session (cache-clear path): unpins all books so
+     * clearAll can actually delete their caches. */
+    public static void closeAllSessions() {
+        synchronized (LOCK) {
+            for (RemoteBookSession s : SESSIONS.values()) {
+                com.foobnix.sys.ImageExtractor.savePageTreeIfPossible(s.remotePath, s.versionTag, s.size);
+                try {
+                    s.abort();
+                } catch (Exception e) {
+                    LOG.w(e);
+                }
+                try {
+                    s.close();
+                } catch (Exception e) {
+                    LOG.w(e);
+                }
+            }
+            SESSIONS.clear();
+        }
     }
 
     public static void closeSession(String remotePath) {

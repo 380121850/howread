@@ -421,6 +421,7 @@ public class DecodeServiceBase implements DecodeService {
             abortDecoding(task, null, null);
         } catch (final Throwable th) {
             th.printStackTrace();
+            scheduleRemoteDecodeRetry(task);
             abortDecoding(task, vuPage, null);
         } finally {
             // TempHolder.lock.unlock();
@@ -428,6 +429,42 @@ public class DecodeServiceBase implements DecodeService {
                 holder.unlock();
             }
 
+        }
+    }
+
+    /**
+     * Remote pages can fail their decode while the blocks are still on the
+     * wire (or not cached at all): retry the node on a short delay so the
+     * page paints automatically once its data lands, instead of staying a
+     * silent blank. The global cached-MB banner keeps the user informed.
+     */
+    private void scheduleRemoteDecodeRetry(final DecodeTask task) {
+        try {
+            if (task.node.remoteDecodeRetries >= 20) {
+                return;
+            }
+            final android.app.Activity a = task.node.page.base.getActivity();
+            if (a == null || a.isFinishing()) {
+                return;
+            }
+            final String book = com.foobnix.android.utils.Apps.getBookPathFromActivity(a);
+            if (book == null || !com.foobnix.remote.RemoteBook.isRemotePathLoose(book)) {
+                return;
+            }
+            task.node.remoteDecodeRetries++;
+            final ViewState vs = task.viewState;
+            final android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
+            h.postDelayed(() -> {
+                try {
+                    if (!a.isFinishing()) {
+                        android.util.Log.i("REMOTE", "decode retry #" + task.node.remoteDecodeRetries
+                                + " page " + task.pageNumber);
+                        decodePage(vs, task.node);
+                    }
+                } catch (Throwable ignore) {
+                }
+            }, 2000);
+        } catch (Throwable ignore) {
         }
     }
 

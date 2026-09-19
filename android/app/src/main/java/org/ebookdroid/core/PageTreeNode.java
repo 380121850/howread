@@ -52,6 +52,9 @@ public class PageTreeNode implements DecodeService.DecodeCallback {
         this.croppedBounds = null;
     }
 
+    /** Remote decode retry counter (block data may still be in flight). */
+    public volatile int remoteDecodeRetries;
+
     PageTreeNode(final Page page, final PageTreeNode parent, final int id, final RectF localPageSliceBounds) {
         this.page = page;
         this.parent = parent;
@@ -101,6 +104,12 @@ public class PageTreeNode implements DecodeService.DecodeCallback {
 
                     @Override
                     public void run() {
+                        if (remoteDecodeRetries > 0 && remoteDecodeRetries < 20) {
+                            // a remote decode retry is pending: keep the node
+                            // in its loading state (placeholder stays visible)
+                            // instead of flashing a blank page
+                            return;
+                        }
                         stopDecodingThisNode(null);
                     }
                 });
@@ -117,6 +126,8 @@ public class PageTreeNode implements DecodeService.DecodeCallback {
                     holder.setBitmap(bitmaps);
                     stopDecodingThisNode(null);
                     FirstPaintGate.notifyDecoded();
+                    com.foobnix.remote.RemoteTimeline.markOnce("firstRender",
+                            "first page bitmap rendered");
 
                     final IViewController dc = page.base.getDocumentController();
                     if (dc instanceof AbstractViewController) {

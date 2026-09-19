@@ -121,9 +121,8 @@ public class RemoteVariantDetector {
     // ------------------------------------------------------------- TXT
 
     private static Verdict checkTxt(RemoteBookSession s, long t0) {
-        if (s.size > TXT_MAX) {
-            return download(false, "size " + s.size);
-        }
+        /* no size gate any more: the chunked-txt document parses the text
+         * 256KB at a time, so huge text files stream like small ones */
         byte[] head = readRange(s, 0, (int) Math.min(65536, s.size));
         if (overBudget(t0) || head == null || head.length == 0) {
             return stream();
@@ -533,12 +532,15 @@ public class RemoteVariantDetector {
             if (!f.isFile()) {
                 return null;
             }
+            /* v2 verdicts carry a "2" marker: entries written before the
+             * chunked-txt engine must not keep their old DOWNLOAD verdicts */
             String[] parts = IO.readString(f).split("\\|", -1);
-            if (parts.length < 3 || !parts[0].equals(tag == null ? "" : tag)) {
+            if (parts.length < 4 || !"2".equals(parts[0])
+                    || !parts[1].equals(tag == null ? "" : tag)) {
                 return null;
             }
-            return new Verdict(Integer.parseInt(parts[1]), "1".equals(parts[2]),
-                    parts.length > 3 ? parts[3] : null);
+            return new Verdict(Integer.parseInt(parts[2]), "1".equals(parts[3]),
+                    parts.length > 4 ? parts[4] : null);
         } catch (Throwable t) {
             return null;
         }
@@ -550,7 +552,7 @@ public class RemoteVariantDetector {
             File f = variantFile(path);
             f.getParentFile().mkdirs();
             o = new FileOutputStream(f);
-            o.write(((tag == null ? "" : tag) + "|" + v.action + "|" + (v.prompt ? 1 : 0)
+            o.write(("2|" + (tag == null ? "" : tag) + "|" + v.action + "|" + (v.prompt ? 1 : 0)
                     + "|" + (v.detail == null ? "" : v.detail)).getBytes("UTF-8"));
         } catch (Throwable t) {
             LOG.w(t);

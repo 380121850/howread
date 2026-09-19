@@ -918,6 +918,12 @@
     <string name="remote_updated_title">文件已更新</string>
     <string name="remote_updated_msg">远程文件已更新。是否清除旧缓存并重新加载？也可下载新版本后打开。</string>
     <string name="remote_open_failed">无法在线打开</string>
+    <string name="offline_partial_toast">离线模式：仅可读已缓存部分（%1$s），未缓存页暂为空白</string>
+    <string name="remote_cache_net_wifi">当前网络：WiFi（后台整本缓存开启）</string>
+    <string name="remote_cache_net_metered">当前网络：流量（后台整本缓存已停用）</string>
+    <string name="remote_cache_capacity">容量：已用 %1$s / 预算 %2$s</string>
+    <string name="remote_window_before">阅读位置前缓存范围（%）</string>
+    <string name="remote_window_after">阅读位置后缓存范围（%）</string>
     <string name="remote_open_failed_msg">错误：%1$s</string>
     <string name="remote_download_and_open">下载后打开</string>
     <string name="remote_variant_drm_title">加密书籍</string>

@@ -35,7 +35,9 @@ public class RemoteSeekableStream implements SeekableInputStream {
             for (int i = 0; i < Math.min(12, n); i++) {
                 sb.append(String.format("%02x", b[i]));
             }
-            android.util.Log.i("REMOTE", sb.toString());
+            if (android.util.Log.isLoggable("REMOTE", android.util.Log.VERBOSE)) {
+                android.util.Log.i("REMOTE", sb.toString());
+            }
         }
         if (n <= 0) {
             android.util.Log.i("REMOTE", "stream read EOF at pos=" + pos + " size=" + session.size);
@@ -66,7 +68,9 @@ public class RemoteSeekableStream implements SeekableInputStream {
         if (pos < 0) {
             pos = 0;
         }
-        android.util.Log.i("REMOTE", "stream seek whence=" + whence + " off=" + offset + " -> " + pos);
+                if (android.util.Log.isLoggable("REMOTE", android.util.Log.VERBOSE)) {
+            android.util.Log.i("REMOTE", "stream seek whence=" + whence + " off=" + offset + " -> " + pos);
+        }
         return pos;
     }
 

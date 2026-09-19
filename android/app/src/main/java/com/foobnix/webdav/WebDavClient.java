@@ -218,6 +218,8 @@ public class WebDavClient {
             okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
                     .connectTimeout(15, TimeUnit.SECONDS)
                     .readTimeout(15, TimeUnit.SECONDS)
+                // bound the whole PROPFIND/GET: slow servers must not hang the browse UI
+                .callTimeout(60, TimeUnit.SECONDS)
                     .build();
             okhttp3.Response resp = client.newCall(rb.method("PROPFIND", null).build()).execute();
             String sample = resp.body() == null ? "<no body>" : resp.peekBody(1600).string();

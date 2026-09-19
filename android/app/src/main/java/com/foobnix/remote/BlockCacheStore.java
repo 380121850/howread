@@ -17,19 +17,31 @@ import java.util.Map;
  *
  * Disk layout: {@code <cachePath>/Remote/<cacheKey>/} containing
  * {@code data.bin} (blocks at index*BLOCK_SIZE), {@code blocks.bin} (one byte
- * per block: 1 = cached) and {@code meta.json} (size / versionTag /
- * fullyCached). A versionTag change wipes the directory — cached bytes from
- * a different file version are never mixed into the new one.
+ * per block: 1 = cached), {@code crc.bin} (4-byte CRC32 per block, format v2)
+ * and {@code meta.json} (fmt / size / versionTag / fullyCached). A versionTag
+ * or format change wipes the directory — cached bytes from a different file
+ * version or cache format are never mixed into the new one.
  */
 public class BlockCacheStore {
+
+    /** On-disk cache format. Bumping wipes every existing remote cache once
+     * (open() rebuilds from scratch): v2 adds per-block checksums — caches
+     * written by v1 may contain truncated blocks that made books fail to
+     * open forever, so they must not be trusted. */
+    public static final int FORMAT_VERSION = 2;
 
     // Text formats (epub/fb2/txt/...) read the book mostly sequentially
     // during the first-open layout: 1MB blocks cut the per-request round
     // trips ~4x compared to 256KB, so the first screen appears much faster.
     // A block-size change wipes existing text caches once (acceptable).
     public static final int BLOCK_SIZE = 1024 * 1024;
-    /** Page-based formats (PDF / CBZ / XPS) use 1MB blocks (tech-spec §7.1). */
-    public static final int BLOCK_SIZE_PAGE_FORMAT = 1024 * 1024;
+    /** Page-based formats (PDF / CBZ / XPS) read SCATTERED small objects
+     * (page tree, outline, xref) as often as sequential page data: 64KB
+     * blocks keep the structural walk cheap (1MB blocks over-fetched ~16:1
+     * — a 531MB book pulled 134MB just to count its pages), while the P2
+     * prefetch window covers the sequential parts. A size change wipes
+     * existing page-format caches once via the mismatch rebuild. */
+    public static final int BLOCK_SIZE_PAGE_FORMAT = 64 * 1024;
     /** Memory LRU byte cap, tiered by device RAM (tech-spec §14 double
      * limit: blocks + bytes). Low-RAM devices keep the conservative 32MB;
      * mid-range get 64MB, large-RAM devices 128MB. */
@@ -85,6 +97,8 @@ public class BlockCacheStore {
     private final int blockCount;
     private final int blockSize;
     private final RandomAccessFile data;
+    /** Per-block CRC32 (4 bytes per block); null when crc.bin is unusable. */
+    private final RandomAccessFile crc;
     private final byte[] bitmap;
     private final Object lock = new Object();
     /** Approximate sum of the materialized block arrays held in {@link #mem}. */
@@ -117,6 +131,13 @@ public class BlockCacheStore {
         this.bitmap = bitmap;
         this.fullyCached = fullyCached;
         this.versionTag = versionTag == null ? "" : versionTag;
+        RandomAccessFile crcF = null;
+        try {
+            crcF = new RandomAccessFile(new File(dir, "crc.bin"), "rw");
+        } catch (Exception e) {
+            LOG.w(e);
+        }
+        this.crc = crcF;
     }
 
     public static File rootDir() {
@@ -191,7 +212,8 @@ public class BlockCacheStore {
                 String storedTag = m.optString("versionTag");
                 long storedSize = m.optLong("size", -1);
                 int storedBlockSize = m.optInt("blockSize", BLOCK_SIZE);
-                if (storedTag.equals(versionTag) && storedSize == fileSize && storedBlockSize == blockSize
+                if (m.optInt("fmt", 1) == FORMAT_VERSION
+                        && storedTag.equals(versionTag) && storedSize == fileSize && storedBlockSize == blockSize
                         && bitmapF.isFile() && bitmapF.length() >= blockCount
                         && dataF.isFile() && dataF.length() == fileSize) {
                     fullyCached = m.optBoolean("fullyCached", false);
@@ -245,6 +267,9 @@ public class BlockCacheStore {
             boolean fullyCached = m.optBoolean("fullyCached", false);
             if (size <= 0 || blockSize <= 0) {
                 return null;
+            }
+            if (m.optInt("fmt", 1) != FORMAT_VERSION) {
+                return null; // old format: let open() rebuild it
             }
             int blockCount = (int) ((size + blockSize - 1) / blockSize);
             if (bitmapF.length() < blockCount) {
@@ -351,6 +376,7 @@ public class BlockCacheStore {
         this.versionTag = versionTag == null ? "" : versionTag;
         try {
             JSONObject m = new JSONObject();
+            m.put("fmt", FORMAT_VERSION);
             m.put("size", fileSize);
             m.put("versionTag", versionTag == null ? "" : versionTag);
             m.put("fullyCached", fullyCached);
@@ -409,6 +435,17 @@ public class BlockCacheStore {
                     data.seek(index * blockSize);
                     data.readFully(buf);
                 }
+                if (!crcMatches(index, buf)) {
+                    // the stored bytes fail their checksum (e.g. a truncated
+                    // write): mark the block uncached so it is fetched again
+                    // instead of feeding the reader corrupt data forever
+                    bitmap[(int) index] = 0;
+                    mem.remove(index);
+                    persistBitmap();
+                    android.util.Log.i("REMOTE", "block checksum mismatch, refetch idx="
+                            + index + " book=" + dir.getName());
+                    return null;
+                }
                 remember(index, buf);
                 touchDir();
                 return buf;
@@ -432,13 +469,60 @@ public class BlockCacheStore {
                 }
                 bitmap[(int) index] = 1;
                 remember(index, blockData);
-                FileOutputStream out = new FileOutputStream(new File(dir, "blocks.bin"));
-                out.write(bitmap);
-                out.close();
+                writeCrc(index, blockData);
+                persistBitmap();
                 touchDir();
             } catch (Exception e) {
                 LOG.e(e);
             }
+        }
+    }
+
+    /** Rewrites blocks.bin (the durable cached/not-cached bitmap). */
+    private void persistBitmap() {
+        try {
+            FileOutputStream out = new FileOutputStream(new File(dir, "blocks.bin"));
+            out.write(bitmap);
+            out.close();
+        } catch (Exception e) {
+            LOG.w(e);
+        }
+    }
+
+    private void writeCrc(long index, byte[] blockData) {
+        if (crc == null) {
+            return;
+        }
+        try {
+            java.util.zip.CRC32 c = new java.util.zip.CRC32();
+            c.update(blockData, 0, blockData.length);
+            synchronized (crc) {
+                crc.seek(index * 4L);
+                crc.writeInt((int) c.getValue());
+            }
+        } catch (Exception e) {
+            LOG.w(e);
+        }
+    }
+
+    /** False when the stored checksum disagrees with the bytes on disk. */
+    private boolean crcMatches(long index, byte[] buf) {
+        if (crc == null) {
+            return true;
+        }
+        try {
+            synchronized (crc) {
+                if (crc.length() < (index + 1) * 4L) {
+                    return true; // no checksum recorded (must not happen in v2)
+                }
+                crc.seek(index * 4L);
+                int stored = crc.readInt();
+                java.util.zip.CRC32 c = new java.util.zip.CRC32();
+                c.update(buf, 0, buf.length);
+                return stored == (int) c.getValue();
+            }
+        } catch (Exception e) {
+            return true; // checksum unreadable: trust the block
         }
     }
 
@@ -497,6 +581,13 @@ public class BlockCacheStore {
             } catch (Exception e) {
                 LOG.w(e);
             }
+            try {
+                if (crc != null) {
+                    crc.close();
+                }
+            } catch (Exception e) {
+                LOG.w(e);
+            }
         }
     }
 
@@ -529,9 +620,80 @@ public class BlockCacheStore {
         com.foobnix.ext.CacheZipUtils.deleteDir(new File(rootDir(), cacheKey));
     }
 
-    /** Total bytes currently occupied by the remote-book cache. */
+    /** Total bytes currently occupied by the remote-book cache. Counts the
+     * REAL cached bytes: data.bin is preallocated to the full remote file
+     * size (a 609MB book counts 609MB even with 8MB cached), which made
+     * the evictor wipe freshly cached books minutes after creation. */
     public static long totalBytes() {
-        return dirSize(rootDir());
+        File[] books = rootDir().listFiles();
+        if (books == null) {
+            return 0;
+        }
+        long total = 0;
+        for (File book : books) {
+            total += cachedBytes(book);
+        }
+        return total;
+    }
+
+    /** Real cached bytes of one book dir: cached block count from the
+     * blocks.bin bitmap times the book's block size (every cached block is
+     * a full block except possibly the file tail), plus the small sidecar
+     * files. data.bin is deliberately not counted. */
+    private static long cachedBytes(File bookDir) {
+        if (bookDir == null || !bookDir.isDirectory()) {
+            return 0;
+        }
+        long total = 0;
+        try {
+            File metaF = new File(bookDir, "meta.json");
+            long blockSize = BLOCK_SIZE;
+            if (metaF.isFile()) {
+                try {
+                    JSONObject m = new JSONObject(com.foobnix.android.utils.IO.readString(metaF));
+                    blockSize = m.optLong("blockSize", BLOCK_SIZE);
+                } catch (Exception e) {
+                    LOG.w(e);
+                }
+                total += metaF.length();
+            }
+            File bitmapF = new File(bookDir, "blocks.bin");
+            if (bitmapF.isFile()) {
+                byte[] all = readFileBytes(bitmapF);
+                int count = 0;
+                for (byte b : all) {
+                    if (b != 0) {
+                        count++;
+                    }
+                }
+                total += (long) count * blockSize;
+            }
+            File pm = new File(bookDir, "pagemap.bin");
+            if (pm.isFile()) {
+                total += pm.length();
+            }
+        } catch (Throwable t) {
+            LOG.w(t);
+        }
+        return total;
+    }
+
+    private static byte[] readFileBytes(File f) throws java.io.IOException {
+        java.io.FileInputStream in = new java.io.FileInputStream(f);
+        try {
+            byte[] out = new byte[(int) f.length()];
+            int got = 0;
+            while (got < out.length) {
+                int n = in.read(out, got, out.length - got);
+                if (n <= 0) {
+                    break;
+                }
+                got += n;
+            }
+            return out;
+        } finally {
+            in.close();
+        }
     }
 
     private static long dirSize(File f) {
@@ -557,7 +719,7 @@ public class BlockCacheStore {
      * {@code maxBytes}. No time-based expiry — cached books live as long
      * as there is room. Called before a new block write burst.
      */
-    public static void evict(long maxBytes) {
+    public static synchronized void evict(long maxBytes) {
         try {
             File root = rootDir();
             File[] books = root.listFiles();
@@ -584,7 +746,10 @@ public class BlockCacheStore {
                 if (pinnedKeys.contains(book.getName())) {
                     continue; // never evict the book being read
                 }
+                long before = totalBytes();
                 com.foobnix.ext.CacheZipUtils.deleteDir(book);
+                android.util.Log.i("REMOTE", "evicted LRU book cache " + book.getName()
+                        + ", freed " + ((before - totalBytes()) / (1024 * 1024)) + "MB");
             }
         } catch (Exception e) {
             LOG.e(e);

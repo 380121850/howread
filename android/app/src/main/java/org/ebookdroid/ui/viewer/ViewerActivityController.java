@@ -445,6 +445,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
         if (pageCount > 0) {
             pageText = (page + 1) + "/" + pageCount;
         }
+        android.util.Log.i("REMOTE", "page now " + (page + 1) + "/" + pageCount);
 
         wrapperControlls.updateUI();
 
@@ -592,6 +593,13 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
     }
 
     public void closeActivityFinal(final Runnable action) {
+        // fail in-flight remote reads now so documentModel.recycle() below
+        // (running on the UI thread) never blocks on a stuck network read
+        // holding the global native lock
+        if (m_fileName != null && com.foobnix.remote.RemoteBook.isRemotePathLoose(m_fileName)) {
+            com.foobnix.remote.RemoteSessionFactory.abortSession(m_fileName);
+        }
+        dismissRemoteSlowBanner();
 
         Safe.run(new Runnable() {
 
@@ -614,7 +622,12 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                     LOG.e(e);
                 }
                 if (documentModel != null) {
+                    final long recycleT0 = android.os.SystemClock.elapsedRealtime();
                     documentModel.recycle();
+                    final long recycleMs = android.os.SystemClock.elapsedRealtime() - recycleT0;
+                    if (recycleMs > 500) {
+                        android.util.Log.i("REMOTE", "codec recycle blocked UI " + recycleMs + "ms");
+                    }
                 }
 
                 LOG.d("closeActivity 2");
@@ -631,6 +644,111 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
         });
 
         LOG.d("closeActivity DONE");
+    }
+
+    // ---- remote slow-first-paint banner (vertical reader) ----
+    private android.widget.LinearLayout remoteSlowBanner;
+    private final android.os.Handler bannerUi = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable bannerTick;
+
+    /**
+     * The loading dialog lifted but the first page still has no bitmap (slow
+     * network / sleeping NAS): keep informing the user — the cached-MB
+     * counter keeps growing — and offer the proven whole-book-download
+     * escape, instead of a silent blank page. The banner removes itself as
+     * soon as the first page bitmap arrives.
+     */
+    private void showRemoteSlowBanner() {
+        final VerticalViewActivity a = getManagedComponent();
+        if (a == null || a.isFinishing() || !com.foobnix.remote.RemoteBook.isRemotePath(m_fileName)
+                || remoteSlowBanner != null) {
+            return;
+        }
+        android.util.Log.i("REMOTE", "slow first paint, showing progress banner: " + m_fileName);
+        final android.widget.LinearLayout bar = new android.widget.LinearLayout(a);
+        bar.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        bar.setBackgroundColor(0xE6171717);
+        final int pad = (int) (8 * a.getResources().getDisplayMetrics().density);
+        bar.setPadding(pad, pad, pad, pad);
+
+        final android.widget.TextView msg = new android.widget.TextView(a);
+        msg.setTextColor(0xFFFFFFFF);
+        msg.setTextSize(13f);
+        final android.widget.Button dl = new android.widget.Button(a);
+        dl.setText(com.foobnix.pdf.info.R.string.remote_download_and_open);
+        dl.setOnClickListener(v -> {
+            android.util.Log.i("REMOTE", "banner: user chose full download: " + m_fileName);
+            dismissRemoteSlowBanner();
+            com.foobnix.remote.RemoteBookOpener.fetchToCache(a, m_fileName, 0, target -> {
+                com.foobnix.pdf.info.ExtUtils.openFile(a,
+                        com.foobnix.ui2.AppDB.get().getOrCreate(target.getPath()));
+                a.finish();
+            });
+        });
+        final android.widget.TextView close = new android.widget.TextView(a);
+        close.setText("✕");
+        close.setTextColor(0xFFFFFFFF);
+        close.setPadding(pad, pad, pad, pad);
+        close.setOnClickListener(v -> dismissRemoteSlowBanner());
+
+        bar.addView(msg, new android.widget.LinearLayout.LayoutParams(0,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        bar.addView(dl);
+        bar.addView(close);
+        a.addContentView(bar, new android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT));
+        remoteSlowBanner = bar;
+
+        final long bannerT0 = android.os.SystemClock.elapsedRealtime();
+        bannerTick = new Runnable() {
+            @Override public void run() {
+                if (remoteSlowBanner == null || a.isFinishing()) {
+                    return;
+                }
+                if (com.foobnix.sys.FirstPaintGate.hasFirstBitmap()) {
+                    android.util.Log.i("REMOTE", "slow-paint banner: first bitmap arrived, hide");
+                    dismissRemoteSlowBanner();
+                    return;
+                }
+                try {
+                    final int pct = com.foobnix.remote.BlockCacheStore.cachedPercent(m_fileName);
+                    String text;
+                    if (pct >= 0) {
+                        final long size = com.foobnix.remote.BlockCacheStore.peekSize(m_fileName);
+                        text = size > 0
+                                ? a.getString(com.foobnix.pdf.info.R.string.remote_open_progress, pct,
+                                        com.foobnix.remote.RemoteBookOpener.fmtMB(size * pct / 100),
+                                        com.foobnix.remote.RemoteBookOpener.fmtMB(size))
+                                : a.getString(com.foobnix.pdf.info.R.string.remote_open_progress_nosize, pct);
+                    } else {
+                        final long sec = (android.os.SystemClock.elapsedRealtime() - bannerT0) / 1000;
+                        text = a.getString(com.foobnix.pdf.info.R.string.remote_open_waiting, sec);
+                    }
+                    text += "\n" + a.getString(com.foobnix.pdf.info.R.string.remote_loading_slow);
+                    msg.setText(text);
+                } catch (Throwable t) {
+                    LOG.e(t);
+                }
+                bannerUi.postDelayed(this, 600);
+            }
+        };
+        bannerUi.postDelayed(bannerTick, 600);
+    }
+
+    private void dismissRemoteSlowBanner() {
+        bannerUi.removeCallbacks(bannerTick);
+        bannerTick = null;
+        final android.widget.LinearLayout bar = remoteSlowBanner;
+        remoteSlowBanner = null;
+        if (bar != null) {
+            try {
+                ((android.view.ViewGroup) bar.getParent()).removeView(bar);
+            } catch (Throwable t) {
+                LOG.e(t);
+            }
+        }
     }
 
     public void closeActivity1(final ActionEx action) {
@@ -740,6 +858,11 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                 }
 
                 android.util.Log.i("REMOTE", "calling documentModel.open");
+                // fresh load: wipe a cancel flag left by a previous book
+                TempHolder.get().loadingCancelled.set(false);
+                // userOpenEnd runs in the task's finally: the page-size loop
+                // AFTER open needs the priority window just as much
+                com.foobnix.remote.RemoteSessionFactory.userOpenStart(m_fileName);
                 documentModel.open(m_fileName, m_password);
                 android.util.Log.i("BENCH", "doc-open-done " + (android.os.SystemClock.elapsedRealtime() - benchT0) + "ms");
 
@@ -802,6 +925,8 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
             } catch (final Throwable th) {
                 LOG.e(th);
                 return th;
+            } finally {
+                com.foobnix.remote.RemoteSessionFactory.userOpenEnd();
             }
         }
 
@@ -810,6 +935,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
             try {
                 LOG.d("onPostExecute");
                 android.util.Log.i("BENCH", "load-end " + (android.os.SystemClock.elapsedRealtime() - benchT0) + "ms");
+                com.foobnix.remote.RemoteTimeline.mark("reader load task done (vertical)");
                 if (TempHolder.get().loadingCancelled.get()) {
                     android.util.Log.i("REMOTE", "load cancelled-gate trips, silent close: " + m_fileName);
                     super.onPostExecute(result);
@@ -818,6 +944,14 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                 }
 
                 wrapperControlls.onLoadBookFinish();
+                if (result == null && m_fileName != null
+                        && com.foobnix.remote.RemoteBook.isRemotePathLoose(m_fileName)) {
+                    // persist a real cover while the document is open and
+                    // the current page is cached (local-only work)
+                    final AppBook bsC = SettingsManager.getBookSettings();
+                    final int coverPage = bsC == null ? 0 : Math.max(0, bsC.pg - 1);
+                    com.foobnix.sys.ImageExtractor.maybeSaveRemoteCover(m_fileName, coverPage);
+                }
                 if (result == null) {
                     try {
                         // The real title (extracted on the background thread)
@@ -864,7 +998,22 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                             // keep the loading dialog up until the first page
                             // bitmap is decoded, so no blank page flashes
                             holdProgressDialog = true;
-                            FirstPaintGate.arm(progressDialog);
+                            if (com.foobnix.remote.RemoteBook.isRemotePath(m_fileName)) {
+                                // the first screen crosses the network: lift the
+                                // dialog after a short beat so the reader shell
+                                // shows immediately (horizontal-parity), and let
+                                // the slow-paint banner carry the cached-MB
+                                // progress + download escape until it paints
+                                FirstPaintGate.arm(progressDialog,
+                                        com.foobnix.sys.FirstPaintGate.REMOTE_HARD_CAP_MS);
+                                FirstPaintGate.setOnRelease(decoded -> {
+                                    if (!decoded) {
+                                        showRemoteSlowBanner();
+                                    }
+                                });
+                            } else {
+                                FirstPaintGate.arm(progressDialog);
+                            }
                         }
 
                     } catch (final Throwable th) {
