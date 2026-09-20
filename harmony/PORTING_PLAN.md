@@ -89,6 +89,17 @@
 4. ✅ **离线**：完全缓存的书零网络打开（openOffline 降级，服务器停机实测）；已缓存整本书重取回直接从缓存落地。
 5. ✅ **SMB/SFTP/EPUB DRM 已在阶段 15b 完成（2026-09-12，见下）**。剩余待续：OPDS 认证/分页；计费网络检测接入 wholeBookOnMetered。
 
+### 阶段 16j（2026-09-20）：安卓新功能移植——MuPDF 懒页树引擎同步 + 远读页图 sidecar + 阅读双击缩放 + 子页工具栏/排序 ✅ 已完成（0.9.10）
+
+- **引擎同步**：共享主树（Builder/mupdf-1.23.7）09-19 的懒页树优化（pdf_get/set_page_object_numbers、pdf_get/set_page_sizes、pdf_finish_lazy_page_tree、howread_lazy 等）通过重编 harmony/libmupdf.so（build_mupdf_harmony.sh 两 ABI）纳入鸿蒙；harmony/native/CMakeLists.txt 补编新增的 source/html/txt-chunk-doc.c（html-doc.c 新链路依赖，缺它链接失败）。
+- **冲突隔离（安卓零改动）**：① pdf.h 尾部新声明落在其 extern "C" 块之外——安卓 C 胶水无感、鸿蒙 C++ 按 C++ 改名导致链接失败；在 mupdf_napi.cpp 用 extern "C" 包裹 mupdf 头文件（共享树不动）。② 远程文档的页树读取需经 remote stream 回调（JS 线程供数）——主线程同步调用页图接口会自锁（实测 appfreeze THREAD_BLOCK_6S）；页图导出/注入实现为 docOpAsync op13/op14（napi_async_work worker 线程执行），同步导出仅供本地文档使用。
+- **页图 sidecar（安卓 MuPdfDocument/BlockCacheStore pagemap.bin 移植）**：RemoteBook.ets 新增 readPageTreeSidecar/writePageTreeSidecar（PGM1 大端格式：magic|fileSize|versionTag|nums|sizes，存 files/Remote/<cacheKey>/pagemap.bin，按 size+versionTag 校验）；Reader.ets initRemoteReader 打开远程 PDF 后：命中 sidecar → docOpAsync op14 注入；无 sidecar 且 fullyCached → op13（完成懒树+导出）→ 落盘。NAPI 同步导出 getPageTreeNums/setPageTreeNums/getPageTreeSizes/setPageTreeSizes/finishLazyPageTree/setLazyPageTree/getWalkMs 共 7 导出（与安卓 JNI 家族对齐）。
+- **阅读双击缩放**：Reader 中央手势改 GestureGroup(Exclusive)：Tap(count:2)→doubleTapFit（fitZoom↔2×fitZoom 往返，fitZoom 取应用设置后的舒适档）、LongPress、Tap(count:1) 原单击行为；对齐安卓 DOUBLE_CLICK_ADJUST_PAGE 默认；切除白边随批次 4。
+- **子页工具栏**：buildBrowseTab 文件夹子页改 ‹（browseHome）/路径/排序/视图（删 ⌂/↑）；browseSortMode 0 名称↑/1 名称↓/2 最新/3 最大（@State，statSync mtime/size，目录与文件都生效）。
+- **WHATSNEW_URL** → https://380121850.github.io/howread/what-is-new/zh.html（安卓 v1.3.13 同源）。
+- **验证（Pura 90 模拟器 x86_64 debug）**：pagemap saved(300 pages)→injected(300 pages) 全链路 + pagemap.bin 落位；双击 3.00x/1.50x 往返、单击菜单/长按选字不受影响；子页工具栏/排序反转/‹ 回根；EPUB/TXT/FB2(UTF-8)/本地 PDF 引擎回归通过；GBK FB2 打不开为既有限制（旧版本同样，进度 0/0 佐证）。
+- **不适用项备案**：华为渠道退款自愈/广告即清（鸿蒙无 IAP 与广告）；安卓第二轮检视 23 类修复（安卓架构特定，鸿蒙侧无同缺陷证据）；六项调整之②OPDS 默认已由 0.9.9 完成、③⑤单击/长按配置鸿蒙架构不同不适用。
+
 ### 阶段 16i（2026-09-19）：浏览页整页化 + 直返导航 + OPDS 预置精简 ✅ 已完成（0.9.9）
 
 - 网络浏览页（WebDAV/OPDS/SMB/SFTP 共用 buildNetworkOverlay）从 92%×86% 浮层改为占满内容区的单页：主列 Tabs 外包 Stack，浏览层为 Stack 兄弟节点（100%×100% + pageBg），底部（tabPositionTop 时顶部）留 barHeight(70) 透明条露出标签栏，hitTestBehavior(HitTestMode.Transparent) 让标签栏点击穿透到 Tabs；Tabs 显式 barHeight(70)。onChange/switchTab 关闭浏览层实现"点标签栏直接跳转"。

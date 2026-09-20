@@ -216,3 +216,19 @@ export function sftpListAsync(host: string, port: number, user: string, password
 export function sftpHomeAsync(handle: number): Promise<string>;
 /** Close and free the connection. */
 export function sftpCloseAsync(handle: number): Promise<string>;
+
+/* ---- HowRead: persisted page-tree map (remote pdf; Android JNI parity) ---- */
+/** Page index -> xref object number of the open pdf, or null when unavailable. */
+export function getPageTreeNums(handle: number): number[] | null;
+/** Inject a persisted page map; true when accepted (all numbers must be > 0). */
+export function setPageTreeNums(handle: number, nums: number[]): boolean;
+/** Per-page [w0,h0,w1,h1,...] harvested at page-tree walk time, or null. */
+export function getPageTreeSizes(handle: number): number[] | null;
+/** Inject per-page sizes (even-length [w,h] pairs); true when accepted. */
+export function setPageTreeSizes(handle: number, sizes: number[]): boolean;
+/** Complete a lazy page tree now (full walk); true on success. */
+export function finishLazyPageTree(handle: number): boolean;
+/** Toggle lazy page-tree mode (defer the O(pages) tree walk). */
+export function setLazyPageTree(handle: number, on: boolean): void;
+/** Duration in ms of the last full page-tree walk. */
+export function getWalkMs(handle: number): number;

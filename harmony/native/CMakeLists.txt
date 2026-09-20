@@ -208,6 +208,7 @@ set(CORE_SRC
         "${MUPDF_ROOT}/source/html/html-parse.c"
         "${MUPDF_ROOT}/source/html/mobi.c"
         "${MUPDF_ROOT}/source/html/story-writer.c"
+        "${MUPDF_ROOT}/source/html/txt-chunk-doc.c"
         "${MUPDF_ROOT}/source/html/xml-dom.c"
         "${MUPDF_ROOT}/source/reflow/reflow-doc.c"
         "${MUPDF_ROOT}/source/cbz/mucbz.c"

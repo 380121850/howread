@@ -58,7 +58,8 @@ const TAB_NAMES: Resource[] = [$r('app.string.tab_home'), $r('app.string.tab_lib
 const THEME_PRESETS: string[] = ['#3949AB', '#1565C0', '#00897B', '#2E7D32', '#6D4C41', '#455A64', '#AD1457', '#37474F'];
 const ACCENT_PRESETS: string[] = ['#03A9F4', '#FF4081', '#7CB342', '#FFB300', '#9575CD', '#4DD0E1', '#F06292', '#90A4AE'];
 const FORMAT_ROWS: string[][] = [['pdf', 'PDF'], ['epub', 'EPUB'], ['fb2', 'FB2'], ['txtmd', 'TXT/MD'], ['mobi', 'MOBI/AZW/PRC'], ['djvu', 'DJVU'], ['xps', 'XPS'], ['doc', 'DOC/DOCX'], ['rtf', 'RTF'], ['odt', 'ODT'], ['cbz', 'CBZ/CBR'], ['zip', 'ZIP'], ['html', 'HTML']];
-const WHATSNEW_URL: string = 'https://github.com/380121850/howread/blob/master/CHANGES.md';
+/* 2026-09-20 port: same what-is-new page as Android v1.3.13 */
+const WHATSNEW_URL: string = 'https://380121850.github.io/howread/what-is-new/zh.html';
 const HOME_URL: string = 'https://380121850.github.io/howread/';
 const SUPPORT_MAIL: string = '380121850@163.com';
 
@@ -99,6 +100,8 @@ struct Index {
   @State allBookmarks: Bookmark[] = [];
   @State bookmarkFilter: string = '';
   @State browseViewMode: number = 0; /* 0=list, 1=grid */
+  /* 2026-09-20 port: Android sortByBrowse - 0 name asc / 1 name desc / 2 newest / 3 largest */
+  @State browseSortMode: number = 0;
   @State browseCurrentDir: string = '';
 
   // ---- Settings (sprint E) ----
@@ -6481,16 +6484,19 @@ struct Index {
       } else {
         /* folder browser: breadcrumb bar (home / up / path / view) */
         Row({ space: 6 }) {
-          Button('\u2302').fontSize(14).width(40).height(32).backgroundColor(this.thm()).fontColor(Color.White)
+          /* 2026-09-20 port: Android detached folder page toolbar - back /
+           * path / sort / view (home+up merged into back; BACK key too) */
+          Button('\u2039').fontSize(18).width(40).height(32).backgroundColor(this.thm()).fontColor(Color.White)
             .onClick(() => {
               this.browseHome();
             })
-          Button('\u2191').fontSize(14).width(40).height(32).backgroundColor(this.chipBg()).fontColor(this.txtPri())
-            .onClick(() => {
-              this.browseUp();
-            })
           Text(this.browseCurrentDir.length > 34 ? '\u2026' + this.browseCurrentDir.substring(this.browseCurrentDir.length - 34) : this.browseCurrentDir)
             .fontSize(10).fontColor(this.txtMid()).maxLines(1).layoutWeight(1)
+          Button(this.browseSortLabel()).fontSize(11).height(32).backgroundColor(this.chipBg()).fontColor(this.txtPri())
+            .onClick(() => {
+              this.browseSortMode = (this.browseSortMode + 1) % 4;
+              this.listBrowseDir();
+            })
           Button(this.browseViewMode === 0 ? $r('app.string.browse_grid_btn') : $r('app.string.browse_list_btn'))
             .fontSize(10).height(32).backgroundColor(this.chipBg()).fontColor(this.txtPri())
             .onClick(() => {
@@ -7914,6 +7920,20 @@ struct Index {
   // ---- Phase 4: browse helpers ----
 
   /** List dirs + files of the current browse dir into browseDirs/browseFiles. */
+  /* 2026-09-20 port: sort button label mirrors the active browseSortMode */
+  private browseSortLabel(): string {
+    if (this.browseSortMode === 1) {
+      return '\u540D\u79F0\u2193';
+    }
+    if (this.browseSortMode === 2) {
+      return '\u6700\u65B0';
+    }
+    if (this.browseSortMode === 3) {
+      return '\u6700\u5927';
+    }
+    return '\u540D\u79F0\u2191';
+  }
+
   private listBrowseDir(): void {
     const dir: string = this.browseCurrentDir;
     this.browseDirs = [];
@@ -7925,24 +7945,55 @@ struct Index {
       const entries: string[] = fs.listFileSync(dir);
       const dirs: string[] = [];
       const files: string[] = [];
+      const dirMeta: [string, number, number][] = [];
+      const fileMeta: [string, number, number][] = [];
       for (let i = 0; i < entries.length; i++) {
         const full: string = dir + '/' + entries[i];
         let isDir = false;
+        let mtime = 0;
+        let fsize = 0;
         try {
-          isDir = fs.statSync(full).isDirectory();
+          const st = fs.statSync(full);
+          isDir = st.isDirectory();
+          mtime = st.mtime;
+          fsize = st.size;
         } catch (e) {
           isDir = false;
         }
         if (isDir) {
           dirs.push(entries[i]);
+          dirMeta.push([entries[i], mtime, fsize]);
         } else {
           files.push(entries[i]);
+          fileMeta.push([entries[i], mtime, fsize]);
         }
       }
-      dirs.sort();
-      files.sort();
-      this.browseDirs = dirs;
-      this.browseFiles = files;
+      /* 2026-09-20 port: Android sortByBrowse - name / newest / largest,
+       * applied to directories too (dirs sort by name; newest/largest reuse
+       * their collected stat values). */
+      const sortMeta = (meta: [string, number, number][], byTime: boolean): string[] => {
+        meta.sort((a: [string, number, number], b: [string, number, number]) =>
+          byTime ? (b[1] - a[1]) : (b[2] - a[2]));
+        const ordered: string[] = [];
+        for (let i = 0; i < meta.length; i++) {
+          ordered.push(meta[i][0]);
+        }
+        return ordered;
+      };
+      if (this.browseSortMode === 2 || this.browseSortMode === 3) {
+        const byTime: boolean = this.browseSortMode === 2;
+        this.browseDirs = sortMeta(dirMeta, byTime);
+        this.browseFiles = sortMeta(fileMeta, byTime);
+      } else {
+        dirs.sort();
+        files.sort();
+        if (this.browseSortMode === 1) {
+          dirs.reverse();
+          files.reverse();
+        }
+        this.browseDirs = dirs;
+        this.browseFiles = files;
+      }
     } catch (e) {
       console.error('[Index] listBrowseDir failed');
     }

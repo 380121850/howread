@@ -28,8 +28,15 @@
  *   protected, so optimized (release -O2) builds stay well-defined.
  */
 #include "napi/native_api.h"
+/* HowRead isolation: mupdf/pdf.h declares its tail page-tree accessors
+ * (pdf_get_page_object_numbers etc.) AFTER its own extern "C" block, so a
+ * C++ consumer would mangle them and fail to link against the C engine
+ * (Android's C JNI glue never hits this). Wrap the C headers here to force
+ * C linkage for every declaration - harmony-side only, shared tree intact. */
+extern "C" {
 #include "mupdf/fitz.h"
 #include "mupdf/pdf.h"
+}
 
 #include <atomic>
 #include <cstring>
@@ -3242,6 +3249,32 @@ static std::string OpAnnotsJson(fz_context *ctx, fz_document *doc, int page)
  * 11 annots(a=page) | 12 authenticate(s=password)
  * All results are JSON strings (document accessors are unsafe to call
  * synchronously on remote-streamed documents). */
+/* HowRead: extract a flat int array from a JSON body like {"nums":[1,2]}.
+ * Only used by the pagemap doc-ops (trusted, self-generated input). */
+static void HrExtractJsonArray(const std::string &s, const char *key, std::vector<int> &out)
+{
+    std::string k = std::string("\"") + key + "\":[";
+    size_t p = s.find(k);
+    if (p == std::string::npos) {
+        return;
+    }
+    p += k.size();
+    while (p < s.size()) {
+        while (p < s.size() && (s[p] == ' ' || s[p] == ',')) {
+            p++;
+        }
+        if (p < s.size() && s[p] == ']') {
+            break;
+        }
+        size_t q = s.find_first_of(",]", p);
+        if (q == std::string::npos) {
+            break;
+        }
+        out.push_back(atoi(s.substr(p, q - p).c_str()));
+        p = q;
+    }
+}
+
 struct DocOpJob {
     DocumentHandle *h; /* holds a reference for the job lifetime */
     int op;
@@ -3308,6 +3341,77 @@ static void DocOpExecute(napi_env /*env*/, void *data)
             case 12:
                 job->json = std::to_string(fz_authenticate_password(ctx, doc, job->s.c_str()));
                 break;
+            case 13: {
+                /* HowRead pagemap export: finish the lazy page tree (only when
+                 * no map was harvested yet unless a>0.5 forces it), then dump
+                 * nums + per-page sizes as JSON. Runs on the worker thread, so
+                 * the tree walk may safely service its own remote reads. */
+                pdf_document *pdf = pdf_specifics(ctx, doc);
+                if (pdf == nullptr) {
+                    job->json = "{\"nums\":[]}";
+                    break;
+                }
+                int have = 0;
+                int *pre = pdf_get_page_object_numbers(ctx, pdf, &have);
+                if (pre != nullptr) {
+                    fz_free(ctx, pre);
+                } else {
+                    pdf_finish_lazy_page_tree(ctx, pdf);
+                }
+                int n = 0;
+                int *nums = pdf_get_page_object_numbers(ctx, pdf, &n);
+                int m = 0;
+                int *sizes = pdf_get_page_sizes(ctx, pdf, &m);
+                std::string out = "{\"nums\":[";
+                if (nums != nullptr) {
+                    for (int i = 0; i < n; i++) {
+                        if (i) {
+                            out += ",";
+                        }
+                        out += std::to_string(nums[i]);
+                    }
+                    fz_free(ctx, nums);
+                }
+                out += "],\"sizes\":[";
+                if (sizes != nullptr) {
+                    for (int i = 0; i < m * 2; i++) {
+                        if (i) {
+                            out += ",";
+                        }
+                        out += std::to_string(sizes[i]);
+                    }
+                    fz_free(ctx, sizes);
+                }
+                out += "]}";
+                job->json = out;
+                break;
+            }
+            case 14: {
+                /* HowRead pagemap inject: s = {"nums":[..],"sizes":[..]} */
+                pdf_document *pdf = pdf_specifics(ctx, doc);
+                if (pdf == nullptr) {
+                    job->failed = true;
+                    break;
+                }
+                std::vector<int> nums;
+                std::vector<int> sizes;
+                HrExtractJsonArray(job->s, "nums", nums);
+                HrExtractJsonArray(job->s, "sizes", sizes);
+                bool ok = !nums.empty();
+                for (int v : nums) {
+                    if (v <= 0) {
+                        ok = false;
+                    }
+                }
+                if (ok) {
+                    pdf_set_page_object_numbers(ctx, pdf, (int)nums.size(), nums.data());
+                }
+                if (ok && !sizes.empty() && (sizes.size() % 2) == 0) {
+                    pdf_set_page_sizes(ctx, pdf, (int)(sizes.size() / 2), sizes.data());
+                }
+                job->json = ok ? "true" : "false";
+                break;
+            }
             default:
                 job->failed = true;
                 break;
@@ -3428,6 +3532,267 @@ napi_value DocOpAsync(napi_env env, napi_callback_info info)
     return deferredVal;
 }
 
+/* ---- HowRead: persisted page-tree map (remote pdf; parity with the
+ * Android JNI glue getPageTreeNums/setPageTreeNums/... family, implemented
+ * here against the NAPI handle registry so the shared engine patch stays
+ * platform-neutral). A remote book's O(pages) tree walk runs at most once
+ * per file version; the app persists the map beside its block cache and
+ * re-injects it on the next open. ---- */
+
+napi_value GetPageTreeNums(napi_env env, napi_callback_info info)
+{
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    auto *h = GetHandle(env, args[0]);
+    if (h == nullptr) {
+        return nullptr;
+    }
+    int count = 0;
+    int *nums = nullptr;
+    pthread_mutex_lock(&g_mu);
+    if (!fz_setjmp(*fz_push_try(h->ctx))) do {
+        if (h->doc != nullptr) {
+            pdf_document *pdf = pdf_specifics(h->ctx, h->doc);
+            if (pdf != nullptr) {
+                nums = pdf_get_page_object_numbers(h->ctx, pdf, &count);
+            }
+        }
+    } while (0);
+    if (fz_do_catch(h->ctx)) {
+        pthread_mutex_unlock(&g_mu);
+        napi_value nullv;
+        napi_get_null(env, &nullv);
+        return nullv;
+    }
+    pthread_mutex_unlock(&g_mu);
+    if (nums == nullptr || count <= 0) {
+        if (nums != nullptr) {
+            fz_free(h->ctx, nums);
+        }
+        napi_value nullv;
+        napi_get_null(env, &nullv);
+        return nullv;
+    }
+    napi_value out;
+    napi_create_array_with_length(env, count, &out);
+    for (int i = 0; i < count; i++) {
+        napi_value v;
+        napi_create_int32(env, nums[i], &v);
+        napi_set_element(env, out, i, v);
+    }
+    fz_free(h->ctx, nums);
+    return out;
+}
+
+napi_value SetPageTreeNums(napi_env env, napi_callback_info info)
+{
+    size_t argc = 2;
+    napi_value args[2];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    auto *h = GetHandle(env, args[0]);
+    if (h == nullptr) {
+        return nullptr;
+    }
+    uint32_t n = 0;
+    bool ok = false;
+    if (napi_get_array_length(env, args[1], &n) == napi_ok && n > 0 && n < 1000000) {
+        std::vector<int> a(n);
+        bool valid = true;
+        for (uint32_t i = 0; i < n; i++) {
+            napi_value ev;
+            int32_t v = 0;
+            if (napi_get_element(env, args[1], i, &ev) != napi_ok ||
+                napi_get_value_int32(env, ev, &v) != napi_ok || v <= 0) {
+                valid = false;
+                break;
+            }
+            a[i] = v;
+        }
+        if (valid) {
+            pthread_mutex_lock(&g_mu);
+            if (!fz_setjmp(*fz_push_try(h->ctx))) do {
+                if (h->doc != nullptr) {
+                    pdf_document *pdf = pdf_specifics(h->ctx, h->doc);
+                    if (pdf != nullptr) {
+                        pdf_set_page_object_numbers(h->ctx, pdf, (int)n, a.data());
+                        ok = true;
+                    }
+                }
+            } while (0);
+            fz_do_catch(h->ctx);
+            pthread_mutex_unlock(&g_mu);
+        }
+    }
+    napi_value res;
+    napi_get_boolean(env, ok, &res);
+    return res;
+}
+
+napi_value GetPageTreeSizes(napi_env env, napi_callback_info info)
+{
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    auto *h = GetHandle(env, args[0]);
+    if (h == nullptr) {
+        return nullptr;
+    }
+    int count = 0;
+    int *sizes = nullptr;
+    pthread_mutex_lock(&g_mu);
+    if (!fz_setjmp(*fz_push_try(h->ctx))) do {
+        if (h->doc != nullptr) {
+            pdf_document *pdf = pdf_specifics(h->ctx, h->doc);
+            if (pdf != nullptr) {
+                sizes = pdf_get_page_sizes(h->ctx, pdf, &count);
+            }
+        }
+    } while (0);
+    if (fz_do_catch(h->ctx)) {
+        pthread_mutex_unlock(&g_mu);
+        napi_value nullv;
+        napi_get_null(env, &nullv);
+        return nullv;
+    }
+    pthread_mutex_unlock(&g_mu);
+    if (sizes == nullptr || count <= 0) {
+        if (sizes != nullptr) {
+            fz_free(h->ctx, sizes);
+        }
+        napi_value nullv;
+        napi_get_null(env, &nullv);
+        return nullv;
+    }
+    napi_value out;
+    napi_create_array_with_length(env, count * 2, &out);
+    for (int i = 0; i < count * 2; i++) {
+        napi_value v;
+        napi_create_int32(env, sizes[i], &v);
+        napi_set_element(env, out, i, v);
+    }
+    fz_free(h->ctx, sizes);
+    return out;
+}
+
+napi_value SetPageTreeSizes(napi_env env, napi_callback_info info)
+{
+    size_t argc = 2;
+    napi_value args[2];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    auto *h = GetHandle(env, args[0]);
+    if (h == nullptr) {
+        return nullptr;
+    }
+    uint32_t n = 0;
+    bool ok = false;
+    if (napi_get_array_length(env, args[1], &n) == napi_ok && n > 0 && (n % 2) == 0 && n < 2000000) {
+        std::vector<int> a(n);
+        bool valid = true;
+        for (uint32_t i = 0; i < n; i++) {
+            napi_value ev;
+            int32_t v = 0;
+            if (napi_get_element(env, args[1], i, &ev) != napi_ok ||
+                napi_get_value_int32(env, ev, &v) != napi_ok) {
+                valid = false;
+                break;
+            }
+            a[i] = v;
+        }
+        if (valid) {
+            pthread_mutex_lock(&g_mu);
+            if (!fz_setjmp(*fz_push_try(h->ctx))) do {
+                if (h->doc != nullptr) {
+                    pdf_document *pdf = pdf_specifics(h->ctx, h->doc);
+                    if (pdf != nullptr) {
+                        pdf_set_page_sizes(h->ctx, pdf, (int)(n / 2), a.data());
+                        ok = true;
+                    }
+                }
+            } while (0);
+            fz_do_catch(h->ctx);
+            pthread_mutex_unlock(&g_mu);
+        }
+    }
+    napi_value res;
+    napi_get_boolean(env, ok, &res);
+    return res;
+}
+
+napi_value FinishLazyPageTree(napi_env env, napi_callback_info info)
+{
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    auto *h = GetHandle(env, args[0]);
+    if (h == nullptr) {
+        return nullptr;
+    }
+    bool ok = false;
+    pthread_mutex_lock(&g_mu);
+    if (!fz_setjmp(*fz_push_try(h->ctx))) do {
+        if (h->doc != nullptr) {
+            pdf_document *pdf = pdf_specifics(h->ctx, h->doc);
+            if (pdf != nullptr) {
+                ok = pdf_finish_lazy_page_tree(h->ctx, pdf) != 0;
+            }
+        }
+    } while (0);
+    fz_do_catch(h->ctx);
+    pthread_mutex_unlock(&g_mu);
+    napi_value res;
+    napi_get_boolean(env, ok, &res);
+    return res;
+}
+
+napi_value SetLazyPageTree(napi_env env, napi_callback_info info)
+{
+    size_t argc = 2;
+    napi_value args[2];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    auto *h = GetHandle(env, args[0]);
+    if (h == nullptr) {
+        return nullptr;
+    }
+    bool on = false;
+    if (napi_get_value_bool(env, args[1], &on) == napi_ok) {
+        pthread_mutex_lock(&g_mu);
+        if (h->doc != nullptr) {
+            pdf_document *pdf = pdf_specifics(h->ctx, h->doc);
+            if (pdf != nullptr) {
+                pdf->howread_lazy = on ? 1 : 0;
+            }
+        }
+        pthread_mutex_unlock(&g_mu);
+    }
+    napi_value undefinedv;
+    napi_get_undefined(env, &undefinedv);
+    return undefinedv;
+}
+
+napi_value GetWalkMs(napi_env env, napi_callback_info info)
+{
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    auto *h = GetHandle(env, args[0]);
+    if (h == nullptr) {
+        return nullptr;
+    }
+    int64_t ms = 0;
+    pthread_mutex_lock(&g_mu);
+    if (h->doc != nullptr) {
+        pdf_document *pdf = pdf_specifics(h->ctx, h->doc);
+        if (pdf != nullptr) {
+            ms = pdf_get_walk_ms(h->ctx, pdf);
+        }
+    }
+    pthread_mutex_unlock(&g_mu);
+    napi_value res;
+    napi_create_int64(env, ms, &res);
+    return res;
+}
+
 napi_value Init(napi_env env, napi_value exports)
 {
     napi_property_descriptor desc[] = {
@@ -3462,6 +3827,13 @@ napi_value Init(napi_env env, napi_value exports)
         {"closeDocument", nullptr, CloseDocument, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"needsPassword", nullptr, NeedsPassword, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"authenticateDocument", nullptr, AuthenticateDocument, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"getPageTreeNums", nullptr, GetPageTreeNums, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setPageTreeNums", nullptr, SetPageTreeNums, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"getPageTreeSizes", nullptr, GetPageTreeSizes, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setPageTreeSizes", nullptr, SetPageTreeSizes, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"finishLazyPageTree", nullptr, FinishLazyPageTree, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setLazyPageTree", nullptr, SetLazyPageTree, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"getWalkMs", nullptr, GetWalkMs, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     RegisterRemoteNet(env, exports);

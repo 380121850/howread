@@ -52,7 +52,7 @@ import {
   RemoteSession, RemoteFileSource, WebDavFileSource, SmbFileSource, SftpFileSource,
   loadRemoteCacheSettings, parseRemoteUri, resolveWebDavServer, resolveSmbServer, resolveSftpServer,
   fileExtOf, isDirectOpenExt, isPageFormatExt, mobiIsEncrypted, sha256Hex,
-  BlockCacheStore, RemoteProbe
+  BlockCacheStore, RemoteProbe, readPageTreeSidecar, writePageTreeSidecar, PageTreeSidecar
 } from '../model/RemoteBook';
 
 const LEFT_ZONE_RATIO: number = 0.3;
@@ -516,6 +516,8 @@ struct Reader {
   @State scrollMode: number = 0; /* 0=horizontal Swiper, 1=vertical List */
   @State pageMode: number = 0;   /* 0=single, 1=double, 2=musician */
   @State zoomLevel: number = 1.5;
+  /* 2026-09-20 port: the comfortable baseline zoom (Android ADJUST_PAGE target) */
+  @State fitZoom: number = 1.5;
   @State nightMode: boolean = false;
   @State showToc: boolean = false;
   @State tocEntries: TocEntry[] = [];
@@ -797,6 +799,37 @@ struct Reader {
       const meta: Record<string, ESObject> = JSON.parse(String(rec['meta'])) as Record<string, ESObject>;
       const total: number = Number(meta['pageCount']);
       this.dataSource.adoptRemote(rec['handle'], total);
+      /* 2026-09-20 port: persisted page-tree map (Android MuPdfDocument parity).
+       * A matching sidecar re-opens a cached remote pdf with zero page-tree
+       * traffic; a fully-cached book without one builds it from cache hits. */
+      if (ext === 'pdf') {
+        const pmHandle: number = rec['handle'] as number;
+        const pmTag: string = cached !== null ? cached.versionTag : probe.versionTag;
+        console.info(`[Reader] pagemap flow: ext=${ext} cached=${cached !== null ? cached.fullyCached : 'null'}`);
+        /* op 13/14 run on the docOpAsync worker: the lazy-tree walk reads
+         * through the remote stream, whose callbacks need the JS thread -
+         * synchronous NAPI calls here would self-deadlock (appfreeze). */
+        readPageTreeSidecar(ctx, cacheKey, probe.size, pmTag).then(async (pm: PageTreeSidecar | null) => {
+          if (pm !== null) {
+            await docOpAsync(pmHandle, 14, 0, 0, 0, JSON.stringify({ nums: pm.nums, sizes: pm.sizes }));
+            console.info(`[Reader] pagemap injected: ${pm.nums.length} pages`);
+          } else if (cached !== null && cached.fullyCached) {
+            const raw: string = await docOpAsync(pmHandle, 13);
+            const j: Record<string, ESObject> = JSON.parse(raw) as Record<string, ESObject>;
+            const nums: ESObject = j['nums'];
+            if (nums !== null && nums !== undefined && nums.length > 0) {
+              const sizes: ESObject = j['sizes'];
+              writePageTreeSidecar(ctx, cacheKey, probe.size, pmTag,
+                nums as number[], sizes !== null && sizes !== undefined ? sizes as number[] : []);
+              console.info(`[Reader] pagemap saved: ${nums.length} pages`);
+            } else {
+              console.info('[Reader] pagemap build: engine returned no map');
+            }
+          }
+        }).catch((err: Error) => {
+          console.error(`[Reader] pagemap flow failed: ${err.message}`);
+        });
+      }
       this.isReflow = meta['isReflow'] === true;
       this.totalPages = total;
       this.pageList = [];
@@ -924,6 +957,7 @@ struct Reader {
       const qualityMults: number[] = [0.75, 1.0, 1.5];
       this.renderQualityLevel = s.renderQuality;
       this.zoomLevel = s.zoom * (qualityMults[s.renderQuality] !== undefined ? qualityMults[s.renderQuality] : 1.0);
+      this.fitZoom = this.zoomLevel;
     this.scrollMode = s.scrollMode;
     this.pageMode = s.pageMode;
     this.nightMode = s.theme === 1 || s.theme === 2;
@@ -1420,6 +1454,19 @@ struct Reader {
       this.dataSource.setZoom(newZoom);
       console.info(`[Reader] Zoom out: ${this.zoomLevel.toFixed(2)}x`);
     }
+  }
+
+  /* 2026-09-20 port: Android DOUBLE_CLICK_ADJUST_PAGE ("\u7F29\u653E\u5230\u5408\u9002\u5927\u5C0F") -
+   * double-tap returns to the comfortable fit zoom; again zooms back in. */
+  private doubleTapFit(): void {
+    const target: number = this.zoomLevel > this.fitZoom + 0.01 ? this.fitZoom
+      : Math.min(this.fitZoom * 2, MAX_ZOOM);
+    if (Math.abs(target - this.zoomLevel) < 0.001) {
+      return;
+    }
+    this.zoomLevel = target;
+    this.dataSource.setZoom(target);
+    console.info(`[Reader] Double-tap zoom: ${target.toFixed(2)}x`);
   }
 
   private toggleNightMode(): void {
@@ -3856,11 +3903,13 @@ struct Reader {
               .width(`${(1 - LEFT_ZONE_RATIO - RIGHT_ZONE_RATIO) * 100}%`).height('100%')
               .align(Alignment.Center)
               .backgroundColor(Color.Transparent)
-              .onClick(() => {
-                this.onTapZoneAction(this.tapCenterAction);
-              })
               .gesture(
-                LongPressGesture({ repeat: false, duration: 600 })
+                GestureGroup(GestureMode.Exclusive,
+                  TapGesture({ count: 2 })
+                    .onAction(() => {
+                      this.doubleTapFit();
+                    }),
+                  LongPressGesture({ repeat: false, duration: 600 })
                   .onAction((event: LongPressGestureEvent) => {
                     /* Round 7: prefs longTapAction: 0=selection, 1=file info, 2=menu, 3=none */
                     if (this.longTapActionPref === 1) {
@@ -3881,7 +3930,12 @@ struct Reader {
                       this.setSelAnchor(event.fingerList[0].globalX, event.fingerList[0].globalY, true);
                     }
                     console.info(`[Reader] Text selection activated on page ${this.currentPage}`);
-                  })
+                  }),
+                  TapGesture({ count: 1 })
+                    .onAction(() => {
+                      this.onTapZoneAction(this.tapCenterAction);
+                    })
+                )
               )
 
             /* v1.3.4 parity: drag the left screen edge to adjust brightness */

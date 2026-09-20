@@ -23,6 +23,123 @@ import {
 import { DavServer, getDavServers, SmbServer, getSmbServers, SftpServer, getSftpServers } from './Servers';
 import { ReaderSettings, loadSettings } from './Settings';
 
+
+/* ---- HowRead page-tree sidecar (pagemap.bin; Android MuPdfDocument parity).
+ * Remote pdf page index -> xref object number (+ per-page sizes), persisted
+ * beside the block cache so a cached book reopens with zero page-tree
+ * traffic. Layout (big-endian, matches Android's DataOutputStream output):
+ * u32 'PGM1' | i64 fileSize | u16 tagLen + tag bytes | i32 n + n*i32 nums |
+ * i32 m + m*2*i32 (w,h) ---- */
+
+export interface PageTreeSidecar {
+  nums: number[];
+  sizes: number[];
+}
+
+export function pageMapPathOf(ctx: Context, cacheKey: string): string {
+  return bookDirOf(ctx, cacheKey) + '/pagemap.bin';
+}
+
+/** Read + validate the sidecar against the file's size and version tag. */
+export async function readPageTreeSidecar(ctx: Context, cacheKey: string, size: number,
+  versionTag: string): Promise<PageTreeSidecar | null> {
+  try {
+    const path: string = pageMapPathOf(ctx, cacheKey);
+    if (!fs.accessSync(path)) {
+      return null;
+    }
+    const stat = fs.statSync(path);
+    const buf = new ArrayBuffer(stat.size);
+    const f = fs.openSync(path, fs.OpenMode.READ_ONLY);
+    fs.readSync(f.fd, buf);
+    fs.closeSync(f);
+    const dv = new DataView(buf);
+    if (dv.getUint32(0, false) !== 0x50474D31 || stat.size < 18) {
+      return null;
+    }
+    const fSize = dv.getInt32(4, false) * 4294967296 + dv.getUint32(8, false);
+    const tagLen = dv.getUint16(12, false);
+    if (14 + tagLen > stat.size) {
+      return null;
+    }
+    const tag = new util.TextDecoder('utf-8').decodeToString(new Uint8Array(buf, 14, tagLen));
+    if (fSize !== size || tag !== versionTag) {
+      return null; /* stale sidecar for another file version */
+    }
+    let off = 14 + tagLen;
+    const n = dv.getInt32(off, false);
+    off += 4;
+    if (n <= 0 || n > 1000000 || off + n * 4 > stat.size) {
+      return null;
+    }
+    const nums: number[] = [];
+    for (let i = 0; i < n; i++) {
+      nums.push(dv.getInt32(off, false));
+      off += 4;
+    }
+    const sizes: number[] = [];
+    if (off + 4 <= stat.size) {
+      const m = dv.getInt32(off, false);
+      off += 4;
+      if (m > 0 && m <= 1000000 && off + m * 8 <= stat.size) {
+        for (let i = 0; i < m * 2; i++) {
+          sizes.push(dv.getInt32(off, false));
+          off += 4;
+        }
+      }
+    }
+    return { nums: nums, sizes: sizes };
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Persist the page map (+ optional [w,h] pairs) for this file version. */
+export async function writePageTreeSidecar(ctx: Context, cacheKey: string, size: number,
+  versionTag: string, nums: number[], sizes: number[]): Promise<void> {
+  try {
+    if (nums.length === 0) {
+      return;
+    }
+    const tagLen = Math.min(versionTag.length, 255);
+    const total = 14 + tagLen + 8 + nums.length * 4 + 4 + sizes.length * 4;
+    const buf = new ArrayBuffer(total);
+    const dv = new DataView(buf);
+    const u8 = new Uint8Array(buf);
+    dv.setUint32(0, 0x50474D31, false);
+    dv.setInt32(4, Math.floor(size / 4294967296), false);
+    dv.setUint32(8, size % 4294967296, false);
+    dv.setUint16(12, tagLen, false);
+    for (let i = 0; i < tagLen; i++) {
+      u8[14 + i] = versionTag.charCodeAt(i) & 0xFF;
+    }
+    let off = 14 + tagLen;
+    dv.setInt32(off, nums.length, false);
+    off += 4;
+    for (let i = 0; i < nums.length; i++) {
+      dv.setInt32(off, nums[i], false);
+      off += 4;
+    }
+    dv.setInt32(off, Math.floor(sizes.length / 2), false);
+    off += 4;
+    for (let i = 0; i < sizes.length; i++) {
+      dv.setInt32(off, sizes[i], false);
+      off += 4;
+    }
+    const dir: string = bookDirOf(ctx, cacheKey);
+    if (!fs.accessSync(dir)) {
+      fs.mkdirSync(dir, true);
+    }
+    const f = fs.openSync(pageMapPathOf(ctx, cacheKey),
+      fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+    fs.writeSync(f.fd, buf);
+    fs.closeSync(f);
+    console.info(`[RemoteBook] pagemap saved: ${nums.length} pages`);
+  } catch (e) {
+    console.error('[RemoteBook] pagemap save failed');
+  }
+}
+
 const REMOTE_PREF_NAME = 'librera_remote';
 const REMOTE_BOOKS_KEY = 'books';
 
