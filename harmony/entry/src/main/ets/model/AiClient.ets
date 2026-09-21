@@ -1,6 +1,7 @@
 import http from '@ohos.net.http';
 import preferences from '@ohos.data.preferences';
 import { loadProxy, proxyOpt } from './HttpUtil';
+import { tlog } from './TestLog';
 
 /**
  * OpenAI-compatible AI client (Android parity 2026-09: AI 大模型接入).
@@ -130,6 +131,8 @@ function parseErrorBody(body: string): string {
 
 /** Single chat completion (non-stream). Resolves with the assistant text. */
 export async function chatCompletion(cfg: AiConfig, messages: AiMessage[], maxTokens: number, ctx?: Context): Promise<string> {
+const t0: number = Date.now();
+tlog('ai_req_start', 'model=' + cfg.model);
   if (!aiConfigReady(cfg)) {
     return Promise.reject(new Error('\u8BF7\u5148\u5728\u504F\u597D\u4E2D\u914D\u7F6E AI \u5927\u6A21\u578B'));
   }
@@ -156,6 +159,7 @@ export async function chatCompletion(cfg: AiConfig, messages: AiMessage[], maxTo
     });
     const text = resp.result as string;
     if (resp.responseCode < 200 || resp.responseCode >= 300) {
+      tlog('ai_req_fail', 'http=' + resp.responseCode + ' ms=' + (Date.now() - t0));
       throw new Error('HTTP ' + resp.responseCode + ': ' + parseErrorBody(text));
     }
     const o = JSON.parse(text) as Record<string, Object>;
@@ -168,6 +172,7 @@ export async function chatCompletion(cfg: AiConfig, messages: AiMessage[], maxTo
     if (content === undefined || content === null || content.length === 0) {
       throw new Error('\u6A21\u578B\u672A\u8FD4\u56DE\u5185\u5BB9');
     }
+    tlog('ai_req_done', 'ms=' + (Date.now() - t0));
     return content;
   } finally {
     client.destroy();

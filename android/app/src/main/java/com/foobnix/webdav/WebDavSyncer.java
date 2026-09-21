@@ -358,8 +358,10 @@ public class WebDavSyncer {
             ProfileStateIO.exportStats();
             ProfileStateIO.exportAi(c);
             ProfileStateIO.exportMisc(c);
-            boolean listsUpdated = syncMetaUnion(s, globalUrl, AppProfile.syncRecent);
-            listsUpdated |= syncMetaUnion(s, globalUrl, AppProfile.syncFavorite);
+            boolean listsUpdated = syncMetaUnion(s, globalUrl, AppProfile.syncRecent,
+                    com.foobnix.remote.RemoteTombstones.TOMB_RECENT);
+            listsUpdated |= syncMetaUnion(s, globalUrl, AppProfile.syncFavorite,
+                    com.foobnix.remote.RemoteTombstones.TOMB_FAVORITE);
             if (listsUpdated) {
                 AppData.get().invalidateListCache();
             }
@@ -771,22 +773,57 @@ public class WebDavSyncer {
     }
 
     /**
-     * Union by key of the per-book read-state overrides (0 unread, 1 reading,
-     * 2 read); the "further along" state wins, so marks converge on every
-     * device instead of each device overwriting the server with its own copy.
+     * Per-book read-state overrides (0 unread, 1 reading, 2 read), merged
+     * three-way against the base snapshot: a key removed on one side and
+     * unchanged remotely STAYS removed — otherwise a synced "reading" mark
+     * could never be cleared by mark-read/unread. When both sides changed a
+     * key the local one wins; with no base snapshot yet the legacy
+     * "further along wins" rule applies.
      */
-    static LinkedJSONObject mergeStatesMaxWins(LinkedJSONObject local, LinkedJSONObject remote) {
-        LinkedJSONObject out = new LinkedJSONObject(local.toString());
-        Iterator<String> keys = remote.keys();
-        while (keys.hasNext()) {
-            String k = keys.next();
-            int r = remote.optInt(k, -1);
-            if (r < 0) {
-                continue;
+    static LinkedJSONObject mergeStatesMaxWins(LinkedJSONObject local, LinkedJSONObject remote,
+            LinkedJSONObject base) {
+        if (base == null) {
+            LinkedJSONObject out0 = new LinkedJSONObject(local.toString());
+            Iterator<String> keys0 = remote.keys();
+            while (keys0.hasNext()) {
+                String k = keys0.next();
+                int r = remote.optInt(k, -1);
+                if (r < 0) {
+                    continue;
+                }
+                int l = out0.optInt(k, -1);
+                if (l < 0 || r > l) {
+                    out0.put(k, r);
+                }
             }
-            int l = out.optInt(k, -1);
-            if (l < 0 || r > l) {
-                out.put(k, r);
+            return out0;
+        }
+        LinkedJSONObject out = new LinkedJSONObject();
+        final java.util.Set<String> keys = new java.util.LinkedHashSet<String>();
+        for (Iterator<String> it = local.keys(); it.hasNext(); ) {
+            keys.add(it.next());
+        }
+        for (Iterator<String> it = remote.keys(); it.hasNext(); ) {
+            keys.add(it.next());
+        }
+        for (Iterator<String> it = base.keys(); it.hasNext(); ) {
+            keys.add(it.next());
+        }
+        for (String k : keys) {
+            final boolean lb = local.has(k), rb = remote.has(k), bb = base.has(k);
+            final int lv = local.optInt(k, -1), rv = remote.optInt(k, -1), bv = base.optInt(k, -1);
+            final boolean localChanged = lb != bb || (lb && lv != bv);
+            final boolean remoteChanged = rb != bb || (rb && rv != bv);
+            int keep = -1; // -1 = omit the key (deletion)
+            if (!remoteChanged) {
+                keep = lb ? lv : -1;             // local edit / deletion wins
+            } else if (!localChanged) {
+                keep = rb ? rv : -1;             // adopt the remote edit / deletion
+            } else {
+                keep = lb ? lv : (rb ? rv : -1); // both changed: local wins
+            }
+            if (keep >= 0) {
+                out.put(k, keep);
             }
         }
         return out;
@@ -1162,6 +1199,15 @@ public class WebDavSyncer {
      * @return true when the LOCAL file was (re)written.
      */
     static boolean syncMetaUnion(Sardine s, String globalUrl, File local) {
+        return syncMetaUnion(s, globalUrl, local, null);
+    }
+
+    /**
+     * @param tombPrefix when set ("recent:"/"favorite:"), remote entries whose
+     * path carries a local deletion tombstone are skipped instead of being
+     * unioned back
+     */
+    static boolean syncMetaUnion(Sardine s, String globalUrl, File local, String tombPrefix) {
         if (local == null || !local.isFile()) {
             return false;
         }
@@ -1192,6 +1238,10 @@ public class WebDavSyncer {
                 final String k = e == null ? "" : e.optString(SimpleMeta.JSON_PATH, "");
                 if (e == null || k.length() == 0) {
                     continue;
+                }
+                if (tombPrefix != null
+                        && com.foobnix.remote.RemoteTombstones.has(tombPrefix + k)) {
+                    continue; // deleted on this device: keep it deleted
                 }
                 final LinkedJSONObject l = merged.get(k);
                 if (l == null) {

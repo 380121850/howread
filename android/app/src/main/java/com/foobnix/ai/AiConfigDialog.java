@@ -96,6 +96,9 @@ public class AiConfigDialog {
                     if (TxtUtils.isEmpty(selectedName[0])) {
                         return true;
                     }
+                    // deletion must survive the AI config union sync
+                    com.foobnix.remote.RemoteTombstones.add(
+                            com.foobnix.remote.RemoteTombstones.TOMB_AI + selectedName[0]);
                     AppState.get().aiConfigs = removeProfile(AppState.get().aiConfigs, selectedName[0]);
                     AppProfile.save(a);
                     selectedName[0] = "";
@@ -372,6 +375,9 @@ public class AiConfigDialog {
                                     apiKey.getText().toString(),
                                     model.getText().toString().trim(),
                                     budget, thinking.isChecked()));
+                    // (re)saving a vendor clears its deletion marker
+                    com.foobnix.remote.RemoteTombstones.clear(
+                            com.foobnix.remote.RemoteTombstones.TOMB_AI + selectedName[0]);
                     AppState.get().aiConfigName = selectedName[0];
                 }
                 AiCredentials.save(a, apiKey.getText().toString());

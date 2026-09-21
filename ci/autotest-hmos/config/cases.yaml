@@ -1,0 +1,86 @@
+# HowRead Pro (HarmonyOS) 自动测试用例参数
+# 包名/Ability 真源在 devices.json 的 bundle.pro；本文件顶部两行仅为速查。
+bundle: com.leestudio.howread.pro.reader.hmos
+ability: EntryAbility
+
+launcher_timeout_s: 30
+ui_timeout_s: 10
+step_screenshot: true
+heartbeat_s: 30          # >30s 的操作打印心跳行
+case_timeout_s: 300      # 单用例默认超时
+case_retries: 1          # 默认失败重试次数
+
+# 冷启动耗时阈值（ms）：ability_onCreate → home_ready 的 HRTEST ts 差值，3 次中位。
+# key 须与 devices.json 的 model 完全一致。
+cold_start_threshold_ms:
+  default: 3500
+  "Pura 90 Emulator": 8000
+
+# 种子书 http 服务（run_all.py 按需拉起 python -m http.server）
+seed_server:
+  host_dir: "Z:/opt/librera/LibreraReader/ci/autotest/teskbook"
+  port: 8790
+
+# 50.23 协议测试服务器（与安卓 CI 共用，FN 网络用例）
+test_server:
+  host: 192.168.50.23
+  webdav_url: http://192.168.50.23:8765/
+  webdav_user: howread
+  webdav_password: howread123
+  smb_share: testbooks
+  smb_port: 445
+  sftp_port: 22
+  user: howread
+  password: howread123
+
+# AI mock（与安卓 CI 同款 tools/ai_mock.py）
+ai_mock:
+  script: tools/ai_mock.py
+  port: 8770
+  model: howread-test-model
+
+# 性能/稳定性参数
+perf:
+  cold_start_runs: 3
+  mem_growth_pct: 30       # 开书后 PSS 增长超此比例疑似泄漏
+  remote_firstpaint_cold_ms: 8000
+  remote_firstpaint_warm_ms: 3000
+
+stability_monkey:
+  duration_s: 300          # 试跑 5 分钟；正式门禁改 1800
+  throttle_ms: 300
+  seed: 20260921
+
+# ===== 用例注册：layer + priority + 超时/重试覆盖 =====
+case_meta:
+  # --- L0 冒烟 ---
+  SM-01: { layer: ui, priority: P0, timeout: 300, retries: 0 }   # 安装与版本确认
+  SM-02: { layer: ui, priority: P0, timeout: 300, retries: 1 }   # 冷启动（HRTEST 计时+UI）
+  SM-03: { layer: ui, priority: P0, timeout: 300, retries: 1 }   # 四 tab 切换（app_tab_* id）
+  SM-04: { layer: ui, priority: P0, timeout: 420, retries: 1 }   # 种子 PDF 开书+翻页
+  SM-05: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 退出确认对话框
+  SM-06: { layer: ui, priority: P0, timeout: 300, retries: 1 }   # 重装兼容（数据清空自愈）
+  SM-07: { layer: ui, priority: P1, timeout: 120, retries: 0 }   # 取证链路（截图+dump+hilog）
+  # --- L1 功能核心子集（2026-09-21）---
+  FN-01: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 开书 EPUB 事件链
+  FN-02: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 音量键翻页页码递增
+  FN-03: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 跳页对话框
+  FN-04: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 目录面板加载
+  FN-05: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 书签面板/添加（按钮不暴露则 SKIP）
+  FN-06: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 字号调节
+  FN-07: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 夜间模式切换
+  FN-08: { layer: ui, priority: P2, timeout: 120, retries: 0 }   # 阅读统计 30s 记录
+  FN-09: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 库内全文搜索
+  FN-10: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 我的文件目录浏览
+  FN-11: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 收藏/取消收藏
+  FN-12: { layer: ui, priority: P1, timeout: 360, retries: 1 }   # WebDAV 测试连接（50.23）
+  FN-13: { layer: ui, priority: P1, timeout: 360, retries: 1 }   # WebDAV 保存并浏览
+  FN-14: { layer: ui, priority: P2, timeout: 360, retries: 0 }   # SMB 测试连接
+  FN-15: { layer: ui, priority: P2, timeout: 360, retries: 0 }   # SFTP 测试连接
+  FN-16: { layer: ui, priority: P1, timeout: 420, retries: 1 }   # 远程书在线打开
+  FN-17: { layer: ui, priority: P1, timeout: 360, retries: 1 }   # AI 配置连通(mock)
+  FN-18: { layer: ui, priority: P2, timeout: 360, retries: 0 }   # 语言切换冷启生效
+  # --- L2 性能/稳定性 ---
+  PF-01: { layer: ui, priority: P1, timeout: 300, retries: 0 }   # 冷启动耗时（3 次中位）
+  PF-02: { layer: ui, priority: P1, timeout: 300, retries: 0 }   # 开书内存增长
+  ST-01: { layer: ui, priority: P0, timeout: 900, retries: 0 }   # 随机 monkey（试跑 5 分钟）

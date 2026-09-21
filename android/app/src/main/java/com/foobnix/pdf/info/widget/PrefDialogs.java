@@ -196,6 +196,8 @@ public class PrefDialogs {
                 String path = result.getPath();
                 LOG.d("TEST", "Remove " + path);
                 BookCSS.get().searchPathsJson = JsonDB.remove(BookCSS.get().searchPathsJson, path);
+                // deletion must survive the folder union sync
+                com.foobnix.remote.RemoteTombstones.add("folder:" + path);
                 // keep removed storage defaults hidden (see BookCSS.searchPathsHiddenJson)
                 BookCSS.get().searchPathsHiddenJson = JsonDB.add(BookCSS.get().searchPathsHiddenJson, path);
                 LOG.d("TEST", "Remove " + BookCSS.get().searchPathsJson);
@@ -239,6 +241,9 @@ public class PrefDialogs {
                         Toast.makeText(a, String.format("[ %s == %s ] %s", nPath, existPath, a.getString(R.string.this_directory_is_already_in_the_list)), Toast.LENGTH_LONG).show();
                     } else {
                         BookCSS.get().searchPathsJson = JsonDB.add(BookCSS.get().searchPathsJson, nPath);
+                        // re-added on purpose: clear any deletion marker or
+                        // the sync filter would strip it again
+                        com.foobnix.remote.RemoteTombstones.clear("folder:" + nPath);
                         // explicitly added again: lift the fallback exclusion
                         BookCSS.get().searchPathsHiddenJson = JsonDB.remove(BookCSS.get().searchPathsHiddenJson, nPath);
                     }

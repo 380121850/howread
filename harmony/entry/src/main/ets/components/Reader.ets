@@ -24,6 +24,7 @@ import promptAction from '@ohos.promptAction';
 import picker from '@ohos.file.picker';
 import pasteboard from '@ohos.pasteboard';
 import common from '@ohos.app.ability.common';
+import { tlog } from '../model/TestLog';
 import inputConsumer from '@ohos.multimodalInput.inputConsumer';
 import mmiKeyEvent from '@ohos.multimodalInput.keyEvent';
 import { systemShare } from '@kit.ShareKit';
@@ -252,6 +253,7 @@ struct PageRenderer {
       this.renderW = renderResult.width;
       this.renderH = renderResult.height;
       console.info(`[Reader] Page ${this.pageIndex} rendered OK: ${renderResult.width}x${renderResult.height}`);
+      tlog('page_rendered', 'page=' + this.pageIndex + ' ' + renderResult.width + 'x' + renderResult.height);
     } catch (e) {
       this.errorText = 'Render error';
       const msg: string = e instanceof Error ? e.message : String(e);
@@ -711,9 +713,13 @@ struct Reader {
     if (h === undefined) {
       return undefined;
     }
+    const t0: number = Date.now();
     try {
-      return await docOpAsync(h, op, a, b, c, s);
+      const r: string | undefined = await docOpAsync(h, op, a, b, c, s);
+      tlog('docop_done', 'op=' + op + ' ms=' + (Date.now() - t0));
+      return r;
     } catch (e) {
+      tlog('docop_fail', 'op=' + op + ' ms=' + (Date.now() - t0));
       return undefined;
     }
   }
@@ -856,6 +862,7 @@ struct Reader {
     }
     this.remoteOpening = false;
     console.info(`[Reader] Remote document opened: ${this.totalPages} pages, page ${this.currentPage + 1}`);
+    tlog('book_open_done', 'remote=1 pages=' + this.totalPages);
   }
 
   aboutToAppear(): void {
@@ -1278,8 +1285,10 @@ struct Reader {
       this.loadBookmarks();
       this.refreshAnnotations();
       console.info(`[Reader] Document opened: ${this.totalPages} pages, starting at page ${this.currentPage + 1}`);
+      tlog('book_open_done', 'pages=' + this.totalPages);
     } catch (e) {
       console.error('[Reader] Failed to open document: ' + JSON.stringify(e));
+      tlog('book_open_fail', 'err=1');
     }
   }
 
@@ -1294,6 +1303,7 @@ struct Reader {
           this.tocEntries = getToc(handle);
         }
         console.info(`[Reader] TOC loaded: ${this.tocEntries.length} entries`);
+        tlog('toc_loaded', 'entries=' + this.tocEntries.length);
       }
     } catch (e) {
       console.info('[Reader] No TOC available');
@@ -1385,6 +1395,7 @@ struct Reader {
       this.exitSelMode();
     }
     console.info(`[Reader] Page changed to ${index + 1}/${this.totalPages}`);
+    tlog('page_change_done', 'page=' + (index + 1) + ' of=' + this.totalPages);
     /* Phase 3: count a flipped page only when the page actually changed */
     if (prevPage !== index) {
       try {
@@ -1541,10 +1552,12 @@ struct Reader {
         this.searchCurrentIdx = 0;
         this.highlightPageHits(firstPage);
         console.info(`[Reader] Search '${q}': ${this.searchTotalHits} hits on ${this.searchResults.length} pages`);
+        tlog('book_search_done', 'hits=' + this.searchTotalHits + ' pages=' + this.searchResults.length);
       } else {
         this.searchHits = [];
         this.searchHitPage = -1;
         console.info(`[Reader] Search '${q}': no hits`);
+        tlog('book_search_done', 'hits=0');
       }
     } catch (e) {
       console.error('[Reader] searchDocument failed: ' + String(e));
@@ -1631,10 +1644,12 @@ struct Reader {
     if (found) {
       await removeBookmark(ctx, this.documentPath, this.currentPage);
       console.info(`[Reader] Bookmark removed at page ${this.currentPage + 1}`);
+      tlog('bookmark_removed', 'page=' + (this.currentPage + 1));
     } else {
       const ok = await addBookmark(ctx, this.documentPath, this.currentPage, '');
       if (ok) {
         console.info(`[Reader] Bookmark added at page ${this.currentPage + 1}`);
+        tlog('bookmark_added', 'page=' + (this.currentPage + 1));
       }
     }
     await this.loadBookmarks();
@@ -1650,6 +1665,7 @@ struct Reader {
     this.bookmarks = await getBookmarks(ctx, this.documentPath);
     this.loadAiNotes();
     console.info(`[Reader] Bookmarks loaded: ${this.bookmarks.length}`);
+    tlog('bookmark_list_loaded', 'n=' + this.bookmarks.length);
   }
 
   private jumpToBookmark(page: number): void {
@@ -1842,6 +1858,7 @@ struct Reader {
     this.currentPage = target;
     this.onPageChanged(target);
     console.info(`[Reader] Jump to page ${n}`);
+    tlog('jump_page_done', 'page=' + n);
   }
 
   /** Fast-scroll rail: map vertical pan distance onto the page index. */
@@ -4697,7 +4714,7 @@ struct Reader {
 
           // TOC button
           if (this.tocEntries.length > 0) {
-            Button($r('app.string.reader_toc'))
+            Button($r('app.string.reader_toc')).id('reader_btn_toc')
               .fontSize(13).height(36)
               .backgroundColor('#2a7').fontColor(Color.White)
               .onClick(() => {
@@ -5322,7 +5339,7 @@ struct Reader {
         Column({ space: 12 }) {
           Text($r('app.string.jump_title'))
             .fontSize(16).fontWeight(FontWeight.Medium).fontColor('#212121')
-          TextInput({ placeholder: `1-${this.totalPages}`, text: this.jumpInput })
+          TextInput({ placeholder: `1-${this.totalPages}`, text: this.jumpInput }).id('reader_jump_input')
             .type(InputType.Number)
             .height(40).width('100%').fontSize(14)
             .onChange((v: string) => {

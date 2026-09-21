@@ -240,6 +240,13 @@ public class OpdsFragment2 extends UIFragment<Entry> {
 
                     @Override
                     public void run() {
+                        // entries dropped by the reset must survive the
+                        // config-sync union merge
+                        for (String line : AppState.get().allOPDSLinks.split(";")) {
+                            if (TxtUtils.isNotEmpty(line) && !AppState.OPDS_DEFAULT.contains(line)) {
+                                com.foobnix.remote.RemoteTombstones.add("opds:" + line);
+                            }
+                        }
                         AppState.get().allOPDSLinks = AppState.OPDS_DEFAULT;
                         url = "/";
                         populate();
@@ -472,6 +479,13 @@ public class OpdsFragment2 extends UIFragment<Entry> {
 
                     @Override
                     public void run() {
+                        // entries dropped by the reset must survive the
+                        // config-sync union merge
+                        for (String line : AppState.get().allOPDSLinks.split(";")) {
+                            if (TxtUtils.isNotEmpty(line) && !AppState.OPDS_DEFAULT.contains(line)) {
+                                com.foobnix.remote.RemoteTombstones.add("opds:" + line);
+                            }
+                        }
                         AppState.get().allOPDSLinks = AppState.OPDS_DEFAULT;
                         populate();
                     }

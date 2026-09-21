@@ -1,5 +1,6 @@
 import preferences from '@ohos.data.preferences';
 import { storeName } from './Profiles';
+import { tlog } from './TestLog';
 
 /**
  * Reading statistics (Phase 3): total / today / month reading time and pages.
@@ -136,6 +137,7 @@ export async function recordReadTime(ctx: Context, ms: number): Promise<void> {
     }
     await saveStore(ctx, store);
     console.info(`[Stats] record ${ms}ms, total=${store.totalMs}`);
+    tlog('stats_readtime_recorded', 'ms=' + ms);
   } catch (e) {
     console.error('[Stats] recordReadTime failed');
   }
@@ -153,6 +155,7 @@ export async function recordPagesRead(ctx: Context, pages: number): Promise<void
       }
     }
     await saveStore(ctx, store);
+    tlog('stats_pages_recorded', 'pages=' + pages);
   } catch (e) {
     console.error('[Stats] recordPagesRead failed');
   }

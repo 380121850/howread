@@ -1,6 +1,7 @@
 import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
+import { tlog } from '../model/TestLog';
 
 const TAG: string = 'Librera';
 export const KEY_PENDING_URI: string = 'pendingOpenUri';
@@ -34,11 +35,19 @@ export function stashWantUri(want: Want): void {
     AppStorage.setOrCreate('sharedText', text);
     hilog.info(0x0000, TAG, 'Shared text received (%{public}d chars)', text.length);
   }
+  /* ci/autotest-hmos seed hook: aa start --ps hrSeedUrl <url>; Index.consumeSeedUrl downloads it */
+  const seedUrl: string | undefined = params !== undefined && params !== null
+    ? params['hrSeedUrl'] as string : undefined;
+  if (seedUrl !== undefined && seedUrl.length > 0) {
+    AppStorage.setOrCreate('hrSeedUrl', seedUrl);
+    hilog.info(0x0000, TAG, 'CI seed url: %{public}s', seedUrl);
+  }
 }
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(0x0000, TAG, '%{public}s', 'Ability onCreate');
+    tlog('ability_onCreate');
     stashWantUri(want);
   }
 
@@ -59,6 +68,7 @@ export default class EntryAbility extends UIAbility {
         return;
       }
       hilog.info(0x0000, TAG, 'Succeeded in loading content.');
+      tlog('content_loaded');
     });
   }
 

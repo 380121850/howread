@@ -35,6 +35,7 @@ import { PlaylistMeta, getAllPlaylists, createPlaylist, deletePlaylist, getPlayl
 import http from '@ohos.net.http';
 import promptAction from '@ohos.promptAction';
 import { KEY_PENDING_URI } from '../entryability/EntryAbility';
+import { tlog } from '../model/TestLog';
 import web_webview from '@ohos.web.webview';
 import i18n from '@ohos.i18n';
 import bundleManager from '@ohos.bundle.bundleManager';
@@ -388,6 +389,7 @@ struct Index {
     this.loadLibrary();
     this.ensureDemoBook();
     this.consumePendingUri();
+    this.consumeSeedUrl();
     this.initSettings();
     this.loadAllBookmarks();
     this.initBrowseDir();
@@ -935,6 +937,7 @@ struct Index {
       /* Sprint N: load tag list */
       this.allTags = await getTagList(ctx);
       console.info(`[Index] Library loaded: ${this.recentBooks.length} recent, ${this.starredBooks.length} starred`);
+      tlog('home_ready', 'recent=' + this.recentBooks.length + ' starred=' + this.starredBooks.length);
       /* Round 6: refresh the missing-files badge */
       this.missingCount = findMissingBooks(this.recentBooks).length;
       /* Round 8: scanned remote books + cache usage */
@@ -995,6 +998,7 @@ struct Index {
       await this.loadLibrary();
       promptAction.showToast({ message: `\u626B\u63CF\u5B8C\u6210\uFF1A\u53D1\u73B0 ${hits.length} \u4E2A\u6587\u4EF6\uFF0C\u65B0\u5BFC\u5165 ${added} \u672C` });
       console.info(`[Index] Device scan: ${hits.length} files, ${added} imported`);
+      tlog('device_scan_done', 'found=' + hits.length + ' imported=' + added);
     } finally {
       this.scanBusy = false;
     }
@@ -1017,6 +1021,7 @@ struct Index {
     this.libSearchBusy = false;
     promptAction.showToast({ message: `\u5168\u6587\u641C\u7D22\uFF1A${hits.length} \u5904\u547D\u4E2D` });
     console.info(`[Index] Full-text search '${q}': ${hits.length} hits`);
+    tlog('lib_search_done', 'hits=' + hits.length);
   }
 
   /** Cancel a running full-text search. */
@@ -1202,6 +1207,48 @@ struct Index {
     }
   }
 
+  /** ci/autotest-hmos seed hook: download hrSeedUrl into the sandbox cache and
+   *  register it as a library book (test-only; triggered by aa start --ps). */
+  private consumeSeedUrl(): void {
+    const url: string | undefined = AppStorage.get<string>('hrSeedUrl');
+    if (url === undefined || url.length === 0) {
+      return;
+    }
+    AppStorage.setOrCreate('hrSeedUrl', '');
+    tlog('seed_start', 'url=' + url);
+    const ctx = getContext(this);
+    let fileName = url.substring(url.lastIndexOf('/') + 1);
+    const q: number = fileName.indexOf('?');
+    if (q > 0) {
+      fileName = fileName.substring(0, q);
+    }
+    if (fileName.length === 0) {
+      fileName = 'seed_book';
+    }
+    const dl = http.createHttp();
+    dl.request(url, { connectTimeout: 10000, readTimeout: 120000,
+      expectDataType: http.HttpDataType.ARRAY_BUFFER })
+      .then((resp: http.HttpResponse) => {
+        dl.destroy();
+        const buf = resp.result as ArrayBuffer;
+        const path: string = ctx.cacheDir + '/' + fileName;
+        const f = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+        fs.writeSync(f.fd, buf);
+        fs.closeSync(f);
+        const book: RecentBook = { path: path, title: fileName, page: 0, totalPages: 0,
+          lastRead: new Date().toISOString(), star: false, coverPath: '', author: '',
+          tags: [], series: '', genre: '', status: 0 };
+        saveRecentBook(ctx, book).then(() => {
+          this.loadLibrary();
+          tlog('seed_done', 'name=' + fileName + ' size=' + buf.byteLength);
+        });
+      })
+      .catch((err: Error) => {
+        dl.destroy();
+        tlog('seed_fail', 'err=' + String(err));
+      });
+  }
+
   /**
    * Generate a cover thumbnail PNG for a book: open the doc, read metadata,
    * render page 0 at low zoom, encode to PNG in cacheDir/covers/.
@@ -1334,6 +1381,7 @@ struct Index {
   }
 
   private openBook(book: RecentBook): void {
+  tlog('book_open_tap', 'title=' + book.title);
     /* Round 7: alwaysPage1 forces page 1 in the Reader (ignores saved progress) */
     router.pushUrl({
       url: 'components/Reader',
@@ -2027,6 +2075,7 @@ struct Index {
       this.webdavDirs = dirs;
       this.webdavFiles = files;
       console.info(`[WEBDAV] ${url} -> ${dirs.length} dirs, ${files.length} files`);
+      tlog('dav_panel_loaded', 'dirs=' + dirs.length + ' files=' + files.length);
       this.webdavStatus = `Connected! ${dirs.length} dirs, ${files.length} files`;
     } catch (e) {
       this.webdavStatus = 'Connection failed: ' + String(e);
@@ -2085,7 +2134,8 @@ struct Index {
     }
     this.webdavDownloading = fileName;
     this.webdavProgress = 0;
-    try {
+
+tlog('download_start', 'name=' + fileName);    try {
       let total = 0;
       const chunks: ArrayBuffer[] = [];
       let req = http.createHttp();
@@ -2131,6 +2181,7 @@ struct Index {
         fs.writeSync(f.fd, merged.buffer);
         fs.closeSync(f);
         this.webdavStatus = `Downloaded: ${fileName} (${size} bytes)`;
+        tlog('download_done', 'name=' + fileName + ' size=' + size);
         /* Add to library */
         const book: RecentBook = {
           path: path,
@@ -2150,9 +2201,11 @@ struct Index {
         await this.loadLibrary();
       } else {
         this.webdavStatus = `Download failed: ${code}`;
+        tlog('download_fail', 'code=' + code);
       }
     } catch (e) {
       this.webdavStatus = 'Download error: ' + String(e);
+      tlog('download_fail', 'err=1');
     }
     this.webdavProgress = -1;
     this.webdavDownloading = '';
@@ -3233,6 +3286,7 @@ struct Index {
       Image(TAB_ICONS[this.tabDisplay[pos]])
         .width(22).height(22)
         .fillColor(this.tabPos === pos ? '#FFFFFF' : '#B3FFFFFF')
+        .id('app_tab_' + pos)
       if (!this.settings.tabIconOnly) {
         Text(TAB_NAMES[this.tabDisplay[pos]])
           .fontSize(this.fsp(10))
@@ -3370,6 +3424,7 @@ struct Index {
   exitApp(): void {
     if (this.settings.showExitDialog) {
       this.showExitConfirm = true;
+      tlog('exit_confirm_shown');
       return;
     }
     try {
@@ -6767,6 +6822,7 @@ struct Index {
           readTimeout: 15000
         });
         const code: number = r.responseCode;
+        tlog('dav_test_done', 'code=' + code);
         if (code >= 200 && code < 300) {
           promptAction.showToast({ message: $r('app.string.dav_test_ok') });
         } else if (code === 401 || code === 403) {
@@ -6779,6 +6835,7 @@ struct Index {
       }
     } catch (e) {
       promptAction.showToast({ message: $r('app.string.dav_test_fail') });
+      tlog('dav_test_done', 'code=-1');
     }
   }
 
@@ -7071,6 +7128,7 @@ struct Index {
           Button($r('app.string.dav_test'))
             .fontSize(12).height(34).layoutWeight(1)
             .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+            .id('dav_btn_test')
             .onClick(() => {
               this.davTestConnection();
             })
@@ -7984,6 +8042,7 @@ struct Index {
         const byTime: boolean = this.browseSortMode === 2;
         this.browseDirs = sortMeta(dirMeta, byTime);
         this.browseFiles = sortMeta(fileMeta, byTime);
+        tlog('browse_dir_loaded', 'dirs=' + this.browseDirs.length + ' files=' + this.browseFiles.length);
       } else {
         dirs.sort();
         files.sort();
@@ -7993,6 +8052,7 @@ struct Index {
         }
         this.browseDirs = dirs;
         this.browseFiles = files;
+        tlog('browse_dir_loaded', 'dirs=' + this.browseDirs.length + ' files=' + this.browseFiles.length);
       }
     } catch (e) {
       console.error('[Index] listBrowseDir failed');
@@ -9240,6 +9300,7 @@ struct Index {
     try {
       i18n.System.setAppPreferredLanguage(v === 'zh' ? 'zh-Hans' : (v === 'en' ? 'en-US' : ''));
       console.info(`[Index] App preferred language: ${v}`);
+      tlog('language_applied', 'lang=' + v);
     } catch (e) {
       console.error('[Index] setAppPreferredLanguage failed');
     }
@@ -9719,16 +9780,19 @@ struct Index {
         Button($r('app.string.common_cancel'))
           .fontSize(13).height(36).layoutWeight(1)
           .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+          .id('exit_btn_cancel')
           .onClick(() => {
             this.showExitConfirm = false;
           })
         Button($r('app.string.common_ok'))
           .fontSize(13).height(36).layoutWeight(1)
           .backgroundColor('#e57373').fontColor(Color.White)
+          .id('exit_btn_ok')
           .onClick(() => {
             this.showExitConfirm = false;
             try {
               (getContext(this) as common.UIAbilityContext).terminateSelf();
+              tlog('exit_confirmed');
             } catch (e) {
               console.error('[Index] exit failed');
             }

@@ -150,6 +150,8 @@ public class SearchAllBooksWorker extends MessageWorker {
                     // JsonDB.set reduced a multi-folder 书库文件夹 list to just
                     // Downloads after one transiently empty scan
                     BookCSS.get().searchPathsJson = JsonDB.add(BookCSS.get().searchPathsJson, path.getPath());
+                    // background re-add: also clear any deletion marker
+                    com.foobnix.remote.RemoteTombstones.clear("folder:" + path.getPath());
                     SearchCore.search(itemsMeta, AppProfile.DOWNLOADS_DIR, ExtUtils.seachExts);
                     LOG.d("SearchAllBooksWorker", "Files-emtpy", "DOWNLOADS_DIR");
                 }

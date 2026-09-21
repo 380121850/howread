@@ -221,12 +221,18 @@ public class AppData {
 
     public void removeRecent(FileMeta meta) {
         LOG.d("removeRecent", meta.getPath());
+        // deletion must survive the meta union sync
+        com.foobnix.remote.RemoteTombstones.add(
+                com.foobnix.remote.RemoteTombstones.TOMB_RECENT + meta.getPath());
         removeAll(meta, AppProfile.APP_RECENT_JSON);
         EventBus.getDefault()
                 .post(new NotifyAllFragments());
     }
 
     public void removeFavorite(FileMeta meta) {
+        // deletion must survive the meta union sync
+        com.foobnix.remote.RemoteTombstones.add(
+                com.foobnix.remote.RemoteTombstones.TOMB_FAVORITE + meta.getPath());
         removeAll(meta, AppProfile.APP_FAVORITE_JSON);
         EventBus.getDefault()
                 .post(new NotifyAllFragments());
@@ -317,6 +323,10 @@ public class AppData {
     }
 
     public void addRecent(SimpleMeta simpleMeta) {
+        // (re)adding clears the deletion marker, or the sync filter would
+        // drop it again
+        com.foobnix.remote.RemoteTombstones.clear(
+                com.foobnix.remote.RemoteTombstones.TOMB_RECENT + simpleMeta.getPath());
         if (simpleMeta.time == 0) {
             simpleMeta.time = System.currentTimeMillis();
         }
@@ -324,6 +334,8 @@ public class AppData {
     }
 
     public void addFavorite(SimpleMeta simpleMeta) {
+        com.foobnix.remote.RemoteTombstones.clear(
+                com.foobnix.remote.RemoteTombstones.TOMB_FAVORITE + simpleMeta.getPath());
         add(simpleMeta, AppProfile.syncFavorite);
         EventBus.getDefault()
                 .post(new NotifyAllFragments());
@@ -336,12 +348,25 @@ public class AppData {
     }
 
     public void clearFavorites() {
+        tombAll(AppProfile.APP_FAVORITE_JSON, com.foobnix.remote.RemoteTombstones.TOMB_FAVORITE);
         clearAll(AppProfile.APP_FAVORITE_JSON);
     }
 
     public void clearRecents() {
+        tombAll(AppProfile.APP_RECENT_JSON, com.foobnix.remote.RemoteTombstones.TOMB_RECENT);
         clearAll(AppProfile.APP_RECENT_JSON);
+    }
 
+    /** Marks every current entry of a meta list deleted (clear-all flows):
+     * the union sync would otherwise bring all of them back. */
+    private void tombAll(String name, String prefix) {
+        try {
+            for (SimpleMeta s : getAll(name)) {
+                com.foobnix.remote.RemoteTombstones.add(prefix + s.getPath());
+            }
+        } catch (Exception e) {
+            LOG.e(e);
+        }
     }
 
     /**

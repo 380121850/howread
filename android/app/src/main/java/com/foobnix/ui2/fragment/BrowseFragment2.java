@@ -1313,6 +1313,8 @@ import java.util.Map;
                             a.getString(R.string.do_you_want_to_delete_) + " " + cat[1],
                             a.getString(R.string.delete), new Runnable() {
                                 @Override public void run() {
+                                    // deletion must survive config sync (plain union merge)
+                                    com.foobnix.remote.RemoteTombstones.add("opds:" + cat[2]);
                                     AppState.get().allOPDSLinks =
                                             AppState.get().allOPDSLinks.replace(cat[2], "");
                                     AppProfile.save(a);
@@ -1526,6 +1528,8 @@ import java.util.Map;
                             Toast.makeText(fa, R.string.this_directory_is_already_in_the_list, Toast.LENGTH_LONG).show();
                         } else {
                             BookCSS.get().searchPathsJson = JsonDB.add(BookCSS.get().searchPathsJson, nPath);
+                            // re-added on purpose: clear any deletion marker
+                            com.foobnix.remote.RemoteTombstones.clear("folder:" + nPath);
                             // an explicitly added folder is wanted again: lift
                             // any earlier fallback-exclusion of it
                             BookCSS.get().searchPathsHiddenJson = JsonDB.remove(BookCSS.get().searchPathsHiddenJson, nPath);

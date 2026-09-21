@@ -1,0 +1,33 @@
+{
+  "devices": [],
+  "emulator_devices": [
+    {
+      "serial": "127.0.0.1:5555",
+      "model": "Pura 90 Emulator",
+      "brand": "Huawei",
+      "os": "HarmonyOS 6.1.1(24)",
+      "api": 24,
+      "abi": "x86_64",
+      "resolution": "1320x2856",
+      "density": 560,
+      "locale": "zh-CN",
+      "rom_notes": "Pura 90 模拟器（DevEco Emulator.exe 人工/手动拉起）；hdc tconn 127.0.0.1:5555（端口实测固定）；系统语言 zh-CN，UI 断言用中文文案；模拟器上生物识别/TTS/语音包不可用→相关用例 SKIP"
+    }
+  ],
+  "bundle": {
+    "pro": {
+      "bundleName": "com.leestudio.howread.pro.reader.hmos",
+      "ability": "EntryAbility",
+      "hap_glob_debug": "../../harmony/dist/debug/HowRead-Pro-*-x86_64-hmos.hap",
+      "hap_glob_release": "../../harmony/dist/release/HowRead-Pro-*-x86_64-hmos.hap"
+    }
+  },
+  "conflicts": "鸿蒙只保留 pro 变体（2026-09-18 决策）；真机接入时往 devices[] 加 serial 即可（hdc list targets 取值）",
+  "fixtures": {
+    "seed_host_dir": "Z:/opt/librera/LibreraReader/ci/autotest/teskbook",
+    "seed_port": 8790,
+    "epub": "alicesadventures.epub",
+    "pdf": "big25.pdf",
+    "note": "测试书经 hrSeedUrl 种子钩子 http 下载入沙箱 cache（应用 libfolder 种子=cacheDir，自动入库）；勿直写沙箱（shell 无权限）"
+  }
+}

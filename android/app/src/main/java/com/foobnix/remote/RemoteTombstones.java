@@ -19,11 +19,18 @@ import com.foobnix.webdav.WebDavStore;
 public class RemoteTombstones {
 
     private static final String PREF = "netTombstones";
-    private static final int MAX = 64;
+    // identity prefixes (the store is local-only; MAX bounds its size —
+    // recent/favorite clear-all can write many markers at once)
+    public static final String TOMB_RECENT = "recent:";
+    public static final String TOMB_FAVORITE = "favorite:";
+    public static final String TOMB_AI = "ai:";
+    private static final int MAX = 512;
 
-    /** Identity keys: "webdav:<trimmed url>", "smb:<id>", "sftp:<id>". */
+    /** Identity keys: "webdav:<trimmed url>", "smb:<id>", "sftp:<id>",
+     * "opds:<line>", "folder:<path>". */
     public static void add(String identity) {
         try {
+            identity = normalizeOpds(identity);
             prefs().edit().putLong(identity, System.currentTimeMillis()).apply();
             trim();
         } catch (Exception e) {
@@ -41,10 +48,22 @@ public class RemoteTombstones {
 
     public static void clear(String identity) {
         try {
+            identity = normalizeOpds(identity);
             prefs().edit().remove(identity).apply();
         } catch (Exception e) {
             LOG.e(e);
         }
+    }
+
+    /** Entry.appState carries a trailing ';' while the identities checked by
+     * {@code rewriteLines} are the bare ';'-split segments — call sites that
+     * passed a whole appState wrote keys the filter never matched, so a
+     * deleted catalog came back on every sync. Normalized in one place. */
+    private static String normalizeOpds(String identity) {
+        if (identity != null && identity.startsWith("opds:") && identity.endsWith(";")) {
+            return identity.substring(0, identity.length() - 1);
+        }
+        return identity;
     }
 
     /**

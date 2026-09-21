@@ -2148,10 +2148,12 @@ def fn13_tags(dev, case_id, cfg=None, fixtures=None):
 
 
 def fn14_browse_ops(dev, case_id, cfg=None, fixtures=None):
-    """文件浏览操作:我的文件→Download→新建 txt 文件出现;zip 压缩包直读打开.
-    覆盖 §4 树形浏览/新建 txt/zip 直读."""
+    """文件浏览操作:我的文件→Download 目录浏览(树形浏览);zip 压缩包直读打开.
+    覆盖 §4 树形浏览/zip 直读.
+    (新建 txt 功能按产品决策 2026-09-20 不再需要,对应步骤已从本用例移除;
+     Download 目录浏览验证保留)"""
     import os
-    with dev.step(case_id, "create_txt"):
+    with dev.step(case_id, "browse_download"):
         _ensure_home(dev)
         if not _browse_root(dev):
             raise AssertionError("我的文件根视图不可达")
@@ -2160,54 +2162,25 @@ def fn14_browse_ops(dev, case_id, cfg=None, fixtures=None):
             raise AssertionError("Download 文件夹不可见")
         dl.click()
         time.sleep(2.5)
-        # 幂等:清掉上次运行残留,避免"同名文件覆盖?"弹窗
-        dev.shell("rm -f /sdcard/Download/autotest_note.txt")
-        cf = dev.d(resourceId=_rid(dev, "createFolder"))
-        if not cf.exists:
-            # 2026-09-18「我的文件」改版后,书库文件夹行打开的是 detached 文件夹
-            # 子页,工具栏有意精简(仅 返回/路径/排序/视图切换,无新建;BrowseFragment2
-            # 注释 "no new-folder")——新建文件入口当前 UI 不可达,待产品确认;
-            # 本用例转 SKIP 并注明(zip 直读覆盖在入口恢复后随用例一并回归)
-            dev.save_dump(case_id, "no_createfolder")
-            raise TestSkip("新建按钮(createFolder)不可见(09-18 改版后文件夹子页工具栏精简,新建入口待产品确认)")
-        cf.click()
-        time.sleep(1.5)
-        newtxt = dev.d(textContains="新文件")
-        if not newtxt.exists:
-            dev.save_dump(case_id, "no_newtxt_menu")
-            dev.d.press("back")
-            raise AssertionError("createFolder 弹窗无[新文件(.txt)]项")
-        newtxt.click()
-        time.sleep(2)
-        name_input = dev.d(className="android.widget.EditText")
-        if not name_input.exists:
-            dev.save_dump(case_id, "no_newtxt_dialog")
-            raise TestSkip("新建 txt 对话框未出现")
-        _fill(dev, name_input, "autotest_note", "(文件名)")
-        _dismiss_keyboard(dev)
-        if not dev.click_text("保存"):
-            dev.save_dump(case_id, "no_save_btn")
-            dev.d.press("back")
-            raise AssertionError("新建 txt 对话框无[保存]按钮")
-        time.sleep(1.5)
-        # 可能出现"同名文件覆盖?"确认弹窗(上次残留未清干净时)
-        if dev.click_text("确认") or dev.click_text("确定"):
-            time.sleep(1.5)
-        # 列表刷新需要时间,轮询;UI 迟迟不显示时以设备文件存在为兜底证据
-        listed = False
-        deadline = time.time() + 12
-        while time.time() < deadline:
-            if dev.dump_has_text("autotest_note"):
-                listed = True
+        # 断言:已进入 Download 真实路径浏览(路径栏面包屑含 emulated)且列表非空
+        ok = False
+        for _ in range(4):
+            xml = dev.d.dump_hierarchy()
+            n_children = 0
+            try:
+                n_children = int(dev.d(resourceId=_rid(dev, "recyclerView")).info.get("childCount", 0))
+            except Exception:
+                pass
+            listed = n_children > 0 or any(
+                k in xml for k in ("Bluetooth", "DCIM", "Alarms", "Android"))
+            if "emulated" in xml and listed:
+                ok = True
                 break
             time.sleep(1.5)
-        _snap(dev, case_id, "txt_created")
-        on_disk = "No such" not in dev.shell("ls /sdcard/Download/autotest_note.txt")
-        if not listed and not on_disk:
-            dev.save_dump(case_id, "txt_not_created")
-            raise AssertionError("新建 txt 失败:列表与设备文件均未出现")
-        if not listed:
-            print("  [%s] UI 列表未及时刷新,文件已确认落盘(/sdcard/Download/autotest_note.txt)" % dev.serial)
+        _snap(dev, case_id, "download_browsed")
+        if not ok:
+            dev.save_dump(case_id, "download_list_empty")
+            raise AssertionError("进入 Download 后目录列表未加载(路径栏/列表项缺失)")
     with dev.step(case_id, "open_zip"):
         zpath = "/sdcard/Download/book_zip.zip"
         if "No such" in dev.shell("ls " + zpath):

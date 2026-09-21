@@ -211,9 +211,15 @@ public class AddCatalogDialog {
                     Entry entry = new Entry();
                     entry.setAppState(feedUrl, name.getText().toString(), description.getText().toString(), image.getTag().toString());
                     if (editAppState != null) {
+                        // the replaced-out old line must not come back through
+                        // a config sync (plain union merge)
+                        com.foobnix.remote.RemoteTombstones.add("opds:" + editAppState);
                         AppState.get().allOPDSLinks = AppState.get().allOPDSLinks.replace(editAppState, "");
                     }
                     AppState.get().allOPDSLinks = entry.appState + AppState.get().allOPDSLinks;
+                    // re-adding a catalog clears its deletion marker, or the
+                    // sync filter would strip it again
+                    com.foobnix.remote.RemoteTombstones.clear("opds:" + entry.appState);
                     onRefresh.run();
                     infoDialog.dismiss();
                     AppProfile.save(a);

@@ -212,6 +212,13 @@ public class AddWebDavDialog {
     private static void save(Activity a, String url, String title, String login, String password, boolean trustAll,
                              String editAppState, Runnable onRefresh, AlertDialog dialog, String startDir) {
         if (editAppState != null) {
+            // the edit changed the server URL: tombstone the old identity so
+            // the pre-edit line cannot come back as a duplicate through sync
+            String oldUrl = editAppState.replace(";", "").split(",")[0].trim();
+            if (TxtUtils.isNotEmpty(oldUrl)
+                    && !WebDavStore.trimSlash(oldUrl).equals(WebDavStore.trimSlash(url))) {
+                com.foobnix.remote.RemoteTombstones.add("webdav:" + WebDavStore.trimSlash(oldUrl));
+            }
             AppState.get().allWebDavLinks = AppState.get().allWebDavLinks.replace(editAppState, "");
         }
         WebDavServer s = new WebDavServer(url, TxtUtils.isNotEmpty(title) ? title : url,

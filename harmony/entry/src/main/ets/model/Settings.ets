@@ -1,5 +1,6 @@
 import preferences from '@ohos.data.preferences';
 import { storeName } from './Profiles';
+import { tlog } from './TestLog';
 
 /**
  * Global reader settings persisted via @ohos.data.preferences (sprint E).
@@ -398,6 +399,7 @@ export async function saveSettings(ctx: Context, s: ReaderSettings): Promise<voi
     console.info('[Settings] saved: theme=' + s.theme + ' zoom=' + s.zoom.toFixed(2) +
       ' mode=' + s.scrollMode + '/' + s.pageMode + ' font=' + s.fontSize +
       ' lh=' + s.lineHeight.toFixed(1) + ' m=' + s.margin);
+    tlog('settings_saved', 'theme=' + s.theme + ' font=' + s.fontSize);
   } catch (e) {
     console.error('[Settings] save failed');
   }

@@ -433,6 +433,10 @@ public class ProfileStateIO {
                     if (v == null || TxtUtils.isEmpty(name)) {
                         continue;
                     }
+                    if (com.foobnix.remote.RemoteTombstones.has(
+                            com.foobnix.remote.RemoteTombstones.TOMB_AI + name)) {
+                        continue; // deleted on this device: keep it deleted
+                    }
                     int hit = aiProfileIndex(cur, name);
                     if (hit < 0) {
                         cur.put(v);
@@ -458,7 +462,9 @@ public class ProfileStateIO {
             }
             // a device without an active profile adopts the backed-up one
             String active = o.optString(K_ACTIVE, "");
-            if (TxtUtils.isNotEmpty(active) && TxtUtils.isEmpty(AppState.get().aiConfigName)) {
+            if (TxtUtils.isNotEmpty(active) && TxtUtils.isEmpty(AppState.get().aiConfigName)
+                    && !com.foobnix.remote.RemoteTombstones.has(
+                            com.foobnix.remote.RemoteTombstones.TOMB_AI + active)) {
                 LinkedJSONObject p = asLinked(vendors == null ? null : vendors.opt(active));
                 if (p != null) {
                     adoptAiProfile(p, active, c);
@@ -524,8 +530,15 @@ public class ProfileStateIO {
      * resolves to the server copy. A freshly reset device (empty local key)
      * therefore recovers the server key instead of its just-exported empty
      * file winning a whole-file mtime race and clobbering the server.
+     *
+     * Vendors merge three-way per name when the base snapshot is available:
+     * a vendor edited on only one side wins (a local edit is no longer
+     * reverted by the stale server copy), a vendor deleted locally and
+     * unchanged remotely stays deleted; with no base yet the historical
+     * two-way rule applies (the server copy wins conflicts).
      */
-    public static LinkedJSONObject mergeAi(LinkedJSONObject local, LinkedJSONObject remote) {
+    public static LinkedJSONObject mergeAi(LinkedJSONObject local, LinkedJSONObject remote,
+            LinkedJSONObject base) {
         try {
             String localKey = local == null ? "" : local.optString(K_API_KEY, "");
             String remoteKey = remote == null ? "" : remote.optString(K_API_KEY, "");
@@ -541,33 +554,67 @@ public class ProfileStateIO {
             String localActive = local == null ? "" : local.optString(K_ACTIVE, "");
             String remoteActive = remote == null ? "" : remote.optString(K_ACTIVE, "");
             out.put(K_ACTIVE, TxtUtils.isEmpty(remoteActive) ? localActive : remoteActive);
-            // per-vendor union keyed by the profile name: a vendor present
-            // on only one side is kept (restore); the same name with
-            // different content resolves to the server copy
-            LinkedJSONObject vendors = new LinkedJSONObject();
             LinkedJSONObject lv = local == null ? null : local.optJSONObject(K_VENDORS);
-            if (lv != null) {
-                Iterator<String> it = lv.keys();
-                while (it.hasNext()) {
-                    String k = it.next();
-                    LinkedJSONObject v = asLinked(lv.opt(k));
-                    if (v != null) {
-                        vendors.put(k, v);
+            LinkedJSONObject rv = remote == null ? null : remote.optJSONObject(K_VENDORS);
+            LinkedJSONObject bv = base == null ? null : base.optJSONObject(K_VENDORS);
+            LinkedJSONObject vendors = new LinkedJSONObject();
+            if (bv == null) {
+                // no base snapshot yet: the historical two-way rule — local
+                // vendors kept, a same-name remote difference wins
+                if (lv != null) {
+                    Iterator<String> it = lv.keys();
+                    while (it.hasNext()) {
+                        String k = it.next();
+                        LinkedJSONObject v = asLinked(lv.opt(k));
+                        if (v != null) {
+                            vendors.put(k, v);
+                        }
                     }
                 }
-            }
-            LinkedJSONObject rv = remote == null ? null : remote.optJSONObject(K_VENDORS);
-            if (rv != null) {
-                Iterator<String> it = rv.keys();
-                while (it.hasNext()) {
-                    String k = it.next();
-                    LinkedJSONObject v = asLinked(rv.opt(k));
-                    if (v == null) {
-                        continue;
+                if (rv != null) {
+                    Iterator<String> it = rv.keys();
+                    while (it.hasNext()) {
+                        String k = it.next();
+                        LinkedJSONObject v = asLinked(rv.opt(k));
+                        if (v == null) {
+                            continue;
+                        }
+                        LinkedJSONObject cur = asLinked(vendors.opt(k));
+                        if (cur == null || !cur.toString().equals(v.toString())) {
+                            vendors.put(k, v);
+                        }
                     }
-                    LinkedJSONObject cur = asLinked(vendors.opt(k));
-                    if (cur == null || !cur.toString().equals(v.toString())) {
-                        vendors.put(k, v);
+                }
+            } else {
+                // three-way per name: single-side changes win (including
+                // deletions), both-changed keeps the local copy
+                java.util.Set<String> names = new java.util.LinkedHashSet<String>();
+                for (Iterator<String> it = lv == null ? null : lv.keys(); it != null && it.hasNext(); ) {
+                    names.add(it.next());
+                }
+                for (Iterator<String> it = rv == null ? null : rv.keys(); it != null && it.hasNext(); ) {
+                    names.add(it.next());
+                }
+                for (Iterator<String> it = bv.keys(); it.hasNext(); ) {
+                    names.add(it.next());
+                }
+                for (String k : names) {
+                    LinkedJSONObject l = asLinked(lv == null ? null : lv.opt(k));
+                    LinkedJSONObject r = asLinked(rv == null ? null : rv.opt(k));
+                    LinkedJSONObject b = asLinked(bv.opt(k));
+                    boolean lb = l != null, rb = r != null, bb = b != null;
+                    boolean localChanged = lb != bb || (lb && !l.toString().equals(b.toString()));
+                    boolean remoteChanged = rb != bb || (rb && !r.toString().equals(b.toString()));
+                    LinkedJSONObject keep;
+                    if (!remoteChanged) {
+                        keep = l;            // local edit / deletion wins
+                    } else if (!localChanged) {
+                        keep = r;            // adopt the remote edit / deletion
+                    } else {
+                        keep = l;            // both changed: local wins
+                    }
+                    if (keep != null) {
+                        vendors.put(k, keep);
                     }
                 }
             }
@@ -1204,7 +1251,15 @@ public class ProfileStateIO {
             LinkedJSONObject l = lm.get(url), r = rm.get(url), b = bm.get(url);
             LinkedJSONObject keep;
             if (l == null) {
-                keep = r;                 // restore a remote addition / other device's entry
+                // locally absent: a real remote addition is restored, but an
+                // entry this device dropped (deleted / URL re-keyed by an
+                // edit) whose remote copy is unchanged since the base stays
+                // dropped — otherwise the pre-edit server re-appears as a ghost
+                if (b != null && (r == null || r.toString().equals(b.toString()))) {
+                    keep = null;
+                } else {
+                    keep = r;
+                }
             } else if (r == null || r.toString().equals(l.toString())) {
                 keep = l;                 // deletion not propagated / already equal
             } else if (b == null || r.toString().equals(b.toString())) {
@@ -1318,7 +1373,14 @@ public class ProfileStateIO {
             String rf = r == null ? null : groupFinger(r);
             String bf = b == null ? null : groupFinger(b);
             if (l == null) {
-                keep = r;
+                // locally absent: restore real remote additions; a group this
+                // device dropped (deleted / re-keyed by an edit) whose remote
+                // copy is unchanged since the base stays dropped (no ghost)
+                if (b != null && (rf == null || rf.equals(bf))) {
+                    keep = null;
+                } else {
+                    keep = r;
+                }
             } else if (r == null || lf.equals(rf)) {
                 keep = l;
             } else if (b == null || rf.equals(bf)) {
