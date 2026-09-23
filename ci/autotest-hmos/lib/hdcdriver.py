@@ -300,19 +300,24 @@ class HdcDevice:
         return int(out.split()[0]) if out else None
 
     def mem_pss_kb(self):
-        """Total PSS of the app process via hidumper --mem (kB)."""
+        """Total PSS of the app process via hidumper --mem (kB).
+
+        Reads the report's own 'Total' row (first number). Do NOT sum the
+        detail rows: the breakdown repeats native heap as heap/brk/mmap
+        sub-rows AND includes the Total itself, so summing inflates the
+        number >2x (PF-02 2026-09-22 correction; real open working set on
+        Pura 90 was 245MB, not 553MB)."""
         pid = self.pid()
         if not pid:
             return None
         out = self.shell('hidumper --mem %d' % pid, timeout=30)
-        # header row "Pss Total Clean Dirty ..." — first numeric row under it is
-        # the total line ("Total Pss:" summary differs per version); sum the
-        # "Pss Total" column of all detail rows as a stable proxy.
-        vals = re.findall(r'^\s+(\S.*?)\s{2,}(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)',
-                          out, re.M)
-        if not vals:
-            return None
-        return sum(int(v[1]) for v in vals)
+        for ln in out.splitlines():
+            s = ln.strip()
+            if s.startswith('Total'):
+                for p in re.split(r'\s+', s)[1:]:
+                    if p.isdigit():
+                        return int(p)
+        return None
 
     # -------------------------------------------------------------- crash
     def _crash_files(self):

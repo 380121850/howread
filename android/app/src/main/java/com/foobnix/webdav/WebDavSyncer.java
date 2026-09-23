@@ -251,6 +251,29 @@ public class WebDavSyncer {
         }
     }
 
+    /** One debounced follow-up sync (same gates as notifyConfigChanged): used
+     * by doSync to converge deletions that landed mid-round without waiting
+     * for the periodic sync. */
+    private static void scheduleDebouncedSync() {
+        try {
+            if (pendingConfigSync != null) {
+                SYNC_SCHEDULER.removeCallbacks(pendingConfigSync);
+            }
+            pendingConfigSync = () -> {
+                pendingConfigSync = null;
+                if (syncingNow) {
+                    return;
+                }
+                if (AppState.get().webdavSyncEnabled && TxtUtils.isNotEmpty(AppState.get().webdavSyncServer)) {
+                    syncAsync(com.foobnix.LibreraApp.context, null);
+                }
+            };
+            SYNC_SCHEDULER.postDelayed(pendingConfigSync, CONFIG_SYNC_DEBOUNCE_MS);
+        } catch (Exception e) {
+            LOG.e(e);
+        }
+    }
+
     /**
      * Periodic background sync while the app is alive. The interval is
      * re-read on every cycle, so a new value picked in the dialog (or synced
@@ -436,6 +459,25 @@ public class WebDavSyncer {
 
             // ---- local per-book info, keyed by book file name
             final Map<String, LinkedJSONObject> localBooks = buildLocalBooks(localP, localB);
+            // deletions made mid-round are still in the start-of-round
+            // snapshots this upload path PUTs for books the server has not
+            // seen yet — strip them so the upload cannot carry a just-deleted
+            // bookmark back to the server
+            try {
+                final LinkedJSONObject delNow = SharedBooks.DeletedBooks.all();
+                for (LinkedJSONObject info : localBooks.values()) {
+                    LinkedJSONObject bms = info.optJSONObject("bookmarks");
+                    if (bms == null) {
+                        continue;
+                    }
+                    final String nm = info.optString("name");
+                    for (String dnKey : SharedBooks.DeletedBooks.keysOf(delNow, nm)) {
+                        bms.remove(dnKey);
+                    }
+                }
+            } catch (Exception stripError) {
+                LOG.e(stripError);
+            }
 
             // ---- local files: name → existing file (bookmarks + library DB)
             final Map<String, File> candidates = buildLocalCandidates();
@@ -457,20 +499,33 @@ public class WebDavSyncer {
             // every book name that exists on the server this round (for the
             // stale-tombstone cleanup below)
             final Set<String> remoteNames = new HashSet<>();
-            // locally deleted progress/bookmarks (marked-unread, bookmark
-            // removal): never merged back, server file removed when nothing
-            // remains to keep it alive
-            final LinkedJSONObject deletedBooks = SharedBooks.DeletedBooks.all();
+            // markers written AFTER this instant belong to deletions made
+            // while this round was running: clearNames must keep them (the
+            // snapshot-based publish already re-PUT the deleted entry —
+            // losing its marker too would lose the deletion entirely)
+            final long markerSnapshotTime = System.currentTimeMillis();
             final List<String> hashesToDelete = new ArrayList<String>();
             // tombstones are only dropped once the deletion is confirmed on
-            // the server (file deleted, or the merged info published); the
-            // rest is kept for the next round so a transient failure cannot
-            // resurrect deleted bookmarks
+            // EVERY same-name server copy: the matched copy re-published (or
+            // its file removed) and every stale variant copy stripped (the
+            // server keeps one info file per book-content hash and never GCs
+            // old ones, so consuming on the matched copy alone let a stale
+            // copy merge the deleted bookmark back on the next round)
             final Set<String> consumedNames = new HashSet<>();
             final Map<String, String> deletedHashName = new HashMap<>();
+            final Map<String, Integer> nameHashTotal = new HashMap<>();
+            final Map<String, Integer> nameHashAccounted = new HashMap<>();
             // real uploads this round (the old "every iterated book" count was
             // meaningless: every matched book re-PUT on every round)
             final int[] putCount = {0};
+            for (LinkedJSONObject ri : remoteBooks.values()) {
+                String rn = ri.optString("name");
+                if (TxtUtils.isEmpty(rn)) {
+                    continue;
+                }
+                Integer rt = nameHashTotal.get(rn);
+                nameHashTotal.put(rn, rt == null ? 1 : rt + 1);
+            }
 
             // ---- apply every remote book info INDEPENDENTLY (per-book restore:
             // one corrupt or conflicting book never blocks the others)
@@ -483,6 +538,10 @@ public class WebDavSyncer {
                         continue;
                     }
                     remoteNames.add(name);
+                    // fresh read per book: a deletion landing mid-round (the
+                    // UI thread keeps running) must already filter here and
+                    // must never be re-published from the start-of-round state
+                    final LinkedJSONObject deletedBooks = SharedBooks.DeletedBooks.all();
                     final boolean delProgress = markKind(deletedBooks, name, "p");
                     final boolean delBookmarks = markKind(deletedBooks, name, "b");
                     // specific bookmark keys the user deleted for this book:
@@ -604,16 +663,63 @@ public class WebDavSyncer {
                                 putBookInfo(s, booksUrl, rHash, merged);
                                 putCount[0]++;
                                 uploadedHashes.add(rHash);
-                                // the merged info is on the server: the deleted
-                                // progress/bookmarks/keys are gone there too, so
-                                // the whole tombstone for this book is consumed
-                                if (delProgress || delBookmarks || !deletedKeys.isEmpty()) {
-                                    consumedNames.add(name);
-                                }
+                                // this copy converged: the deleted keys are
+                                // stripped and the dk record is on the server
+                                incNameHash(nameHashAccounted, name);
                             } catch (Exception putError) {
                                 // keep the tombstone for the next round
                                 LOG.d("WebDavSyncer put", rHash, putError.getMessage());
                             }
+                        } else if (merged != null) {
+                            // the server already equals the merged state:
+                            // converged as far as this device's deletions go
+                            incNameHash(nameHashAccounted, name);
+                        }
+                    } else if (!deletedKeys.isEmpty()) {
+                        // same-name copies the normal publish cannot reach:
+                        // a stale variant hash (the book file was replaced or
+                        // another device holds a different copy of the same
+                        // name — the server keeps one info file per content
+                        // hash and never GCs them) or a remote book (no local
+                        // file, so matched is never true). Fixing only the
+                        // matched copy and then consuming the whole tombstone
+                        // let these copies merge the deleted bookmark back on
+                        // the next round. Strip exactly the deleted keys from
+                        // this copy too (progress/name/hash stay untouched)
+                        // and carry the dk record, so every copy converges.
+                        LinkedJSONObject fixBm = info.optJSONObject("bookmarks");
+                        boolean need = false;
+                        if (fixBm != null) {
+                            for (String dkKey : deletedKeys) {
+                                if (fixBm.has(dkKey)) {
+                                    need = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (need) {
+                            try {
+                                LinkedJSONObject fixed = new LinkedJSONObject(info.toString());
+                                LinkedJSONObject fixedBm = fixed.optJSONObject("bookmarks");
+                                if (fixedBm != null) {
+                                    for (String dkKey : deletedKeys) {
+                                        fixedBm.remove(dkKey);
+                                    }
+                                }
+                                LinkedJSONObject fixDk = buildDeletedKeys(name, info.optJSONObject("dk"), deletedBooks);
+                                if (fixDk != null) {
+                                    fixed.put("dk", fixDk);
+                                }
+                                putBookInfo(s, booksUrl, rHash, fixed);
+                                putCount[0]++;
+                                incNameHash(nameHashAccounted, name);
+                            } catch (Exception fixError) {
+                                // copy not converged: keep the tombstone, retry
+                                LOG.d("WebDavSyncer fixdel", rHash, fixError.getMessage());
+                            }
+                        } else {
+                            // copy already clean of the deleted keys
+                            incNameHash(nameHashAccounted, name);
                         }
                     }
                     res.booksSynced++;
@@ -658,10 +764,10 @@ public class WebDavSyncer {
                         s.delete(booksUrl + "/" + h + ".json");
                         res.booksDeleted++;
                         SyncChangeLog.add("books", deletedHashName.get(h) + " · 书籍信息", "up", "(存在)", "(已删除)");
-                        // server copy gone: the tombstone for this book is consumed
+                        // server copy gone: this copy has converged
                         String n = deletedHashName.get(h);
                         if (n != null) {
-                            consumedNames.add(n);
+                            incNameHash(nameHashAccounted, n);
                         }
                     } catch (Exception delError) {
                         LOG.d("WebDavSyncer delete", h, delError.getMessage());
@@ -682,7 +788,7 @@ public class WebDavSyncer {
                         }
                     }
                     if (!stale.isEmpty()) {
-                        SharedBooks.DeletedBooks.clearNames(stale);
+                        SharedBooks.DeletedBooks.clearNames(stale, markerSnapshotTime);
                         LOG.d("WebDavSyncer", "stale tombstones cleared", stale.size());
                     }
                 } catch (Exception staleError) {
@@ -692,12 +798,24 @@ public class WebDavSyncer {
                 LOG.d("WebDavSyncer", "remote listing incomplete: upload/delete phase skipped this round");
             }
             res.booksSynced = putCount[0];
-            // drop only the tombstones whose deletion is confirmed on the
-            // server this round (consumedNames holds exactly those names);
-            // everything else is kept so the next round retries instead of
-            // union-merging the "deleted" entries back from the server
+            // drop only the tombstones whose deletion is confirmed on EVERY
+            // same-name server copy this round; everything else is kept so
+            // the next round retries instead of union-merging the "deleted"
+            // entries back from the server. With an incomplete listing the
+            // accounting is unreliable — keep every tombstone.
+            if (!booksListFailed[0]) {
+                for (Map.Entry<String, Integer> tot : nameHashTotal.entrySet()) {
+                    Integer acc = nameHashAccounted.get(tot.getKey());
+                    if (acc != null && tot.getValue() != null && acc >= tot.getValue()) {
+                        consumedNames.add(tot.getKey());
+                    }
+                }
+            }
             if (!consumedNames.isEmpty()) {
-                SharedBooks.DeletedBooks.clearNames(consumedNames);
+                // markers written after the round started belong to deletions
+                // made while it was running: clearNames only drops older ones,
+                // the debounced follow-up converges the rest
+                SharedBooks.DeletedBooks.clearNames(consumedNames, markerSnapshotTime);
             }
 
             // writeback with a mid-round merge: the UI thread keeps writing
@@ -749,6 +867,16 @@ public class WebDavSyncer {
                 });
             }
 
+            // deletions made while this round was running keep their markers
+            // (clearNames notBefore): converge them right away with one
+            // debounced follow-up instead of waiting for the periodic sync
+            try {
+                if (SharedBooks.DeletedBooks.hasNewerThan(markerSnapshotTime)) {
+                    scheduleDebouncedSync();
+                }
+            } catch (Exception followError) {
+                LOG.e(followError);
+            }
             res.ok = true;
         } catch (Exception e) {
             LOG.e(e);
@@ -1591,6 +1719,12 @@ public class WebDavSyncer {
         return o;
     }
 
+    /** One more same-name hash copy of the book has converged. */
+    private static void incNameHash(Map<String, Integer> map, String key) {
+        Integer v = map.get(key);
+        map.put(key, v == null ? 1 : v + 1);
+    }
+
     /** Bookmark subset of one book, in the per-book info shape ({"t": bm}). */
     static LinkedJSONObject subsetFor(LinkedJSONObject localB, String name) {
         LinkedJSONObject out = new LinkedJSONObject();
@@ -1705,6 +1839,15 @@ public class WebDavSyncer {
                 }
                 if (info.length() > 0) {
                     out.put(hash, info);
+                } else {
+                    // empty body: the file exists but is unreadable (an
+                    // interrupted PUT leaves a 0-byte copy). Drop it WITH
+                    // the failed flag: accounting must not consume
+                    // tombstones while a same-name copy's state is unknown,
+                    // and the next round can repair the copy instead.
+                    if (listFailedOut != null) {
+                        listFailedOut[0] = true;
+                    }
                 }
             } catch (Exception e) {
                 LOG.e(e, "WebDavSyncer remote book");

@@ -118,7 +118,7 @@ case_meta:
   FN-37: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 文件信息对话框
   FN-38: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 标记已读/未读
   FN-39: { layer: ui, priority: P1, timeout: 360, retries: 1 }   # 行距调节
-  FN-40: { layer: ui, priority: P2, timeout: 360, retries: 0 }   # 页码格式切换
+  FN-40: { layer: ui, priority: P2, timeout: 360, retries: 1 }   # 页码格式切换
   FN-41: { layer: ui, priority: P2, timeout: 360, retries: 0 }   # 进度条/状态栏位置
   FN-42: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 阅读统计详情
   FN-43: { layer: ui, priority: P2, timeout: 300, retries: 0 }   # 在线阅读设置页
@@ -143,5 +143,5 @@ case_meta:
   FN-57: { layer: ui, priority: P1, timeout: 900, retries: 1 }   # 后台尺寸渐进补全
   FN-58: { layer: ui, priority: P1, timeout: 300, retries: 1 }   # 打开取消秒退
   FN-59: { layer: ui, priority: P2, timeout: 420, retries: 1 }   # 封面占位持久化
-  FN-60: { layer: ui, priority: P1, timeout: 600, retries: 1 }   # 惰性布局页码正确性
+  FN-60: { layer: ui, priority: P1, timeout: 1500, retries: 1 }   # 惰性布局页码正确性(900s:慢环境拖底+回顶滑动上限240,2026-09-23)
   PF-04: { layer: ui, priority: P1, timeout: 900, retries: 1 }   # 远程首屏性能基线

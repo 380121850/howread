@@ -59,6 +59,15 @@ constexpr size_t kMaxPath = 4096;
 
 pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 
+/* PF-02 stability finding (2026-09-21): FZ_STORE_DEFAULT is 256 MB; opening
+ * and paging a book fills the store and showed up as ~+72% PSS growth on a
+ * 4 GB device. 48 MB is ample for a page's display list / stext / decoded
+ * images - MuPDF evicts least-recently-used items beyond the cap. */
+static const unsigned int kMupdfStoreBytes = 48u << 20;
+
+/* Forward decl: queued renderPageAsync jobs (per-document backlog cap). */
+struct RenderJob;
+
 struct DocumentHandle {
     fz_context *ctx;          /* valid until the last reference is released */
     fz_document *doc;         /* nullptr once closed */
@@ -66,6 +75,8 @@ struct DocumentHandle {
     std::atomic<bool> closed; /* set by closeDocument / finalizer */
     char customFontPath[512];
     char userCss[4096]; /* Sprint L: accumulated CSS (font-face + user rules) */ /* sprint H3: loaded font path (empty = none) */
+    /* JS-thread only: pending renderPageAsync jobs, oldest first (backlog cap) */
+    std::vector<struct RenderJob *> renderQueue;
 };
 
 static void AcquireHandle(DocumentHandle *h)
@@ -151,7 +162,7 @@ napi_value OpenDocument(napi_env env, napi_callback_info info)
         return nullptr;
     }
 
-    fz_context *ctx = fz_new_context(nullptr, nullptr, FZ_STORE_DEFAULT);
+    fz_context *ctx = fz_new_context(nullptr, nullptr, kMupdfStoreBytes);
     if (ctx == nullptr) {
         napi_throw_error(env, "OOM", "cannot create mupdf context");
         return nullptr;
@@ -361,6 +372,8 @@ struct RenderJob {
     std::vector<uint8_t> pixels; /* RGBA_8888, stride == width*4 */
     bool failed = false;
     napi_deferred deferred = nullptr;
+    napi_async_work work = nullptr; /* set once queued (backlog cap) */
+    bool cancelRequested = false;   /* backlog cap: superseded by a newer turn */
 };
 
 static void RenderJobExecute(napi_env /*env*/, void *data)
@@ -377,9 +390,17 @@ static void RenderJobExecute(napi_env /*env*/, void *data)
 
     pthread_mutex_lock(&g_mu);
     if (h->closed) {
-        /* Document was closed while this job was queued. */
+        /* Document was closed while this job was queued. Bail out without
+         * touching the exception stack: fz_do_always/fz_do_catch are only
+         * legal after fz_push_try - do_catch pops ctx->error.top, so an
+         * unbalanced call walks the pointer out of the context allocation
+         * and the next try/catch on this ctx SIGSEGVs (fz_do_always crash,
+         * faultlogger 20260921-010408). */
         job->failed = true;
-    } else if (!fz_setjmp(*fz_push_try(h->ctx))) do {
+        pthread_mutex_unlock(&g_mu);
+        return;
+    }
+    if (!fz_setjmp(*fz_push_try(h->ctx))) do {
         pix = fz_new_pixmap_from_page_number(h->ctx, h->doc, job->pageNumber,
             fz_scale(job->zoom, job->zoom), fz_device_rgb(h->ctx), 1);
 
@@ -491,9 +512,22 @@ static void RenderJobReject(napi_env env, napi_deferred deferred, const char *co
     }
 }
 
+/* Erase a finished/cancelled render job from the document's pending queue
+ * (JS-thread only: enqueues, cancels and completions all run there). */
+static void RemoveQueuedRender(DocumentHandle *h, RenderJob *job)
+{
+    for (size_t i = 0; i < h->renderQueue.size(); i++) {
+        if (h->renderQueue[i] == job) {
+            h->renderQueue.erase(h->renderQueue.begin() + static_cast<long>(i));
+            break;
+        }
+    }
+}
+
 static void RenderJobComplete(napi_env env, napi_status status, void *data)
 {
     auto *job = static_cast<RenderJob *>(data);
+    RemoveQueuedRender(job->h, job);
     if (job->deferred != nullptr) {
         if (status == napi_cancelled) {
             RenderJobReject(env, job->deferred, "CANCELLED");
@@ -632,6 +666,29 @@ napi_value RenderPageAsync(napi_env env, napi_callback_info info)
         delete job;
         return deferredVal;
     }
+    job->work = work;
+    h->renderQueue.push_back(job);
+    /* Stability fix (appfreeze 20260921-003445): rapid page turns used to
+     * queue every intermediate render and each job holds g_mu for its whole
+     * render, so UI-thread sync calls stalled 6s+ (THREAD_BLOCK, process
+     * kill -> the 'empty reader after a big book' symptom). Keep at most 2
+     * pending renders; superseded ones fail fast with CANCELLED and the JS
+     * side retries the page it still shows. */
+    {
+        const size_t kMaxQueuedRenders = 2;
+        size_t cancelled = 0;
+        for (size_t i = 0; i < h->renderQueue.size()
+            && h->renderQueue.size() - cancelled > kMaxQueuedRenders; i++) {
+            RenderJob *cand = h->renderQueue[i];
+            if (cand == job || cand->cancelRequested) {
+                continue;
+            }
+            cand->cancelRequested = true;
+            if (napi_cancel_async_work(env, cand->work) == napi_ok) {
+                cancelled++; /* removed in RenderJobComplete(napi_cancelled) */
+            }
+        }
+    }
     return deferredVal;
 }
 
@@ -685,7 +742,7 @@ napi_value OpenDocumentByFd(napi_env env, napi_callback_info info)
         return nullptr;
     }
 
-    fz_context *ctx = fz_new_context(nullptr, nullptr, FZ_STORE_DEFAULT);
+    fz_context *ctx = fz_new_context(nullptr, nullptr, kMupdfStoreBytes);
     if (ctx == nullptr) {
         fclose(fp);
         napi_throw_error(env, "OOM", "cannot create mupdf context");
@@ -2882,7 +2939,7 @@ static void OpenRemoteExecute(napi_env /*env*/, void *data)
         return;
     }
 
-    job->ctx = fz_new_context(nullptr, nullptr, FZ_STORE_DEFAULT);
+    job->ctx = fz_new_context(nullptr, nullptr, kMupdfStoreBytes);
     if (job->ctx == nullptr) {
         job->failed = true;
         return;

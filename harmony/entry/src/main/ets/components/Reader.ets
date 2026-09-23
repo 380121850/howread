@@ -237,14 +237,29 @@ struct PageRenderer {
     this.loadData();
   }
 
-  async loadData(): Promise<void> {
+  async loadData(retryDepth: number = 0): Promise<void> {
     if (this.dataSource === undefined) {
       return;
     }
     try {
       this.isLoading = true;
       this.errorText = '';
-      const renderResult: RenderResult = await this.dataSource.renderPage(this.pageIndex, this.cropRect);
+      let renderResult: RenderResult;
+      try {
+        renderResult = await this.dataSource.renderPage(this.pageIndex, this.cropRect);
+      } catch (rendErr) {
+        const rendMsg: string = rendErr instanceof Error ? rendErr.message : String(rendErr);
+        if (rendMsg.indexOf('CANCELLED') >= 0 && retryDepth < 2) {
+          /* Native backlog cap: a newer page turn superseded this render.
+           * Keep the loading state and retry quietly - the churn has settled
+           * by the time the retry runs (stability fix, 2026-09-21). */
+          setTimeout(() => {
+            this.loadData(retryDepth + 1);
+          }, 250);
+          return;
+        }
+        throw rendErr as Error;
+      }
       const opts: image.InitializationOptions = {
         size: { width: renderResult.width, height: renderResult.height },
         pixelFormat: image.PixelMapFormat.RGBA_8888
@@ -1683,12 +1698,12 @@ struct Reader {
       return;
     }
     try {
-      if (this.isRemote) {
-        const j = await this.docOp(11, this.currentPage);
-        this.annotations = j !== undefined ? JSON.parse(j) as AnnotationInfo[] : [];
-      } else {
-        this.annotations = getAnnotations(handle, this.currentPage);
-      }
+      /* op 11 (annots) runs on the docOpAsync worker for local and remote
+       * documents alike. The sync getAnnotations() call here used to block
+       * the UI thread on g_mu behind queued page renders - THREAD_BLOCK_6S
+       * appfreeze on rapid page turns of large PDFs (2026-09-21). */
+      const j = await this.docOp(11, this.currentPage);
+      this.annotations = j !== undefined ? JSON.parse(j) as AnnotationInfo[] : [];
       console.info(`[Reader] Page ${this.currentPage + 1} annotations: ${this.annotations.length}`);
     } catch (e) {
       this.annotations = [];
@@ -2132,12 +2147,15 @@ struct Reader {
         return '';
       }
     }
-    const handle: ESObject | undefined = this.dataSource.getDocHandle();
-    if (handle === undefined) {
-      return '';
-    }
+    /* Local docs go through docOpAsync too: sync getText() would hold the
+     * UI thread on g_mu behind queued page renders (TTS/RSVP re-anchor on
+     * every page change; appfreeze fix 2026-09-21). */
     try {
-      return getText(handle, page, 1.0);
+      const j = await this.docOp(4, page, 1.0);
+      if (j === undefined) {
+        return '';
+      }
+      return JSON.parse(j) as string;
     } catch (e) {
       return '';
     }
@@ -2907,6 +2925,17 @@ struct Reader {
   /** Round 9: volume-key navigation (Android enable_volume_keys).
    *  Returns true when the key was consumed (so the system does not adjust
    *  the volume). While auto-scrolling the keys adjust the scroll speed. */
+  /** True while a modal panel/dialog covers the reading area. The tap zones
+   *  must stop claiming touches then (hitTestBehavior below), or buttons in
+   *  the jump/password dialogs and panel lists never receive them. */
+  private zonesDisabled(): boolean {
+    return this.showJump || this.showPwd || this.showToc || this.showBookmarks
+      || this.showMenu || this.showThumbs || this.showTrans || this.showTransPanel
+      || this.showExportDialog || this.showAnnPanel || this.showSearch
+      || this.showSelNoteInput || this.showFileInfo || this.showGestureConfig
+      || this.showTextReplace || this.showTypographyPanel;
+  }
+
   private onVolumeKey(keyCode: number): boolean {
     if (this.volumeKeyAction === 0) {
       return false;
@@ -3881,6 +3910,7 @@ struct Reader {
             /* Pinch gesture for zoom */
             Column()
               .width('100%').height('100%')
+              .hitTestBehavior(this.zonesDisabled() ? HitTestMode.None : HitTestMode.Default)
               .gesture(
                 GestureGroup(GestureMode.Parallel,
                   PinchGesture({ fingers: 2 })
@@ -3902,6 +3932,7 @@ struct Reader {
             Row()
               .width(`${LEFT_ZONE_RATIO * 100}%`).height('100%')
               .backgroundColor(Color.Transparent)
+              .hitTestBehavior(this.zonesDisabled() ? HitTestMode.None : HitTestMode.Default)
               .onClick(() => {
                 this.onTapZoneAction(this.tapLeftAction);
               })
@@ -3911,6 +3942,7 @@ struct Reader {
               .width(`${RIGHT_ZONE_RATIO * 100}%`).height('100%')
               .align(Alignment.End)
               .backgroundColor(Color.Transparent)
+              .hitTestBehavior(this.zonesDisabled() ? HitTestMode.None : HitTestMode.Default)
               .onClick(() => {
                 this.onTapZoneAction(this.tapRightAction);
               })
@@ -3920,6 +3952,7 @@ struct Reader {
               .width(`${(1 - LEFT_ZONE_RATIO - RIGHT_ZONE_RATIO) * 100}%`).height('100%')
               .align(Alignment.Center)
               .backgroundColor(Color.Transparent)
+              .hitTestBehavior(this.zonesDisabled() ? HitTestMode.None : HitTestMode.Default)
               .gesture(
                 GestureGroup(GestureMode.Exclusive,
                   TapGesture({ count: 2 })

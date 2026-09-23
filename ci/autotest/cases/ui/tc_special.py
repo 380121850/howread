@@ -138,7 +138,7 @@ def pf04_remote_firstpaint(dev, case_id, cfg=None, fixtures=None):
         title, added = tf._ensure_server(dev, case_id, cfg, "webdav")
         tf._ensure_home(dev)
         dev.log_clear()
-        entered = tf._open_remote_book(dev, case_id, title, tf._REMOTE_BIG_BOOK, timeout=90, snap="cold_reader")
+        entered = tf._open_remote_book(dev, case_id, cfg, title, tf._REMOTE_BIG_BOOK, timeout=90, snap="cold_reader")
         if not entered:
             dev.save_dump(case_id, "cold_open_timeout")
             raise AssertionError("冷开 90s 未进入阅读器")
@@ -159,7 +159,7 @@ def pf04_remote_firstpaint(dev, case_id, cfg=None, fixtures=None):
     with dev.step(case_id, "reopen_x3"):
         for i in range(3):
             dev.log_clear()
-            entered = tf._open_remote_book(dev, case_id, title, tf._REMOTE_BIG_BOOK, timeout=60)
+            entered = tf._open_remote_book(dev, case_id, cfg, title, tf._REMOTE_BIG_BOOK, timeout=60)
             if not entered:
                 raise AssertionError("重开 #%d 未进入阅读器" % (i + 1))
             time.sleep(2)

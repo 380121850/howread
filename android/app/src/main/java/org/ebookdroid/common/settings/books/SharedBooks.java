@@ -159,6 +159,19 @@ public class SharedBooks {
          * the "deleted" bookmarks.
          */
         public static void clearNames(Set<String> names) {
+            clearNames(names, 0L);
+        }
+
+        /**
+         * Drops the tombstone entries for the given book names, but only
+         * markers OLDER than {@code notBefore} (0 = all): a deletion made
+         * while a sync round was running writes its marker after that
+         * round's snapshot — consuming it in the same round (whose publish
+         * already re-PUT the deleted entry from the snapshot) would lose the
+         * deletion entirely. Fresh markers are kept and converge on the next
+         * round (or the debounced follow-up).
+         */
+        public static void clearNames(Set<String> names, long notBefore) {
             try {
                 if (AppProfile.syncDeletedBooks == null || names == null || names.isEmpty()) {
                     return;
@@ -169,7 +182,36 @@ public class SharedBooks {
                     if (TxtUtils.isEmpty(name)) {
                         continue;
                     }
-                    if (root.has(name)) {
+                    LinkedJSONObject marks = root.optJSONObject(name);
+                    if (marks == null) {
+                        continue;
+                    }
+                    if (notBefore <= 0 || marks.optLong("p", 0) < notBefore) {
+                        if (marks.has("p")) {
+                            marks.remove("p");
+                            changed = true;
+                        }
+                    }
+                    if (notBefore <= 0 || marks.optLong("b", 0) < notBefore) {
+                        if (marks.has("b")) {
+                            marks.remove("b");
+                            changed = true;
+                        }
+                    }
+                    final LinkedJSONObject keys = marks.optJSONObject("keys");
+                    if (keys != null) {
+                        for (Iterator<String> kt = keys.keys(); kt.hasNext();) {
+                            final String k = kt.next();
+                            if (notBefore <= 0 || keys.optLong(k, 0) < notBefore) {
+                                kt.remove();
+                                changed = true;
+                            }
+                        }
+                        if (keys.length() == 0) {
+                            marks.remove("keys");
+                        }
+                    }
+                    if (marks.length() == 0) {
                         root.remove(name);
                         changed = true;
                     }
@@ -180,6 +222,38 @@ public class SharedBooks {
             } catch (Exception e) {
                 LOG.e(e);
             }
+        }
+
+        /** True when any tombstone (p/b/key) was written at or after the
+         * given instant — a deletion landed while a sync round was running. */
+        public static boolean hasNewerThan(long time) {
+            try {
+                if (AppProfile.syncDeletedBooks == null) {
+                    return false;
+                }
+                final LinkedJSONObject root = IO.readJsonObject(AppProfile.syncDeletedBooks);
+                for (Iterator<String> it = root.keys(); it.hasNext();) {
+                    final String name = it.next();
+                    final LinkedJSONObject marks = root.optJSONObject(name);
+                    if (marks == null) {
+                        continue;
+                    }
+                    if (marks.optLong("p", 0) >= time || marks.optLong("b", 0) >= time) {
+                        return true;
+                    }
+                    final LinkedJSONObject keys = marks.optJSONObject("keys");
+                    if (keys != null) {
+                        for (Iterator<String> kt = keys.keys(); kt.hasNext();) {
+                            if (keys.optLong(kt.next(), 0) >= time) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                LOG.e(e);
+            }
+            return false;
         }
 
         public static void clear() {

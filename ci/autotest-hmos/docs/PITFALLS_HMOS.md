@@ -57,4 +57,17 @@
     → FN-08 在修复前会持续 FAIL（这是用例在正确工作）。
 22. **big25 打开后续开书失败**：打开并 Back 大书后，再开其它书 Reader 呈 0/0 空文档
     （book_open_done/fail 均不触发，进程 pid 已变——应用曾重启）。
-20-22 均待应用侧排查；CI 侧已把相关路径隔离出冒烟。
+**20-22 已于 2026-09-22 全部修复并回归验证**（应用侧 mupdf_napi.cpp + Reader.ets）：
+- #21（SIGSEGV）：RenderJobExecute 的 closed 快速路径不再调用 fz_do_always/fz_do_catch
+  （失衡的 do_catch 会把 ctx->error.top 踩出分配区）。
+- #20（appfreeze）与 #22（空阅读器次生）：渲染队列每文档上限 2、过期渲染
+  napi_cancel_async_work 快速失败 + JS 静默重试；翻页热路径的同步 getAnnotations/
+  getText 全部改走 docOpAsync（op 11 / op 4 对本地文档同样可用）。
+- 回归：T1 五轮"开书-翻 30 页-退出"零崩溃 pid 稳定；T2 大书快翻不冻结、重开即正常；
+  正式门禁 PF-01/PF-02 PASS。
+
+23. **hidumper --mem 统计别自己求和**（2026-09-22）：hidumper 报表的明细行包含
+    Total 行本身和 native heap 的 heap/brk/mmap 三个子行，逐行求和会把同一块内存
+    计 2-3 遍（PF-02 旧实现虚报 +72%，真实翻页阶段增长 +0.1%）。mem_pss_kb() 现在
+    直接读报表自己的 Total 行；泄漏门禁语义 = 开书之后的翻页阶段增长（开书工作集
+    是引擎字体/布局的固有开销，~+58% 后立即平台期，记录为基线不门禁）。

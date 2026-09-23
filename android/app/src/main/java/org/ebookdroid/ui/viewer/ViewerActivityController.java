@@ -1042,7 +1042,11 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                 final boolean remoteLazySizes = remoteBook && !ExtUtils.isTextFomat(m_fileName);
                 if ((remoteBook || AppState.get().isFastOpen)
                         && (ExtUtils.isTextFomat(m_fileName) || remoteLazySizes)
-                        && (intent == null || intent.getStringExtra(DocumentController.EXTRA_PERCENT) == null)) {
+                        // EXTRA_PERCENT 是 Float extra(p,书签/笔记跳转落点):必须用
+                        // getFloatExtra 判断——getStringExtra 对 Float extra 恒返回 null,
+                        // 原判断永远为 true,快速开书窗口只排到上次阅读位置,落点页
+                        // 排版缺失导致书签跳转落不准。带落点时跳过窗口,全文排版后再跳。
+                        && (intent == null || intent.getFloatExtra(DocumentController.EXTRA_PERCENT, 0f) <= 0f)) {
                     final AppBook bs = SettingsManager.getBookSettings();
                     if (bs != null && !remoteLazySizes) {
                         if (bs.pg >= 0) {

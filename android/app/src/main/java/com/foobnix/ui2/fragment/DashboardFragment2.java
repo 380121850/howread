@@ -735,8 +735,13 @@ public class DashboardFragment2 extends UIFragment<FileMeta> {
                     if (!new java.io.File(path).isFile()) {
                         return;
                     }
-                    FileMeta meta = AppDB.get().getOrCreate(path);
-                    ExtUtils.openFile(a, meta);
+                    // 书签/笔记行:按书签记录的落点(percent)打开,而不是上次阅读位置
+                    // ——与阅读器内书签点击行为对齐;percent<=0(首页书签)沿用原入口
+                    if (bm.p > 0f) {
+                        ExtUtils.showDocumentWithoutDialog2(a, android.net.Uri.fromFile(new java.io.File(path)), bm.p, null);
+                    } else {
+                        ExtUtils.openFile(a, AppDB.get().getOrCreate(path));
+                    }
                 }
             });
         }

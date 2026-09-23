@@ -319,6 +319,11 @@ public class BookmarksData {
         for (AppBookmark b : getAll()) {
             if (TxtUtils.isNotEmpty(b.getPath())) {
                 SharedBooks.DeletedBooks.record(b.getPath(), "b");
+                // per-key tombstones too: without them the server copy loses
+                // the bookmarks but carries no dk record, and another device
+                // that still holds them re-uploads its local set on its next
+                // publish
+                SharedBooks.DeletedBooks.recordKey(b.getPath(), b.t);
             }
         }
         for (File f : AppProfile.getAllFiles(AppProfile.APP_BOOKMARKS_JSON)) {

@@ -371,9 +371,12 @@ class Device:
         self.shell("logcat -c")
 
     def remote_log(self, lines=4000):
-        """取 REMOTE/BENCH 两个 tag 的最近日志(远程阅读链路断言用)."""
-        r = self.shell("logcat -d -s REMOTE:* -t %d" % lines)
-        b = self.shell("logcat -d -s BENCH:* -t %d" % lines)
+        """取 REMOTE/BENCH 两个 tag 的最近日志(远程阅读链路断言用).
+        不用 -t N:API 34 的 logcat 在 '-s TAG:* -t N' 且缓冲区行数 < N 时
+        返回空(logcat -c 刚清空后必然如此,2026-09-23 AVD 实锤),
+        '-d' 全量输出最可靠;lines 参数保留兼容旧调用。"""
+        r = self.shell("logcat -d -s REMOTE:*")
+        b = self.shell("logcat -d -s BENCH:*")
         return (r or "") + "\n" + (b or "")
 
     def clear_remote_cache(self):

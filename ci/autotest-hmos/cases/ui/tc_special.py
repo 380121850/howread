@@ -51,22 +51,32 @@ def pf02_memory(dev, case_id, cfg, fixtures):
     base = dev.mem_pss_kb()
     if not base or base < 1000:
         raise TestSkip('mem_pss_kb unavailable (%s)' % base)
+    pss_open = None
     with dev.step(case_id, 'open book + 8 turns'):
         _open_book(dev, 'Alice', expect_pages=105)
+        time.sleep(2.0)
+        # First-render working set (fonts/store/layout, plateaus immediately;
+        # 2026-09-22 baseline on Pura 90: ~155 -> ~245MB, informational only)
+        pss_open = dev.mem_pss_kb()
         for _ in range(8):
             dev.key('17')
             time.sleep(0.8)
         time.sleep(2.0)
     after = dev.mem_pss_kb()
-    if not after:
+    if not after or not pss_open:
         raise TestSkip('mem_pss_kb after unavailable')
-    growth = (after - base) * 100.0 / base
-    print('    [%s] PSS %dkB -> %dkB (+%.1f%%, limit %.0f%%)' %
-          (case_id, base, after, growth, limit), flush=True)
+    # Leak gate semantics (2026-09-22): growth is measured from AFTER OPEN to
+    # after the turns — turning pages must not grow the process. The open
+    # working set itself is reported above, not gated.
+    growth = (after - pss_open) * 100.0 / pss_open
+    print('    [%s] PSS home %dkB -> open %dkB -> post-turns %dkB '
+          '(turn growth %+.1f%%, open working set %+.1f%%, limit %.0f%%)' %
+          (case_id, base, pss_open, after, growth,
+           (pss_open - base) * 100.0 / base, limit), flush=True)
     _exit_reader(dev)
     if growth > limit:
-        raise TestFail('PSS growth %.1f%% > %.0f%% (%dkB -> %dkB)' %
-                       (growth, limit, base, after))
+        raise TestFail('PSS turn-phase growth %.1f%% > %.0f%% (%dkB -> %dkB)' %
+                       (growth, limit, pss_open, after))
 
 
 def st01_monkey(dev, case_id, cfg, fixtures):

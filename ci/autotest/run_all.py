@@ -181,7 +181,9 @@ def prepare_device(dev, flavor, apk, args, fixtures):
         # (AppState.load 只读它,内部无副本),pm clear 清不掉;不删则首启原样恢复
         # 旧配置(浏览目录/书库文件夹/远程条目),复位形同虚设——KSA 全量回归
         # FN-02/07/14/16/34 踩坑(2026-09-13)
-        dev.shell("rm -rf /sdcard/HowRead/profile.HowRead")
+        # IS_LOG 设备(模拟器 IS_LOG=true)用 profile.BETA,不删则 --reset 形同虚设:
+        # 旧条目/旧书签全存活且凭据已被 pm clear 清掉,网络用例 401 弹回(2026-09-23 AVD 实锤)
+        dev.shell("rm -rf /sdcard/HowRead/profile.HowRead /sdcard/HowRead/profile.BETA")
         ok, msg = dev.install(apk)
         if not ok:
             raise RuntimeError("--reset 重装失败: " + msg)
@@ -297,6 +299,17 @@ def main():
     else:
         devices = devices_cfg["devices"]
         layer_tag = "ui-device"
+    if args.avd and devices:
+        # 模拟器 serial 端口(5554/5556...)每次启动可能漂移:配置 serial 不在线时
+        # 自动改绑当前在线的 emulator-*(2026-09-23,MedicineAVD 实测 5556 上线)
+        # 注意必须在 --serial 过滤之前改绑,否则过滤直接把唯一设备滤空
+        _, devout = adb("devices")
+        online = [l.split()[0] for l in devout.splitlines()
+                  if l.strip().startswith("emulator-") and l.strip().endswith("device")]
+        for m in devices:
+            if m.get("serial") not in online and online:
+                log("[avd] 配置 serial %s 不在线,自动改绑 %s" % (m.get("serial"), online[0]))
+                m["serial"] = online[0]
     if args.serial:
         devices = [d for d in devices if d["serial"] in args.serial]
     if not devices:
