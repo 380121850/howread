@@ -54,10 +54,10 @@
    <string name="automatic_export_backup">Auto-export current session on exit (back up)</string>
    <string name="product">Product</string>
    <string name="version">Version</string>
-   <string name="licence_gnu_gpl_v3_0">License: GNU GPL v3.0</string>
+   <string name="licence_gnu_gpl_v3_0">Open Source License</string>
    <string name="licenses_for_libraries">Libraries\' Licenses</string>
    <string name="autor_ivan_ivanenko">Developer: Ivan Ivanenko</string>
-   <string name="support">Support</string>
+   <string name="support">Support &amp; feedback</string>
    <string name="web">Home page</string>
    <string name="beta_version">Beta version</string>
    <string name="archive">Archive</string>
@@ -889,7 +889,7 @@
    <string name="note_export_position_percent">Position: %1$s</string>
 
     <!-- ===== Pro gating / IAP stub (2026-09-09) ===== -->
-    <string name="pro_upgrade_btn">Upgrade Pro</string>
+    <string name="pro_upgrade_btn">Unlock Pro features</string>
     <string name="pro_upgrade_btn_fdroid">Upgrade to the Pro version</string>
     <string name="pro_btn_active">Pro active</string>
     <string name="pro_hint_locked">Pro is locked — unlock to enjoy WebDAV sync, AI notes and other pro features</string>
@@ -986,4 +986,12 @@
     <string name="remote_open_waiting">Loading remote book… %1$d s</string>
     <string name="remote_open_eta">about %1$s left</string>
     <string name="remote_locating_position">Locating last read position…</string>
+    <string name="support_issues_link">HowRead Pro issues</string>
+    <string name="support_issues_url">https://github.com/380121850/howread/issues</string>
+    <string name="pro_row_title">Advanced features</string>
+    <string name="developer_row_title">Developer</string>
+    <string name="developer_name">LeeStudio</string>
+    <string name="privacy_row_title">Privacy Policy</string>
+    <string name="privacy_policy_link">HowRead Pro Privacy Policy</string>
+    <string name="mail_row_title">Email</string>
 </resources>

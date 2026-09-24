@@ -2,18 +2,16 @@
 ## HowRead Pro (current version)
 
 * [Releases & release notes on GitHub](https://github.com/380121850/howread/releases)
-* Current version: **1.3.13** — see the [download page]({{ site.baseurl }}/download) for APKs.
+* Current version: **1.3.11** — see the [download page]({{ site.baseurl }}/download) for APKs.
 
-### 1.3.13 (2026-09-19) · Online reading, fully accelerated
-* Huge books open almost instantly, with content streaming in as you read
-* Page-turning uses far less data; already-cached books stay readable offline
-* Exiting or cancelling a download takes effect immediately instead of freezing the app
-* Clearer cache management: network status, storage level, and a "clear cache" that really works
-
-### 1.3.11 (2026-09-17) · More reliable sync & library
+### 1.3.11 (2026-09-17) · More reliable sync, library & online reading
 * Edited server entries no longer revert or duplicate after saving
 * Removed books are cleaned up from "Recent" and "Favorites" on refresh
 * Books opened from other apps join the library automatically
+* Online reading fully accelerated: huge books open almost instantly, streaming as you read
+* Page-turning uses far less data; already-cached books stay readable offline
+* Exiting or cancelling a download takes effect immediately instead of freezing the app
+* Clearer cache management: network status, storage level, and a "clear cache" that really works
 
 ### 1.3.10 (2026-09-17) · Trustworthy online opening
 * Fixed several hidden causes of online books silently failing to open

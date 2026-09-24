@@ -57,8 +57,7 @@ public class AboutSectionBinder {
         }
 
         TextView whatIsNew = root.findViewById(R.id.whatIsNew);
-        whatIsNew.setText(a.getString(R.string.what_is_new_in) + " " + Apps.getApplicationName(a)
-                + " v" + Apps.getVersionName(a));
+        whatIsNew.setText(Apps.getApplicationName(a) + " v" + Apps.getVersionName(a));
         TxtUtils.underlineTextView(whatIsNew);
         whatIsNew.setOnClickListener(v -> AndroidWhatsNew.show2(a));
 
@@ -66,9 +65,32 @@ public class AboutSectionBinder {
         TxtUtils.underlineTextView(licenses);
         licenses.setOnClickListener(v -> showLicenses(a));
 
+        TextView onDeveloper = root.findViewById(R.id.onDeveloper);
+        if (onDeveloper != null) {
+            // same site as the web row; hidden alongside it when unset
+            if (TxtUtils.isEmpty(a.getString(R.string.my_site))) {
+                onDeveloper.setVisibility(View.GONE);
+            } else {
+                TxtUtils.underlineTextView(onDeveloper);
+                onDeveloper.setOnClickListener(v -> Urls.open(a, a.getString(R.string.my_site)));
+            }
+        }
+
+        TextView onPrivacy = root.findViewById(R.id.onPrivacy);
+        if (onPrivacy != null) {
+            TxtUtils.underlineTextView(onPrivacy);
+            onPrivacy.setOnClickListener(v -> Urls.open(a, a.getString(R.string.privacy_policy_url)));
+        }
+
+        TextView onMailRow = root.findViewById(R.id.onMailRow);
+        if (onMailRow != null) {
+            TxtUtils.underlineTextView(onMailRow);
+            onMailRow.setOnClickListener(v -> onEmailSupport(a));
+        }
+
         TextView onMail = root.findViewById(R.id.onMailSupport);
-        onMail.setText(TxtUtils.underline(a.getString(R.string.my_email)));
-        onMail.setOnClickListener(v -> onEmailSupport(a));
+        onMail.setText(TxtUtils.underline(a.getString(R.string.support_issues_link)));
+        onMail.setOnClickListener(v -> Urls.open(a, a.getString(R.string.support_issues_url)));
 
         TextView openWeb = root.findViewById(R.id.openWeb);
         // the project site is intentionally left empty — hide the link when unset

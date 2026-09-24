@@ -42,6 +42,13 @@ public class DraggbleTouchListener implements OnTouchListener {
         anchor.setOnTouchListener(this);
     }
 
+    public DraggbleTouchListener(View anchor, View root, OnClickListener onClickListener) {
+        this.anchor = anchor;
+        this.root = root;
+        this.onClickListener = onClickListener;
+        anchor.setOnTouchListener(this);
+    }
+
     long time, time1;
 
     private Runnable onEventDetected;

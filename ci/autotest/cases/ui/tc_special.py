@@ -32,7 +32,9 @@ def pf01_cold_start(dev, case_id, cfg=None, fixtures=None, runs=3):
             for line in out.splitlines():
                 # 实际格式: "Displayed com.x.y/.Main: +903ms"（<1s）或 "+1s294ms"（≥1s，秒+毫秒）。
                 # 旧正则只认纯毫秒且漏了类名后的冒号 → 永远匹配不到 → 静默退化成墙钟计时。
-                m = re.search(r"Displayed [\w.]+/[\w.$]+:?\s*\+?(?:(\d+)s)?(\d+)ms", line)
+                # API34 起 ActivityTaskManager 行含 " for user 0:"(Android11 无), 必须兼容,
+                # 否则永不匹配 -> 退化成含 2s 固定 sleep 的墙钟计时 -> 误报超阈值
+                m = re.search(r"Displayed [\w.]+/[\w.$]+(?:\s+for\s+user\s+\d+)?:?\s*\+?(?:(\d+)s)?(\d+)ms", line)
                 if m:
                     secs = int(m.group(1)) if m.group(1) else 0
                     ms = secs * 1000 + int(m.group(2))

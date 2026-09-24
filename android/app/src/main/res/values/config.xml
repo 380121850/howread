@@ -5,6 +5,7 @@
 
 	<string name="my_email" translatable="false">380121850@163.com</string>
 	<string name="my_site" translatable="false">https://380121850.github.io/howread/</string>
+	<string name="privacy_policy_url" translatable="false">https://380121850.github.io/howread/PrivacyPolicy/zh.html</string>
 
     <string name="one_drive" translatable="false">One Drive</string>
 

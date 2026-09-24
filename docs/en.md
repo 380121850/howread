@@ -45,15 +45,15 @@ stats:
 changelog_title: "Changelog"
 changelog_more: "Full changelog →"
 download_title: "Download Now"
-download_subtitle: "Pick your channel · current version 1.3.13"
+download_subtitle: "Pick your channel · current version 1.3.11"
 downloads:
   - title: "F-Droid"
-    version: "Version 1.3.13"
+    version: "Version 1.3.11"
     size: "No ads · No Google dependencies"
     url: "https://f-droid.org/packages/com.howread.reader/"
     button: "Open F-Droid"
   - title: "GitHub Releases"
-    version: "Version 1.3.13"
+    version: "Version 1.3.11"
     size: "Direct APK download"
     url: "https://github.com/380121850/howread/releases/latest"
     blank: true

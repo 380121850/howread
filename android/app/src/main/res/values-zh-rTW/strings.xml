@@ -54,10 +54,10 @@
    <string name="automatic_export_backup">自動備份設置，進度、書簽、並導出</string>
    <string name="product">軟體說明</string>
    <string name="version">當前版本</string>
-   <string name="licence_gnu_gpl_v3_0">授權方式: GNU GPL v3.0</string>
+   <string name="licence_gnu_gpl_v3_0">開放源代碼授權</string>
    <string name="licenses_for_libraries">授權許可</string>
    <string name="autor_ivan_ivanenko">作者: Ivan Ivanenko</string>
-   <string name="support">郵箱</string>
+   <string name="support">支援和問題回報</string>
    <string name="web">官網</string>
    <string name="beta_version">測試版</string>
    <string name="archive">檔案</string>
@@ -712,7 +712,7 @@
    <string name="webdav_url">WebDAV 位址</string>
 
     <!-- ===== Pro 門控 / IAP 樁（2026-09-09）===== -->
-    <string name="pro_upgrade_btn">升級 Pro</string>
+    <string name="pro_upgrade_btn">解鎖Pro高級功能</string>
     <string name="pro_upgrade_btn_fdroid">升級 Pro 版本</string>
     <string name="pro_btn_active">Pro 已啟用</string>
     <string name="pro_hint_locked">Pro 未解鎖，解鎖後享受WebDAV、AI筆記等高級功能</string>
@@ -810,4 +810,9 @@
     <string name="remote_open_eta">預計剩餘 %1$s</string>
     <string name="remote_locating_position">正在定位上次閱讀位置…</string>
    <string name="sun_day_mode">白天模式</string>
+    <string name="pro_row_title">高級功能</string>
+    <string name="developer_row_title">開發者</string>
+    <string name="privacy_row_title">隱私政策</string>
+    <string name="privacy_policy_link">好好讀Pro 隱私政策</string>
+    <string name="mail_row_title">郵箱</string>
 </resources>

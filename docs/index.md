@@ -45,15 +45,15 @@ stats:
 changelog_title: "更新日志"
 changelog_more: "查看完整更新日志 →"
 download_title: "立即下载"
-download_subtitle: "选择适合你的渠道 · 当前版本 1.3.13"
+download_subtitle: "选择适合你的渠道 · 当前版本 1.3.11"
 downloads:
   - title: "F-Droid"
-    version: "版本 1.3.13"
+    version: "版本 1.3.11"
     size: "无广告 · 无 Google 依赖"
     url: "https://f-droid.org/packages/com.howread.reader/"
     button: "前往 F-Droid"
   - title: "GitHub Releases"
-    version: "版本 1.3.13"
+    version: "版本 1.3.11"
     size: "APK 直接下载"
     url: "https://github.com/380121850/howread/releases/latest"
     blank: true

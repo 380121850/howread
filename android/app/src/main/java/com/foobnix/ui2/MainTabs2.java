@@ -74,6 +74,7 @@ import com.foobnix.pdf.info.view.AboutSectionBinder;
 import com.foobnix.pdf.info.view.BrightnessHelper;
 import com.foobnix.pdf.info.view.Dialogs;
 import com.foobnix.pdf.info.view.MyProgressBar;
+import com.foobnix.pdf.info.widget.DraggbleTouchListener;
 import com.foobnix.pdf.info.wrapper.DocumentController;
 import com.foobnix.pdf.info.wrapper.UITab;
 import com.foobnix.pdf.search.activity.HorizontalViewActivity;
@@ -420,12 +421,15 @@ public class MainTabs2 extends AdsFragmentActivity {
         if (fabLastBook != null) {
             TintUtil.setTintImageNoAlpha(fabLastBook, Color.WHITE);
             tintLastBookFab();
-            fabLastBook.setOnClickListener(new OnClickListener() {
+            // Draggable floating button: drag moves it (in-memory only, the
+            // default bottom-right spot is restored on every app start); a
+            // press with <10dp movement still opens the last book.
+            fabLastBook.setOnTouchListener(new DraggbleTouchListener(fabLastBook, (View) fabLastBook.getParent(), new OnClickListener() {
                 @Override
                 public void onClick(View v) {
                     openLastBook();
                 }
-            });
+            }));
         }
 
         swipeRefreshLayout = findViewById(R.id.swipeRefreshLayout);
@@ -1516,6 +1520,12 @@ public class MainTabs2 extends AdsFragmentActivity {
             //pager.setAdapter(adapter); //WHY???
             pager.setCurrentItem(currentItem);
             IMG.clearMemoryCache();
+        }
+        if (fabLastBook != null) {
+            // after a size change the gravity baseline moves under the kept
+            // translation, so return the draggable FAB to its default spot
+            fabLastBook.setTranslationX(0);
+            fabLastBook.setTranslationY(0);
         }
         //showBannerAds();
     }

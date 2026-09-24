@@ -54,10 +54,10 @@
    <string name="automatic_export_backup">退出时自动备份当前状态</string>
    <string name="product">软件说明</string>
    <string name="version">当前版本</string>
-   <string name="licence_gnu_gpl_v3_0">许可:GNU GPL v3.0</string>
+   <string name="licence_gnu_gpl_v3_0">开放源代码许可</string>
    <string name="licenses_for_libraries">第三方库许可</string>
    <string name="autor_ivan_ivanenko">作者:Ivan Ivanenko</string>
-   <string name="support">支持邮箱</string>
+   <string name="support">支持和问题反馈</string>
    <string name="web">官网</string>
    <string name="beta_version">测试版</string>
    <string name="archive">压缩包</string>
@@ -889,7 +889,7 @@
    <string name="note_export_position_percent">位置：%1$s</string>
 
     <!-- ===== Pro 门控 / IAP 桩（2026-09-09）===== -->
-    <string name="pro_upgrade_btn">升级 Pro</string>
+    <string name="pro_upgrade_btn">解锁Pro高级功能</string>
     <string name="pro_upgrade_btn_fdroid">升级 Pro 版本</string>
     <string name="pro_btn_active">Pro 已激活</string>
     <string name="pro_hint_locked">Pro 未解锁，解锁后享受WebDAV、AI笔记等高级功能</string>
@@ -986,4 +986,9 @@
     <string name="remote_open_waiting">正在加载远程书籍… 已等待 %1$d 秒</string>
     <string name="remote_open_eta">预计剩余 %1$s</string>
     <string name="remote_locating_position">正在定位上次阅读位置…</string>
+    <string name="pro_row_title">高级功能</string>
+    <string name="developer_row_title">开发者</string>
+    <string name="privacy_row_title">隐私政策</string>
+    <string name="privacy_policy_link">好好读Pro 隐私政策</string>
+    <string name="mail_row_title">邮箱</string>
 </resources>

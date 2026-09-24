@@ -1,20 +1,20 @@
 # HowRead Pro 官网首页"更新日志"手风琴数据（最近 3 条，完整历史见 what-is-new 页）
 recent:
   - date:
-      zh: "2026-09-19"
-      en: "2026-09-19"
+      zh: "2026-09-17"
+      en: "2026-09-17"
     title:
-      zh: "在线阅读全面提速（v1.3.13）"
-      en: "Online reading, fully accelerated (v1.3.13)"
+      zh: "同步、书库与在线阅读更可靠（v1.3.11）"
+      en: "More reliable sync, library & online reading (v1.3.11)"
     items:
       zh:
-        - "大书打开几乎不等待，内容边下边显；翻页更省流量"
-        - "已缓存的书断网也能继续读；退出或取消下载立即生效"
-        - "缓存管理更透明，\"清空缓存\"真正可用"
+        - "服务器配置编辑不再回退；书库刷新同步清理最近/珍藏"
+        - "外部打开的书自动加入书库"
+        - "在线阅读全面提速：大书边下边显，断网也能继续读"
       en:
-        - "Huge books open almost instantly with content streaming in; page-turning uses far less data"
-        - "Already-cached books stay readable offline; exiting or cancelling takes effect immediately"
-        - "Clearer cache management with a \"clear cache\" that really works"
+        - "Server edits no longer revert; refresh cleans Recent & Favorites"
+        - "Books opened from other apps join the library automatically"
+        - "Online reading fully accelerated: streaming pages, offline for cached books"
   - date:
       zh: "2026-09-16"
       en: "2026-09-16"
