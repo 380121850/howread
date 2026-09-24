@@ -289,26 +289,22 @@ public class AiTranslateDialog {
 
     private static void startTranslation(final Activity a, final DocumentController dc,
             final String src, final String tgt) {
+        // page-aware session: the panel follows the reader position, later
+        // pages keep translating in the background
+        final TranslateSession session = new TranslateSession(a.getApplicationContext(), dc, src, tgt);
         final TranslatePanel panel = new TranslatePanel(a);
         panel.setTitle(a.getString(R.string.ai_translate) + " → "
                 + AiTranslator.targetLangName(tgt));
-        panel.setTranslating(true);
-        panel.setJob(AiTranslator.translate(a, dc, src, tgt, new AiTranslator.Listener() {
-            @Override public void onParagraph(String pid, String orig, String tran, String status) {
-                a.runOnUiThread(new Runnable() {
-                    @Override public void run() {
-                        panel.addParagraph(orig, tran, status);
-                    }
-                });
+        panel.bind(session);
+        session.setListener(new TranslateSession.Listener() {
+            @Override public void onSessionChanged() {
+                panel.onSessionChanged();
             }
 
-            @Override public void onFinished(boolean ok) {
-                a.runOnUiThread(new Runnable() {
-                    @Override public void run() {
-                        panel.setTranslating(false);
-                    }
-                });
+            @Override public void onSlotPartial(TranslateSession.Slot slot) {
+                panel.onSlotPartial(slot);
             }
-        }));
+        });
+        session.start();
     }
 }

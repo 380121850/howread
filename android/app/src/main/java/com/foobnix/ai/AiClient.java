@@ -84,6 +84,18 @@ public class AiClient {
      *  PRO feature hard gate: locked/fdroid builds never reach the network
      *  (defense in depth — every UI entry point is gated too). */
     public static TestResult ask(Context c, String userText) {
+        return ask(c, userText, null);
+    }
+
+    /** Incremental output of a live-streamed completion: onDelta receives the
+     *  full text so far (throttled to ~150 ms) on the calling thread. */
+    public interface StreamCallback {
+        void onDelta(String fullTextSoFar);
+    }
+
+    /** Same as {@link #ask(Context, String)} with live streaming (OpenAI
+     *  compatible endpoints; other protocols answer in one block). */
+    public static TestResult ask(Context c, String userText, StreamCallback stream) {
         if (!com.foobnix.pdf.info.AppsConfig.isProFeaturesEnabled()) {
             TestResult r = new TestResult();
             r.error = "pro_required";
@@ -102,7 +114,7 @@ public class AiClient {
             budget = 4096;
         }
         return chat(c, AppState.get().aiProtocol, url, key, model, userText, budget,
-                AppState.get().aiThinking);
+                AppState.get().aiThinking, stream);
     }
 
     /**
@@ -208,6 +220,13 @@ public class AiClient {
      */
     public static TestResult chat(Context c, String protocol, String baseUrl, String apiKey,
             String model, String userText, int maxTokens, boolean thinking) {
+        return chat(c, protocol, baseUrl, apiKey, model, userText, maxTokens, thinking, null);
+    }
+
+    /** Chat with an optional live-stream callback (OpenAI-compatible only). */
+    public static TestResult chat(Context c, String protocol, String baseUrl, String apiKey,
+            String model, String userText, int maxTokens, boolean thinking, StreamCallback stream) {
+        final long t0 = System.currentTimeMillis();
         lastError = "";
         TestResult res = new TestResult();
         OkHttpClient client = sharedClient(true);
@@ -257,28 +276,35 @@ public class AiClient {
                         .post(RequestBody.create(MediaType.parse("application/json"), body.toString()))
                         .build();
             } else {
-                // OpenAI-compatible: OpenAI / DeepSeek / gateways / Qwen3 on
-                // llama.cpp & vLLM. The thinking flags are llama.cpp/vLLM
+                // OpenAI-compatible: OpenAI / DeepSeek / GLM / gateways /
+                // Qwen3 on llama.cpp & vLLM. The thinking flags are server
                 // extensions — the official OpenAI API rejects unknown
                 // top-level arguments with HTTP 400, so they are only sent
-                // to non-OpenAI endpoints.
+                // to non-OpenAI endpoints (a 400 falls back to a plain
+                // request, see chatOpenAi).
                 LinkedJSONObject body = new LinkedJSONObject();
                 body.put("model", model);
                 body.put("max_tokens", maxTokens);
-                body.put("stream", false);
                 JSONArray messages = new JSONArray();
                 messages.put(new LinkedJSONObject().put("role", "user").put("content", userText));
                 body.put("messages", messages);
-                if (!base.contains("api.openai.com")) {
+                final boolean officialOpenAi = base.contains("api.openai.com");
+                // GLM/zhipu-style explicit switch: GLM-4.5+ THINKS BY
+                // DEFAULT and silently ignores the vLLM-style flags above
+                // (measured 4-5x slower answers when left thinking). Models
+                // that reject the field with HTTP 400 are remembered and
+                // skip the extension fields from then on.
+                final boolean extensionsBlocked = officialOpenAi
+                        || thinkingUnsupported(base, model);
+                if (!extensionsBlocked) {
                     body.put("chat_template_kwargs",
                             new LinkedJSONObject().put("enable_thinking", thinking));
                     body.put("enable_thinking", thinking);
+                    body.put("thinking", new LinkedJSONObject()
+                            .put("type", thinking ? "enabled" : "disabled"));
                 }
-                request = new Request.Builder()
-                        .url(base + "/chat/completions")
-                        .header("Authorization", "Bearer " + apiKey)
-                        .post(RequestBody.create(MediaType.parse("application/json"), body.toString()))
-                        .build();
+                body.put("stream", stream != null);
+                return chatOpenAi(client, base, apiKey, body, officialOpenAi, stream, res, t0);
             }
 
             Response response = client.newCall(request).execute();
@@ -302,6 +328,8 @@ public class AiClient {
                 }
                 res.ok = true;
                 res.truncated = isLengthTruncated(protocol, text);
+                android.util.Log.i("AITRANS", "chat total=" + (System.currentTimeMillis() - t0)
+                        + "ms out=" + res.reply.length() + " protocol=" + protocol);
                 return res;
             } finally {
                 response.close();
@@ -323,6 +351,194 @@ public class AiClient {
             res.error = "other";
             return res;
         }
+    }
+
+    /** base|model keys whose endpoint rejected the GLM "thinking" switch with
+     *  HTTP 400 (e.g. glm-5.x) — remembered so later requests skip the field
+     *  entirely instead of paying a 400 round-trip every time. */
+    private static final java.util.Set<String> THINKING_UNSUPPORTED =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<String, Boolean>());
+
+    private static boolean thinkingUnsupported(String base, String model) {
+        return THINKING_UNSUPPORTED.contains(base + "|" + model);
+    }
+
+    private static Request openAiRequest(String base, String apiKey, LinkedJSONObject body) {
+        return new Request.Builder()
+                .url(base + "/chat/completions")
+                .header("Authorization", "Bearer " + apiKey)
+                .post(RequestBody.create(MediaType.parse("application/json"), body.toString()))
+                .build();
+    }
+
+    /**
+     * OpenAI-compatible execution with live streaming: stream=true when a
+     * callback is given, SSE "data:" lines feed the callback (throttled) and
+     * accumulate into the same TestResult shape as the plain call. A strict
+     * gateway answering 400 to the extension fields (thinking / stream) gets
+     * exactly one plain retry without them, and a 2xx answer that never
+     * streams falls back to one plain request — nothing fails that used to
+     * work.
+     */
+    private static TestResult chatOpenAi(OkHttpClient client, String base, String apiKey,
+            LinkedJSONObject body, boolean officialOpenAi, StreamCallback stream, TestResult res,
+            long t0) throws java.io.IOException {
+        Response response = client.newCall(openAiRequest(base, apiKey, body)).execute();
+        if (response.code() == 400 && !officialOpenAi) {
+            String err = response.body() == null ? "" : response.body().string();
+            response.close();
+            android.util.Log.i("AITRANS", "chat HTTP 400 -> retry without extension fields "
+                    + err.substring(0, Math.min(120, err.length())));
+            if (err.contains("think")) {
+                // this model rejects the GLM thinking switch: skip the field
+                // on future requests instead of paying the 400 round-trip
+                THINKING_UNSUPPORTED.add(base + "|" + body.optString("model"));
+            }
+            res.error = "";
+            res.detail = "";
+            body.remove("thinking");
+            body.remove("chat_template_kwargs");
+            body.remove("enable_thinking");
+            body.put("stream", false);
+            response = client.newCall(openAiRequest(base, apiKey, body)).execute();
+        }
+        try {
+            if (body.optBoolean("stream", false) && response.isSuccessful()) {
+                TestResult sres = readStreamOpenAi(response, stream, res);
+                if (sres.ok) {
+                    return sres;
+                }
+                if ("empty".equals(sres.error)) {
+                    // 2xx but no SSE events (a gateway that ignored
+                    // stream=true): one plain retry
+                    android.util.Log.i("AITRANS", "stream empty -> plain retry");
+                    response.close();
+                    res.error = "";
+                    res.detail = "";
+                    body.put("stream", false);
+                    response = client.newCall(openAiRequest(base, apiKey, body)).execute();
+                } else {
+                    return sres;
+                }
+            }
+            String text = response.body() == null ? "" : response.body().string();
+            if (!response.isSuccessful()) {
+                res.error = classify(response.code());
+                res.detail = "HTTP " + response.code() + " " + text.substring(0, Math.min(200, text.length()));
+                lastError = res.error + " " + response.code();
+                LOG.d("AiClient http", String.valueOf(response.code()),
+                        text.substring(0, Math.min(300, text.length())));
+                return res;
+            }
+            res.reply = extractText(PROTOCOL_OPENAI, text);
+            if (TxtUtils.isEmpty(res.reply)) {
+                res.error = "empty";
+                res.detail = "HTTP 200 " + text.substring(0, Math.min(200, text.length()));
+                return res;
+            }
+            res.ok = true;
+            res.truncated = isLengthTruncated(PROTOCOL_OPENAI, text);
+            android.util.Log.i("AITRANS", "chat total=" + (System.currentTimeMillis() - t0)
+                    + "ms out=" + res.reply.length() + " stream=false");
+            return res;
+        } finally {
+            response.close();
+        }
+    }
+
+    /** Consume an OpenAI-compatible SSE response: throttled onDelta with the
+     *  growing text; content deltas accumulate, reasoning deltas are kept
+     *  only as the empty-content fallback (mirrors the plain parsing). */
+    private static TestResult readStreamOpenAi(Response response, StreamCallback stream,
+            TestResult res) throws java.io.IOException {
+        final long t0 = System.currentTimeMillis();
+        long tFirst = 0;
+        final StringBuilder content = new StringBuilder();
+        final StringBuilder reasoning = new StringBuilder();
+        String finish = null;
+        long lastCb = 0;
+        java.io.BufferedReader in = null;
+        try {
+            in = new java.io.BufferedReader(new java.io.InputStreamReader(
+                    response.body().byteStream(), "UTF-8"));
+            String line;
+            while ((line = in.readLine()) != null) {
+                if (Thread.currentThread().isInterrupted()) {
+                    res.error = "cancelled";
+                    android.util.Log.i("AITRANS", "stream cancelled, got "
+                            + content.length() + " chars");
+                    return res;
+                }
+                if (!line.startsWith("data:")) {
+                    continue;
+                }
+                String data = line.substring(5).trim();
+                if ("[DONE]".equals(data)) {
+                    break;
+                }
+                LinkedJSONObject obj;
+                try {
+                    obj = new LinkedJSONObject(data);
+                } catch (Exception e) {
+                    continue;
+                }
+                JSONArray choices = obj.optJSONArray("choices");
+                if (choices == null || choices.length() == 0) {
+                    continue;
+                }
+                LinkedJSONObject ch0 = choices.getJSONObject(0);
+                LinkedJSONObject delta = ch0.optJSONObject("delta");
+                if (delta != null) {
+                    String piece = delta.optString("content");
+                    if (TxtUtils.isNotEmpty(piece)) {
+                        content.append(piece);
+                    }
+                    String think = delta.optString("reasoning_content");
+                    if (TxtUtils.isNotEmpty(think)) {
+                        reasoning.append(think);
+                    }
+                    if (tFirst == 0 && (content.length() > 0 || reasoning.length() > 0)) {
+                        tFirst = System.currentTimeMillis() - t0;
+                    }
+                }
+                String fr = ch0.optString("finish_reason");
+                if (TxtUtils.isNotEmpty(fr)) {
+                    finish = fr;
+                }
+                if (stream != null) {
+                    final long now = System.currentTimeMillis();
+                    if (now - lastCb >= 150) {
+                        lastCb = now;
+                        stream.onDelta(content.toString());
+                    }
+                }
+            }
+        } finally {
+            if (in != null) {
+                try {
+                    in.close();
+                } catch (Exception ignored) {
+                }
+            }
+        }
+        if (stream != null) {
+            stream.onDelta(content.toString()); // final flush
+        }
+        String reply = content.toString();
+        if (TxtUtils.isEmpty(reply)) {
+            reply = reasoning.toString();
+        }
+        android.util.Log.i("AITRANS", "stream ttft=" + tFirst + "ms total="
+                + (System.currentTimeMillis() - t0) + "ms out=" + reply.length()
+                + " finish=" + finish);
+        if (TxtUtils.isEmpty(reply)) {
+            res.error = "empty";
+            return res;
+        }
+        res.reply = reply;
+        res.ok = true;
+        res.truncated = "length".equals(finish);
+        return res;
     }
 
     /** Pull the first text out of the protocol-specific response shape. */

@@ -409,6 +409,107 @@ public abstract class HorizontalModeController extends DocumentController {
         return null;
     }
 
+    /**
+     * Locate each paragraph's first line on the page by matching it against
+     * the page's char geometry (text116) and return the first char's top as a
+     * fraction of the page height; -1 when not found. Paragraphs arrive in
+     * reading order, so the match walks the char stream once, forward only.
+     */
+    @Override public float[] getParagraphTops(int page, String[] paragraphs) {
+        float[] out = new float[paragraphs == null ? 0 : paragraphs.length];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = -1;
+        }
+        try {
+            if (codeDocument == null || codeDocument.isRecycled() || paragraphs == null
+                    || paragraphs.length == 0) {
+                return out;
+            }
+            CodecPage cp = codeDocument.getOwnedPage(page);
+            if (cp == null) {
+                return out;
+            }
+            try {
+                if (cp.isRecycled() || codeDocument.isRecycled() || !(cp instanceof MuPdfPage)) {
+                    return out;
+                }
+                MuPdfPage mp = (MuPdfPage) cp;
+                java.util.ArrayList<org.ebookdroid.droids.mupdf.codec.TextChar> chars = mp.getTextChars();
+                if (chars == null || chars.isEmpty()) {
+                    return out;
+                }
+                float pageH = cp.getHeight();
+                if (pageH <= 0) {
+                    return out;
+                }
+                // normalized char stream: letters/digits only, lowercased;
+                // whitespace, punctuation and soft hyphens are skipped so
+                // hyphenation and entities cannot break the match
+                int n = chars.size();
+                char[] norm = new char[n];
+                float[] tops = new float[n];
+                for (int i = 0; i < n; i++) {
+                    org.ebookdroid.droids.mupdf.codec.TextChar tc = chars.get(i);
+                    char c = (char) tc.c;
+                    norm[i] = Character.isLetterOrDigit(c) ? Character.toLowerCase(c) : 0;
+                    tops[i] = tc.top;
+                }
+                int from = 0;
+                for (int p = 0; p < paragraphs.length; p++) {
+                    String needle = normalizeForAlign(paragraphs[p], 24);
+                    if (needle.length() == 0) {
+                        continue;
+                    }
+                    int at = indexOfAlignRun(norm, from, needle);
+                    if (at < 0) {
+                        continue;
+                    }
+                    out[p] = tops[at] / pageH;
+                    from = at + 1;
+                }
+            } finally {
+                cp.recycle();
+            }
+        } catch (Throwable t) {
+            LOG.e(t);
+        }
+        return out;
+    }
+
+    private static String normalizeForAlign(String s, int cap) {
+        StringBuilder sb = new StringBuilder();
+        if (s == null) {
+            return sb.toString();
+        }
+        for (int i = 0; i < s.length() && sb.length() < cap; i++) {
+            char c = s.charAt(i);
+            if (Character.isLetterOrDigit(c)) {
+                sb.append(Character.toLowerCase(c));
+            }
+        }
+        return sb.toString();
+    }
+
+    /** First index >= from whose normalized run equals needle; -1 when absent. */
+    private static int indexOfAlignRun(char[] norm, int from, String needle) {
+        int nLen = needle.length();
+        int ni = 0;
+        for (int i = from; i < norm.length; i++) {
+            if (norm[i] == 0) {
+                continue;
+            }
+            if (norm[i] == needle.charAt(ni)) {
+                ni++;
+                if (ni == nLen) {
+                    return i - nLen + 1;
+                }
+            } else {
+                ni = norm[i] == needle.charAt(0) ? 1 : 0;
+            }
+        }
+        return -1;
+    }
+
     @Override public synchronized String getTextForPage(int page) {
         try {
             // owned page: recycled below, so it must not be the shared cache

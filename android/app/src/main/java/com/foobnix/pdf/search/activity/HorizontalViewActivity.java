@@ -50,6 +50,7 @@ import com.foobnix.ai.AiTranslateDialog;
 import com.foobnix.ai.AiTranslator;
 import com.foobnix.ai.BilingualHintUi;
 import com.foobnix.ai.BilingualSession;
+import com.foobnix.ai.TranslateSession;
 import com.foobnix.android.utils.Apps;
 import com.foobnix.android.utils.Dips;
 import com.foobnix.android.utils.Keyboards;
@@ -2272,6 +2273,7 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
     /** Feed the current page to the active bilingual session (cheap when idle). */
     private void feedBilingualView() {
         BilingualSession.feedForController(dc);
+        TranslateSession.feedForController(dc);
     }
 
     @Override

@@ -93,6 +93,23 @@ public class MuPdfPage extends AbstractCodecPage {
 
     private native static ArrayList<TextChar> text116(long docHandle, long pageHandle);
 
+    /**
+     * Char-level text geometry of the page (best effort; null when the native
+     * is unavailable). Chars come in reading order, rects in page coordinates
+     * (top-left origin) — backing for the AI translation card alignment.
+     */
+    @SuppressWarnings("unchecked")
+    public ArrayList<TextChar> getTextChars() {
+        try {
+            if (docHandle == 0 || pageHandle == 0) {
+                return null;
+            }
+            return text116(docHandle, pageHandle);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     @Override
     public long getPageHandle() {
         return pageHandle;

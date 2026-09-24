@@ -76,6 +76,19 @@ public class BilingualBuilder {
         return originalBook;
     }
 
+    /**
+     * Publish the edition MuPDF is about to open for this original book (the
+     * reader's working copy, or the bilingual edition built from it). The
+     * translation session must enumerate THIS exact file: enumerating a
+     * different base than the bilingual build uses made every paragraph md5
+     * disagree and the build inject nothing. Called synchronously from the
+     * document-open path — before a session can attach and enumerate.
+     */
+    public static void noteOpenEdition(String originalPath, String openPath) {
+        lastOriginalPath = originalPath;
+        lastBasePath = openPath;
+    }
+
     /** Deterministic output file for the current translated-md5 snapshot. */
     private static File targetFile(File base, Map<String, String> done) {
         StringBuilder key = new StringBuilder();
@@ -242,6 +255,12 @@ public class BilingualBuilder {
         }
         java.util.regex.Matcher m = P_P.matcher(content);
         while (m.find()) {
+            // skip the injected bilingual translations: re-enumerating a
+            // bilingual edition must never turn old translations into source
+            // text
+            if (m.group(0).contains("aitran")) {
+                continue;
+            }
             paras.add(m.group(1));
         }
         return paras;
@@ -256,6 +275,11 @@ public class BilingualBuilder {
             return "";
         }
         s = s.replaceAll("<[^>]*>", " ");
+        // soft hyphens: the reader's working copy of a book re-encodes words
+        // with &shy; breaks ("be&shy;gin&shy;ning") — without stripping them
+        // the paragraph md5s never match the session's cached translations
+        // and the bilingual build injected 0 translations with a full cache
+        s = s.replace("&shy;", "").replace("\u00ad", "");
         s = s.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
                 .replace("&quot;", "\"").replace("&#39;", "'").replace("&apos;", "'");
         return s.replace('\u00a0', ' ').replaceAll("\\s+", " ").trim();

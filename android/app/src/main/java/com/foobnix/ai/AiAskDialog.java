@@ -153,8 +153,20 @@ public class AiAskDialog {
                 result.setText(R.string.ai_ask_thinking);
                 running = new AsyncTask() {
                     @Override protected Object doInBackground(Object[] params) {
-                        return AiClient.ask(a, prompt);
+                        return AiClient.ask(a, prompt, new AiClient.StreamCallback() {
+                            @Override public void onDelta(String partial) {
+                                publishProgress(partial);
+                            }
+                        });
                     }
+
+                @Override protected void onProgressUpdate(Object[] values) {
+                    if (a.isFinishing() || a.isDestroyed()) {
+                        return;
+                    }
+                    // live answer: grows as the model streams
+                    result.setText(String.valueOf(values[0]));
+                }
 
                 @Override protected void onPostExecute(Object r) {
                     if (a.isFinishing() || a.isDestroyed()) {

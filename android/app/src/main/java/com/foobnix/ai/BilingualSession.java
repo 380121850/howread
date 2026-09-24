@@ -339,8 +339,11 @@ public class BilingualSession {
             BilingualSession s = attachOrNull(dc.getCurrentBook().getPath());
             if (s != null) {
                 s.lastDc = dc;
-                s.onView(dc.getCurentPageFirst1() - 1, dc.getPageCount());
+                // match the page's paragraphs BEFORE recomputing the window so
+                // the exact page paragraphs are queued first (otherwise the
+                // queue ran one feed behind the real reading position)
                 s.onPageShown(dc);
+                s.onView(dc.getCurentPageFirst1() - 1, dc.getPageCount());
                 s.maybeRefreshCurrentPage();
             }
         } catch (Throwable t) {
@@ -401,19 +404,43 @@ public class BilingualSession {
 
     // the md5 set the currently open book was built with (translations it shows)
     private volatile Set<String> builtMd5s = new HashSet<String>();
+    // paragraphs of the CURRENT page placed since the last rebuild (streamed
+    // placements increment it; it drives the rebuild gate)
+    private int placedOnCurrentPage = 0;
     private volatile boolean reloading = false;
     private volatile boolean reloadPending = false;
 
+    // minimum spacing between two merges (see rebuildRunnable)
+    private static final long REBUILD_MIN_INTERVAL_MS = 8000;
+    private long lastRebuildAt = 0;
+
     private final Runnable rebuildRunnable = new Runnable() {
         @Override public void run() {
+            // at most one merge per window: streamed placements land in
+            // bursts, and each rebuild re-opens the book in place — merging
+            // three times in eight seconds made the page jump repeatedly
+            long since = System.currentTimeMillis() - lastRebuildAt;
+            if (since < REBUILD_MIN_INTERVAL_MS) {
+                ui.postDelayed(rebuildRunnable, REBUILD_MIN_INTERVAL_MS - since);
+                return; // rebuildScheduled stays true: the trigger is kept
+            }
             rebuildScheduled = false;
             // only merge (rebuild + reload) when the CURRENT page actually
             // gained translations; background-only progress must not refresh
-            // the page the user is reading (no periodic flashing)
-            if (!needsRefreshForCurrentPage()) {
+            // the page the user is reading (no periodic flashing). The direct
+            // placement counter is the primary signal — done/built matching
+            // alone proved fragile in the field (a rebuild sat skipped while
+            // the page's own paragraphs were already translated).
+            int placed;
+            synchronized (queueLock) {
+                placed = placedOnCurrentPage;
+                placedOnCurrentPage = 0;
+            }
+            if (placed == 0 && !needsRefreshForCurrentPage()) {
                 android.util.Log.i("BENCH", "BilingualSession rebuild skipped: current page has no new translations");
                 return;
             }
+            lastRebuildAt = System.currentTimeMillis();
             rebuild();
         }
     };
@@ -533,6 +560,10 @@ public class BilingualSession {
                                     // the anchor/hint could not be computed
                                     // before the enumeration finished
                                     onPageShown(lastDc);
+                                    // the page match just landed: re-queue so
+                                    // the exact page paragraphs lead the lanes
+                                    recomputeWindow();
+                                    wake();
                                     updateHint();
                                     maybeRefreshCurrentPage();
                                 }
@@ -553,8 +584,20 @@ public class BilingualSession {
         if (paras != null) {
             return;
         }
+        // Enumerate the file the reader ACTUALLY opens (published by
+        // PdfContext.openTextDoc). The document-open path can lag the first
+        // session attach by a moment; enumerating before the publication made
+        // this session and the bilingual build disagree on every paragraph.
         File base = BilingualBuilder.baseFor(book);
-        List<BilingualBuilder.Para> enumerated = BilingualBuilder.enumerateParagraphs(base == null ? book : base);
+        for (int i = 0; base.equals(book) && i < 32 && !stopped.get(); i++) {
+            try {
+                Thread.sleep(250);
+            } catch (InterruptedException e) {
+                return;
+            }
+            base = BilingualBuilder.baseFor(book);
+        }
+        List<BilingualBuilder.Para> enumerated = BilingualBuilder.enumerateParagraphs(base);
         if (enumerated.isEmpty()) {
             // the cache holds empty placeholder epubs (22-byte zips) for some
             // books — enumerating them once must not poison the session with
@@ -573,7 +616,7 @@ public class BilingualSession {
             }
         }
         android.util.Log.i("BENCH", "BilingualSession paras total=" + paras.size() + " base="
-                + (base == null ? book : base).getPath());
+                + base.getPath());
     }
 
     /** 0-based page index -> global source paragraph index (linear estimate). */
@@ -835,40 +878,66 @@ public class BilingualSession {
             android.util.Log.i("BENCH", "BilingualBatch ask n=" + ps.size() + " ords=[" + ordLog + "] len="
                     + prompt.length());
             long t0 = System.currentTimeMillis();
-            AiClient.TestResult res = AiClient.ask(host == null ? null : host.getAppContext(), prompt);
+            // STREAMING batch: the numbered reply is parsed while it grows and
+            // every finished segment lands on the page immediately — the first
+            // paragraph shows after ITS OWN generation (~5-8s) instead of the
+            // whole batch (~16-30s). The complete reply is still parsed
+            // authoritatively at the end; anything the incremental pass missed
+            // falls back to per-paragraph translation exactly as before.
+            final boolean[] placed = new boolean[ps.size()];
+            AiClient.TestResult res = AiClient.ask(host == null ? null : host.getAppContext(), prompt,
+                    new AiClient.StreamCallback() {
+                        @Override public void onDelta(String fullTextSoFar) {
+                            placeCompleted(ps, placed, fullTextSoFar);
+                        }
+                    });
             android.util.Log.i("BENCH", "BilingualBatch res ok=" + res.ok + " ms="
                     + (System.currentTimeMillis() - t0) + " err=" + res.error + " detail=" + head(res.detail, 200)
-                    + " reply=" + (res.reply == null ? -1 : res.reply.length()) + " truncated=" + res.truncated);
+                    + " reply=" + (res.reply == null ? -1 : res.reply.length()) + " truncated=" + res.truncated
+                    + " placed=" + countPlaced(placed));
             if (res.ok && !res.truncated && TxtUtils.isNotEmpty(res.reply)) {
                 String[] parts = splitNumbered(res.reply, ps.size());
                 if (parts != null) {
-                    boolean allSaved = true;
+                    boolean complete = true;
                     for (int i = 0; i < ps.size(); i++) {
+                        if (placed[i]) {
+                            continue; // already saved + surfaced incrementally
+                        }
                         String tran = parts[i] == null ? null : parts[i].trim();
                         if (TxtUtils.isEmpty(tran)) {
-                            allSaved = false;
+                            complete = false;
                             break;
                         }
                     }
-                    if (allSaved) {
+                    if (complete) {
+                        List<BilingualBuilder.Para> late = new ArrayList<BilingualBuilder.Para>();
                         for (int i = 0; i < ps.size(); i++) {
-                            cache.save("h" + ps.get(i).md5, src, tgt, ps.get(i).text, parts[i].trim(), "done");
+                            if (!placed[i]) {
+                                cache.save("h" + ps.get(i).md5, src, tgt, ps.get(i).text, parts[i].trim(), "done");
+                                late.add(ps.get(i));
+                            }
                         }
-                        cache.flush();
-                        for (int i = 0; i < ps.size(); i++) {
-                            onParagraphDone(ps.get(i).md5, true);
+                        if (!late.isEmpty()) {
+                            cache.flush();
+                            for (BilingualBuilder.Para p : late) {
+                                onParagraphDone(p.md5, true);
+                            }
                         }
                         return;
                     }
                 }
-                android.util.Log.i("BENCH", "BilingualBatch parse mismatch n=" + ps.size() + " head="
-                        + head(res.reply, 600));
+                android.util.Log.i("BENCH", "BilingualBatch parse mismatch n=" + ps.size()
+                        + " placed=" + countPlaced(placed) + " head=" + head(res.reply, 600));
             }
             // request failed / truncated / reply did not split cleanly:
-            // translate the batch paragraph-by-paragraph (each with its own
-            // bounded retry), so no paragraph is lost
-            for (BilingualBuilder.Para p : ps) {
-                translateOne(p.md5, p, res.ok ? "parse" : res.error);
+            // translate the REMAINING paragraphs one-by-one (each with its own
+            // bounded retry) so no paragraph is lost; incrementally placed
+            // ones are already on the page and stay
+            for (int i = 0; i < ps.size(); i++) {
+                if (!placed[i]) {
+                    BilingualBuilder.Para p = ps.get(i);
+                    translateOne(p.md5, p, res.ok ? "parse" : res.error);
+                }
             }
         } catch (Throwable t) {
             LOG.e(t);
@@ -927,6 +996,97 @@ public class BilingualSession {
             LOG.e(t);
             return null;
         }
+    }
+
+    /**
+     * Streaming companion of {@link #splitNumbered(String, int)}: returns the
+     * segments ALREADY BOUNDED by the following marker in the accumulated
+     * reply; the tail segment (its body still growing) and any numbers the
+     * model skipped stay null. Null only when no marker exists at all.
+     */
+    private static String[] splitNumberedPartial(String reply, int n) {
+        try {
+            if (reply == null || n <= 0) {
+                return null;
+            }
+            String[] out = new String[n];
+            String pattern = reply.contains("【")
+                    ? "【\\s*(\\d+)\\s*】"
+                    : "(?m)^\\s*(?:\\[(\\d+)\\]|(\\d+)\\s*[.、．)）])\\s*";
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile(pattern).matcher(reply);
+            List<Integer> nums = new ArrayList<Integer>();
+            List<Integer> body = new ArrayList<Integer>();
+            while (m.find()) {
+                String g = m.group(1) != null ? m.group(1) : m.group(2);
+                nums.add(Integer.parseInt(g));
+                body.add(m.end());
+            }
+            if (nums.isEmpty()) {
+                return null;
+            }
+            // every marker except the LAST bounds a finished segment
+            for (int i = 0; i < nums.size() - 1; i++) {
+                int num = nums.get(i);
+                if (num < 1 || num > n) {
+                    continue;
+                }
+                int end = lineStartOf(reply, body.get(i + 1));
+                String seg = reply.substring(Math.min(body.get(i), reply.length()),
+                        Math.min(end, reply.length()));
+                out[num - 1] = out[num - 1] == null ? seg : out[num - 1] + seg;
+            }
+            return out;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * Save + surface every numbered segment that just became complete while
+     * the batch reply streams in. LLM output is append-only, so a segment
+     * bounded by the next marker is final — placing it early only moves the
+     * visibility up, it cannot diverge from the final full parse.
+     */
+    private void placeCompleted(List<BilingualBuilder.Para> ps, boolean[] placed, String acc) {
+        try {
+            String[] parts = splitNumberedPartial(acc, ps.size());
+            if (parts == null) {
+                return;
+            }
+            List<BilingualBuilder.Para> fresh = new ArrayList<BilingualBuilder.Para>();
+            for (int i = 0; i < ps.size(); i++) {
+                if (placed[i] || parts[i] == null) {
+                    continue;
+                }
+                String tran = parts[i].trim();
+                if (TxtUtils.isEmpty(tran)) {
+                    continue;
+                }
+                cache.save("h" + ps.get(i).md5, src, tgt, ps.get(i).text, tran, "done");
+                placed[i] = true;
+                fresh.add(ps.get(i));
+            }
+            if (!fresh.isEmpty()) {
+                // flush is deferred to the end of the batch: the rebuild path
+                // reads the in-memory cache, and the stream may place more
+                // segments within seconds
+                for (BilingualBuilder.Para p : fresh) {
+                    onParagraphDone(p.md5, true);
+                }
+            }
+        } catch (Throwable t) {
+            LOG.e(t);
+        }
+    }
+
+    private static int countPlaced(boolean[] placed) {
+        int n = 0;
+        for (boolean p : placed) {
+            if (p) {
+                n++;
+            }
+        }
+        return n;
     }
 
     private static int lineStartOf(String s, int pos) {
@@ -1011,6 +1171,12 @@ public class BilingualSession {
         if (!newly) {
             return; // nothing changed, nothing to rebuild
         }
+        final Set<String> page = currentPageMd5s;
+        if (page != null && page.contains(md5)) {
+            synchronized (queueLock) {
+                placedOnCurrentPage++;
+            }
+        }
         updateHint();
         ui.post(new Runnable() {
             @Override public void run() {
@@ -1018,7 +1184,11 @@ public class BilingualSession {
                     return;
                 }
                 if (rebuildScheduled) {
-                    ui.removeCallbacks(rebuildRunnable);
+                    // a rebuild is already pending: it merges everything saved
+                    // by the time it runs. Rescheduling on EVERY streamed
+                    // paragraph used to postpone the merge indefinitely (the
+                    // page stayed untranslated for a minute with a busy queue)
+                    return;
                 }
                 rebuildScheduled = true;
                 ui.postDelayed(rebuildRunnable, REBUILD_DEBOUNCE_MS);
@@ -1363,25 +1533,36 @@ public class BilingualSession {
             Set<String> page = new HashSet<String>();
             collectCurrentPage(page);
             int pageLeft = 0;
+            int failedLeft = 0;
             synchronized (queueLock) {
                 for (String md5 : page) {
                     if (done.containsKey(md5)) {
                         if (!built.contains(md5)) {
                             pageLeft++;
                         }
-                    } else if (!failed.contains(md5)) {
+                    } else if (failed.contains(md5)) {
+                        // failed paragraphs stay visible in the hint (with a
+                        // retry hint) instead of silently vanishing while the
+                        // page still shows no translation
+                        failedLeft++;
+                    } else {
                         pageLeft++;
                     }
                 }
             }
-            if (pageLeft <= 0) {
+            if (pageLeft + failedLeft <= 0) {
                 return null;
             }
             int inQueue;
             synchronized (queueLock) {
                 inQueue = pending.size() + inFlight.size();
             }
-            return "正在翻译中… 本页剩 " + pageLeft + " 段 · 队列 " + inQueue + " 段";
+            String text = "正在翻译中… 本页剩 " + pageLeft + " 段";
+            if (failedLeft > 0) {
+                text += "（" + failedLeft + " 段失败，翻页后自动重试）";
+            }
+            text += " · 队列 " + inQueue + " 段";
+            return text;
         } catch (Throwable t) {
             LOG.e(t);
             return null;

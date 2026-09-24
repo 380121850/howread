@@ -37,6 +37,9 @@ public class PdfContext extends MuPdfContext {
                 && TxtUtils.isNotEmpty(finalPath)
                 && finalPath.toLowerCase(Locale.US).endsWith(".epub")) {
             try {
+                // publish FIRST (also when ensure has nothing to build yet):
+                // the translation session keys its paragraphs to this file
+                BilingualBuilder.noteOpenEdition(originalFileName, finalPath);
                 File bi = BilingualBuilder.ensure(new File(originalFileName), new File(finalPath),
                         new TranslationCache(new File(originalFileName)), st.aiBilingualSrc, st.aiBilingualTgt);
                 if (bi != null) {

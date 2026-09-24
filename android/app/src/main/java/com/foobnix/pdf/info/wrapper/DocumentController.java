@@ -871,6 +871,21 @@ public abstract class DocumentController {
         return null;
     }
 
+    /**
+     * The top of each paragraph's first line as a fraction of the page height
+     * (0 = top of the page, 1 = bottom); -1 when a paragraph could not be
+     * located. Best effort — backs the AI translation card alignment. The
+     * default reports "not found" for every paragraph; the paged controller
+     * overrides it via page text search.
+     */
+    public float[] getParagraphTops(int page, String[] paragraphs) {
+        float[] out = new float[paragraphs == null ? 0 : paragraphs.length];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = -1;
+        }
+        return out;
+    }
+
     public abstract String getPageHtml();
 
     public abstract List<PageLink> getLinksForPage(int page);

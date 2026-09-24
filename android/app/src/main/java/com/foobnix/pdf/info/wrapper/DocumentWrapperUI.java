@@ -33,6 +33,7 @@ import androidx.core.graphics.ColorUtils;
 import com.foobnix.ai.AiTranslateDialog;
 import com.foobnix.ai.AiTranslator;
 import com.foobnix.ai.BilingualSession;
+import com.foobnix.ai.TranslateSession;
 import com.foobnix.android.utils.Apps;
 import com.foobnix.android.utils.Dips;
 import com.foobnix.android.utils.IntegerResponse;
@@ -783,6 +784,7 @@ public class DocumentWrapperUI {
         final int current = dc.getCurentPage();
 
         BilingualSession.feedForController(dc);
+        TranslateSession.feedForController(dc);
 
         updateSpeedLabel();
 
