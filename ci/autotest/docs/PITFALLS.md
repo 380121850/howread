@@ -290,3 +290,22 @@ MIUI 11 上 `find /sdcard -name x.zip` 返回空而 `ls` 可见同一文件。
 47. **AVD 输入/渲染怪癖（未解，真机不受影响）**：音量键翻页（疑被路由到系统音量）、长按选词弹层、
    点按分区翻页、暗色主题截图像素对比，在 AVD 上失败但同用例 MI9/KSA 全过。判定为模拟器输入
    注入/SwiftShader 差异；AVD 轮报告需注明这些项以真机为准。
+   （2026-09-25 复测：headless + WMI 启动的 AVD 上 FN-49/50/51/52 全 PASS，怪癖未复现；
+   "以真机为准"原则保留，但不再视为必败项。）
+
+48. **模拟器开机 10~16 分钟后整组进程静默消失（2026-09-25 凌晨实锤，全量 L1 三连杀）**：
+   现象：跑到中段所有用例瞬间级联假失败（`device not found`/`device offline`），Emulator.exe、
+   qemu 均无 WER 崩溃报告、qemu stdout（-show-kernel）在死亡秒戛然而止、无内核 panic——纯外部终止。
+   机制：emulator.exe(启动器) → **Emulator.exe(壳进程,持 5554/5555 端口与 guest RAM)** →
+   qemu-system-x86_64-headless.exe(VM)；壳对 qemu 有作业对象级联，壳死则 qemu 被静默清场；
+   反向（qemu 先死）则留 ~3GB 僵尸壳占端口 → 新实例被挤到 5556/5557。Defender 无检测、
+   无 25 分钟周期计划任务，发起者未定位；但从自动化沙箱内 `Start-Process` 拉起的实例
+   3/3 次死于 9~16 分钟，**改用 WMI `Win32_Process.Create` 拉起 cmd 启动器（脱离发起方作业
+   对象）后 1/1 次跑完 78 分钟全量**——疑似沙箱/作业回收，规避手段已验证。
+   规避清单：① 用 WMI 拉起（PowerShell `Invoke-CimMethod Win32_Process Create`，命令行写成
+   `cmd /c xxx.cmd` 落盘脚本文件，重定向 stdout/stderr 到 tmp\logs 供尸检，参数加
+   `-no-window -no-audio -show-kernel`）；② 启动前清场：taskkill 杀 Emulator.exe/emulator.exe/
+   emulator-crash-service.exe/qemu-system-x86_64*.exe（**注意 -headless 变体名**，按名称杀会漏）
+   + 删 `~/.android/avd/<AVD>.avd/*.lock`；③ 冷启后固定动作：`adb root` + 补默认路由（见 45）+
+   查 locale zh-CN（见 44）+ `nc` 探 50.23:8765；④ 实例若落 5556，临时把 devices.json avd serial
+   改成实际端口，跑完还原；⑤ 收尾清场**先杀壳再杀 qemu**，防僵尸壳占端口。

@@ -98,6 +98,16 @@
 - **子页工具栏**：buildBrowseTab 文件夹子页改 ‹（browseHome）/路径/排序/视图（删 ⌂/↑）；browseSortMode 0 名称↑/1 名称↓/2 最新/3 最大（@State，statSync mtime/size，目录与文件都生效）。
 - **WHATSNEW_URL** → https://380121850.github.io/howread/what-is-new/zh.html（安卓 v1.3.13 同源）。
 - **验证（Pura 90 模拟器 x86_64 debug）**：pagemap saved(300 pages)→injected(300 pages) 全链路 + pagemap.bin 落位；双击 3.00x/1.50x 往返、单击菜单/长按选字不受影响；子页工具栏/排序反转/‹ 回根；EPUB/TXT/FB2(UTF-8)/本地 PDF 引擎回归通过；GBK FB2 打不开为既有限制（旧版本同样，进度 0/0 佐证）。
+
+### 阶段 16k（2026-09-25）：安卓 AI 翻译提速/界面优化同步 + 双语重复构建修复 ✅ 已完成（0.9.11）
+
+- **AiClient.ets**：新增 chatCompletionStream（@ohos.net.http requestInStream + SSE 行解析 + utf-8 安全分块解码 + 180s watchdog；onDelta 增量回调 + isCancelled 取消）；双兜底：流式失败→整段回退、200 但非 SSE JSON→按整段解析；thinking 400 学习跳过（NO_THINK 集 = model@url，持久化 librera_ai/no_thinking；chatCompletion 同样具备 400 后去 thinking 重试一次）。
+- **Bilingual.ets**：translateParas 批任务改 3 工人并行池（Promise.all；缓存按 key 写入无冲突）；修复二次构建 "File exists"：ensureDir（本镜像 mkdirSync(dir,true) 对已存在目录仍抛 EEXIST，RemoteBook.ets:880 旧例同款守卫）+ removeIfExists 后再 openSync(CREATE|TRUNC)（saveCache/writeFile/zipDir 三处，本镜像对已存在文件 CREATE 打开会抛错）。
+- **Reader.ets / AiChat.ets**：面板翻译改流式（transToken 世代守卫：对话框重开/关闭后旧流结果作废、不再误弹面板；isCancelled 联动停止供数）；发送给AI 流式增量显示（生成中提示与增长文本同显）。
+- **Index.ets**：FAB PanGesture 拖动（fabDx/fabDy translate + display px2vp 尺寸 clamp；PanGesture distance:5 与点击并存；@State 重启自动归零 = 安卓"重开回默认"）；关于浮层 aboutRow 行式重构（开发者 LeeStudio/更新日志/隐私政策/许可/问题和反馈/邮箱/官网；新增 PRIVACY_URL、FEEDBACK_URL 常量；安卓"高级功能"行因鸿蒙无门控不移植）；base/zh_CN string.json 新增 7 键。
+- **CI 工具**：tools/ai_mock.py 支持 SSE 流式（4 片×0.8s）与编号段落批量回复（解析用户消息 "N. 段落" 按编号回复），流式/注入/缓存可端到端断言。
+- **不涉及备案**：安卓同步复活 8 处/书签删除复活（鸿蒙 Sync 仅书进度+书签、墓碑语义内建）、双语工作副本指纹/合并节流（鸿蒙一次性整本重建架构）、华为渠道系列。
+- **验证**：见 CHANGES 2026-09-25 条目（Pura 90 实测：流式增量/3 路并行同毫秒 3 请求/注入页数 3→5/二次构建零网络/FAB 拖动与归位/关于页七行；全量 CI L0+L1+L2 28/28 PASS）。
 - **不适用项备案**：华为渠道退款自愈/广告即清（鸿蒙无 IAP 与广告）；安卓第二轮检视 23 类修复（安卓架构特定，鸿蒙侧无同缺陷证据）；六项调整之②OPDS 默认已由 0.9.9 完成、③⑤单击/长按配置鸿蒙架构不同不适用。
 
 ### 阶段 16i（2026-09-19）：浏览页整页化 + 直返导航 + OPDS 预置精简 ✅ 已完成（0.9.9）

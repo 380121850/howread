@@ -2077,6 +2077,34 @@
       "value": "Home page:"
     },
     {
+      "name": "about_developer",
+      "value": "Developer"
+    },
+    {
+      "name": "about_privacy",
+      "value": "Privacy Policy"
+    },
+    {
+      "name": "about_privacy_link",
+      "value": "HowRead Pro Privacy Policy"
+    },
+    {
+      "name": "about_feedback",
+      "value": "Feedback"
+    },
+    {
+      "name": "about_feedback_link",
+      "value": "HowRead Pro issues (GitHub)"
+    },
+    {
+      "name": "about_mail",
+      "value": "Email"
+    },
+    {
+      "name": "about_web",
+      "value": "Web site"
+    },
+    {
       "name": "app_description",
       "value": "An open-source e-book reader focused on personal reading experience"
     },

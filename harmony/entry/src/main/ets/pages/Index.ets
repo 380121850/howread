@@ -33,6 +33,7 @@ import { addNote, AiNote } from '../model/Notes';
 import { biometricAvailable, startBiometricAuth } from '../model/Biometric';
 import { PlaylistMeta, getAllPlaylists, createPlaylist, deletePlaylist, getPlaylistItems, updatePlaylist, addToPlaylist } from '../model/Playlists';
 import http from '@ohos.net.http';
+import display from '@ohos.display';
 import promptAction from '@ohos.promptAction';
 import { KEY_PENDING_URI } from '../entryability/EntryAbility';
 import { tlog } from '../model/TestLog';
@@ -63,6 +64,8 @@ const FORMAT_ROWS: string[][] = [['pdf', 'PDF'], ['epub', 'EPUB'], ['fb2', 'FB2'
 const WHATSNEW_URL: string = 'https://380121850.github.io/howread/what-is-new/zh.html';
 const HOME_URL: string = 'https://380121850.github.io/howread/';
 const SUPPORT_MAIL: string = '380121850@163.com';
+const PRIVACY_URL: string = 'https://380121850.github.io/howread/PrivacyPolicy/zh.html';
+const FEEDBACK_URL: string = 'https://github.com/380121850/howread/issues';
 
 /** Backup payload shape (sprint E). */
 interface BackupFile {
@@ -1549,6 +1552,16 @@ struct Index {
         .borderRadius(26)
         .shadow({ radius: 8, color: '#44000000', offsetX: 0, offsetY: 2 })
         .margin({ right: 16, bottom: this.settings.tabPositionTop ? 24 : 62 })
+        .translate({ x: this.fabDx, y: this.fabDy })
+        .gesture(PanGesture({ fingers: 1, direction: PanDirection.All, distance: 5 })
+          .onActionStart((e: GestureEvent) => {
+            this.fabBaseX = this.fabDx;
+            this.fabBaseY = this.fabDy;
+          })
+          .onActionUpdate((e: GestureEvent) => {
+            this.fabDx = this.clampFabX(this.fabBaseX + e.offsetX);
+            this.fabDy = this.clampFabY(this.fabBaseY + e.offsetY);
+          }))
         .onClick(() => {
           this.openLastBook();
         })
@@ -3365,6 +3378,37 @@ tlog('download_start', 'name=' + fileName);    try {
       this.loadStats();
     }
     console.info(`[Index] Tab switched to ${index} (${this.topTitle})`);
+  }
+
+  /* Android fabLastBook parity (2026-09-24): draggable, in-memory only —
+   * the default bottom-right spot is back on every app start; a tap still
+   * opens the last book. */
+  @State private fabDx: number = 0;
+  @State private fabDy: number = 0;
+  private fabBaseX: number = 0;
+  private fabBaseY: number = 0;
+
+  private clampFabX(x: number): number {
+    let w = 360;
+    try {
+      const d = display.getDefaultDisplaySync();
+      w = px2vp(d.width);
+    } catch (err) {
+      /* keep default */
+    }
+    return Math.max(-(w - 120), Math.min(8, x));
+  }
+
+  private clampFabY(y: number): number {
+    let h = 780;
+    try {
+      const d = display.getDefaultDisplaySync();
+      h = px2vp(d.height);
+    } catch (err) {
+      /* keep default */
+    }
+    const downMax = this.settings.tabPositionTop ? 16 : 52;
+    return Math.max(-(h - 200), Math.min(downMax, y));
   }
 
   /** FAB: open the most recently read book. */
@@ -9837,6 +9881,26 @@ tlog('download_start', 'name=' + fileName);    try {
     return 'HowRead: v' + this.appVersion + ' build ' + BUILD_TIME;
   }
 
+  /** About row: label + underlined link (Android about_section row style). */
+  @Builder
+  aboutRow(label: ResourceStr, value: ResourceStr, onTap: () => void) {
+    Row({ space: 10 }) {
+      Text(label)
+        .fontSize(13).fontColor(this.txtSec())
+        .width(110)
+      Text(value)
+        .fontSize(13).fontColor(this.thm())
+        .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .layoutWeight(1)
+        .onClick(() => {
+          onTap();
+        })
+    }
+    .width('100%')
+  }
+
   /** Modal overlay: about (关于说明, Android about_section.xml parity). */
   @Builder
   buildAboutOverlay() {
@@ -9868,53 +9932,29 @@ tlog('download_start', 'name=' + fileName);    try {
           /* version row */
           Text('v' + this.appVersion)
             .fontSize(12).fontColor(this.txtHint())
-          /* what's new link */
-          Text($r('app.string.about_whatnew'))
-            .fontSize(14).fontColor(this.thm())
-            .decoration({ type: TextDecorationType.Underline, color: this.thm() })
-            .onClick(() => {
-              this.openExternal(WHATSNEW_URL);
-            })
-          Divider().color(this.divColor())
-          /* GPL + licenses */
-          Row({ space: 8 }) {
-            Text($r('app.string.about_gpl'))
-              .fontSize(12).fontColor(this.txtSec())
-            Text($r('app.string.about_licenses'))
-              .fontSize(12).fontColor(this.thm())
-              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
-              .onClick(() => {
-                this.showLicenses = true;
-              })
-          }
-          .justifyContent(FlexAlign.Center)
-          .width('100%')
-          /* support email */
-          Row({ space: 8 }) {
-            Text($r('app.string.about_support'))
-              .fontSize(12).fontColor(this.txtSec())
-            Text(SUPPORT_MAIL)
-              .fontSize(12).fontColor(this.thm())
-              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
-              .onClick(() => {
-                this.openExternal('mailto:' + SUPPORT_MAIL);
-              })
-          }
-          .justifyContent(FlexAlign.Center)
-          .width('100%')
-          /* home page */
-          Row({ space: 8 }) {
-            Text($r('app.string.about_homepage'))
-              .fontSize(12).fontColor(this.txtSec())
-            Text('HowRead \u597D\u597D\u8BFB')
-              .fontSize(12).fontColor(this.thm())
-              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
-              .onClick(() => {
-                this.openExternal(HOME_URL);
-              })
-          }
-          .justifyContent(FlexAlign.Center)
-          .width('100%')
+          /* Android about_section.xml rows (2026-09-24): developer / what's
+           * new / privacy / license / feedback / mail / web */
+          this.aboutRow($r('app.string.about_developer'), 'LeeStudio', (): void => {
+            this.openExternal(HOME_URL);
+          })
+          this.aboutRow($r('app.string.about_whatnew'), 'v' + this.appVersion, (): void => {
+            this.openExternal(WHATSNEW_URL);
+          })
+          this.aboutRow($r('app.string.about_privacy'), $r('app.string.about_privacy_link'), (): void => {
+            this.openExternal(PRIVACY_URL);
+          })
+          this.aboutRow($r('app.string.about_gpl'), $r('app.string.about_licenses'), (): void => {
+            this.showLicenses = true;
+          })
+          this.aboutRow($r('app.string.about_feedback'), $r('app.string.about_feedback_link'), (): void => {
+            this.openExternal(FEEDBACK_URL);
+          })
+          this.aboutRow($r('app.string.about_mail'), SUPPORT_MAIL, (): void => {
+            this.openExternal('mailto:' + SUPPORT_MAIL);
+          })
+          this.aboutRow($r('app.string.about_web'), 'HowRead \u597D\u597D\u8BFB', (): void => {
+            this.openExternal(HOME_URL);
+          })
           /* fork footnote + tagline */
           Text($r('app.string.fork_of_librera'))
             .fontSize(11).fontColor(this.txtFaint())

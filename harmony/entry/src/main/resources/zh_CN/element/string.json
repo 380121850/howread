@@ -2069,6 +2069,34 @@
       "value": "主页："
     },
     {
+      "name": "about_developer",
+      "value": "开发者"
+    },
+    {
+      "name": "about_privacy",
+      "value": "隐私政策"
+    },
+    {
+      "name": "about_privacy_link",
+      "value": "好好读Pro 隐私政策"
+    },
+    {
+      "name": "about_feedback",
+      "value": "问题和反馈"
+    },
+    {
+      "name": "about_feedback_link",
+      "value": "HowRead Pro 问题反馈（GitHub）"
+    },
+    {
+      "name": "about_mail",
+      "value": "邮箱"
+    },
+    {
+      "name": "about_web",
+      "value": "官网"
+    },
+    {
       "name": "app_description",
       "value": "一个专注于个人阅读体验的开源电子书阅读软件"
     },

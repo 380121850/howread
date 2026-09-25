@@ -1,6 +1,6 @@
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
-import { AiConfig, loadAiConfig, chatCompletion, aiConfigReady, AiMessage } from '../model/AiClient';
+import { AiConfig, loadAiConfig, chatCompletionStream, aiConfigReady, AiMessage } from '../model/AiClient';
 import { addNote, AiNote } from '../model/Notes';
 
 /**
@@ -77,7 +77,10 @@ struct AiChat {
     }
     this.busy = true;
     this.answer = '';
-    chatCompletion(this.cfg, this.buildMessages(), 0).then((out: string) => {
+    /* streaming (Android 2026-09-24): the answer grows while generating */
+    chatCompletionStream(this.cfg, this.buildMessages(), 0, (full: string) => {
+      this.answer = full;
+    }).then((out: string) => {
       this.answer = out;
       this.busy = false;
     }).catch((e: Object) => {
@@ -175,7 +178,7 @@ struct AiChat {
             .fontSize(13).fontColor('#555')
             .width('100%')
           Column() {
-            if (this.busy) {
+            if (this.busy && this.answer.length === 0) {
               Row({ space: 8 }) {
                 LoadingProgress().width(22).height(22).color(thmColor())
                 Text($r('app.string.ai_requesting')).fontSize(13).fontColor('#777')
@@ -184,6 +187,13 @@ struct AiChat {
               Text(this.answer)
                 .fontSize(14).fontColor('#333')
                 .width('100%')
+              if (this.busy) {
+                Row({ space: 6 }) {
+                  LoadingProgress().width(14).height(14).color(thmColor())
+                  Text($r('app.string.ai_requesting')).fontSize(12).fontColor('#999')
+                }
+                .margin({ top: 6 })
+              }
             } else {
               Text($r('app.string.aichat_answer_hint'))
                 .fontSize(13).fontColor(Color.Gray)

@@ -69,6 +69,7 @@ async function loadCache(ctx: Context, bookKey: string): Promise<Record<string, 
 async function saveCache(ctx: Context, bookKey: string, cache: Record<string, string>): Promise<void> {
   try {
     const target = workDir(ctx) + '/cache_' + bookKey + '.json';
+    removeIfExists(target);
     const f = fs.openSync(target, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
     fs.writeSync(f.fd, JSON.stringify(cache));
     fs.closeSync(f);
@@ -87,7 +88,26 @@ function readFile(path: string): string {
   return new util.TextDecoder('utf-8').decodeToString(new Uint8Array(buf));
 }
 
+function ensureDir(dir: string): void {
+  try {
+    fs.mkdirSync(dir, true);
+  } catch (e) {
+    /* already exists on this image */
+  }
+}
+
+function removeIfExists(path: string): void {
+  try {
+    if (fs.accessSync(path)) {
+      fs.unlinkSync(path);
+    }
+  } catch (e) {
+    /* best effort: openSync below still surfaces real errors */
+  }
+}
+
 function writeFile(path: string, text: string): void {
+  removeIfExists(path);
   const f = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
   fs.writeSync(f.fd, text);
   fs.closeSync(f);
@@ -100,8 +120,11 @@ async function translateParas(cfg: AiConfig, dst: string, paras: string[],
   for (let i = 0; i < paras.length; i++) {
     keys.push(hashKey(dst + '|' + paras[i]));
   }
-  /* collect batches of untranslated paragraphs */
+  /* Collect untranslated batches first, then run 3 workers in parallel
+   * (Android 2026-09-24 "3-way parallel" parity). Cache writes are keyed
+   * per paragraph, so parallel batches never conflict. */
   let done = 0;
+  const jobs: number[][] = [];
   for (let start = 0; start < paras.length; start += BATCH) {
     const idxs: number[] = [];
     for (let i = start; i < paras.length && i < start + BATCH; i++) {
@@ -109,41 +132,55 @@ async function translateParas(cfg: AiConfig, dst: string, paras: string[],
         idxs.push(i);
       }
     }
-    if (idxs.length === 0) {
-      done += Math.min(BATCH, paras.length - start);
-      continue;
+    if (idxs.length > 0) {
+      jobs.push(idxs);
     }
-    let user = `\u76EE\u6807\u8BED\u8A00\uFF1A${dst}\n`;
-    for (let k = 0; k < idxs.length; k++) {
-      let t = paras[idxs[k]];
-      if (t.length > PARA_LIMIT) {
-        t = t.substring(0, PARA_LIMIT);
-      }
-      user += (k + 1) + '. ' + t + '\n';
-    }
-    const msgs: AiMessage[] = [
-      { role: 'system', content: SYS_PROMPT },
-      { role: 'user', content: user }
-    ];
-    try {
-      const resp: string = await chatCompletion(cfg, msgs, 2048);
-      const lines = resp.split('\n');
+  }
+  let next = 0;
+  const runJob = async (): Promise<void> => {
+    while (next < jobs.length) {
+      const idxs: number[] = jobs[next];
+      next++;
+      let user = `\u76EE\u6807\u8BED\u8A00\uFF1A${dst}\n`;
       for (let k = 0; k < idxs.length; k++) {
-        const want = '' + (k + 1);
-        for (let li = 0; li < lines.length; li++) {
-          const line = lines[li].trim();
-          if (line.startsWith(want + '.') || line.startsWith(want + '\u3001') || line.startsWith(want + ')')) {
-            cache[keys[idxs[k]]] = line.substring(want.length).replace(/^[\.\u3001\)]\s*/, '').trim();
-            break;
+        let t = paras[idxs[k]];
+        if (t.length > PARA_LIMIT) {
+          t = t.substring(0, PARA_LIMIT);
+        }
+        user += (k + 1) + '. ' + t + '\n';
+      }
+      const msgs: AiMessage[] = [
+        { role: 'system', content: SYS_PROMPT },
+        { role: 'user', content: user }
+      ];
+      try {
+        const resp: string = await chatCompletion(cfg, msgs, 2048);
+        const lines = resp.split('\n');
+        for (let k = 0; k < idxs.length; k++) {
+          const want = '' + (k + 1);
+          for (let li = 0; li < lines.length; li++) {
+            const line = lines[li].trim();
+            if (line.startsWith(want + '.') || line.startsWith(want + '\u3001') || line.startsWith(want + ')')) {
+              cache[keys[idxs[k]]] = line.substring(want.length).replace(/^[\.\u3001\)]\s*/, '').trim();
+              break;
+            }
           }
         }
+      } catch (e) {
+        /* network/model failure: leave these paragraphs untranslated */
+        console.error('[Bilingual] batch translate failed: ' + String(e));
       }
-    } catch (e) {
-      /* network/model failure: leave these paragraphs untranslated */
-      console.error('[Bilingual] batch translate failed: ' + String(e));
+      done += idxs.length;
+      onProg('\u5DF2\u7FFB\u8BD1 ' + done + ' / ' + paras.length + ' \u6BB5');
     }
-    done += idxs.length;
-    onProg('\u5DF2\u7FFB\u8BD1 ' + done + ' / ' + paras.length + ' \u6BB5');
+  };
+  const workers: Promise<void>[] = [];
+  const workerCount = Math.min(3, jobs.length);
+  for (let w = 0; w < workerCount; w++) {
+    workers.push(runJob());
+  }
+  if (workers.length > 0) {
+    await Promise.all(workers);
   }
   const out: string[] = [];
   for (let i = 0; i < paras.length; i++) {
@@ -378,6 +415,7 @@ function zipDir(dir: string, outPath: string): void {
     pos += centrals[i].length;
   }
   out.set(Uint8Array.from(eocd), pos);
+  removeIfExists(outPath);
   const f = fs.openSync(outPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
   fs.writeSync(f.fd, out.buffer);
   fs.closeSync(f);
@@ -396,8 +434,8 @@ export async function buildBilingualEpub(ctx: Context, cfg: AiConfig, srcPath: s
   const srcDir = dir + '/src';
   const outPath = dir + '/bi_' + baseName(srcPath);
   try {
-    fs.mkdirSync(dir, true);
-    fs.mkdirSync(srcDir, true);
+    ensureDir(dir);
+    ensureDir(srcDir);
     onProg('\u6B63\u5728\u89E3\u5305 EPUB\u2026');
     const zopt: zlib.Options = { level: 1 };
     await zlib.unzipFile(srcPath, srcDir, zopt);
@@ -470,7 +508,7 @@ export async function buildBilingualTxt(ctx: Context, cfg: AiConfig, srcPath: st
   dst: string, onProg: (msg: string) => void): Promise<string> {
   try {
     const dir = workDir(ctx);
-    fs.mkdirSync(dir, true);
+    ensureDir(dir);
     const text = readFile(srcPath);
     const paras: string[] = [];
     const lines = text.split('\n');

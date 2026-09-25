@@ -41,7 +41,7 @@ import {
 import { saveRecentBook, getPageForPath, RecentBook } from '../model/ReadingProgress';
 import { recordReadTime, recordPagesRead } from '../model/ReadingStats';
 import { getBookmarks, addBookmark, removeBookmark, Bookmark } from '../model/Bookmarks';
-import { AiConfig, loadAiConfig, chatCompletion, aiConfigReady, AiMessage } from '../model/AiClient';
+import { AiConfig, loadAiConfig, chatCompletion, chatCompletionStream, aiConfigReady, AiMessage } from '../model/AiClient';
 import { getNotes, addNote, removeNote, AiNote } from '../model/Notes';
 import { exportNotesFile, ExportData } from '../model/Export';
 import { isBilingualDoc, buildBilingual } from '../model/Bilingual';
@@ -567,6 +567,7 @@ struct Reader {
   @State showExportDialog: boolean = false; /* notes/bookmarks export format picker (A) */
   @State transInPage: boolean = false;      /* in-page bilingual toggle (D, EPUB/TXT only) */
   private biOriginalPath: string = '';      /* set while reading the rebuilt bilingual file */
+  private transToken: number = 0;           /* dialog generation: stale stream results are dropped */
   /* Round 5: top bar clock + battery (Android document_title_bar parity) */
   @State topClock: string = '';
   @State topBattery: string = '';
@@ -3143,6 +3144,7 @@ struct Reader {
     loadAiConfig(getContext(this)).then((c: AiConfig) => {
       this.aiCfg = c;
     });
+    this.transToken++;
     this.transResult = '';
     this.transBusy = false;
     this.showTrans = true;
@@ -3263,18 +3265,33 @@ struct Reader {
     }
     this.transBusy = true;
     this.transResult = '';
+    const tok = this.transToken;
     const src: string = TRANS_SRC[this.transSrcIdx];
     const from = src === TRANS_SRC[0] ? '' : '\u4ECE' + src;
     const msgs: AiMessage[] = [
       { role: 'system', content: '\u4F60\u662F\u4E13\u4E1A\u7684\u7FFB\u8BD1\uFF0C\u53EA\u8F93\u51FA\u8BD1\u6587\uFF0C\u4E0D\u8981\u89E3\u91CA\u3002' },
       { role: 'user', content: `\u8BF7\u628A\u4E0B\u9762\u7684\u6587\u672C${from}\u7FFB\u8BD1\u6210${dst}\uFF0C\u53EA\u8F93\u51FA\u8BD1\u6587\uFF1A\n\n` + text }
     ];
-    chatCompletion(this.aiCfg, msgs, 0).then((out: string) => {
+    /* streaming (Android 2026-09-24): the translation grows word by word;
+     * closing the dialog stops feeding and the stale result is discarded */
+    chatCompletionStream(this.aiCfg, msgs, 0, (full: string) => {
+      if (tok === this.transToken) {
+        this.transResult = full;
+      }
+    }, undefined, (): boolean => {
+      return tok !== this.transToken;
+    }).then((out: string) => {
+      if (tok !== this.transToken) {
+        return;
+      }
       this.transResult = out;
       this.transBusy = false;
       this.showTransPanel = true;
       this.showTrans = false;
     }).catch((e: Object) => {
+      if (tok !== this.transToken) {
+        return;
+      }
       this.transResult = '\u7FFB\u8BD1\u5931\u8D25\uFF1A' + (e instanceof Error ? e.message : String(e));
       this.transBusy = false;
       this.showTransPanel = true;
