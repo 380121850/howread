@@ -382,7 +382,7 @@
    <string name="banner_slogan_PDF_READER">Най-удобният четец за pdf и djvu документи</string>
    <string name="books">Книги</string>
    <string name="reading_out_loud">Tts четене</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro (без реклами): водещ четец на epub и pdf</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro (без реклами): водещ четец на epub и pdf</string>
    <string name="custom_text">Заглавие</string>
    <string name="cd_search_books_in_the_library">Търсене на книги в библиотеката</string>
    <string name="cd_clear_search_reasult">Ясни резултати от търсенето</string>
@@ -459,7 +459,7 @@
    <string name="crop_borders_symmetrically">Симетрично отрязване</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">Извличане на имена на автори и заглавия на книги от метаданни (pdf)</string>
    <string name="meta_tags">Мета тагове</string>
-   <string name="librera_pro">HowRead Pro: това приложение, но без реклами</string>
+   <string name="librera_pro">HowReadPro: това приложение, но без реклами</string>
    <string name="annotation">Анотация</string>
    <string name="book">Книга</string>
    <string name="information">Информация за файла</string>

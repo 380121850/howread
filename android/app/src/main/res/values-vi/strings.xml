@@ -382,7 +382,7 @@
    <string name="banner_slogan_PDF_READER">Thuận tiện nhất "PDF Reader" để đọc tài liệu điện tử</string>
    <string name="books">Sách</string>
    <string name="reading_out_loud">Đọc to</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro (không có quảng cáo) Trình đọc sách hàng đầu và PDF</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro (không có quảng cáo) Trình đọc sách hàng đầu và PDF</string>
    <string name="custom_text">Văn bản tùy chỉnh</string>
    <string name="cd_search_books_in_the_library">Tìm sách trong thư viện</string>
    <string name="cd_clear_search_reasult">Xóa tìm kiếm reasult</string>
@@ -459,7 +459,7 @@
    <string name="crop_borders_symmetrically">Cắt biên giới đối xứng</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">Hiển thị tác giả và tựa đề của cuốn sách PDF từ các thẻ meta</string>
    <string name="meta_tags">Thẻ meta</string>
-   <string name="librera_pro">HowRead Pro: ứng dụng này nhưng không có quảng cáo</string>
+   <string name="librera_pro">HowReadPro: ứng dụng này nhưng không có quảng cáo</string>
    <string name="annotation">Chú thích</string>
    <string name="book">Sách</string>
    <string name="information">Thông tin</string>

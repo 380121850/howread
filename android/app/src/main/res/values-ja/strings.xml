@@ -382,7 +382,7 @@
    <string name="banner_slogan_PDF_READER">電子文書を読み取るための最も便利な「PDFリーダー」</string>
    <string name="books">書籍</string>
    <string name="reading_out_loud">TTSで読む</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro（広告なし）：先進的なePub/PDFリーダー</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro（広告なし）：先進的なePub/PDFリーダー</string>
    <string name="custom_text">カスタムテキスト</string>
    <string name="cd_search_books_in_the_library">ライブラリで書籍を検索する</string>
    <string name="cd_clear_search_reasult">検索結果をクリア</string>
@@ -459,7 +459,7 @@
    <string name="crop_borders_symmetrically">余白を左右対称に切り取る</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">メタタグから著者名とタイトル名を抽出する（PDF）</string>
    <string name="meta_tags">メタタグ</string>
-   <string name="librera_pro">HowRead Pro: このアプリですが、広告はありません</string>
+   <string name="librera_pro">HowReadPro: このアプリですが、広告はありません</string>
    <string name="annotation">注釈</string>
    <string name="book">本</string>
    <string name="information">情報</string>

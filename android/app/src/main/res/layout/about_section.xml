@@ -253,7 +253,7 @@
             style="@style/textLink"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="好好读 Pro" />
+            android:text="好好读Pro" />
     </LinearLayout>
 
     <LinearLayout

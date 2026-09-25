@@ -4,7 +4,7 @@ layout: page
 
 # Privacy Policies
 
-## HowRead Pro
+## HowReadPro
 
 * [General Privacy Policy (English)]({{ site.baseurl }}/PrivacyPolicy/general)
 * [Huawei Platform Privacy Statement (English)]({{ site.baseurl }}/PrivacyPolicy/huawei)

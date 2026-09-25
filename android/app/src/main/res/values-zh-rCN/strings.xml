@@ -387,7 +387,7 @@
    <string name="banner_slogan_PDF_READER">最舒适的PDF和DjVu文档阅读器</string>
    <string name="books">书籍</string>
    <string name="reading_out_loud">TTS朗读</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro(无广告):领先的ePUB及PDF阅读器</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro(无广告):领先的ePUB及PDF阅读器</string>
    <string name="custom_text">标题</string>
    <string name="cd_search_books_in_the_library">在书库中搜索</string>
    <string name="cd_clear_search_reasult">清除搜索记录</string>
@@ -464,7 +464,7 @@
    <string name="crop_borders_symmetrically">对称裁剪</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">显示PDF元数据中的作者和书名</string>
    <string name="meta_tags">元标签</string>
-   <string name="librera_pro">HowRead Pro：无广告的应用程序</string>
+   <string name="librera_pro">HowReadPro：无广告的应用程序</string>
    <string name="app_description">一个专注于个人阅读体验的开源电子书阅读软件</string>
    <string name="annotation">注释</string>
    <string name="book">书名</string>
@@ -767,6 +767,7 @@
    <string name="moon_net_section_webdav">WebDAV(Pro)</string>
    <string name="moon_section_folders">书库文件夹</string>
    <string name="moon_remove_folder_hint">从书库列表中移除该文件夹？磁盘上的文件夹不会被删除</string>
+   <string name="moon_folder_scan_added">已将 %1$d 本书加入书库</string>
    <string name="moon_stat_hm">%1$d小时%2$d分</string>
    <string name="moon_stat_min">%1$d分钟</string>
    <string name="moon_no_recent_book">暂无最近阅读</string>

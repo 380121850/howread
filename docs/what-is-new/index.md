@@ -1,5 +1,5 @@
 # What is new
-## HowRead Pro (current version)
+## HowReadPro (current version)
 
 * [Releases & release notes on GitHub](https://github.com/380121850/howread/releases)
 * Current version: **1.3.11** — see the [download page]({{ site.baseurl }}/download) for APKs.
@@ -48,7 +48,7 @@
 ### 1.0.0 (2026-09-06) · First stable release
 * Brand and reading experience finalized
 
-### 0.9.0 (2026-08-30) · Hello, HowRead Pro
+### 0.9.0 (2026-08-30) · Hello, HowReadPro
 * Renewed from Librera: a brand-new bookshelf view, WebDAV sync, AI Q&A and translation, notes, and reading statistics
 
 ## Legacy Librera changelog (archive)

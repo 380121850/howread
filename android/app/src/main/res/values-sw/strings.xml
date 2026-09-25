@@ -382,7 +382,7 @@
    <string name="banner_slogan_PDF_READER">Rahisi zaidi "PDF Reader" kwa kusoma hati za elektroniki</string>
    <string name="books">Vitabu</string>
    <string name="reading_out_loud">Kusoma kwa sauti kubwa</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro (hakuna matangazo) Msomaji wa kitabu cha kuongoza na PDF</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro (hakuna matangazo) Msomaji wa kitabu cha kuongoza na PDF</string>
    <string name="custom_text">Maandishi maalum</string>
    <string name="cd_search_books_in_the_library">Tafuta vitabu kwenye maktaba</string>
    <string name="cd_clear_search_reasult">Futa utafutaji upya</string>
@@ -459,7 +459,7 @@
    <string name="crop_borders_symmetrically">Mipaka ya mimea ya usawa</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">Inaonyesha mwandishi na kichwa cha kitabu cha PDF kutoka kwa meta tags</string>
    <string name="meta_tags">Lebo za meta</string>
-   <string name="librera_pro">HowRead Pro: programu hii lakini bila matangazo</string>
+   <string name="librera_pro">HowReadPro: programu hii lakini bila matangazo</string>
    <string name="annotation">Maelezo</string>
    <string name="book">Kitabu</string>
    <string name="information">Taarifa</string>

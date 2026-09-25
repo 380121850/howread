@@ -7,7 +7,7 @@ It even features a unique auto-scrolling, hands-free Musician's mode, with contr
 The F-Droid build (HowRead FD) is based on the latest MuPDF and supports Android 7.0+.
 
 The HowRead family comes in three flavors: HowRead (this app, ad-supported),
-HowRead Pro (the same app without ads), and HowRead FD (the F-Droid build,
+HowReadPro (the same app without ads), and HowRead FD (the F-Droid build,
 free of Google Play services and ads).
 
 # Just a few HowRead main features:
@@ -37,7 +37,7 @@ free of Google Play services and ads).
 * And a whole bunch of other features for you to check out.
 
 The best way to fully appreciate HowRead, however,
-is to use the ads-free HowRead Pro version.
+is to use the ads-free HowReadPro version.
 
 HowRead is an independent fork of the open-source Librera Reader project;
 if you enjoy it, please consider supporting the original author:

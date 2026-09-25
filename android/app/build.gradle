@@ -234,7 +234,7 @@ android {
             dimension = "version"
             applicationId = "com.leestudio.howread.pro.reader"
             manifestPlaceholders = [
-                    appName      : "HowRead Pro",
+                    appName      : "HowReadPro",
                     appIcon      : "@mipmap/icon_pdf_pro",
                     appRoundIcon : "@mipmap/icon_pdf_pro",
                     appGdriveKey : project.findProperty('pro_appGdriveKey') ?: '',
@@ -259,7 +259,7 @@ android {
             dimension = "version"
             applicationId = "com.leestudio.howread.pro.reader"
             manifestPlaceholders = [
-                    appName        : "HowRead Pro",
+                    appName        : "HowReadPro",
                     appIcon        : "@mipmap/icon_pdf_pro",
                     appRoundIcon   : "@mipmap/icon_pdf_pro",
                     appGdriveKey   : project.findProperty('pro_appGdriveKey') ?: '',

@@ -382,7 +382,7 @@
    <string name="banner_slogan_PDF_READER">Yang paling mudah "PDF Reader" untuk membaca dokumen elektronik</string>
    <string name="books">Buku</string>
    <string name="reading_out_loud">Membaca dengan suara keras</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro (no ads) Memimpin pembaca buku dan PDF</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro (no ads) Memimpin pembaca buku dan PDF</string>
    <string name="custom_text">Teks khusus</string>
    <string name="cd_search_books_in_the_library">Cari buku di perpustakaan</string>
    <string name="cd_clear_search_reasult">Hapus pencarian ulang</string>
@@ -459,7 +459,7 @@
    <string name="crop_borders_symmetrically">Perbatasan tanaman simetris</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">Menampilkan penulis dan judul buku PDF dari meta tag</string>
    <string name="meta_tags">Meta tag</string>
-   <string name="librera_pro">HowRead Pro: aplikasi ini tetapi tanpa iklan</string>
+   <string name="librera_pro">HowReadPro: aplikasi ini tetapi tanpa iklan</string>
    <string name="annotation">Anotasi</string>
    <string name="book">Book</string>
    <string name="information">Informasi</string>

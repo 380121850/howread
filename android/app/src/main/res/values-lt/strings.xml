@@ -382,7 +382,7 @@
    <string name="banner_slogan_PDF_READER">Patogiausia PDF dokumentų skaityklė</string>
    <string name="books">Knygos</string>
    <string name="reading_out_loud">Skaitoma balsu</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">"HowRead Pro" (be skelbimų) "Leader Book Reader" ir PDF</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">"HowReadPro" (be skelbimų) "Leader Book Reader" ir PDF</string>
    <string name="custom_text">Tinkintas tekstas</string>
    <string name="cd_search_books_in_the_library">Paieškos knygos bibliotekoje</string>
    <string name="cd_clear_search_reasult">Išvalyti paiešką surasti</string>
@@ -459,7 +459,7 @@
    <string name="crop_borders_symmetrically">Sumažinti sienas simetriškai</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">Rodoma autoriaus ir PDF knygos pavadinimo iš meta žymeles</string>
    <string name="meta_tags">Meta žymeles</string>
-   <string name="librera_pro">HowRead Pro: ši programa, bet be skelbimų</string>
+   <string name="librera_pro">HowReadPro: ši programa, bet be skelbimų</string>
    <string name="annotation">Anotacija</string>
    <string name="book">Knyga</string>
    <string name="information">Informacija</string>

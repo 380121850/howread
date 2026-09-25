@@ -2,9 +2,9 @@
 layout: page
 ---
 
-# Huawei Platform Privacy Statement — HowRead Pro
+# Huawei Platform Privacy Statement — HowReadPro
 
-This statement applies to the HowRead Pro version distributed through **Huawei AppGallery**. It supplements the [General Privacy Policy]({{ site.baseurl }}/PrivacyPolicy/general), and both apply together.
+This statement applies to the HowReadPro version distributed through **Huawei AppGallery**. It supplements the [General Privacy Policy]({{ site.baseurl }}/PrivacyPolicy/general), and both apply together.
 
 Last updated: 2026-09-20
 

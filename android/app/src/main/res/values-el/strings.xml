@@ -382,7 +382,7 @@
    <string name="banner_slogan_PDF_READER">Ο πιο άνετος αναγνώστης για έγγραφα pdf και djvu</string>
    <string name="books">Βιβλία</string>
    <string name="reading_out_loud">Ανάγνωση</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro (χωρίς διαφημίσεις): ένας κορυφαίος αναγνώστης epub και pdf</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro (χωρίς διαφημίσεις): ένας κορυφαίος αναγνώστης epub και pdf</string>
    <string name="custom_text">Τίτλος</string>
    <string name="cd_search_books_in_the_library">Αναζήτηση βιβλίων στη βιβλιοθήκη</string>
    <string name="cd_clear_search_reasult">Διαγραφή αποτελεσμάτων αναζήτησης</string>
@@ -459,7 +459,7 @@
    <string name="crop_borders_symmetrically">Είδωλο καλλιέργειας</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">Εξαγωγή ονομάτων συγγραφέων και τίτλων βιβλίων από μετα-δεδομένα (pdf)</string>
    <string name="meta_tags">Μετα-ετικέτες</string>
-   <string name="librera_pro">HowRead Pro: αυτή η εφαρμογή αλλά χωρίς διαφημίσεις</string>
+   <string name="librera_pro">HowReadPro: αυτή η εφαρμογή αλλά χωρίς διαφημίσεις</string>
    <string name="annotation">Σχόλιο</string>
    <string name="book">Βιβλίο</string>
    <string name="information">Πληροφορίες αρχείου</string>

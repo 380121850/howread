@@ -4,7 +4,7 @@ layout: page
 
 # 隐私政策
 
-## HowRead Pro 好好读
+## HowReadPro 好好读Pro
 
 * [通用隐私政策（中文）]({{ site.baseurl }}/PrivacyPolicy/general.zh)
 * [华为平台隐私声明（中文）]({{ site.baseurl }}/PrivacyPolicy/huawei.zh)

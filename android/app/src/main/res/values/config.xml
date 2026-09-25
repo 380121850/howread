@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">HowRead</string>
-    <string name="app_name_pro" translatable="false">HowRead Pro</string>
+    <string name="app_name_pro" translatable="false">HowReadPro</string>
 
 	<string name="my_email" translatable="false">380121850@163.com</string>
 	<string name="my_site" translatable="false">https://380121850.github.io/howread/</string>

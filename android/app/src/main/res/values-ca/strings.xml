@@ -382,7 +382,7 @@
    <string name="banner_slogan_PDF_READER">El lector més còmode per a documents PDF i DjVu</string>
    <string name="books">Llibres</string>
    <string name="reading_out_loud">Lectura TTS</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro (sense anuncis): Un dels principals lectors d\'ePUB i PDF</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro (sense anuncis): Un dels principals lectors d\'ePUB i PDF</string>
    <string name="custom_text">Títol</string>
    <string name="cd_search_books_in_the_library">Cerca llibres a la Biblioteca</string>
    <string name="cd_clear_search_reasult">Esborra els resultats de la cerca</string>
@@ -459,7 +459,7 @@
    <string name="crop_borders_symmetrically">Retall simètric</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">Extreu els noms dels autors i els títols dels llibres de les meta-dades (PDF)</string>
    <string name="meta_tags">Meta etiquetes</string>
-   <string name="librera_pro">HowRead Pro: Aquesta aplicació però sense anuncis</string>
+   <string name="librera_pro">HowReadPro: Aquesta aplicació però sense anuncis</string>
    <string name="annotation">Anotació</string>
    <string name="book">Llibre</string>
    <string name="information">Informació del fitxer</string>

@@ -382,7 +382,7 @@
    <string name="banner_slogan_PDF_READER">Helppokäyttöisin PDF- ja DjVu-asiakirjojen lukija</string>
    <string name="books">Kirjat</string>
    <string name="reading_out_loud">TTS-lukeminen</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro (ei mainoksia): Johtava ePUB- ja PDF-lukija</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro (ei mainoksia): Johtava ePUB- ja PDF-lukija</string>
    <string name="custom_text">Otsikko</string>
    <string name="cd_search_books_in_the_library">Hae kirjoja kirjastosta</string>
    <string name="cd_clear_search_reasult">Tyhjennä hakutulokset</string>
@@ -459,7 +459,7 @@
    <string name="crop_borders_symmetrically">Rajaa reunukset symmetrisesti</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">Hae tekijöiden tiedot ja kirjan otsikot PDF-tiedoston metatiedoista</string>
    <string name="meta_tags">Metatunnisteet</string>
-   <string name="librera_pro">HowRead Pro: tämä sovellus, mutta ilman mainoksia</string>
+   <string name="librera_pro">HowReadPro: tämä sovellus, mutta ilman mainoksia</string>
    <string name="annotation">Huomautus</string>
    <string name="book">Kirja</string>
    <string name="information">Tiedoston tiedot</string>

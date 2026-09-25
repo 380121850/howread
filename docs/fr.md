@@ -2,9 +2,9 @@
 layout: page
 ---
 
-# HowRead Pro · 好好读
+# HowReadPro · 好好读Pro
 
-> HowRead Pro (fr) — a highly customizable ebook reader for Android and HarmonyOS: PDF, EPUB, MOBI, DjVu, FB2, TXT, CBZ and more.
+> HowReadPro (fr) — a highly customizable ebook reader for Android and HarmonyOS: PDF, EPUB, MOBI, DjVu, FB2, TXT, CBZ and more.
 
 This site is currently available in Chinese and English:
 

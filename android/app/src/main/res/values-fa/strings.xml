@@ -382,7 +382,7 @@
    <string name="banner_slogan_PDF_READER">راحت ترین "PDF خوان" برای خواندن اسناد الکترونیکی</string>
    <string name="books">کتاب ها</string>
    <string name="reading_out_loud">خواندن با صدای بلند</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro (بدون تبلیغات) خواننده کتاب پیشرو و PDF</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro (بدون تبلیغات) خواننده کتاب پیشرو و PDF</string>
    <string name="custom_text">متن سفارشی</string>
    <string name="cd_search_books_in_the_library">کتابهای جستجو در کتابخانه</string>
    <string name="cd_clear_search_reasult">پاک کردن جستجوی جستجو</string>
@@ -459,7 +459,7 @@
    <string name="crop_borders_symmetrically">میانه های محصول به طور متقارن</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">نمایش نویسنده و عنوان کتاب PDF از برچسب های متا</string>
    <string name="meta_tags">برچسب های متا</string>
-   <string name="librera_pro">HowRead Pro: این برنامه اما بدون تبلیغات</string>
+   <string name="librera_pro">HowReadPro: این برنامه اما بدون تبلیغات</string>
    <string name="annotation">حاشیه نویسی</string>
    <string name="book">کتاب</string>
    <string name="information">اطلاعات</string>

@@ -382,7 +382,7 @@
    <string name="banner_slogan_PDF_READER">את "קורא PDF" הנוח ביותר עבור קריאת מסמכים אלקטרוניים</string>
    <string name="books">ספרים</string>
    <string name="reading_out_loud">קורא בקול רם</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro (ללא מודעות) קורא ספרים מובילים PDF</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro (ללא מודעות) קורא ספרים מובילים PDF</string>
    <string name="custom_text">טקסט מותאם אישית</string>
    <string name="cd_search_books_in_the_library">חיפוש בספריה</string>
    <string name="cd_clear_search_reasult">נקה חיפוש חוזר</string>
@@ -459,7 +459,7 @@
    <string name="crop_borders_symmetrically">חתוך גבולות באופן סימטרי</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">הצגת המחבר והכותרת של ספר ה- PDF מתוך המטא-תגים</string>
    <string name="meta_tags">מטא תגים</string>
-   <string name="librera_pro">HowRead Pro: אפליקציה זו אך ללא מודעות</string>
+   <string name="librera_pro">HowReadPro: אפליקציה זו אך ללא מודעות</string>
    <string name="annotation">ביאור</string>
    <string name="book">ספר</string>
    <string name="information">מידע</string>

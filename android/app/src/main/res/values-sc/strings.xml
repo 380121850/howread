@@ -382,7 +382,7 @@
    <string name="banner_slogan_PDF_READER">Su leghidore prus discansosu pro sos documentos PDF e DjVu</string>
    <string name="books">Libros</string>
    <string name="reading_out_loud">Leghidura vocale TTS</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro (chene publitzidade): unu leghidore de ePUB e PDF innovativu</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro (chene publitzidade): unu leghidore de ePUB e PDF innovativu</string>
    <string name="custom_text">Tìtulu</string>
    <string name="cd_search_books_in_the_library">Chirca libros in sa biblioteca</string>
    <string name="cd_clear_search_reasult">Isbòida sos resurtados de chirca</string>
@@ -459,7 +459,7 @@
    <string name="crop_borders_symmetrically">Mutzinadura de oros simmètrica</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">Estrai sos nùmenes de sos autores e sos tìtulos de sos libros dae sos metadatos (PDF)</string>
    <string name="meta_tags">Etichetas meta</string>
-   <string name="librera_pro">HowRead Pro: this app but without ads</string>
+   <string name="librera_pro">HowReadPro: this app but without ads</string>
    <string name="annotation">Annotatzione</string>
    <string name="book">Libru</string>
    <string name="information">Informatziones de su documentu</string>

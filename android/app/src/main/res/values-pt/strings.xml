@@ -382,7 +382,7 @@
    <string name="banner_slogan_PDF_READER">O mais conveniente leitor de PDF e documentos electrónicos</string>
    <string name="books">Livros</string>
    <string name="reading_out_loud">Leitura em voz alta</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro (sem anúncios): Leitor de livros e PDF</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro (sem anúncios): Leitor de livros e PDF</string>
    <string name="custom_text">Título personalizado</string>
    <string name="cd_search_books_in_the_library">Buscar livros na biblioteca</string>
    <string name="cd_clear_search_reasult">Limpar resultados da busca</string>
@@ -459,7 +459,7 @@
    <string name="crop_borders_symmetrically">Cortar bordas simetricamente</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">Mostrar autor e título de metadados (PDF)</string>
    <string name="meta_tags">Metadados</string>
-   <string name="librera_pro">HowRead Pro: este app, mas sem anúncios</string>
+   <string name="librera_pro">HowReadPro: este app, mas sem anúncios</string>
    <string name="annotation">Anotação</string>
    <string name="book">Livro</string>
    <string name="information">Informação</string>

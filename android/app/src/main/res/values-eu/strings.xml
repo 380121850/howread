@@ -382,7 +382,7 @@
    <string name="banner_slogan_PDF_READER">PDF eta DjVu dokumentuak irakurgailurik erosoena</string>
    <string name="books">Liburuak</string>
    <string name="reading_out_loud">Testutik ahotsera</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro (iragarkirik gabe) ePUB eta PDF irakurgailu nagusia</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro (iragarkirik gabe) ePUB eta PDF irakurgailu nagusia</string>
    <string name="custom_text">Izenburua</string>
    <string name="cd_search_books_in_the_library">Bilatu liburuak liburutegian</string>
    <string name="cd_clear_search_reasult">Ezabatu bilaketaren emaitzak</string>
@@ -459,7 +459,7 @@
    <string name="crop_borders_symmetrically">Moztu ertzak simetrikoki</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">Erakutsi egilea eta liburuaren izenburua meta-etiketetatik</string>
    <string name="meta_tags">Metaetiketak</string>
-   <string name="librera_pro">HowRead Pro: aplikazio hau baina iragarkirik gabe</string>
+   <string name="librera_pro">HowReadPro: aplikazio hau baina iragarkirik gabe</string>
    <string name="annotation">Oharra</string>
    <string name="book">Liburua</string>
    <string name="information">Informazioa</string>

@@ -2,9 +2,9 @@
 layout: page
 ---
 
-# General Privacy Policy — HowRead Pro
+# General Privacy Policy — HowReadPro
 
-HowRead Pro is an ebook reader application. This SERVICE is provided at no cost and is intended for use as is.
+HowReadPro is an ebook reader application. This SERVICE is provided at no cost and is intended for use as is.
 
 This policy describes our general practices regarding the collection, use, and disclosure of Personal Information, and applies to all channel versions. Except as described in this policy, we will not use or share your information with anyone.
 
@@ -14,7 +14,7 @@ Last updated: 2026-09-20
 
 ## Information Collection and Use
 
-HowRead Pro is first and foremost an offline reader:
+HowReadPro is first and foremost an offline reader:
 
 * The documents you open (PDF, EPUB, MOBI, DjVu, FB2, TXT, CBZ, etc.) are stored and processed **locally on your device**. They are never uploaded to us.
 * Reading progress, bookmarks, annotations and settings are stored locally.

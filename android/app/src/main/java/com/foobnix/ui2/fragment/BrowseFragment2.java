@@ -90,6 +90,10 @@ import com.foobnix.webdav.AddWebDavDialog;
 import com.foobnix.pdf.info.wrapper.PopupHelper;
 import com.foobnix.pdf.search.view.AsyncProgressTask;
 import com.foobnix.work.SearchAllBooksWorker;
+import com.foobnix.ext.CacheZipUtils;
+import com.foobnix.ext.EbookMeta;
+import com.foobnix.pdf.search.activity.msg.MessageSyncFinish;
+import com.foobnix.ui2.BooksService;
 import com.foobnix.sys.TempHolder;
 import com.foobnix.ui2.AppDB;
 import com.foobnix.ui2.FileMetaCore;
@@ -109,6 +113,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.LinkedList;
 import java.util.Map;
 
 @TargetApi(Build.VERSION_CODES.LOLLIPOP) public class BrowseFragment2 extends UIFragment<FileMeta> {
@@ -1462,25 +1467,26 @@ import java.util.Map;
                     // tab keeps its root view
                     ((MainTabs2) a).openFolderPage(fp);
                 }
-            }, null);
+            }, new OnClickListener() {
+                @Override public void onClick(View v) {
+                    // delete icon, same action as the long-press below
+                    removeLibraryFolder(a, fp);
+                }
+            }, new OnClickListener() {
+                @Override public void onClick(View v) {
+                    // edit icon: pick a replacement folder for this entry
+                    editLibraryFolder(fp);
+                }
+            }, new OnClickListener() {
+                @Override public void onClick(View v) {
+                    // scan icon: add THIS folder's books to the shelf
+                    // (per-folder counterpart of the remote-server scan button)
+                    scanSingleFolder(fp);
+                }
+            });
             row.setOnLongClickListener(new OnLongClickListener() {
                 @Override public boolean onLongClick(View v) {
-                    // remove from the library list only, the folder on disk
-                    // is never touched (same as the old root cards)
-                    AlertDialogs.showDialog(a,
-                            getString(R.string.moon_remove_folder_hint) + "\n[" + fp + "]",
-                            getString(R.string.delete), new Runnable() {
-                                @Override public void run() {
-                                    // deletion must survive config sync
-                                    com.foobnix.remote.RemoteTombstones.add("folder:" + fp);
-                                    BookCSS.get().searchPathsJson =
-                                            JsonDB.remove(BookCSS.get().searchPathsJson, fp);
-                                    BookCSS.get().searchPathsHiddenJson =
-                                            JsonDB.add(BookCSS.get().searchPathsHiddenJson, fp);
-                                    AppProfile.save(a);
-                                    buildNetSections();
-                                }
-                            });
+                    removeLibraryFolder(a, fp);
                     return true;
                 }
             });
@@ -1556,6 +1562,140 @@ import java.util.Map;
         Intent intent = new Intent(UIFragment.INTENT_TINT_CHANGE)//
                 .putExtra(MainTabs2.EXTRA_PAGE_NUMBER, UITab.getCurrentTabIndex(UITab.SearchFragment));//
         LocalBroadcastManager.getInstance(a).sendBroadcast(intent);
+    }
+
+    /** Folder row delete icon / long-press: remove from the library list
+     * only, the folder on disk is never touched (same as the old root cards). */
+    private void removeLibraryFolder(final Activity a, final String fp) {
+        AlertDialogs.showDialog(a,
+                getString(R.string.moon_remove_folder_hint) + "\n[" + fp + "]",
+                getString(R.string.delete), new Runnable() {
+                    @Override public void run() {
+                        // deletion must survive config sync
+                        com.foobnix.remote.RemoteTombstones.add("folder:" + fp);
+                        BookCSS.get().searchPathsJson =
+                                JsonDB.remove(BookCSS.get().searchPathsJson, fp);
+                        BookCSS.get().searchPathsHiddenJson =
+                                JsonDB.add(BookCSS.get().searchPathsHiddenJson, fp);
+                        AppProfile.save(a);
+                        buildNetSections();
+                    }
+                });
+    }
+
+    /** Folder row edit icon: pick a replacement folder; the old entry is
+     * dropped (with a sync tombstone) and the new path takes its place. */
+    private void editLibraryFolder(final String oldPath) {
+        final androidx.fragment.app.FragmentActivity fa = (androidx.fragment.app.FragmentActivity) getActivity();
+        String init = new File(oldPath).getParent();
+        ChooserDialogFragment.chooseFolder(fa, TxtUtils.isEmpty(init) ? oldPath : init)
+                .setOnSelectListener(new ResultResponse2<String, Dialog>() {
+                    @Override public boolean onResultRecive(String nPath, Dialog dialog) {
+                        try {
+                            if (!nPath.equals(oldPath)) {
+                                boolean isExists = false;
+                                for (String str : JsonDB.get(BookCSS.get().searchPathsJson)) {
+                                    if (TxtUtils.isNotEmpty(str) && nPath.equals(str)) {
+                                        isExists = true;
+                                        break;
+                                    }
+                                }
+                                if (nPath.equals("/") || ExtUtils.isExteralSD(nPath)) {
+                                    Toast.makeText(fa, R.string.incorrect_value, Toast.LENGTH_SHORT).show();
+                                } else if (isExists) {
+                                    Toast.makeText(fa, R.string.this_directory_is_already_in_the_list,
+                                            Toast.LENGTH_LONG).show();
+                                } else {
+                                    BookCSS.get().searchPathsJson =
+                                            JsonDB.remove(BookCSS.get().searchPathsJson, oldPath);
+                                    // the old path must not come back through config sync
+                                    com.foobnix.remote.RemoteTombstones.add("folder:" + oldPath);
+                                    BookCSS.get().searchPathsJson = JsonDB.add(BookCSS.get().searchPathsJson, nPath);
+                                    // re-added on purpose: lift any exclusion of the new path
+                                    com.foobnix.remote.RemoteTombstones.clear("folder:" + nPath);
+                                    BookCSS.get().searchPathsHiddenJson =
+                                            JsonDB.remove(BookCSS.get().searchPathsHiddenJson, nPath);
+                                    AppProfile.save(fa);
+                                    buildNetSections();
+                                }
+                            }
+                        } finally {
+                            dialog.dismiss();
+                            // the chooser's embedded browser rewrote the shared
+                            // displayPath — go back to the root view
+                            displayAnyPath(ROOT_PATH);
+                        }
+                        return false;
+                    }
+                });
+    }
+
+    /** Folder row scan icon: add ONE folder's books to the shelf without the
+     * full-library wipe+rescan. Existing rows keep their metadata; new rows
+     * get basic + full metadata (covers, annotation) like the full scan gives. */
+    private void scanSingleFolder(final String folderPath) {
+        final Activity a = getActivity();
+        if (a == null) {
+            return;
+        }
+        AppProfile.save(a);
+        Toast.makeText(a, R.string.please_wait, Toast.LENGTH_SHORT).show();
+        new Thread(new Runnable() {
+            @Override public void run() {
+                int added = 0;
+                try {
+                    final List<FileMeta> items = new LinkedList<FileMeta>();
+                    SearchCore.search(items, new File(folderPath), ExtUtils.seachExts);
+                    final List<FileMeta> fresh = new LinkedList<FileMeta>();
+                    for (FileMeta meta : items) {
+                        if (com.foobnix.remote.RemoteBook.isRemotePathLoose(meta.getPath())) {
+                            continue;
+                        }
+                        meta.setIsSearchBook(true);
+                        FileMeta exist = AppDB.get().load(meta.getPath());
+                        if (exist != null) {
+                            // already in the library: flag it, keep its metadata
+                            exist.setIsSearchBook(true);
+                            AppDB.get().update(exist);
+                        } else {
+                            FileMetaCore.get().upadteBasicMeta(meta, new File(meta.getPath()));
+                            fresh.add(meta);
+                        }
+                    }
+                    AppDB.get().saveAll(fresh);
+                    // covers / annotations for the new rows (same passes as
+                    // the full scan, scoped to this folder)
+                    for (FileMeta meta : fresh) {
+                        try {
+                            EbookMeta ebookMeta = FileMetaCore.get().getEbookMeta(meta.getPath(),
+                                    CacheZipUtils.CacheDir.ZipService, true);
+                            FileMetaCore.get().udpateFullMeta(meta, ebookMeta);
+                        } catch (Exception e) {
+                            LOG.e(e);
+                        }
+                    }
+                    AppDB.get().updateAll(fresh);
+                    added = fresh.size();
+                } catch (Exception e) {
+                    LOG.e(e);
+                }
+                final int n = added;
+                if (isAdded()) {
+                    a.runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            Toast.makeText(a, a.getString(R.string.moon_folder_scan_added, n),
+                                    Toast.LENGTH_SHORT).show();
+                        }
+                    });
+                }
+                // refresh the shelf tabs the same way the full scan does
+                EventBus.getDefault().post(new MessageSyncFinish());
+                EventBus.getDefault().post(new UpdateAllFragments());
+                LocalBroadcastManager.getInstance(a).sendBroadcast(
+                        new Intent(BooksService.INTENT_NAME)
+                                .putExtra(Intent.EXTRA_TEXT, BooksService.RESULT_SEARCH_FINISH));
+            }
+        }, "scanLibraryFolder").start();
     }
 
     /** Pro 门控区块标题：未解锁时在标题旁显示小锁图标 */

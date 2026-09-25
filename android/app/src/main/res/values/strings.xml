@@ -386,7 +386,7 @@
    <string name="banner_slogan_PDF_READER">The most comfortable reader for PDF and DjVu documents</string>
    <string name="books">Books</string>
    <string name="reading_out_loud">TTS Reading</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro (ad-free): A Leading ePUB and PDF Reader</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro (ad-free): A Leading ePUB and PDF Reader</string>
    <string name="custom_text">Title</string>
    <string name="cd_search_books_in_the_library">Search books in Library</string>
    <string name="cd_clear_search_reasult">Clear search results</string>
@@ -463,7 +463,7 @@
    <string name="crop_borders_symmetrically">Mirrored crop</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">Extract authors\' names and book titles from meta-data (PDF)</string>
    <string name="meta_tags">Meta tags</string>
-   <string name="librera_pro">HowRead Pro: This app but without ads</string>
+   <string name="librera_pro">HowReadPro: This app but without ads</string>
    <string name="app_description">An open-source e-book reader focused on personal reading experience</string>
    <string name="fork_of_librera" translatable="false">This is a fork of Librera Reader</string>
    <string name="annotation">Annotation</string>
@@ -767,6 +767,7 @@
   <string name="moon_net_section_webdav">WebDAV (Pro)</string>
   <string name="moon_section_folders">Library folders</string>
   <string name="moon_remove_folder_hint">Remove this folder from the library list? The folder on disk will not be deleted</string>
+  <string name="moon_folder_scan_added">Added %1$d book(s) to the library</string>
    <string name="moon_stat_hm">%1$d h %2$d min</string>
    <string name="moon_stat_min">%1$d min</string>
    <string name="moon_no_recent_book">No recent book</string>
@@ -986,12 +987,12 @@
     <string name="remote_open_waiting">Loading remote book… %1$d s</string>
     <string name="remote_open_eta">about %1$s left</string>
     <string name="remote_locating_position">Locating last read position…</string>
-    <string name="support_issues_link">HowRead Pro issues</string>
+    <string name="support_issues_link">HowReadPro issues</string>
     <string name="support_issues_url">https://github.com/380121850/howread/issues</string>
     <string name="pro_row_title">Advanced features</string>
     <string name="developer_row_title">Developer</string>
     <string name="developer_name">LeeStudio</string>
     <string name="privacy_row_title">Privacy Policy</string>
-    <string name="privacy_policy_link">HowRead Pro Privacy Policy</string>
+    <string name="privacy_policy_link">HowReadPro Privacy Policy</string>
     <string name="mail_row_title">Email</string>
 </resources>

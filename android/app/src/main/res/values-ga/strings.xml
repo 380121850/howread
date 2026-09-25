@@ -382,7 +382,7 @@
    <string name="banner_slogan_PDF_READER">An léitheoir is compordaí do dhoiciméid pdf agus djvu</string>
    <string name="books">Leabhair</string>
    <string name="reading_out_loud">Tts ag léamh</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro (saor ó ad): léitheoir epub agus pdf mór le rá</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro (saor ó ad): léitheoir epub agus pdf mór le rá</string>
    <string name="custom_text">Teideal</string>
    <string name="cd_search_books_in_the_library">Leabhair chuardaigh sa leabharlann</string>
    <string name="cd_clear_search_reasult">Torthaí cuardaigh soiléire</string>
@@ -459,7 +459,7 @@
    <string name="crop_borders_symmetrically">Barr scáthánach</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">Sleachta ainmneacha údair agus teidil leabhar ó mheiteashonraí (pdf)</string>
    <string name="meta_tags">Meta tags</string>
-   <string name="librera_pro">HowRead Pro: an aip seo ach gan fógraí</string>
+   <string name="librera_pro">HowReadPro: an aip seo ach gan fógraí</string>
    <string name="annotation">Anótáil</string>
    <string name="book">Leabhar</string>
    <string name="information">Eolas comhaid</string>

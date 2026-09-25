@@ -5,16 +5,16 @@ info: this file is generated automatically, please do not modify it
 
 # Frequently Asked Questions
 
-## HowRead Pro 好好读 (current version)
+## HowReadPro 好好读Pro (current version)
 
-* [HowRead Pro在线阅读 — read PDF / EPUB / FB2 / CBZ in your browser, no install needed]({{ site.baseurl }}/online-book-reader/)
-* [Download HowRead Pro (F-Droid / GitHub Releases)]({{ site.baseurl }}/download)
+* [HowReadPro在线阅读 — read PDF / EPUB / FB2 / CBZ in your browser, no install needed]({{ site.baseurl }}/online-book-reader/)
+* [Download HowReadPro (F-Droid / GitHub Releases)]({{ site.baseurl }}/download)
 * [Privacy Policy]({{ site.baseurl }}/PrivacyPolicy)
 * [Questions & feedback on GitHub](https://github.com/380121850/howread/issues)
 
 ## Legacy Librera FAQ (archive)
 
-> The articles below were written for the legacy Librera Reader app. Most concepts still apply to HowRead Pro, but menus and icons may differ.
+> The articles below were written for the legacy Librera Reader app. Most concepts still apply to HowReadPro, but menus and icons may differ.
 
 * [Configure tab zones size  left/right/top/bottom]({{ site.baseurl }}/faq/tap-zones-configuration)
 * [Working with _Librera_'s Profiles]({{ site.baseurl }}/faq/working-with-profiles)

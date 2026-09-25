@@ -2,9 +2,9 @@
 layout: home
 lang_key: en
 lang_key_link: index
-seo_title: "HowRead Pro — an open-source ebook reader focused on personal reading experience"
-seo_description: "HowRead Pro is an open-source ebook reader focused on personal reading experience, for Android / HarmonyOS supporting PDF, EPUB, MOBI, DjVu, TXT and more, with WebDAV sync and a no-install online reader."
-hero_title: "HowRead Pro"
+seo_title: "HowReadPro — an open-source ebook reader focused on personal reading experience"
+seo_description: "HowReadPro is an open-source ebook reader focused on personal reading experience, for Android / HarmonyOS supporting PDF, EPUB, MOBI, DjVu, TXT and more, with WebDAV sync and a no-install online reader."
+hero_title: "HowReadPro"
 hero_subtitle: "An open-source ebook reader focused on personal reading experience"
 hero_description: "Read PDF, EPUB, MOBI, DjVu, FB2, TXT, CBZ and more on Android / HarmonyOS. Intuitive yet powerful, with a unique hands-free auto-scrolling Musician's mode — plus a no-install online reader."
 hero_btn_primary: "Download Now"
@@ -31,9 +31,9 @@ features:
     description: "No install needed — open PDF / EPUB / FB2 / CBZ right in your browser, with wheel/click page-turning and position memory."
     tooltip: "Click \"Online Reader\" above to try it now."
 screenshots: ["1.webp", "2.webp", "3.webp"]
-about_title: "About HowRead Pro"
+about_title: "About HowReadPro"
 about_paragraphs:
-  - "HowRead Pro is an open-source ebook reader focused on personal reading experience, forked from Librera Reader. Choose which formats and folders to include and build a self-maintained library: list or grid views, size- and style-adjustable thumbnail covers, sorting and filtering by path, name, size, date, etc."
+  - "HowReadPro is an open-source ebook reader focused on personal reading experience, forked from Librera Reader. Choose which formats and folders to include and build a self-maintained library: list or grid views, size- and style-adjustable thumbnail covers, sorting and filtering by path, name, size, date, etc."
   - "While reading, lock documents into a vertical-scroll-only mode and navigate page- or screen-wise. Text can be reflowed and annotated. Volume-key functionality is configurable, and backgrounds and fonts are customizable via the intuitive Settings window. Excerpts can be translated, shared, copied and searched for inside the document or on the Internet."
 stats:
   - number: "12+"

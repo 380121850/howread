@@ -382,7 +382,7 @@
    <string name="banner_slogan_PDF_READER">PDF ve DjVu belgelerini rahatça okumak için en uygun program</string>
    <string name="books">Kitaplar</string>
    <string name="reading_out_loud">Sesli okuma</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro (reklamsız) Öncü kitap okuyucu ve PDF</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro (reklamsız) Öncü kitap okuyucu ve PDF</string>
    <string name="custom_text">Başlık</string>
    <string name="cd_search_books_in_the_library">Kütüphanede kitap ara</string>
    <string name="cd_clear_search_reasult">Arama sonuçlarını temizle</string>
@@ -459,7 +459,7 @@
    <string name="crop_borders_symmetrically">Simetrik olarak kenar sınırları</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">Meta kitabından yazarı ve PDF kitabının başlığını görüntüleme</string>
    <string name="meta_tags">Meta etiketleri</string>
-   <string name="librera_pro">HowRead Pro: bu uygulama ancak reklamsız</string>
+   <string name="librera_pro">HowReadPro: bu uygulama ancak reklamsız</string>
    <string name="annotation">Not</string>
    <string name="book">Kitap</string>
    <string name="information">Bilgi</string>

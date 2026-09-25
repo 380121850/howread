@@ -382,7 +382,7 @@
    <string name="banner_slogan_PDF_READER">Najpohodlnejšia čítačka dokumentov PDF a DjVu</string>
    <string name="books">Knihy</string>
    <string name="reading_out_loud">Čítanie nahlas</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro (bez reklamy): Popredná čítačka ePUB a PDF</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro (bez reklamy): Popredná čítačka ePUB a PDF</string>
    <string name="custom_text">Nadpis</string>
    <string name="cd_search_books_in_the_library">Vyhľadať knihy v knižnici</string>
    <string name="cd_clear_search_reasult">Vymazať výsledky vyhľadávania</string>
@@ -459,7 +459,7 @@
    <string name="crop_borders_symmetrically">Zrkadlové orezanie</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">Získať mená autorov a názvy kníh z metaúdajov PDF</string>
    <string name="meta_tags">Metaznačky</string>
-   <string name="librera_pro">HowRead Pro: táto aplikácia, ale bez reklám</string>
+   <string name="librera_pro">HowReadPro: táto aplikácia, ale bez reklám</string>
    <string name="annotation">Anotácia</string>
    <string name="book">Kniha</string>
    <string name="information">Informácie o súbore</string>

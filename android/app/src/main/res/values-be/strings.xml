@@ -382,7 +382,7 @@
    <string name="banner_slogan_PDF_READER">Самая зручная праграма для чытання дакументаў pdf і djvu</string>
    <string name="books">Кнігі</string>
    <string name="reading_out_loud">Tts чытанне</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro (без рэкламы): вядучая праграма для чытання epub і pdf</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro (без рэкламы): вядучая праграма для чытання epub і pdf</string>
    <string name="custom_text">Назва</string>
    <string name="cd_search_books_in_the_library">Пошук кніг у бібліятэцы</string>
    <string name="cd_clear_search_reasult">Выразныя вынікі пошуку</string>
@@ -459,7 +459,7 @@
    <string name="crop_borders_symmetrically">Люстраны кадр</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">Атрымаць імёны аўтараў і назвы кніг з мета-дадзеных (pdf)</string>
    <string name="meta_tags">Мета-тэгі</string>
-   <string name="librera_pro">HowRead Pro: гэта дадатак, але без рэкламы</string>
+   <string name="librera_pro">HowReadPro: гэта дадатак, але без рэкламы</string>
    <string name="annotation">Анатацыя</string>
    <string name="book">Кніга</string>
    <string name="information">Інфармацыя аб файле</string>

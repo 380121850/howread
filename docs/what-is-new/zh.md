@@ -1,5 +1,5 @@
 # 新功能
-## HowRead Pro 好好读（当前版本）
+## HowReadPro 好好读Pro（当前版本）
 
 * [GitHub Releases 与版本说明](https://github.com/380121850/howread/releases)
 * 当前版本：**1.3.11** — APK 下载见[下载页]({{ site.baseurl }}/download/zh)。
@@ -48,7 +48,7 @@
 ### 1.0.0（2026-09-06）· 首个正式版
 * 品牌与阅读体验全面定型
 
-### 0.9.0（2026-08-30）· 你好，HowRead Pro
+### 0.9.0（2026-08-30）· 你好，HowReadPro
 * 由 Librera 焕新而来：全新书架视图、WebDAV 多设备同步、AI 问答与翻译、笔记、阅读统计
 
 ## 旧版 Librera 更新日志（存档）

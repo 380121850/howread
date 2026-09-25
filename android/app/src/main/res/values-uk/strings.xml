@@ -382,7 +382,7 @@
    <string name="banner_slogan_PDF_READER">Найзручніший "PDF Reader" для читання електронних документів</string>
    <string name="books">Книжки</string>
    <string name="reading_out_loud">Читання вголос</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro (без реклами) провідний читач книжок і PDF</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro (без реклами) провідний читач книжок і PDF</string>
    <string name="custom_text">Користувацький текст</string>
    <string name="cd_search_books_in_the_library">Пошук книжок у бібліотеці</string>
    <string name="cd_clear_search_reasult">Очистити результати пошуку</string>
@@ -459,7 +459,7 @@
    <string name="crop_borders_symmetrically">Обрізання меж симетрично</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">Показувати авторів та назви книг PDF з метатеґів</string>
    <string name="meta_tags">Метатеґи</string>
-   <string name="librera_pro">HowRead Pro: ця програма, але без реклами</string>
+   <string name="librera_pro">HowReadPro: ця програма, але без реклами</string>
    <string name="annotation">Анотація</string>
    <string name="book">Книга</string>
    <string name="information">Інформація</string>

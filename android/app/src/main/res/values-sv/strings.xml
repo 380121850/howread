@@ -382,7 +382,7 @@
    <string name="banner_slogan_PDF_READER">Det mest bekväma "PDF Reader" för att läsa elektroniska dokument</string>
    <string name="books">Böcker</string>
    <string name="reading_out_loud">Läser högt</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro (inga annonser) Ledande bokläsare och PDF</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro (inga annonser) Ledande bokläsare och PDF</string>
    <string name="custom_text">Anpassad text</string>
    <string name="cd_search_books_in_the_library">Sök böcker i biblioteket</string>
    <string name="cd_clear_search_reasult">Rensa sökreparation</string>
@@ -459,7 +459,7 @@
    <string name="crop_borders_symmetrically">Beskär gränserna symmetriskt</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">Visar författaren och titeln på PDF-boken från metataggarna</string>
    <string name="meta_tags">Metataggar</string>
-   <string name="librera_pro">HowRead Pro: denna app men utan annonser</string>
+   <string name="librera_pro">HowReadPro: denna app men utan annonser</string>
    <string name="annotation">Anteckning</string>
    <string name="book">Bok</string>
    <string name="information">Information</string>

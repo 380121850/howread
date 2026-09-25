@@ -1,11 +1,11 @@
 ---
 layout: page
 ---
-# Download HowRead Pro
+# Download HowReadPro
 
 ## F-Droid (no ads, no Google dependencies)
 
-[HowRead Pro on F-Droid](https://f-droid.org/packages/com.howread.reader/)
+[HowReadPro on F-Droid](https://f-droid.org/packages/com.howread.reader/)
 
 ## GitHub Releases (direct APK download)
 

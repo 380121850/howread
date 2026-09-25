@@ -2,9 +2,9 @@
 layout: page
 ---
 
-# 华为平台隐私声明 — HowRead Pro 好好读
+# 华为平台隐私声明 — HowReadPro 好好读Pro
 
-本声明适用于通过**华为应用市场（AppGallery）**分发的 HowRead Pro（好好读）版本，是对《[通用隐私政策]({{ site.baseurl }}/PrivacyPolicy/general.zh)》的补充，两者一并适用。
+本声明适用于通过**华为应用市场（AppGallery）**分发的 HowReadPro（好好读Pro）版本，是对《[通用隐私政策]({{ site.baseurl }}/PrivacyPolicy/general.zh)》的补充，两者一并适用。
 
 更新日期：2026-09-20
 

@@ -382,7 +382,7 @@
    <string name="banner_slogan_PDF_READER">"PDF Reader" ที่สะดวกที่สุดในการอ่านเอกสารอิเล็กทรอนิกส์</string>
    <string name="books">หนังสือ</string>
    <string name="reading_out_loud">อ่านออกเสียง</string>
-   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowRead Pro (ไม่มีโฆษณา) เครื่องอ่านหนังสือและ PDF ชั้นนำ</string>
+   <string name="librera_pro_no_ads_leading_book_reader_and_pdf">HowReadPro (ไม่มีโฆษณา) เครื่องอ่านหนังสือและ PDF ชั้นนำ</string>
    <string name="custom_text">ข้อความที่กำหนดเอง</string>
    <string name="cd_search_books_in_the_library">ค้นหาหนังสือในห้องสมุด</string>
    <string name="cd_clear_search_reasult">ล้างการค้นหาเพิ่มเติม</string>
@@ -459,7 +459,7 @@
    <string name="crop_borders_symmetrically">ครอบตัดขอบสมมาตร</string>
    <string name="displaying_the_author_and_title_of_the_pdf_book_from_the_meta_tags">แสดงชื่อผู้แต่งและชื่อหนังสือ PDF จากเมตาแท็ก</string>
    <string name="meta_tags">แท็ก meta</string>
-   <string name="librera_pro">HowRead Pro: แอพนี้ แต่ไม่มีโฆษณา</string>
+   <string name="librera_pro">HowReadPro: แอพนี้ แต่ไม่มีโฆษณา</string>
    <string name="annotation">คำอธิบายประกอบ</string>
    <string name="book">หนังสือ</string>
    <string name="information">ข้อมูล</string>
