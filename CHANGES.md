@@ -5,6 +5,42 @@
 
 ---
 
+## [2026-09-26] AI 页内双语 + 页面翻译扩展支持 HTML/DOC/DOCX/ODT/RTF（批次2）
+
+**用户需求**：批次1（FB2 与 MOBI 系）验证通过后，继续让 HTML/DOC/DOCX/ODT/RTF 五种格式支持 AI 翻译（页面翻译面板 + 页内双语对照）。
+
+**做了什么（用户视角）**：这五种格式的书打开时都会先转换成"单个 HTML 文件"再排版（DOC 用 antiword、DOCX 用 mammoth、ODT/RTF 各用自有转换器）。这次给双语引擎增加了"单 HTML 文件"重写通道——与 epub 的 zip 通道并存、互不影响：
+1. **翻译入口放开**：五种格式的书现在都能打开 AI 翻译对话框、都能用页面翻译面板和页内双语对照。
+2. **双语版换入**：这几个格式链路的打开入口统一接到双语换入通道；双语版在原 HTML 基础上追加译文段落，图片引用（同目录相对路径）不受影响。
+3. **快照按原书命名**：部分格式的转换缓存是固定名（多本书共用一个文件名），双语版文件名改按"原书名+译文快照"生成，避免不同书互相覆盖。
+
+**过程中发现并修复的两个转换格式兼容问题**：
+- RTF 转换出的 HTML 用"空的 <p></p>"当段落分隔符、正文是裸文本——双语引擎原先只认"<p>正文</p>"，枚举得到 0 段。现在兼容这种分隔符式写法（仅当文档里没有任何正常段落时才启用，避免误判）。
+- DOC（antiword）产出的 HTML 里混有只含空白的 <p>——这类段落自动跳过，不影响正常段落的枚举与译文对齐。
+
+**用起来的变化**：HTML/DOC/DOCX/ODT/RTF 的书 → 菜单 → AI 翻译 → 可勾选"在页面内显示译文（双语对照）"→ 当前页每段中文下方插入高亮英文译文；不勾选走翻译面板。注意 DOC 的转换器较老（antiword 1.3.1），复杂排版的 DOC 转换质量有限，双语效果跟随转换质量。
+
+**如何验证（P30 真机，五本书 × 面板+双语全链路）**：HTML 12 段注入 10、DOCX 338/14、ODT 6/5、RTF 5/5、DOC 62/2——双语版均正确构建并换入页面（截图可见中文原文+高亮英文译文逐段对照），全程 0 崩溃。回归：EPUB 778/14、MOBI 880/39 与改动前行为一致，已验证格式零回归。
+
+**内部佐证（辅助）**：BilingualBuilder 新增 isSingleHtmlBase/ensureHtml/targetFileHtml/cleanOldVersionsHtml/splitHtmlSegments（zip 路径逐字节不动，分支在入口分流）；PdfContext.openTextDoc 的换入条件放行 .html；DocContext/DocxContext(2处)/OdtContext(2处)/RtfContext 的直开改走 openTextDoc（HtmlContext 原本已接，自动生效）；AiTranslator.isSupportedFormat 加 .html/.htm/.doc/.docx/.odt/.rtf。每轮 6 任务构建均成功。
+
+
+## [2026-09-26] AI 页内双语 + 页面翻译扩展支持 FB2 与 MOBI/AZW/AZW3/PDB/PRC（批次1）
+
+**用户需求**：分析并扩展 AI 翻译的书籍格式支持——批次1先做低确定性的 FB2 与 Kindle 系（MOBI/AZW/AZW3/PDB/PRC）。
+
+**做了什么（用户视角）**：
+1. **FB2**：此前 AI 翻译菜单对 fb2 完全置灰。现在 FB2（含 .fbd）可以使用全部 AI 翻译功能：页面翻译面板 + 页内双语对照。
+2. **MOBI/AZW/AZW3/PDB/PRC**：此前这些格式只能用页面翻译面板，页内双语勾选框是隐藏的。现在双语对照功能开放——应用打开 Kindle 系书籍时本来就会先转成内部 epub 再排版，这次把"双语版换入"通道接到了这个转换链路上（MobiContext 打开改走统一的文本链入口）。
+3. 过程中修复一个隐藏缺陷：FB2 转换出的内部 epub 把正文存成了 `fb2.fb2` 文件名（内容实为 HTML），双语引擎不认识这个后缀导致一枚举就得到 0 段——已让双语引擎识别该条目，FB2 双语由此打通。
+
+**用起来的变化**：用 FB2/MOBI/AZW/AZW3/PDB/PRC 打开书 → 菜单 → AI 翻译 → 勾选"在页面内显示译文（双语对照）"→ 开始翻译：当前阅读页的每段中文下面会插入高亮的英文译文，随翻页继续翻译；不勾选则走翻译面板。远程（网络邻居在线阅读）的书保持仅面板翻译（双语需要改写本地文件）。
+
+**如何验证（P30 真机，六本书 × 面板+双语全链路）**：MOBI 880 段注入 12 段、AZW3 628/11、PRC 54/9、AZW 3403/24、FB2 19/16、EPUB 回归 778/10——双语版均正确构建并换入，页面可见中文原文+英文译文逐段对照（截图），全程 0 崩溃。脚注数据不受影响（双语改写只追加译文段落，不改动原有条目与锚点）。
+
+**内部佐证（辅助）**：AiTranslator.isSupportedFormat 加 .fb2/.fbd/.prc/.pdb；AiTranslateDialog.isBilingualFormat 放开 mobi 族、排除远程书与 azw4；MobiContext 打开改走 PdfContext.openTextDoc（脚注 setFootNotes 逻辑保留）；BilingualBuilder.isHtmlEntry 识别 Fb2Extractor 产物的 fb2.fb2（opf 声明为 application/xhtml+xml）条目。每轮改动 6 任务构建（pro/fdroid/huawei × debug/release）均成功。
+
+
 ## [2026-09-25] 侧边栏格言语言跟随应用语言：中文/繁体显示中文格言，其它语言显示英文格言
 
 **用户需求**：APP 语言选中文、繁体时，侧边栏格言用中文；其它语言时用英文格言。

@@ -222,7 +222,11 @@ public class BilingualSession {
             if (activity == null || dc == null || dc.getCurrentBook() == null) {
                 return;
             }
-            final String path = dc.getCurrentBook().getPath();
+            // canonical form: aiBilingualBook is saved from File.getPath()
+            // (collapsed) while other call sites may carry "remote://..." —
+            // one canonical value keeps the book-match guards consistent
+            final String path = com.foobnix.remote.RemoteBook
+                    .fixCollapsed(dc.getCurrentBook().getPath());
             final AppState st = AppState.get();
             BilingualSession existing = attachOrNull(path);
             if (existing != null) {
@@ -230,7 +234,7 @@ public class BilingualSession {
                 // leftover session used to resurrect here (translating and
                 // spending quota) with NO ui switch left to stop it
                 if (!st.aiBilingual || TxtUtils.isEmpty(st.aiBilingualBook)
-                        || !st.aiBilingualBook.equals(path)) {
+                        || !com.foobnix.remote.RemoteBook.fixCollapsed(st.aiBilingualBook).equals(path)) {
                     existing.detachHost();
                     pauseAllExcept(null);
                     return;
@@ -242,11 +246,22 @@ public class BilingualSession {
                 return;
             }
             if (!st.aiBilingual || TxtUtils.isEmpty(st.aiBilingualBook)
-                    || !st.aiBilingualBook.equals(path)) {
+                    || !com.foobnix.remote.RemoteBook.fixCollapsed(st.aiBilingualBook).equals(path)) {
                 pauseAllExcept(null);
                 return;
             }
-            BilingualSession created = attach(path, dc.getCurrentBook(), st.aiBilingualSrc, st.aiBilingualTgt);
+            // remote bilingual: the session's book (and cache key) must be the
+            // local offline base the open path rewrote — resolved cheaply here
+            // because the open already assembled it
+            File bookFile = dc.getCurrentBook();
+            if (com.foobnix.remote.RemoteBook.isRemotePath(path)) {
+                File local = com.foobnix.remote.RemoteBilingualBase
+                        .resolveLocalBaseForBilingual(path);
+                if (local != null) {
+                    bookFile = local;
+                }
+            }
+            BilingualSession created = attach(path, bookFile, st.aiBilingualSrc, st.aiBilingualTgt);
             created.attachHost(hostFor(activity, dc, path));
             pauseAllExcept(path);
             created.onView(dc.getCurentPageFirst1() - 1, dc.getPageCount());

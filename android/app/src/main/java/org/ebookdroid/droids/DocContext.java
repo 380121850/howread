@@ -68,8 +68,7 @@ public class DocContext extends PdfContext {
 
         }
 
-        MuPdfDocument muPdfDocument = new MuPdfDocument(this, MuPdfDocument.FORMAT_PDF, cacheFile.getPath(), password);
-        return muPdfDocument;
+        return openTextDoc(fileName, cacheFile.getPath(), password);
     }
 
 

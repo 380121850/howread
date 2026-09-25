@@ -616,7 +616,7 @@ public class RemoteBookOpener {
      * the remote file's own name so reading progress / bookmarks (keyed by
      * file name) match the shelf entry.
      */
-    private static File cacheBookFile(String remotePath) {
+    public static File cacheBookFile(String remotePath) {
         String name = displayName(remotePath);
         if (TxtUtils.isEmpty(name)) {
             name = RemoteBook.cacheKey(remotePath);

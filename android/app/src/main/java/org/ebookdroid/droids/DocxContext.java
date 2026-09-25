@@ -97,8 +97,7 @@ public class DocxContext extends PdfContext {
                     throw new IOException("cannot move the converted html into place");
                 }
 
-                MuPdfDocument muPdfDocument = new MuPdfDocument(this, MuPdfDocument.FORMAT_PDF, cacheFile.getPath(), password);
-                return muPdfDocument;
+                return openTextDoc(fileName, cacheFile.getPath(), password);
 
             } catch (IOException e) {
                 LOG.e(e);
@@ -106,8 +105,7 @@ public class DocxContext extends PdfContext {
             }
 
         }
-        MuPdfDocument muPdfDocument = new MuPdfDocument(this, MuPdfDocument.FORMAT_PDF, cacheFile.getPath(), password);
-        return muPdfDocument;
+        return openTextDoc(fileName, cacheFile.getPath(), password);
 
 
     }

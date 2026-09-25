@@ -128,6 +128,9 @@ public class BilingualBuilder {
             LOG.d("BilingualBuilder", "no done translations, open base", base.getPath());
             return null;
         }
+        if (isSingleHtmlBase(base)) {
+            return ensureHtml(originalBook, base, done);
+        }
         File out = targetFile(base, done);
         if (out.isFile() && out.length() > 0 && isReadableZip(out)) {
             LOG.d("BilingualBuilder", "cached bilingual", out.getPath());
@@ -202,10 +205,207 @@ public class BilingualBuilder {
         }
     }
 
+    /** True when the base is a single converted HTML file (the html / doc /
+     * docx / odt / rtf chains produce one html cache) rather than a zip epub:
+     * the bilingual rewrite then patches the HTML text in place instead of
+     * rebuilding zip entries. */
+    private static boolean isSingleHtmlBase(File base) {
+        String n = base == null ? null : base.getName().toLowerCase(Locale.US);
+        return n != null && (n.endsWith(".html") || n.endsWith(".htm"));
+    }
+
+    /** Split a converted single-html cache on empty-paragraph separators
+     * (some converters, e.g. the rtf chain, emit bare text with &lt;p&gt;&lt;/p&gt;
+     * as paragraph breaks instead of &lt;p&gt;text&lt;/p&gt;). The segment before the
+     * first separator (document head) stays at index 0. Returns null when the
+     * file is normal &lt;p&gt;text&lt;/p&gt; content and the shared splitter applies. */
+    private static List<String> splitHtmlSegments(String content) {
+        // only when the document has NO real <p>text</p> paragraphs at all
+        // (a stray whitespace-only <p> inside an otherwise normal document
+        // must not flip it into separator mode: segment-level md5s would then
+        // never match the per-paragraph text the rendered page reports)
+        java.util.regex.Matcher pm = P_P.matcher(content);
+        while (pm.find()) {
+            if (!TxtUtils.isEmpty(clean(pm.group(1)))) {
+                return null;
+            }
+        }
+        String norm = content.replaceAll("<p\\s*>\\s*</p>", "\u0001");
+        if (norm.indexOf('\u0001') < 0) {
+            return null;
+        }
+        return new ArrayList<String>(java.util.Arrays.asList(norm.split("\u0001", -1)));
+    }
+
+    /** Single-HTML counterpart of {@link #ensure}: rewrite the converted html
+     * cache into a bilingual copy. The output name is keyed by the ORIGINAL
+     * book (several chains share fixed-name caches like temp.html / txt.html,
+     * so keying by the base would collide across books) plus the translated
+     * md5 snapshot, exactly like the epub branch keys its snapshots. */
+    private static File ensureHtml(File originalBook, File base, Map<String, String> done) {
+        File out = targetFileHtml(originalBook, done);
+        // a regenerated base (mtime newer than the snapshot) invalidates it
+        if (out.isFile() && out.length() > 0 && out.lastModified() >= base.lastModified()) {
+            LOG.d("BilingualBuilder", "cached bilingual html", out.getPath());
+            return out;
+        }
+        try {
+            java.io.InputStream in = new java.io.FileInputStream(base);
+            String content;
+            try {
+                content = readAll(in);
+            } finally {
+                in.close();
+            }
+            StringBuilder sb = new StringBuilder(content.length() + 512);
+            int injected = 0;
+            List<String> segs = splitHtmlSegments(content);
+            if (segs == null) {
+                java.util.regex.Matcher m = P_P.matcher(content);
+                int last = 0;
+                while (m.find()) {
+                    int start = m.start();
+                    sb.append(content, last, start);
+                    sb.append(m.group(0));
+                    last = m.end();
+                    String clean = clean(m.group(1));
+                    if (TxtUtils.isEmpty(clean)) {
+                        continue;
+                    }
+                    String tran = done.get(FileHash.md5(clean));
+                    if (TxtUtils.isNotEmpty(tran)) {
+                        sb.append("\n<p class=\"aitran\">").append(escape(tran)).append("</p>");
+                        injected++;
+                    }
+                }
+                sb.append(content, last, content.length());
+            } else {
+                sb.append(segs.get(0));
+                for (int i = 1; i < segs.size(); i++) {
+                    sb.append("<p></p>");
+                    String seg = segs.get(i);
+                    sb.append(seg);
+                    String clean = clean(seg);
+                    if (!TxtUtils.isEmpty(clean)) {
+                        String tran = done.get(FileHash.md5(clean));
+                        if (TxtUtils.isNotEmpty(tran)) {
+                            sb.append("<p class=\"aitran\">").append(escape(tran)).append("</p>");
+                            injected++;
+                        }
+                    }
+                }
+            }
+            if (injected == 0) {
+                return null; // nothing translated yet: keep the plain base open
+            }
+            File tmp = new File(out.getParentFile(), out.getName() + ".tmp");
+            tmp.delete();
+            FileOutputStream fos = new FileOutputStream(tmp);
+            try {
+                fos.write(sb.toString().getBytes("UTF-8"));
+            } finally {
+                fos.close();
+            }
+            if (!tmp.renameTo(out)) {
+                out.delete();
+                if (!tmp.renameTo(out)) {
+                    throw new IllegalStateException("rename failed");
+                }
+            }
+            cleanOldVersionsHtml(originalBook, out);
+            android.util.Log.i("BENCH", "BilingualBuilder buildHtml base=" + base.getName()
+                    + " out=" + out.getName() + " injected=" + injected + " done=" + done.size());
+            return out;
+        } catch (Throwable t) {
+            LOG.e(t);
+            android.util.Log.i("BENCH", "BilingualBuilder buildHtml FAIL "
+                    + t.getClass().getName() + " " + t.getMessage());
+            new File(out.getParentFile(), out.getName() + ".tmp").delete();
+            return null;
+        }
+    }
+
+    /** Snapshot file for the single-HTML branch (keyed by the original book). */
+    private static File targetFileHtml(File original, Map<String, String> done) {
+        StringBuilder key = new StringBuilder();
+        List<String> md5s = new ArrayList<String>(done.keySet());
+        Collections.sort(md5s);
+        for (String m : md5s) {
+            key.append(m);
+        }
+        String snap = FileHash.md5(key.toString());
+        if (snap != null && snap.length() > 12) {
+            snap = snap.substring(0, 12);
+        }
+        String name = original.getName();
+        int dot = name.lastIndexOf('.');
+        String noExt = dot > 0 ? name.substring(0, dot) : name;
+        File dir = CacheZipUtils.CACHE_TEMP != null ? CacheZipUtils.CACHE_TEMP : CacheZipUtils.CACHE_BOOK_DIR;
+        return new File(dir, noExt + "__bi_" + snap + ".html");
+    }
+
+    /** Drop stale single-HTML snapshots of the same original book. */
+    private static void cleanOldVersionsHtml(File original, File keep) {
+        try {
+            File dir = keep.getParentFile();
+            if (dir == null) {
+                return;
+            }
+            String name = original.getName();
+            int dot = name.lastIndexOf('.');
+            String prefix = (dot > 0 ? name.substring(0, dot) : name) + "__bi_";
+            File[] files = dir.listFiles();
+            if (files == null) {
+                return;
+            }
+            for (File f : files) {
+                if (f.isFile() && f.getName().startsWith(prefix)
+                        && !f.getAbsolutePath().equals(keep.getAbsolutePath())) {
+                    f.delete();
+                }
+            }
+        } catch (Exception e) {
+            LOG.e(e);
+        }
+    }
+
     /** Enumerate all source paragraphs of a bilingual-capable base file. */
     public static List<Para> enumerateParagraphs(File base) {
         List<Para> out = new ArrayList<Para>();
         if (base == null || !base.isFile()) {
+            return out;
+        }
+        if (isSingleHtmlBase(base)) {
+            try {
+                java.io.InputStream in = new java.io.FileInputStream(base);
+                String content;
+                try {
+                    content = readAll(in);
+                } finally {
+                    in.close();
+                }
+                int ordinal = 0;
+                List<String> segs = splitHtmlSegments(content);
+                if (segs == null) {
+                    for (String text : splitParagraphs(content)) {
+                        String clean = clean(text);
+                        if (TxtUtils.isEmpty(clean)) {
+                            continue;
+                        }
+                        out.add(new Para(base.getName(), ordinal++, clean, FileHash.md5(clean)));
+                    }
+                } else {
+                    for (int i = 1; i < segs.size(); i++) {
+                        String clean = clean(segs.get(i));
+                        if (TxtUtils.isEmpty(clean)) {
+                            continue;
+                        }
+                        out.add(new Para(base.getName(), ordinal++, clean, FileHash.md5(clean)));
+                    }
+                }
+            } catch (Throwable t) {
+                LOG.e(t);
+            }
             return out;
         }
         try {
@@ -244,7 +444,11 @@ public class BilingualBuilder {
             return false;
         }
         String low = name.toLowerCase(Locale.US);
-        return low.endsWith(".html") || low.endsWith(".htm") || low.endsWith(".xhtml");
+        // fb2.fb2: Fb2Extractor's converted epub keeps its xhtml content in an
+        // entry named after the original extension (opf declares it as
+        // application/xhtml+xml) — treat it as a content entry too
+        return low.endsWith(".html") || low.endsWith(".htm") || low.endsWith(".xhtml")
+                || low.endsWith(".fb2");
     }
 
     /** Split an XHTML body into the text of its <p>...</p> paragraphs. */

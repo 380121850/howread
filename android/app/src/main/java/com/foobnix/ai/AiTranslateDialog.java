@@ -41,14 +41,24 @@ public class AiTranslateDialog {
     // spinner position -> BCP-47 code (kept in sync with the array resource)
     private static final String[] CODES = {LanguageDetector.EN, LanguageDetector.ZH, LanguageDetector.JA};
 
-    /** In-page bilingual needs the epub rewrite chain; mobi/azw open natively. */
+    /**
+     * In-page bilingual needs a rewritable epub base. The mobi family
+     * (mobi/azw/azw3/pdb/prc) now converts to an epub cache via libmobi and
+     * opens through the bilingual swap, so it qualifies; azw4 (a PDF wrapper
+     * inside a pdb container) stays excluded, and remote books (no real local
+     * file to rewrite) keep panel-only translation.
+     */
     public static boolean isBilingualFormat(String path) {
         if (!AiTranslator.isSupportedFormat(path)) {
             return false;
         }
+        if (com.foobnix.remote.RemoteBook.isRemotePath(path)) {
+            // a remote book can only be rewritten offline: require the full
+            // downloaded copy or a 100%-filled block cache
+            return com.foobnix.remote.RemoteBilingualBase.isFullyAvailable(path);
+        }
         String p = path.toLowerCase(Locale.US);
-        return !p.endsWith(".mobi") && !p.contains(".azw")
-                && !p.endsWith(".pdb") && !p.endsWith(".prc");
+        return !p.endsWith(".azw4");
     }
 
     public static void show(final Activity a, final DocumentController dc) {

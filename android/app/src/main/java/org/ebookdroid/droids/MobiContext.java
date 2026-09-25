@@ -59,7 +59,11 @@ public class MobiContext extends PdfContext {
         fileNameEpub = cacheFile.getPath();
         LOG.d("Context", "MobiContext file", fileNameEpub);
 
-        final MuPdfDocument muPdfDocument = new MuPdfDocument(this, MuPdfDocument.FORMAT_PDF, fileNameEpub, password);
+        // open through the shared text-chain entry (PdfContext.openTextDoc):
+        // the libmobi product IS an epub cache, so when the AI in-page
+        // bilingual mode is active for this book the bilingual edition is
+        // swapped in here; otherwise this behaves exactly as before
+        final MuPdfDocument muPdfDocument = openTextDoc(fileName, fileNameEpub, password);
 
         final File jsonFile = new File(cacheFile + ".json");
         if (jsonFile.isFile()) {

@@ -19,7 +19,12 @@ public class AiTranslator {
         }
         String p = path.toLowerCase(Locale.US);
         return p.endsWith(".epub") || p.endsWith(".txt") || p.endsWith(".mobi")
-                || p.endsWith(".azw") || p.endsWith(".azw3");
+                || p.endsWith(".azw") || p.endsWith(".azw3")
+                || p.endsWith(".fb2") || p.endsWith(".fbd")
+                || p.endsWith(".prc") || p.endsWith(".pdb")
+                || p.endsWith(".html") || p.endsWith(".htm")
+                || p.endsWith(".doc") || p.endsWith(".docx")
+                || p.endsWith(".odt") || p.endsWith(".rtf");
     }
 
     /** Human name of the target language for the prompt (英文/中文/日文). */

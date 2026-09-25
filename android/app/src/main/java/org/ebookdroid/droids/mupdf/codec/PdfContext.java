@@ -33,26 +33,58 @@ public class PdfContext extends MuPdfContext {
         AppState st = AppState.get();
         if (st.aiBilingual && TxtUtils.isNotEmpty(st.aiBilingualBook)
                 && TxtUtils.isNotEmpty(originalFileName)
-                && st.aiBilingualBook.equals(originalFileName)
-                && TxtUtils.isNotEmpty(finalPath)
-                && finalPath.toLowerCase(Locale.US).endsWith(".epub")) {
-            try {
-                // publish FIRST (also when ensure has nothing to build yet):
-                // the translation session keys its paragraphs to this file
-                BilingualBuilder.noteOpenEdition(originalFileName, finalPath);
-                File bi = BilingualBuilder.ensure(new File(originalFileName), new File(finalPath),
-                        new TranslationCache(new File(originalFileName)), st.aiBilingualSrc, st.aiBilingualTgt);
-                if (bi != null) {
-                    LOG.d("openTextDoc bilingual", bi.getPath());
-                    android.util.Log.i("BENCH", "openTextDoc bilingual base=" + finalPath + " open=" + bi.getPath());
-                    open = bi.getPath();
+                && sameBilingualBook(st.aiBilingualBook, originalFileName)
+                && TxtUtils.isNotEmpty(finalPath)) {
+            // base selection: local chains rewrite their converted epub/html
+            // cache; remote books (reached only from the engine's remote
+            // pass-through branch, where finalPath IS the remote path) rewrite
+            // the fully-cached offline copy assembled by RemoteBilingualBase
+            boolean remote = com.foobnix.remote.RemoteBook.isRemotePath(originalFileName);
+            File base = null;
+            if (remote) {
+                if (finalPath.equals(originalFileName)) {
+                    base = com.foobnix.remote.RemoteBilingualBase
+                            .resolveLocalBaseForBilingual(originalFileName);
                 }
-            } catch (Throwable t) {
-                LOG.e(t);
+            } else if (finalPath.toLowerCase(Locale.US).endsWith(".epub")
+                    || finalPath.toLowerCase(Locale.US).endsWith(".html")) {
+                base = new File(finalPath);
+            }
+            if (base != null) {
+                try {
+                    // publish FIRST (also when ensure has nothing to build
+                    // yet): the translation session keys its paragraphs to
+                    // this file
+                    BilingualBuilder.noteOpenEdition(originalFileName, finalPath);
+                    // cache key: the original book for local chains, the local
+                    // base for remote books (a remote path is not a real file)
+                    File cacheKey = remote ? base : new File(originalFileName);
+                    File bi = BilingualBuilder.ensure(new File(originalFileName), base,
+                            new TranslationCache(cacheKey), st.aiBilingualSrc, st.aiBilingualTgt);
+                    if (bi != null) {
+                        LOG.d("openTextDoc bilingual", bi.getPath());
+                        android.util.Log.i("BENCH", "openTextDoc bilingual base=" + base.getPath()
+                                + " open=" + bi.getPath());
+                        open = bi.getPath();
+                    }
+                } catch (Throwable t) {
+                    LOG.e(t);
+                }
             }
             android.util.Log.i("BENCH", "openTextDoc bilingual-final open=" + open);
         }
         return new MuPdfDocument(this, MuPdfDocument.FORMAT_PDF, open, password);
+    }
+
+    /** aiBilingualBook was saved through File.getPath() (which collapses
+     * "remote://a" to "remote:/a") while the open chain carries the canonical
+     * form — compare collapse-tolerantly. */
+    private static boolean sameBilingualBook(String saved, String path) {
+        if (saved.equals(path)) {
+            return true;
+        }
+        return com.foobnix.remote.RemoteBook.fixCollapsed(saved)
+                .equals(com.foobnix.remote.RemoteBook.fixCollapsed(path));
     }
 
 

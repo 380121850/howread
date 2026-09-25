@@ -47,8 +47,7 @@ public class OdtContext extends PdfContext {
         try {
             if (cacheFile.isFile()) {
                 LOG.d("OdtContext cache", cacheFile.getPath());
-                MuPdfDocument muPdfDocument = new MuPdfDocument(this, MuPdfDocument.FORMAT_PDF, cacheFile.getPath(), password);
-                return muPdfDocument;
+                return openTextDoc(fileName, cacheFile.getPath(), password);
             }
 
             CacheZipUtils.removeFiles(CacheZipUtils.CACHE_BOOK_DIR.listFiles());
@@ -98,8 +97,7 @@ public class OdtContext extends PdfContext {
             LOG.e(e);
         }
 
-        MuPdfDocument muPdfDocument = new MuPdfDocument(this, MuPdfDocument.FORMAT_PDF, cacheFile.getPath(), password);
-        return muPdfDocument;
+        return openTextDoc(fileName, cacheFile.getPath(), password);
     }
 
 }
