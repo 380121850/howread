@@ -153,6 +153,15 @@ export function scanDeviceBooks(ctx: Context, maxDepth: number = 3,
   return out;
 }
 
+/** Scan ONE folder (recursively) for book files (Android scanSingleFolder
+ * parity, 2026-09-25): per-folder quick scan for the library-folder rows. */
+export function scanFolderBooks(ctx: Context, root: string, maxDepth: number = 3,
+  fmt: Record<string, boolean> = {}, skipNoMedia: boolean = true): ScanHit[] {
+  const out: ScanHit[] = [];
+  listBooksInDir(root, out, 0, maxDepth, fmt, skipNoMedia);
+  return out;
+}
+
 /** Copy a scanned native-path book into the app cache; returns the sandbox path. */
 export function importPathToSandbox(ctx: Context, srcPath: string): string {
   const name: string = srcPath.substring(srcPath.lastIndexOf('/') + 1);

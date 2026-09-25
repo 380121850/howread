@@ -21,7 +21,7 @@ import {
   loadSettings, saveSettings, defaultSettings, THEME_NAMES, ReaderSettings
 } from '../model/Settings';
 import { importUriToSandbox } from '../model/FileImport';
-import { scanDeviceBooks, importPathToSandbox, searchLibraryText, findMissingBooks, ScanHit, LibSearchHit } from '../model/LibrarySearch';
+import { scanDeviceBooks, scanFolderBooks, importPathToSandbox, searchLibraryText, findMissingBooks, ScanHit, LibSearchHit } from '../model/LibrarySearch';
 import { initProfiles, listProfiles, createProfile, switchProfile, deleteProfile, getCurrentProfile, DEFAULT_PROFILE } from '../model/Profiles';
 import { getTagList, addTagToBook, removeTagFromBook, getSeriesList } from '../model/Tags';
 import { getReadingStats, getDailyStats, getMonthlyStats, ReadingStatsData, DayStat, MonthStat } from '../model/ReadingStats';
@@ -167,6 +167,7 @@ struct Index {
   @State drawerQuote: string = '';
   /** cached quote pool loaded once from rawfile/reading_quotes.txt */
   quotePool: string[] = [];
+  private quotePoolEn: string[] = [];
   /** library tab: true -> show only starred books */
   @State libStarFilter: boolean = false;
   /* ---- Phase 2: library search / status chips / sort / view modes / batch select ---- */
@@ -190,7 +191,8 @@ struct Index {
   @State groupExp: Record<string, boolean> = { 'lib': true, 'gen': true, 'backup': true, 'ui': true, 'fmt': true, 'libset': true, 'libdisp': true, 'cov': true, 'read': true, 'theme': true, 'tabs': true };
   @State subPage: number = 0;           /* full-screen sub-page: 0=none 1=最近阅读 2=书签笔记 */
   @State showDirPick: boolean = false;  /* local directory picker dialog */
-  @State dirPickTarget: string = '';    /* root | fonts | downloads | libFolder */
+  @State dirPickTarget: string = '';    /* root | fonts | downloads | libFolder | libFolderEdit */
+  private dirPickEditOld: string = '';  /* libFolderEdit: the path being replaced */
   @State dirPickPath: string = '';
   @State dirPickDirs: string[] = [];
   /* ---- Round 7: option popup sheet (orientation/language/columns/font scale/taps) ---- */
@@ -3426,7 +3428,7 @@ tlog('download_start', 'name=' + fileName);    try {
     }
     try {
       const ctx = getContext(this);
-      ctx.resourceManager.getRawFileContent('reading_quotes.txt').then((content: Uint8Array) => {
+      const parse = (content: Uint8Array): string[] => {
         const decoder: util.TextDecoder = util.TextDecoder.create('utf-8');
         const text: string = decoder.decodeToString(content);
         const lines: string[] = text.split('\n');
@@ -3437,24 +3439,59 @@ tlog('download_start', 'name=' + fileName);    try {
             pool.push(line);
           }
         }
-        this.quotePool = pool;
-        console.info(`[Index] Quotes loaded: ${pool.length}`);
+        return pool;
+      };
+      ctx.resourceManager.getRawFileContent('reading_quotes.txt').then((content: Uint8Array) => {
+        this.quotePool = parse(content);
+        console.info(`[Index] Quotes loaded: ${this.quotePool.length}`);
       }).catch((e: Error) => {
         console.error('[Index] loadQuotes failed: ' + e.message);
+      });
+      /* English pool (Android reading_quotes_en.txt parity, 2026-09-25) */
+      ctx.resourceManager.getRawFileContent('reading_quotes_en.txt').then((content: Uint8Array) => {
+        this.quotePoolEn = parse(content);
+        console.info(`[Index] Quotes EN loaded: ${this.quotePoolEn.length}`);
+      }).catch((e: Error) => {
+        console.error('[Index] loadQuotes EN failed: ' + e.message);
       });
     } catch (e) {
       console.error('[Index] loadQuotes error');
     }
   }
 
-  /** Pick a random quote for the drawer (refreshed every drawer open). */
+  /** Pick a random quote for the drawer (refreshed every drawer open).
+   * Language rule (Android 2026-09-25 parity): zh app language (or a zh
+   * system language when following the system) -> Chinese pool, any other
+   * language -> English pool; fall back to the Chinese pool when a file is
+   * unavailable so the drawer always shows a quote. */
   pickRandomQuote(): void {
-    if (this.quotePool.length === 0) {
+    /* follow the language the app UI actually resolves to: the app
+     * preferred language (set by the in-app language picker; falls back to
+     * the system language when unset) */
+    let lang: string = '';
+    try {
+      lang = i18n.System.getAppPreferredLanguage();
+    } catch (err) {
+      lang = '';
+    }
+    if (lang.length === 0) {
+      try {
+        lang = i18n.System.getSystemLanguage();
+      } catch (err) {
+        lang = 'zh';
+      }
+    }
+    console.info(`[Index] Quote lang: appLang=${this.settings.appLang} preferred=${lang}`);
+    let pool: string[] = lang.startsWith('zh') ? this.quotePool : this.quotePoolEn;
+    if (pool.length === 0) {
+      pool = this.quotePool;
+    }
+    if (pool.length === 0) {
       this.drawerQuote = '';
       return;
     }
-    const idx: number = Math.floor(Math.random() * this.quotePool.length);
-    this.drawerQuote = this.quotePool[idx];
+    const idx: number = Math.floor(Math.random() * pool.length);
+    this.drawerQuote = pool[idx];
   }
 
   /** Drawer "night mode" toggle: switch light <-> dark theme (from any theme, incl. OLED/ink). */
@@ -7301,7 +7338,8 @@ tlog('download_start', 'name=' + fileName);    try {
           this.showDirPick = false;
         })
       Column({ space: 10 }) {
-        Text(this.dirPickTarget === 'libFolder' ? '选择要加入书库的文件夹' : '选择文件夹')
+        Text(this.dirPickTarget === 'libFolder' ? '选择要加入书库的文件夹'
+          : this.dirPickTarget === 'libFolderEdit' ? '选择新的文件夹路径' : '选择文件夹')
           .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
           .width('100%')
         Text(this.dirPickPath)
@@ -7773,10 +7811,24 @@ tlog('download_start', 'name=' + fileName);    try {
         .fontSize(16).fontColor(this.txtSec())
         .maxLines(1)
         .layoutWeight(1)
+      /* Android 2026-09-25: per-row scan / edit / delete like server rows */
+      Image($r('app.media.ic_search'))
+        .width(20).height(20).fillColor(this.thm())
+        .margin({ right: 10 })
+        .onClick(() => {
+          this.scanSingleFolder(f);
+        })
+      Image($r('app.media.ic_edit'))
+        .width(20).height(20).fillColor(this.thm())
+        .margin({ right: 10 })
+        .onClick(() => {
+          this.dirPickEditOld = f.path;
+          this.openDirPick('libFolderEdit');
+        })
       Image($r('app.media.ic_close'))
         .width(20).height(20).fillColor(this.txtFaint())
         .onClick(() => {
-          this.removeLibFolder(f.path);
+          this.confirmRemoveLibFolder(f.path);
         })
     }
     .width('94%')
@@ -7902,6 +7954,9 @@ tlog('download_start', 'name=' + fileName);    try {
   private openDirPick(target: string): void {
     const ctx = getContext(this);
     let start: string = ctx.filesDir;
+    if (target === 'libFolderEdit' && this.dirPickEditOld.length > 0) {
+      start = this.dirPickEditOld;
+    }
     if (target === 'fonts' || target === 'downloads') {
       const cur: string = this.resolveFolderPath(target === 'fonts' ? this.settings.fontsFolder : this.settings.downloadsFolder);
       if (cur.length > 0) {
@@ -7958,6 +8013,8 @@ tlog('download_start', 'name=' + fileName);    try {
       this.saveNow();
     } else if (this.dirPickTarget === 'libFolder') {
       this.addLibFolder(this.dirPickPath);
+    } else if (this.dirPickTarget === 'libFolderEdit') {
+      this.editLibFolder(this.dirPickEditOld, this.dirPickPath);
     }
     this.showDirPick = false;
   }
@@ -7976,6 +8033,107 @@ tlog('download_start', 'name=' + fileName);    try {
     this.libFolders.push(rec);
     saveLibFolders(getContext(this), this.libFolders);
     console.info(`[Index] Library folder added: ${path}`);
+  }
+
+  /** Replace a library folder's path (Android editLibraryFolder parity):
+   * the old path is replaced in place; a duplicate target just drops the old row. */
+  private editLibFolder(oldPath: string, newPath: string): void {
+    if (newPath.length === 0 || newPath === oldPath) {
+      return;
+    }
+    let dup = false;
+    for (let i = 0; i < this.libFolders.length; i++) {
+      if (this.libFolders[i].path === newPath) {
+        dup = true;
+      }
+    }
+    const kept: LibFolder[] = [];
+    for (let i = 0; i < this.libFolders.length; i++) {
+      const f = this.libFolders[i];
+      if (f.path === oldPath) {
+        if (dup) {
+          continue;
+        }
+        let name: string = newPath.substring(newPath.lastIndexOf('/') + 1);
+        if (name.length === 0) {
+          name = newPath;
+        }
+        kept.push({ name: name, path: newPath });
+      } else {
+        kept.push(f);
+      }
+    }
+    this.libFolders = kept;
+    saveLibFolders(getContext(this), this.libFolders);
+    console.info(`[Index] Library folder edited: ${oldPath} -> ${newPath}`);
+  }
+
+  /** Delete with confirmation (Android parity: the folder on disk is kept). */
+  private confirmRemoveLibFolder(path: string): void {
+    const ctx = getContext(this);
+    promptAction.showDialog({
+      message: this.L($r('app.string.folder_remove_confirm')),
+      buttons: [
+        { text: this.L($r('app.string.folder_remove_ok')), color: '#d32f2f' },
+        { text: this.L($r('app.string.common_cancel')), color: '#333333' }
+      ]
+    }).then((r: promptAction.ShowDialogSuccessResponse) => {
+      if (r.index === 0) {
+        this.removeLibFolder(path);
+      }
+    }).catch(() => {
+      /* dismissed */
+    });
+  }
+
+  /** Scan just this folder and add its new books (Android scanSingleFolder parity). */
+  async scanSingleFolder(f: LibFolder): Promise<void> {
+    if (this.scanBusy) {
+      return;
+    }
+    this.scanBusy = true;
+    promptAction.showToast({ message: this.L($r('app.string.folder_scan_wait')) });
+    try {
+      const ctx = getContext(this);
+      const hits: ScanHit[] = scanFolderBooks(ctx, f.path, 3, parseScanFormats(this.settings.scanFormats), this.settings.skipNoMediaFolders);
+      const known: string[] = [];
+      for (let i = 0; i < this.recentBooks.length; i++) {
+        known.push(this.recentBooks[i].path);
+      }
+      let added: number = 0;
+      for (let i = 0; i < hits.length && added < 20; i++) {
+        if (known.indexOf(hits[i].path) >= 0) {
+          continue;
+        }
+        const target: string = importPathToSandbox(ctx, hits[i].path);
+        if (target.length === 0) {
+          continue;
+        }
+        const book: RecentBook = {
+          path: target,
+          title: hits[i].name,
+          page: 0,
+          totalPages: 0,
+          lastRead: new Date().toISOString(),
+          star: false,
+          coverPath: '',
+          author: '',
+          tags: [],
+          series: '',
+          genre: '',
+          status: 0
+        };
+        await saveRecentBook(ctx, book);
+        this.generateCover(ctx, book);
+        added++;
+      }
+      await this.loadLibrary();
+      promptAction.showToast({ message: this.L($r('app.string.folder_scan_added')).replace('%d', String(added)) });
+      console.info(`[Index] Folder scan ${f.path}: ${hits.length} files, ${added} imported`);
+      tlog('folder_scan_done', `found=${hits.length} imported=${added}`);
+    } finally {
+      this.scanBusy = false;
+    }
   }
 
   private removeLibFolder(path: string): void {
@@ -9952,7 +10110,7 @@ tlog('download_start', 'name=' + fileName);    try {
           this.aboutRow($r('app.string.about_mail'), SUPPORT_MAIL, (): void => {
             this.openExternal('mailto:' + SUPPORT_MAIL);
           })
-          this.aboutRow($r('app.string.about_web'), 'HowRead \u597D\u597D\u8BFB', (): void => {
+          this.aboutRow($r('app.string.about_web'), '\u597D\u597D\u8BFBPro', (): void => {
             this.openExternal(HOME_URL);
           })
           /* fork footnote + tagline */

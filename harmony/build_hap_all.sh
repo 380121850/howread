@@ -59,7 +59,7 @@ BAK="$ROOT/.variantbak"
 swap_variant() {
     mkdir -p "$BAK"
     python3 - "$VARIANT" "$BUNDLE" "$BAK" <<'PYEOF'
-import json, shutil, sys
+import json, os, shutil, sys
 
 variant, bundle, bak = sys.argv[1], sys.argv[2], sys.argv[3]
 app_json5 = 'AppScope/app.json5'
@@ -71,12 +71,14 @@ print('  app.json5 bundleName ->', bundle)
 
 # app-level label (AppScope) AND ability label (entry module) — the launcher
 # displays the ability label, so both must be swapped per variant
-names = {'base': ('HowRead', 'HowRead Pro'), 'zh_CN': ('好好读', '好好读 Pro')}
+names = {'base': ('HowRead', 'HowReadPro'), 'en_US': ('HowRead', 'HowReadPro'), 'zh_CN': ('好好读', '好好读Pro')}
 for locale, (plain, pro) in names.items():
     for res in (
         f'AppScope/resources/{locale}/element/string.json',
         f'entry/src/main/resources/{locale}/element/string.json',
     ):
+        if not os.path.exists(res):
+            continue
         shutil.copy(res, bak + '/' + res.replace('/', '_'))
         d = json.load(open(res))
         for s in d['string']:
@@ -106,6 +108,8 @@ restore_variant() {
                                mv -f "$f" AppScope/resources/base/element/string.json;;
             AppScope_resources_zh_CN_element_string.json)
                                mv -f "$f" AppScope/resources/zh_CN/element/string.json;;
+            AppScope_resources_en_US_element_string.json)
+                               mv -f "$f" AppScope/resources/en_US/element/string.json;;
             entry_src_main_resources_base_element_string.json)
                                mv -f "$f" entry/src/main/resources/base/element/string.json;;
             entry_src_main_resources_zh_CN_element_string.json)

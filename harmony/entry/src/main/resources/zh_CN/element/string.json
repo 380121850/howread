@@ -2086,7 +2086,7 @@
     },
     {
       "name": "about_feedback_link",
-      "value": "HowRead Pro 问题反馈（GitHub）"
+      "value": "HowReadPro 问题反馈（GitHub）"
     },
     {
       "name": "about_mail",
@@ -2095,6 +2095,22 @@
     {
       "name": "about_web",
       "value": "官网"
+    },
+    {
+      "name": "folder_scan_wait",
+      "value": "请稍候…"
+    },
+    {
+      "name": "folder_scan_added",
+      "value": "已将 %d 本书加入书库"
+    },
+    {
+      "name": "folder_remove_confirm",
+      "value": "从书库列表中移除该文件夹？磁盘上的文件夹和书不会被删除"
+    },
+    {
+      "name": "folder_remove_ok",
+      "value": "移除"
     },
     {
       "name": "app_description",

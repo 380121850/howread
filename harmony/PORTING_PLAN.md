@@ -108,6 +108,14 @@
 - **CI 工具**：tools/ai_mock.py 支持 SSE 流式（4 片×0.8s）与编号段落批量回复（解析用户消息 "N. 段落" 按编号回复），流式/注入/缓存可端到端断言。
 - **不涉及备案**：安卓同步复活 8 处/书签删除复活（鸿蒙 Sync 仅书进度+书签、墓碑语义内建）、双语工作副本指纹/合并节流（鸿蒙一次性整本重建架构）、华为渠道系列。
 - **验证**：见 CHANGES 2026-09-25 条目（Pura 90 实测：流式增量/3 路并行同毫秒 3 请求/注入页数 3→5/二次构建零网络/FAB 拖动与归位/关于页七行；全量 CI L0+L1+L2 28/28 PASS）。
+
+### 阶段 16l（2026-09-25）：安卓 09-25 三批改动同步（品牌去空格/格言语言跟随/书库文件夹行按钮）✅ 已完成（0.9.12）
+
+- **品牌去空格**：build_hap_all.sh 换名表 {'base','zh_CN'} → {'base','en_US','zh_CN'}（HowReadPro/好好读Pro；en_US 此前漏换，顺手修复——heredoc python 补 import os + 资源路径存在性判断 + restore 分支 AppScope_resources_en_US）；entry string.json 3 处 "HowRead Pro" 去空格（隐私政策/反馈链接名 ×2 + zh_CN 反馈 ×1）；Index.ets 关于页官网行 → 好好读Pro；BRAND.md 鸿蒙条目同步（显示名/关于页/版本行 0.9.12/50）。
+- **格言语言跟随**：rawfile 新增 reading_quotes_en.txt（自安卓 assets 拷贝，1042 条）；Index.ets quotePoolEn + loadQuotes 双池解析 + pickRandomQuote 语言规则（zh* → 中文池，否则英文池，池缺失回退中文池）；语言解析读 i18n.System.getAppPreferredLanguage()（应用内语言选择器写入的值，与 UI 生效语言一致）回退 getSystemLanguage()——最初用 getSystemLanguage 与应用语言机制不一致（模拟器系统 en、应用 zh-Hans，格言错选英文池），加日志取证后修正。
+- **书库文件夹行按钮**：LibrarySearch.ets 新增 scanFolderBooks（listBooksInDir 单根递归）；Index.ets browseFolderRow 增 ic_search（scanSingleFolder：单文件夹扫描入库、known 去重、generateCover、toast 请稍候…/已将 %d 本书加入书库、tlog folder_scan_done）+ ic_edit（dirPickEditOld 状态 + openDirPick('libFolderEdit') 从旧路径起始 + 结果分支 editLibFolder 原地替换/重复目标去重 + 选择器标题分支）+ ✕ 改 confirmRemoveLibFolder（promptAction.showDialog；类型 promptAction.ShowDialogSuccessResponse）；string.json base/zh_CN 四新键。
+- **不涉及备案**：安卓繁体/40 语言全量补齐（鸿蒙资源仅 base+zh_CN 两套、语言选项仅 中/英/跟随系统，无缺条目混排问题）。
+- **验证**：见 CHANGES 2026-09-25 条目（Pura 90 实测：桌面好好读Pro/格言双语态/行扫描零重复/删除确认框/编辑选择器；全量 CI 28/28 PASS）。
 - **不适用项备案**：华为渠道退款自愈/广告即清（鸿蒙无 IAP 与广告）；安卓第二轮检视 23 类修复（安卓架构特定，鸿蒙侧无同缺陷证据）；六项调整之②OPDS 默认已由 0.9.9 完成、③⑤单击/长按配置鸿蒙架构不同不适用。
 
 ### 阶段 16i（2026-09-19）：浏览页整页化 + 直返导航 + OPDS 预置精简 ✅ 已完成（0.9.9）

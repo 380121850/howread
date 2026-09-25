@@ -100,8 +100,31 @@ public class AiConfigDialog {
                     com.foobnix.remote.RemoteTombstones.add(
                             com.foobnix.remote.RemoteTombstones.TOMB_AI + selectedName[0]);
                     AppState.get().aiConfigs = removeProfile(AppState.get().aiConfigs, selectedName[0]);
+                    // deleting the ACTIVE vendor must also clear the effective
+                    // config (AiClient reads the AppState fields + encrypted
+                    // key, not the profile list) — otherwise the deleted
+                    // vendor's endpoint/key silently stay in effect
+                    if (selectedName[0].equals(AppState.get().aiConfigName)) {
+                        AppState.get().aiConfigName = "";
+                        AppState.get().aiBaseUrl = "";
+                        AppState.get().aiModel = "";
+                        AppState.get().aiMaxTokens = PROFILE_BUDGET_DEFAULT;
+                        AppState.get().aiThinking = false;
+                        AppState.get().aiProtocol = AiClient.PROTOCOL_OPENAI;
+                        AiCredentials.save(a, "");
+                    }
                     AppProfile.save(a);
                     selectedName[0] = "";
+                    // reset the dialog fields to a clean sheet (same as adding
+                    // a new vendor) so a later 保存 cannot re-persist the
+                    // deleted vendor's values
+                    savedLocal = AiClient.PROTOCOL_OPENAI;
+                    url.setText(AiClient.defaultUrl(savedLocal));
+                    apiKey.setText("");
+                    model.setText("");
+                    maxTokens.setText(String.valueOf(PROFILE_BUDGET_DEFAULT));
+                    thinking.setChecked(false);
+                    refreshProtocolLabel(protocolValue);
                     refreshProfileLabel(profileValue, "");
                     return true;
                 });

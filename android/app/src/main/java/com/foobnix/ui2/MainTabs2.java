@@ -1058,9 +1058,10 @@ public class MainTabs2 extends AdsFragmentActivity {
     /**
      * Shows a random reading quote in the drawer banner's top-left corner.
      * The 1000+ quotes ship in assets/reading_quotes.txt (Chinese, one per line,
-     * "text —— source"); when the app display language is English,
-     * assets/reading_quotes_en.txt ("text — Author, Work") is used instead.
-     * Loaded once and kept in memory.
+     * "text —— source") and are used when the display language is Chinese
+     * (Simplified or Traditional, or a Chinese system language);
+     * every other display language uses assets/reading_quotes_en.txt
+     * ("text — Author, Work"). Loaded once and kept in memory.
      */
     private void showRandomQuote() {
         if (drawerQuote == null) {
@@ -1068,9 +1069,13 @@ public class MainTabs2 extends AdsFragmentActivity {
         }
         try {
             if (drawerQuotes == null) {
-                String file = "reading_quotes.txt";
-                if ("en".equals(AppState.get().getAppLang())) {
-                    file = "reading_quotes_en.txt";
+                // Chinese (Simplified or Traditional, incl. a Chinese system
+                // language) gets the Chinese quote set; every other display
+                // language gets the English one
+                String file = "reading_quotes_en.txt";
+                String qLang = AppState.get().getAppLang();
+                if (qLang != null && qLang.startsWith("zh")) {
+                    file = "reading_quotes.txt";
                 }
                 try {
                     drawerQuotes = loadQuotes(file);
