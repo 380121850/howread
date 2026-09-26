@@ -12,7 +12,7 @@ import java.util.Map;
 
 public abstract class AbstractCodecDocument implements CodecDocument {
 
-    protected volatile CodecContext context;
+    protected CodecContext context;
 
     protected final long documentHandle;
 
@@ -78,22 +78,9 @@ public abstract class AbstractCodecDocument implements CodecDocument {
         //LOG.d("ACD","recycle",isRecycled());
         TempHolder.get().lastRecycledDocument = documentHandle;
         if (!isRecycled()) {
-            // The native context/document teardown must be serialized against
-            // the codec's native access (all of it runs under TempHolder.lock,
-            // e.g. savePageTreeSidecar / render ops). Freeing outside the lock
-            // left a window where isRecycled() was still false while the
-            // fz_context was already destroyed -> SIGSEGV on a dangling
-            // document handle (bilingual silent reload vs page-ready callback).
-            TempHolder.lock.lock();
-            try {
-                if (!isRecycled()) {
-                    context.recycle();
-                    context = null;
-                    freeDocument();
-                }
-            } finally {
-                TempHolder.lock.unlock();
-            }
+            context.recycle();
+            context = null;
+            freeDocument();
         }
 
     }

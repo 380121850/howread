@@ -996,4 +996,6 @@
    <string name="developer_name">LeeStudio</string>
    <string name="support_issues_link">HowReadPro 問題回報</string>
    <string name="support_issues_url">https://github.com/380121850/howread/issues</string>
+    <string name="ai_key_show">顯示</string>
+    <string name="ai_key_hide">隱藏</string>
 </resources>

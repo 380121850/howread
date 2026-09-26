@@ -47,8 +47,7 @@ public class AiAskDialog {
             com.foobnix.ui2.fragment.PrefFragment2.proLockedToast(a);
             return;
         }
-        if (TxtUtils.isEmpty(AppState.get().aiBaseUrl) || TxtUtils.isEmpty(AppState.get().aiModel)
-                || TxtUtils.isEmpty(AiCredentials.load(a))) {
+        if (!com.foobnix.ai.AiVendors.isConfigured(a)) {
             Toast.makeText(a, R.string.ai_ask_not_configured, Toast.LENGTH_LONG).show();
             return;
         }

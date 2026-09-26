@@ -39,15 +39,10 @@ public class RemoteBilingualBase {
         if (currentCopy(p) != null) {
             return true;
         }
-        BlockCacheStore cache = BlockCacheStore.openExisting(RemoteBook.cacheKey(p));
-        if (cache == null) {
-            return false;
-        }
-        try {
-            return cache.isFullyCached();
-        } finally {
-            closeQuietly(cache);
-        }
+        // same gauge as the shelf's "cached N%" badge: the actual block
+        // bitmap, not the filler's flag (a book whose layout has read every
+        // byte is fully available offline even when the filler never ran)
+        return BlockCacheStore.cachedPercent(p) >= 100;
     }
 
     /**
@@ -69,7 +64,7 @@ public class RemoteBilingualBase {
             return null;
         }
         try {
-            if (!cache.isFullyCached()) {
+            if (BlockCacheStore.cachedPercent(p) < 100) {
                 return null;
             }
             return assembledFile(cache);

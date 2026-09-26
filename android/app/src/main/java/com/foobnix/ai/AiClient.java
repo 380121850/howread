@@ -68,16 +68,14 @@ public class AiClient {
 
     /** Fire a minimal real chat request with the current persisted config. */
     public static TestResult testConnection(Context c) {
-        String key = AiCredentials.load(c);
-        String url = AppState.get().aiBaseUrl;
-        String model = AppState.get().aiModel;
-        if (TxtUtils.isEmpty(url) || TxtUtils.isEmpty(model) || TxtUtils.isEmpty(key)) {
+        AiVendors.Entry e = AiVendors.active(c);
+        if (!e.found || TxtUtils.isEmpty(e.baseUrl) || TxtUtils.isEmpty(e.model)
+                || TxtUtils.isEmpty(e.apiKey)) {
             TestResult r = new TestResult();
             r.error = "no_config";
             return r;
         }
-        return chat(c, AppState.get().aiProtocol, url, key, model, "ping", 5,
-                AppState.get().aiThinking);
+        return chat(c, e.protocol, e.baseUrl, e.apiKey, e.model, "ping", 5, e.thinking);
     }
 
     /** Ask with the current persisted config; the token budget is user-tunable.
@@ -101,20 +99,15 @@ public class AiClient {
             r.error = "pro_required";
             return r;
         }
-        String key = AiCredentials.load(c);
-        String url = AppState.get().aiBaseUrl;
-        String model = AppState.get().aiModel;
-        if (TxtUtils.isEmpty(url) || TxtUtils.isEmpty(model) || TxtUtils.isEmpty(key)) {
+        AiVendors.Entry e = AiVendors.active(c);
+        if (!e.found || TxtUtils.isEmpty(e.baseUrl) || TxtUtils.isEmpty(e.model)
+                || TxtUtils.isEmpty(e.apiKey)) {
             TestResult r = new TestResult();
             r.error = "no_config";
             return r;
         }
-        int budget = AppState.get().aiMaxTokens;
-        if (budget <= 0) {
-            budget = 4096;
-        }
-        return chat(c, AppState.get().aiProtocol, url, key, model, userText, budget,
-                AppState.get().aiThinking, stream);
+        return chat(c, e.protocol, e.baseUrl, e.apiKey, e.model, userText, e.maxTokens,
+                e.thinking, stream);
     }
 
     /**

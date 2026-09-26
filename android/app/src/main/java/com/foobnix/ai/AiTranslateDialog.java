@@ -52,10 +52,13 @@ public class AiTranslateDialog {
         if (!AiTranslator.isSupportedFormat(path)) {
             return false;
         }
-        if (com.foobnix.remote.RemoteBook.isRemotePath(path)) {
+        if (com.foobnix.remote.RemoteBook.isRemotePathLoose(path)) {
             // a remote book can only be rewritten offline: require the full
-            // downloaded copy or a 100%-filled block cache
-            return com.foobnix.remote.RemoteBilingualBase.isFullyAvailable(path);
+            // downloaded copy or a 100%-filled block cache. The path arrives
+            // File-collapsed ("remote:/a") — canonicalize for the prefix
+            // checks and the cache-key hash inside
+            return com.foobnix.remote.RemoteBilingualBase.isFullyAvailable(
+                    com.foobnix.remote.RemoteBook.fixCollapsed(path));
         }
         String p = path.toLowerCase(Locale.US);
         return !p.endsWith(".azw4");
@@ -76,8 +79,7 @@ public class AiTranslateDialog {
             Toast.makeText(a, R.string.ai_translate_unsupported_format, Toast.LENGTH_SHORT).show();
             return;
         }
-        if (TxtUtils.isEmpty(AppState.get().aiBaseUrl) || TxtUtils.isEmpty(AppState.get().aiModel)
-                || TxtUtils.isEmpty(AiCredentials.load(a))) {
+        if (!com.foobnix.ai.AiVendors.isConfigured(a)) {
             Toast.makeText(a, R.string.ai_translate_not_configured, Toast.LENGTH_LONG).show();
             return;
         }
@@ -103,12 +105,14 @@ public class AiTranslateDialog {
         final String savedTgt = AppState.get().aiBilingualTgt;
         final boolean hasSavedSrc = isValidCode(savedSrc);
         final boolean hasSavedTgt = isValidCode(savedTgt);
-        if (hasSavedTgt) {
-            tgtSpinner.setSelection(indexOf(savedTgt));
-        } else {
-            // default target: Chinese (the common case for this app's users)
-            tgtSpinner.setSelection(1);
-        }
+        // NOTE: the selections are applied POST-layout below (and the detect
+        // path already posts via runOnUiThread) — a setSelection before the
+        // dialog's first layout pass silently reverts to position 0 (classic
+        // Spinner bug): the target spinner came up as 英文 for everyone and
+        // 开始翻译 rejected the pair with "same language", so the in-page
+        // bilingual mode looked completely dead.
+        final int savedSrcPos = hasSavedSrc ? indexOf(savedSrc) : 0;
+        final int savedTgtPos = hasSavedTgt ? indexOf(savedTgt) : 1; // default: Chinese
 
         // Use AlertDialog (like AiConfigDialog / WebDavSyncDialog) rather than a
         // bare Dialog: a bare Dialog sizes to wrap_content, which is only as wide
@@ -119,6 +123,21 @@ public class AiTranslateDialog {
                 .setView(view)
                 .create();
         dialog.show();
+
+        // apply the spinner selections after the dialog is laid out (see the
+        // Spinner-revert note above)
+        tgtSpinner.post(new Runnable() {
+            @Override public void run() {
+                tgtSpinner.setSelection(savedTgtPos);
+            }
+        });
+        if (hasSavedSrc) {
+            srcSpinner.post(new Runnable() {
+                @Override public void run() {
+                    srcSpinner.setSelection(savedSrcPos);
+                }
+            });
+        }
 
         final boolean isBilingualActive = AppState.get().aiBilingual
                 && TxtUtils.isNotEmpty(AppState.get().aiBilingualBook)
@@ -203,8 +222,6 @@ public class AiTranslateDialog {
                     });
                 }
             }, "AiLangDetect").start();
-        } else {
-            srcSpinner.setSelection(indexOf(savedSrc));
         }
 
         cancel.setOnClickListener(new View.OnClickListener() {

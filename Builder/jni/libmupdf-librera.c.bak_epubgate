@@ -2651,13 +2651,8 @@ Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_getPageTreeNums(JNIEnv *env
 	renderdocument_t *doc = (renderdocument_t *)(long)handle;
 	if (!doc || !doc->ctx || !doc->document)
 		return NULL;
-	/* only a real pdf_document has the page-tree fields: a html/epub
-	 * document blind-cast here reads foreign memory (SIGSEGV) */
-	pdf_document *pdfdoc = pdf_document_from_fz_document(doc->ctx, doc->document);
-	if (!pdfdoc)
-		return NULL;
 	int count = 0;
-	int *nums = pdf_get_page_object_numbers(doc->ctx, pdfdoc, &count);
+	int *nums = pdf_get_page_object_numbers(doc->ctx, (pdf_document *)doc->document, &count);
 	if (!nums || count <= 0)
 	{
 		if (nums)
@@ -2738,11 +2733,8 @@ Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_getPageTreeSizes(JNIEnv *en
 	renderdocument_t *doc = (renderdocument_t *)(long)handle;
 	if (!doc || !doc->ctx || !doc->document)
 		return NULL;
-	pdf_document *pdfdoc = pdf_document_from_fz_document(doc->ctx, doc->document);
-	if (!pdfdoc)
-		return NULL;
 	int count = 0;
-	int *sizes = pdf_get_page_sizes(doc->ctx, pdfdoc, &count);
+	int *sizes = pdf_get_page_sizes(doc->ctx, (pdf_document *)doc->document, &count);
 	if (!sizes || count <= 0)
 	{
 		if (sizes)
@@ -2762,10 +2754,7 @@ Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_setLazyPageTree(JNIEnv *env
 	renderdocument_t *doc = (renderdocument_t *)(long)handle;
 	if (!doc || !doc->ctx || !doc->document)
 		return;
-	pdf_document *pdfdoc = pdf_document_from_fz_document(doc->ctx, doc->document);
-	if (!pdfdoc)
-		return;
-	pdfdoc->howread_lazy = on ? 1 : 0;
+	((pdf_document *)doc->document)->howread_lazy = on ? 1 : 0;
 }
 
 JNIEXPORT jlong JNICALL
@@ -2774,10 +2763,7 @@ Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_getWalkMs(JNIEnv *env, jcla
 	renderdocument_t *doc = (renderdocument_t *)(long)handle;
 	if (!doc || !doc->ctx || !doc->document)
 		return 0;
-	pdf_document *pdfdoc = pdf_document_from_fz_document(doc->ctx, doc->document);
-	if (!pdfdoc)
-		return 0;
-	return (jlong)pdf_get_walk_ms(doc->ctx, pdfdoc);
+	return (jlong)pdf_get_walk_ms(doc->ctx, (pdf_document *)doc->document);
 }
 
 JNIEXPORT jboolean JNICALL

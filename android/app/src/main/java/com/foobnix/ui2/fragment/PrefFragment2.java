@@ -2591,10 +2591,11 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
         if (aiConfigValue == null) {
             return;
         }
-        if (TxtUtils.isEmpty(AppState.get().aiBaseUrl) || TxtUtils.isEmpty(AppState.get().aiModel)) {
+        com.foobnix.ai.AiVendors.Entry aiEntry = com.foobnix.ai.AiVendors.active(getContext());
+        if (!aiEntry.found || TxtUtils.isEmpty(aiEntry.baseUrl) || TxtUtils.isEmpty(aiEntry.model)) {
             aiConfigValue.setText(R.string.ai_state_unconfigured);
         } else {
-            aiConfigValue.setText(AppState.get().aiModel);
+            aiConfigValue.setText(aiEntry.model);
         }
         applyProLock(aiConfigValue);
     }

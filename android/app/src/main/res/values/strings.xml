@@ -995,4 +995,6 @@
     <string name="privacy_row_title">Privacy Policy</string>
     <string name="privacy_policy_link">HowReadPro Privacy Policy</string>
     <string name="mail_row_title">Email</string>
+    <string name="ai_key_show">Show</string>
+    <string name="ai_key_hide">Hide</string>
 </resources>

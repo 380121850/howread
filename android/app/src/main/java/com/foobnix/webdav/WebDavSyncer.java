@@ -133,8 +133,12 @@ public class WebDavSyncer {
             "hashCode", "webdavLastSyncTime", "webdavLastSyncInfo",
             // the saved AI vendor list syncs PER-VENDOR through app-AI.json
             // (mergeAi); as one opaque string it would clobber that
-            // per-vendor merge, so it is kept device-local here
+            // per-vendor merge, so it is kept device-local here. Since 0926
+            // the legacy flat active-vendor fields are unread (the pointer
+            // aiConfigName + the entry list are the only truth) — kept local
+            // too so old synced copies cannot resurrect them.
             "aiConfigs", "aiConfigName",
+            "aiBaseUrl", "aiModel", "aiProtocol", "aiMaxTokens", "aiThinking",
             // the server entry lists sync PER-ITEM through
             // app-NetworkSources.json (mergeNetworkSources3); as one raw
             // delimited string each they are a second, coarser copy of the

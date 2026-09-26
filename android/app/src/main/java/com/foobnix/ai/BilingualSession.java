@@ -63,7 +63,16 @@ public class BilingualSession {
 
     private static final Map<String, BilingualSession> SESSIONS = new HashMap<String, BilingualSession>();
 
+        /** ONE canonical session key: File.getPath() collapses "remote://a"
+         *  to "remote:/a" while several call sites carry the canonical form —
+         *  every lookup MUST normalize or the session silently starves. */
+    private static String normKey(String bookPath) {
+        return com.foobnix.remote.RemoteBook.fixCollapsed(
+                bookPath == null ? "" : bookPath);
+    }
+
     public static synchronized BilingualSession attach(String bookPath, File book, String src, String tgt) {
+        bookPath = normKey(bookPath);
         BilingualSession s = SESSIONS.get(bookPath);
         if (s == null) {
             s = new BilingualSession(book, src, tgt);
@@ -74,13 +83,14 @@ public class BilingualSession {
 
     /** The session for a book path, or null when it was never created/stopped. */
     public static synchronized BilingualSession attachOrNull(String bookPath) {
-        if (bookPath == null) {
+        if (bookPath == null || bookPath.isEmpty()) {
             return null;
         }
-        return SESSIONS.get(bookPath);
+        return SESSIONS.get(normKey(bookPath));
     }
 
     public static synchronized void pauseAllExcept(String bookPath) {
+        bookPath = normKey(bookPath);
         for (Map.Entry<String, BilingualSession> e : SESSIONS.entrySet()) {
             boolean active = e.getKey().equals(bookPath);
             e.getValue().setActive(active);
@@ -88,6 +98,7 @@ public class BilingualSession {
     }
 
     public static synchronized void stop(String bookPath) {
+        bookPath = normKey(bookPath);
         BilingualSession s = SESSIONS.remove(bookPath);
         if (s != null) {
             s.dispose();
@@ -131,6 +142,7 @@ public class BilingualSession {
     }
 
     public static synchronized boolean isActive(String bookPath) {
+        bookPath = normKey(bookPath);
         BilingualSession s = SESSIONS.get(bookPath);
         return s != null && s.active.get() && !s.stopped.get();
     }
@@ -239,6 +251,7 @@ public class BilingualSession {
                     pauseAllExcept(null);
                     return;
                 }
+                existing.hostDc = dc;
                 existing.attachHost(hostFor(activity, dc, path));
                 pauseAllExcept(path);
                 existing.onView(dc.getCurentPageFirst1() - 1, dc.getPageCount());
@@ -262,6 +275,7 @@ public class BilingualSession {
                 }
             }
             BilingualSession created = attach(path, bookFile, st.aiBilingualSrc, st.aiBilingualTgt);
+            created.hostDc = dc;
             created.attachHost(hostFor(activity, dc, path));
             pauseAllExcept(path);
             created.onView(dc.getCurentPageFirst1() - 1, dc.getPageCount());
@@ -351,7 +365,19 @@ public class BilingualSession {
             if (dc == null || dc.getCurrentBook() == null) {
                 return;
             }
-            BilingualSession s = attachOrNull(dc.getCurrentBook().getPath());
+            BilingualSession s = attachOrNull(normKey(dc.getCurrentBook().getPath()));
+            if (s == null) {
+                // after the bilingual edition opens, getCurrentBook() reports
+                // the EDITION file — recover the session by its host controller
+                synchronized (SESSIONS) {
+                    for (BilingualSession cand : SESSIONS.values()) {
+                        if (cand.hostDc == dc) {
+                            s = cand;
+                            break;
+                        }
+                    }
+                }
+            }
             if (s != null) {
                 s.lastDc = dc;
                 // match the page's paragraphs BEFORE recomputing the window so
@@ -372,6 +398,10 @@ public class BilingualSession {
     private final TranslationCache cache;
 
     private volatile Host host;
+    // the reader controller currently hosting this session; page feeds reach
+    // the session through it even when getCurrentBook() reports the bilingual
+    // edition file instead of the original book
+    private volatile DocumentController hostDc;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final AtomicBoolean stopped = new AtomicBoolean(false);
     private final AtomicBoolean active = new AtomicBoolean(false);
@@ -571,6 +601,23 @@ public class BilingualSession {
                                 @Override public void run() {
                                     if (stopped.get()) {
                                         return;
+                                    }
+                                    // re-sync the REAL reading position: the
+                                    // attach-time onView ran with page=-1 and
+                                    // count=0 (the async load had not finished)
+                                    // and this enumeration can outlast it — a
+                                    // concurrent feed with the real numbers is
+                                    // dropped by the ensuring CAS, so without
+                                    // this re-sync the window stays empty until
+                                    // the next page turn (fresh remote books
+                                    // looked completely dead)
+                                    if (lastDc != null && lastDc.getCurrentBook() != null) {
+                                        try {
+                                            lastPage0 = lastDc.getCurentPageFirst1() - 1;
+                                            lastPageCount = lastDc.getPageCount();
+                                        } catch (Throwable t3) {
+                                            LOG.e(t3);
+                                        }
                                     }
                                     // the anchor/hint could not be computed
                                     // before the enumeration finished

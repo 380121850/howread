@@ -25,7 +25,7 @@ public abstract class AbstractCodecContext implements CodecContext {
 
     private static Integer densityDPI;
 
-    private volatile long contextHandle;
+    private long contextHandle;
 
     /**
      * Constructor.
@@ -166,19 +166,8 @@ public abstract class AbstractCodecContext implements CodecContext {
     @Override
     public final void recycle() {
         if (!isRecycled()) {
-            // Same contract as AbstractCodecDocument.recycle(): the native
-            // free and the isRecycled() flag update are one serialized step,
-            // so concurrent guarded native calls can never observe a live
-            // flag with an already-freed context.
-            TempHolder.lock.lock();
-            try {
-                if (!isRecycled()) {
-                    freeContext();
-                    contextHandle = 0;
-                }
-            } finally {
-                TempHolder.lock.unlock();
-            }
+            freeContext();
+            contextHandle = 0;
         }
     }
 

@@ -250,7 +250,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
 
     /** Injects a persisted page tree map; true when accepted. */
     public boolean loadPageTreeMap(String path) {
-        if (isEpub || documentHandle == 0 || isRecycled()) {
+        if (documentHandle == 0 || isRecycled()) {
             return false;
         }
         return loadPageTreeMap(documentHandle, path);
@@ -270,12 +270,6 @@ public class MuPdfDocument extends AbstractCodecDocument {
 
     /** Page index -> xref object number of the currently open document. */
     public int[] getPageTreeNums() {
-        // Text formats (epub/fb2/mobi/txt/...) run on MuPDF's html engine,
-        // NOT a pdf_document: the page-tree natives would read foreign
-        // struct memory (SIGSEGV). The persisted page tree is a PDF feature.
-        if (isEpub) {
-            return null;
-        }
         if (documentHandle == 0 || isRecycled()) {
             return null;
         }
@@ -285,7 +279,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
     private static native int[] getPageTreeNums(long handle);
 
     public boolean setPageTreeNums(int[] nums) {
-        if (isEpub || documentHandle == 0 || isRecycled() || nums == null) {
+        if (documentHandle == 0 || isRecycled() || nums == null) {
             return false;
         }
         return setPageTreeNums(documentHandle, nums);
@@ -322,10 +316,6 @@ public class MuPdfDocument extends AbstractCodecDocument {
      * reader close races the teardown.
      */
     public void finishLazyTreeAndSaveSidecar(String bookPath) {
-        if (isEpub) {
-            // the lazy page tree / sidecar are PDF-only (see getPageTreeNums)
-            return;
-        }
         boolean locked = false;
         try {
             locked = TempHolder.lock.tryLock(5, java.util.concurrent.TimeUnit.SECONDS);
@@ -337,8 +327,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
             return;
         }
         try {
-            if (documentHandle == 0 || isRecycled()
-                    || TempHolder.get().lastRecycledDocument == documentHandle) {
+            if (documentHandle == 0 || isRecycled()) {
                 android.util.Log.i("REMOTE", "lazy tree finish skip: doc handle=" + documentHandle);
                 return;
             }
@@ -386,13 +375,6 @@ public class MuPdfDocument extends AbstractCodecDocument {
      * cached blocks with zero tree traffic.
      */
     public void savePageTreeSidecar(String bookPath, String versionTag, long fileSize) {
-        if (isEpub) {
-            // an epub page tree does not exist: the natives below would cast
-            // a html-engine document to pdf_document and crash (remote
-            // bilingual reloads hit this on every silent reopen)
-            android.util.Log.i("REMOTE", "page tree save skipped: text format");
-            return;
-        }
         if (!com.foobnix.remote.RemoteBook.isRemotePathLoose(bookPath)) {
             return;
         }
@@ -409,11 +391,6 @@ public class MuPdfDocument extends AbstractCodecDocument {
             return;
         }
         try {
-            if (TempHolder.get().lastRecycledDocument == documentHandle) {
-                // best-effort save: this exact document was already torn down
-                android.util.Log.i("REMOTE", "page tree save skipped: stale doc handle");
-                return;
-            }
             int[] nums = getPageTreeNums();
             if (nums == null || nums.length == 0) {
                 return;

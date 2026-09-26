@@ -52,14 +52,26 @@ public class AiConfigDialog {
         TxtUtils.underlineTextView(modelList);
         TxtUtils.underlineTextView(profileValue);
 
+        // API key masked by default; the toggle shows/hides it in place
+        final TextView keyToggle = (TextView) view.findViewById(R.id.aiKeyToggle);
+        TxtUtils.underlineTextView(keyToggle);
+        apiKey.setTransformationMethod(android.text.method.PasswordTransformationMethod.getInstance());
+        keyToggle.setText(R.string.ai_key_show);
+        keyToggle.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                boolean masked = apiKey.getTransformationMethod() != null;
+                apiKey.setTransformationMethod(masked
+                        ? android.text.method.HideReturnsTransformationMethod.getInstance()
+                        : android.text.method.PasswordTransformationMethod.getInstance());
+                keyToggle.setText(masked ? R.string.ai_key_hide : R.string.ai_key_show);
+                apiKey.setSelection(apiKey.getText() == null ? 0 : apiKey.getText().length());
+            }
+        });
+
         // the named config chosen in the dialog; persisted on save only.
-        // Falls back to "no profile" when the saved name no longer exists.
-        final String[] selectedName = {TxtUtils.isNotEmpty(AppState.get().aiConfigName)
-                ? AppState.get().aiConfigName : ""};
-        if (TxtUtils.isNotEmpty(selectedName[0])
-                && findProfile(AppState.get().aiConfigs, selectedName[0]) == null) {
-            selectedName[0] = "";
-        }
+        // The active vendor is resolved through AiVendors (pointer model).
+        final AiVendors.Entry cur = AiVendors.active(a);
+        final String[] selectedName = {cur.found ? cur.name : ""};
         refreshProfileLabel(profileValue, selectedName[0]);
 
         // in-flight dialog tasks (list models / test / chat): cancelled when
@@ -81,7 +93,7 @@ public class AiConfigDialog {
                         // the dialog fields (persisted on save only)
                         savedLocal = e.optString("protocol", AiClient.PROTOCOL_OPENAI);
                         url.setText(e.optString("baseUrl", ""));
-                        apiKey.setText(AiCredentials.decryptFromPrefixed(e.optString("apiKey", "")));
+                        apiKey.setText(AiVendors.plainKey(e.optString("apiKey", "")));
                         model.setText(e.optString("model", ""));
                         int mt = e.optInt("maxTokens", 4096);
                         maxTokens.setText(String.valueOf(mt > 0 ? mt : 4096));
@@ -105,13 +117,8 @@ public class AiConfigDialog {
                     // key, not the profile list) — otherwise the deleted
                     // vendor's endpoint/key silently stay in effect
                     if (selectedName[0].equals(AppState.get().aiConfigName)) {
+                        // the pointer is the only effective-config state
                         AppState.get().aiConfigName = "";
-                        AppState.get().aiBaseUrl = "";
-                        AppState.get().aiModel = "";
-                        AppState.get().aiMaxTokens = PROFILE_BUDGET_DEFAULT;
-                        AppState.get().aiThinking = false;
-                        AppState.get().aiProtocol = AiClient.PROTOCOL_OPENAI;
-                        AiCredentials.save(a, "");
                     }
                     AppProfile.save(a);
                     selectedName[0] = "";
@@ -166,20 +173,17 @@ public class AiConfigDialog {
         });
 
         // protocol chosen inside the dialog; persisted on save only
-        savedLocal = TxtUtils.isEmpty(AppState.get().aiProtocol)
-                ? AiClient.PROTOCOL_OPENAI : AppState.get().aiProtocol;
+        savedLocal = cur.found ? cur.protocol : AiClient.PROTOCOL_OPENAI;
         final String openProtocol = savedLocal;
-        String key = AiCredentials.load(a);
-        if (TxtUtils.isNotEmpty(AppState.get().aiBaseUrl)) {
-            url.setText(AppState.get().aiBaseUrl);
+        if (cur.found && TxtUtils.isNotEmpty(cur.baseUrl)) {
+            url.setText(cur.baseUrl);
         } else {
             url.setText(AiClient.defaultUrl(openProtocol));
         }
-        apiKey.setText(key);
-        model.setText(AppState.get().aiModel);
-        maxTokens.setText(String.valueOf(
-                AppState.get().aiMaxTokens > 0 ? AppState.get().aiMaxTokens : 4096));
-        thinking.setChecked(AppState.get().aiThinking);
+        apiKey.setText(cur.apiKey);
+        model.setText(cur.model);
+        maxTokens.setText(String.valueOf(cur.maxTokens));
+        thinking.setChecked(cur.thinking);
         refreshProtocolLabel(protocolValue);
 
         protocolValue.setOnClickListener(new View.OnClickListener() {
@@ -376,9 +380,6 @@ public class AiConfigDialog {
         builder.setView(view);
         builder.setPositiveButton(R.string.webdav_sync_save, new DialogInterface.OnClickListener() {
             @Override public void onClick(DialogInterface dialog, int which) {
-                AppState.get().aiProtocol = savedLocal;
-                AppState.get().aiBaseUrl = url.getText().toString().trim();
-                AppState.get().aiModel = model.getText().toString().trim();
                 int budget = 4096;
                 try {
                     budget = Integer.parseInt(maxTokens.getText().toString().trim());
@@ -387,10 +388,18 @@ public class AiConfigDialog {
                 if (budget <= 0) {
                     budget = 4096;
                 }
-                AppState.get().aiMaxTokens = budget;
-                AppState.get().aiThinking = thinking.isChecked();
+                // unnamed config (legacy style): keep it usable under a
+                // stable name instead of the removed flat-field copy
+                if (TxtUtils.isEmpty(selectedName[0])
+                        && (TxtUtils.isNotEmpty(url.getText().toString().trim())
+                        || TxtUtils.isNotEmpty(apiKey.getText().toString()))) {
+                    selectedName[0] = "default";
+                    refreshProfileLabel(profileValue, selectedName[0]);
+                }
                 // a named config is selected: store the current field values
-                // back into it (edit-in-place) and mark it active
+                // back into it (edit-in-place) and mark it active — the entry
+                // IS the effective config, resolved through the aiConfigName
+                // pointer at request time
                 if (TxtUtils.isNotEmpty(selectedName[0])) {
                     AppState.get().aiConfigs = upsertProfile(AppState.get().aiConfigs,
                             profileJson(selectedName[0], savedLocal,
@@ -403,7 +412,6 @@ public class AiConfigDialog {
                             com.foobnix.remote.RemoteTombstones.TOMB_AI + selectedName[0]);
                     AppState.get().aiConfigName = selectedName[0];
                 }
-                AiCredentials.save(a, apiKey.getText().toString());
                 AppProfile.save(a);
                 Keyboards.close(a);
                 if (onRefresh != null) {
@@ -462,8 +470,9 @@ public class AiConfigDialog {
             e.put("name", name);
             e.put("protocol", protocol);
             e.put("baseUrl", baseUrl);
-            // store the key encrypted at rest; the sync export strips it
-            e.put("apiKey", AiCredentials.encryptToPrefixed(apiKey == null ? "" : apiKey));
+            // key stored PLAINTEXT since 0926 (the dialog masks it); the
+            // sync export strips it before anything leaves the device
+            e.put("apiKey", apiKey == null ? "" : apiKey);
             e.put("model", model);
             e.put("maxTokens", maxTokens);
             e.put("thinking", thinking);

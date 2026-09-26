@@ -413,11 +413,10 @@ public class ProfileStateIO {
             }
             LinkedJSONObject o = IO.readJsonObject(AppProfile.syncAI);
             String fileKey = o.optString(K_API_KEY, "");
-            // empty means "nothing published" (new-style file): must NOT wipe
-            // the local encrypted key — only a real server value applies
-            if (TxtUtils.isNotEmpty(fileKey) && !fileKey.equals(AiCredentials.load(c))) {
-                AiCredentials.save(c, fileKey);
-            }
+            // legacy file: the top-level key belonged to the exporting
+            // device's ACTIVE vendor. There is no separate global key store
+            // anymore — backfill the active entry only when it has no key of
+            // its own (applied after the per-vendor restore below)
             // per-vendor restore: every backed-up vendor is upserted into
             // the saved list by name — a vendor added on another device
             // appears here with ALL of its fields (key included); local
@@ -458,6 +457,19 @@ public class ProfileStateIO {
                 }
                 if (changed) {
                     AppState.get().aiConfigs = cur.toString();
+                }
+            }
+            // legacy top-level key: backfill the active entry when keyless
+            if (TxtUtils.isNotEmpty(fileKey)) {
+                JSONArray curNow = parseAiProfiles(AppState.get().aiConfigs);
+                int ai = aiProfileIndex(curNow, AppState.get().aiConfigName);
+                if (ai >= 0) {
+                    LinkedJSONObject lp = asLinked(curNow.opt(ai));
+                    if (lp != null && TxtUtils.isEmpty(lp.optString("apiKey", ""))) {
+                        lp.put("apiKey", fileKey);
+                        curNow.put(ai, lp);
+                        AppState.get().aiConfigs = curNow.toString();
+                    }
                 }
             }
             // a device without an active profile adopts the backed-up one
@@ -506,21 +518,10 @@ public class ProfileStateIO {
         return -1;
     }
 
-    /** Mirror a vendor profile into the active config fields + runtime key. */
+    /** The entry was just restored into aiConfigs — point the active name at
+     *  it; url/key/model resolve through the entry at request time. */
     private static void adoptAiProfile(LinkedJSONObject p, String name, Context c) {
         AppState.get().aiConfigName = name;
-        AppState.get().aiProtocol = p.optString("protocol", AppState.get().aiProtocol);
-        AppState.get().aiBaseUrl = p.optString("baseUrl", AppState.get().aiBaseUrl);
-        AppState.get().aiModel = p.optString("model", AppState.get().aiModel);
-        int tokens = p.optInt("maxTokens", AppState.get().aiMaxTokens);
-        if (tokens > 0) {
-            AppState.get().aiMaxTokens = tokens;
-        }
-        AppState.get().aiThinking = p.optBoolean("thinking", AppState.get().aiThinking);
-        String k = AiCredentials.decryptFromPrefixed(p.optString("apiKey", ""));
-        if (TxtUtils.isNotEmpty(k)) {
-            AiCredentials.save(c, k);
-        }
         android.util.Log.i("BENCH", "ai restore: active adopted " + name);
     }
 
