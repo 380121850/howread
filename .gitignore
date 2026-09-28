@@ -60,6 +60,9 @@ harmony/signing/*
 !harmony/signing/gen_signing.sh
 !harmony/signing/make_material.js
 !harmony/signing/README.md
+# Android signing: same policy - local material only, whitelist the README
+/android/signing/*
+!/android/signing/README.md
 # stray signing copies in harmony root (never commit keys)
 harmony/material/
 harmony/*.p12

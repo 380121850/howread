@@ -131,6 +131,20 @@ android {
         }
     }
 
+    // Shared signing + channel configuration: android/signing/signing.properties
+    // (gitignored, NFS-shared across build servers, same policy as harmony/signing).
+    // Command-line -P and ~/.gradle/gradle.properties still take precedence.
+    def signingPropsFile = rootProject.file('signing/signing.properties')
+    if (signingPropsFile.exists()) {
+        def signingProps = new Properties()
+        signingPropsFile.withInputStream { signingProps.load(it) }
+        signingProps.each { k, v ->
+            if (project.findProperty(k) == null) {
+                project.ext.set(k, v)
+            }
+        }
+    }
+
     signingConfigs {
         release {
             // signing props are optional now: Debug builds never use this config,
@@ -139,6 +153,15 @@ android {
             storePassword project.findProperty('RELEASE_STORE_PASSWORD') ?: 'placeholder'
             keyAlias project.findProperty('RELEASE_KEY_ALIAS') ?: 'placeholder'
             keyPassword project.findProperty('RELEASE_KEY_PASSWORD') ?: 'placeholder'
+        }
+        howreadDebug {
+            // Shared debug keystore (android/signing/debug.keystore, gitignored but
+            // NFS-shared across build servers) so every machine signs debug APKs
+            // with the same certificate and devices upgrade without reinstalling.
+            storeFile file(project.findProperty('DEBUG_STORE_FILE') ?: '../signing/debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
         }
     }
 
@@ -151,6 +174,11 @@ android {
         }
         debug {
             debuggable = true
+            // Apply the shared debug keystore only when it is present; otherwise
+            // keep the per-machine default so a fresh clone still builds.
+            if (file(project.findProperty('DEBUG_STORE_FILE') ?: '../signing/debug.keystore').exists()) {
+                signingConfig = signingConfigs.howreadDebug
+            }
         }
     }
 
@@ -193,8 +221,8 @@ android {
         project.findProperty("pro_${base}") ?: project.findProperty("howread_${base}") ?: project.findProperty("google_${base}")
     }
 
-    // Huawei-channel property lookup: hw_* keys on the build server's
-    // ~/.gradle/gradle.properties (hw_bannerId / hw_fullId / hw_rewardId /
+    // Huawei-channel property lookup: hw_* keys from android/signing/signing.properties
+    // (hw_bannerId / hw_fullId / hw_rewardId /
     // hw_iapProductId). Empty defaults keep ads dormant + IAP on the default
     // product id, same idea as the pro_admob* keys above.
     def hwProp = { String base ->

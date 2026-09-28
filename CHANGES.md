@@ -5,6 +5,27 @@
 
 ---
 
+## [2026-09-28] 签名与渠道敏感配置统一收纳到 android/signing/（项目目录共用、不入库）
+
+**用户需求**：① 新增备用编译服务器（50.104）后，其构建的 APK 装到手机提示签名冲突、必须卸载重装；② 密码/证书/签名这类敏感材料**不要提交进版本库**——像鸿蒙 `harmony/signing` 一样统一放在项目目录里、靠 NFS 共用，换任何编译服务器都零配置。
+
+**原因**：debug 包签名用的是"每台构建机自己的" `~/.android/debug.keystore`（首次构建自动生成），50.104 那把与 50.111 的不同，所以 50.104 构建的 debug 包无法覆盖手机上已装的包；release 密码此前也存在各服务器本机的 `~/.gradle/gradle.properties` 里，新机器要手工配。另说明：debug 包与 release 包互换覆盖本来就会提示卸载（两把密钥不同，系统防篡改机制），与哪台服务器构建无关——50.104 的 release 签名经实测与既有证书完全一致。
+
+**做了什么（用户视角）**：
+1. 新建 **`android/signing/`** 目录（与 `harmony/signing` 同一策略）：release 证书 `howread.keystore`、共享 debug 密钥 `debug.keystore`（取自 50.111，即所有手机已装 debug 包的签名来源）、`signing.properties`（release 密码 + 华为渠道 `hw_*` 广告位/IAP 配置）全部收纳于此；`.gitignore` 整目录忽略、仅 README 入库。
+2. 构建脚本自动加载 `signing.properties`（命令行 `-P` 与服务器本机 `~/.gradle` 仍可覆盖）；50.104 的低内存性能参数继续留在其本机——那属于硬件差异，不入目录。
+3. 两台编译服务器 `~/.gradle/gradle.properties` 里的 `RELEASE_*`/`hw_*` 已全部删除（有备份），签名与渠道配置只认 `android/signing/`。
+4. 新克隆的仓库没有 signing 目录也能正常配置：release 到真正签名那一步才失败（与历史行为一致），debug 回退各机器默认密钥——把 signing 目录随项目工作区放好即恢复完整能力。
+
+**用起来的变化**：换/新增任何编译服务器，项目工作区到手即可构建出**签名完全一致**的包，无需再配任何签名或渠道参数；任何机器构建的 debug 包都能直接覆盖安装手机上已有的 debug 包；华为渠道测试广告位也随目录走，不再依赖服务器记忆。debug↔release 互装仍会要求卸载，属系统正常行为。
+
+**如何验证**：
+- 50.104（本机 gradle 中相关配置已清空）6 任务全量构建成功；apksigner 实测 pro/fdroid/huawei 三个 release 证书均 = howread.keystore 的 `4ff8439f…`，pro debug = 共享密钥 `9ab72705…`；华为测试广告位 ID 已正确注入 huaweiRelease 清单；
+- 50.111（本机配置同样清空）构建 assembleProDebug，产物证书同为 `9ab72705…`——两台机器只凭项目目录即产出同签名包；
+- 畅享20 真机：不卸载直接 `adb install -r` 覆盖安装成功、启动正常。
+
+**提交与安全**：本改动需要提交的文件：`.gitignore`、`android/app/build.gradle`、`android/gradle.properties`（撤回了一段误入的配置）以及删除旧的 `android/howread.keystore`/`android/debug.keystore` 顶层路径；**`android/signing/` 整目录不入库**（gitignore 已生效），请务必在工作区外另行备份——尤其 AGC 签发的鸿蒙 pro p7b 与 howread p12 的口令仅用户本人持有。
+
 ## [2026-09-26] 远程书籍（已 100% 缓存）支持页内双语对照
 
 **用户需求**：对已经 100% 缓存了的远程书籍（WebDAV/SMB/SFTP），也支持 AI 页内双语翻译。
