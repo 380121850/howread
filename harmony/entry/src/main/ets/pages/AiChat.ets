@@ -25,7 +25,7 @@ struct AiChat {
   @State busy: boolean = false;
   @State cfgNotReady: boolean = false;
   private cfg: AiConfig = {
-    provider: '', url: '', key: '', model: '', maxTokens: 8192, thinking: false
+    protocol: 'openai', provider: '', url: '', key: '', model: '', maxTokens: 8192, thinking: false
   };
 
   /* Round 6: resolve a string resource into a plain string */

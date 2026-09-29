@@ -27,8 +27,9 @@ import { getTagList, addTagToBook, removeTagFromBook, getSeriesList } from '../m
 import { getReadingStats, getDailyStats, getMonthlyStats, ReadingStatsData, DayStat, MonthStat } from '../model/ReadingStats';
 import { fetchOpds, OpdsEntry } from '../model/Opds';
 import { OpdsServer, DavServer, SmbServer, SftpServer, getOpdsServers, saveOpdsServer, removeOpdsServer, getDavServers, saveDavServer, removeDavServer, getSmbServers, saveSmbServer, removeSmbServer, getSftpServers, saveSftpServer, removeSftpServer, LibFolder, getLibFolders, saveLibFolders } from '../model/Servers';
-import { SyncConfig, SyncLogEntry, SYNC_CONFLICTS, defaultSyncConfig, loadSyncConfig, saveSyncConfig, getSyncLog, runSync, testSyncConnection } from '../model/Sync';
-import { AiConfig, AiMessage, loadAiConfig, saveAiConfig, chatCompletion, listModels, testChat, aiConfigReady, AI_PROVIDERS, AI_PROVIDER_URLS } from '../model/AiClient';
+import { SyncConfig, SyncLogEntry, SYNC_CONFLICTS, defaultSyncConfig, loadSyncConfig, saveSyncConfig, getSyncLog, runSync, testSyncConnection, syncAiProfiles } from '../model/Sync';
+import { AiConfig, AiMessage, loadAiConfig, saveAiConfig, chatCompletion, listModels, testChat, aiConfigReady, AI_PROVIDERS, AI_PROVIDER_URLS, PROTOCOL_OPENAI, PROTOCOL_ANTHROPIC, PROTOCOL_GOOGLE, defaultUrl, lastTruncated } from '../model/AiClient';
+import { AiVendorEntry, listVendors, activeVendorName, activeVendor, saveVendor, deleteVendor } from '../model/AiVendors';
 import { addNote, AiNote } from '../model/Notes';
 import { biometricAvailable, startBiometricAuth } from '../model/Biometric';
 import { PlaylistMeta, getAllPlaylists, createPlaylist, deletePlaylist, getPlaylistItems, updatePlaylist, addToPlaylist } from '../model/Playlists';
@@ -75,6 +76,14 @@ interface BackupFile {
   settings: ReaderSettings;
   recents: RecentBook[];
   bookmarks: Bookmark[];
+}
+
+/* Android DashboardFragment2.FileSource: one quick-access circle in 首页-我的文件 */
+interface HomeSource {
+  icon: Resource;
+  color: string;
+  label: string;
+  kind: number;
 }
 
 /** Home 书签笔记 card model (one per book that has bookmarks). */
@@ -176,7 +185,7 @@ struct Index {
   /** status chip filter: -1=all 0=unread 1=reading 2=finished */
   @State libStatusFilter: number = -1;
   /** view mode: 0=list 1=compact 2=grid 3=cover 4=bookshelf */
-  @State libViewMode: number = 0;
+  @State libViewMode: number = 4;
   /* ---- Round 6: full-text search + device scan + missing cleanup ---- */
   @State libSearchBusy: boolean = false;
   @State libSearchProgress: string = '';
@@ -188,7 +197,10 @@ struct Index {
   @State profileList: string[] = [DEFAULT_PROFILE];
   @State profileInput: string = '';
   /* ---- Round 7: collapsible pref groups ---- */
-  @State groupExp: Record<string, boolean> = { 'lib': true, 'gen': true, 'backup': true, 'ui': true, 'fmt': true, 'libset': true, 'libdisp': true, 'cov': true, 'read': true, 'theme': true, 'tabs': true };
+  /* group bars (lib/gen/ui) render their rows directly like Android; the
+   * sub config containers start collapsed so the page opens as a compact
+   * link-row list (Android PrefFragment2 parity) */
+  @State groupExp: Record<string, boolean> = { 'lib': true, 'gen': true, 'ui': true, 'backup': false, 'fmt': false, 'libset': false, 'libdisp': false, 'cov': false, 'read': false, 'theme': false, 'tabs': false, 'remote': false };
   @State subPage: number = 0;           /* full-screen sub-page: 0=none 1=最近阅读 2=书签笔记 */
   @State showDirPick: boolean = false;  /* local directory picker dialog */
   @State dirPickTarget: string = '';    /* root | fonts | downloads | libFolder | libFolderEdit */
@@ -292,8 +304,16 @@ struct Index {
   // ---- Phase 10: AI 大模型接入 (Android hr08/13/17/18/19 parity) ----
   /** AI config dialog visibility (prefs) */
   @State showAiDialog: boolean = false;
+  /* 0.9.14: named AI vendor profiles (Android AiConfigDialog parity) */
+  @State aiVendorEntries: AiVendorEntry[] = [];
+  @State aiVendorNames: string[] = [];
+  @State aiVendorName: string = '';
+  @State aiKeyVisible: boolean = false;
+  @State aiAddingName: boolean = false;
+  @State aiNewName: string = '';
   /** editable AI config bound to the dialog inputs */
   @State aiCfg: AiConfig = {
+    protocol: PROTOCOL_OPENAI,
     provider: AI_PROVIDERS[0], url: AI_PROVIDER_URLS[0], key: '', model: '', maxTokens: 8192, thinking: false
   };
   @State aiTestIn: string = '';
@@ -3516,6 +3536,12 @@ tlog('download_start', 'name=' + fileName);    try {
     }
   }
 
+  /** Profile display name (Android shows the brand profile "HowRead"). */
+  private profileDisplayName(): string {
+    const p: string = getCurrentProfile();
+    return p === 'default' ? 'HowRead' : p;
+  }
+
   /** Theme-aware drawer background (ink theme stays light like Android). */
   drawerBg(): string {
     return this.isDark() ? '#1e1e1e' : '#ffffff';
@@ -3523,7 +3549,7 @@ tlog('download_start', 'name=' + fileName);    try {
 
   /** Theme-aware drawer foreground text. */
   drawerFg(): string {
-    return this.isDark() ? '#dddddd' : '#333';
+    return this.isDark() ? '#e0e0e0' : '#212121';
   }
 
   // ---- Phase 3: reading stats ----
@@ -3559,21 +3585,21 @@ tlog('download_start', 'name=' + fileName);    try {
     return n;
   }
 
-  /** Format a duration compactly (e.g. 1h5m / 32m / 12s). */
+  /** Duration like Android (X小时Y分 / X分钟; other languages Xh Ym / Xm). */
   fmtDuration(ms: number): string {
-    if (ms <= 0) {
-      return '0m';
+    const minutes = Math.floor(ms / 60000);
+    let zh = true;
+    try {
+      zh = i18n.System.getAppPreferredLanguage().startsWith('zh');
+    } catch (err) {
+      zh = true;
     }
-    const h = Math.floor(ms / 3600000);
-    const m = Math.floor((ms % 3600000) / 60000);
-    const s = Math.floor((ms % 60000) / 1000);
-    if (h > 0) {
-      return h + 'h' + m + 'm';
+    if (minutes >= 60) {
+      const h = Math.floor(minutes / 60);
+      const m = minutes % 60;
+      return zh ? `${h}小时${m}分` : `${h}h ${m}m`;
     }
-    if (m > 0) {
-      return m + 'm';
-    }
-    return s + 's';
+    return zh ? `${minutes}分钟` : `${minutes}m`;
   }
 
   /** Max value of the active chart series (avoid div-by-zero). */
@@ -3677,28 +3703,38 @@ tlog('download_start', 'name=' + fileName);    try {
   /** Big cover tile for the home carousels (no caption, Android hr01 style). */
   @Builder
   coverTile(book: RecentBook) {
-    if (book.coverPath.length > 0) {
-      Image(book.coverPath)
+    Stack({ alignContent: Alignment.BottomStart }) {
+      if (book.coverPath.length > 0) {
+        Image(book.coverPath)
+          .width(92).height(126)
+          .borderRadius(3)
+          .objectFit(ImageFit.Cover)
+          .backgroundColor(this.divColor())
+          .onClick(() => {
+            this.openBook(book);
+          })
+      } else {
+        Column() {
+          Text(book.title.length > 6 ? book.title.substring(0, 6) : book.title)
+            .fontSize(12).fontColor('#fff').maxLines(3).textAlign(TextAlign.Center)
+        }
         .width(92).height(126)
+        .justifyContent(FlexAlign.Center)
+        .padding(6)
         .borderRadius(3)
-        .objectFit(ImageFit.Cover)
-        .backgroundColor(this.divColor())
+        .backgroundColor(this.coverFallbackColor(book.title))
         .onClick(() => {
           this.openBook(book);
         })
-    } else {
-      Column() {
-        Text(book.title.length > 6 ? book.title.substring(0, 6) : book.title)
-          .fontSize(12).fontColor('#fff').maxLines(3).textAlign(TextAlign.Center)
       }
-      .width(92).height(126)
-      .justifyContent(FlexAlign.Center)
-      .padding(6)
-      .borderRadius(3)
-      .backgroundColor('#8d7b74')
-      .onClick(() => {
-        this.openBook(book);
-      })
+      if (book.totalPages > 0) {
+        Text('' + Math.floor((book.page + 1) * 100 / book.totalPages) + '%')
+          .fontSize(11).fontColor(Color.White)
+          .width(36).height(36).borderRadius(18)
+          .textAlign(TextAlign.Center)
+          .backgroundColor('#66000000')
+          .margin({ left: 4, bottom: 4 })
+      }
     }
   }
 
@@ -3735,7 +3771,21 @@ tlog('download_start', 'name=' + fileName);    try {
 
   statValue(kind: number): string {
     if (kind === 0) {
-      return '' + this.recentBooks.length;
+      /* Android: 书籍总数 counts the whole library (recent + unique remote) */
+      let n: number = this.recentBooks.length;
+      for (let i = 0; i < this.remoteBooks.length; i++) {
+        let dup = false;
+        for (let j = 0; j < this.recentBooks.length; j++) {
+          if (this.recentBooks[j].path === this.remoteBooks[i].uri) {
+            dup = true;
+            break;
+          }
+        }
+        if (!dup) {
+          n++;
+        }
+      }
+      return '' + n;
     }
     if (kind === 1) {
       return '' + this.countFinishedBooks();
@@ -3746,7 +3796,7 @@ tlog('download_start', 'name=' + fileName);    try {
     if (kind === 3) {
       return this.fmtDuration(this.statsData.todayMs);
     }
-    return this.statsData.speedPpm + '';
+    return this.statsData.speedPpm.toFixed(1);
   }
 
   statLabel(kind: number): string {
@@ -3782,6 +3832,28 @@ tlog('download_start', 'name=' + fileName);    try {
     .onClick(() => {
       this.switchTab(target);
     })
+  }
+
+  /** Android buildFileSources: configured WebDAV/SMB/SFTP servers + library
+   *  folders as quick circles (disc colors from DashboardFragment2). */
+  homeSources(): HomeSource[] {
+    const out: HomeSource[] = [];
+    for (let i = 0; i < this.davServers.length; i++) {
+      const nm = this.davServers[i].name.length > 0 ? this.davServers[i].name : 'WebDAV';
+      out.push({ icon: $r('app.media.my_nas_webdav'), color: '#80cbc4', label: nm, kind: 1 });
+    }
+    for (let i = 0; i < this.smbServers.length; i++) {
+      const nm = this.smbServers[i].name.length > 0 ? this.smbServers[i].name : 'SMB';
+      out.push({ icon: $r('app.media.my_nas_smb'), color: '#7986cb', label: nm, kind: 2 });
+    }
+    for (let i = 0; i < this.sftpServers.length; i++) {
+      const nm = this.sftpServers[i].name.length > 0 ? this.sftpServers[i].name : 'SFTP';
+      out.push({ icon: $r('app.media.my_nas_sftp'), color: '#7986cb', label: nm, kind: 3 });
+    }
+    for (let i = 0; i < this.libFolders.length; i++) {
+      out.push({ icon: $r('app.media.ic_folder_open'), color: '#bdbdbd', label: this.libFolders[i].name, kind: 4 });
+    }
+    return out;
   }
 
   /** Group allBookmarks into one card per book (cover + title + 最新书签 + percent). */
@@ -3855,7 +3927,7 @@ tlog('download_start', 'name=' + fileName);    try {
                       Text(card.title.length > 4 ? card.title.substring(0, 4) : card.title)
                         .fontSize(10).fontColor('#fff').maxLines(2).textAlign(TextAlign.Center)
                     }
-                    .width(48).height(64).justifyContent(FlexAlign.Center).backgroundColor('#8d7b74').borderRadius(2)
+                    .width(48).height(64).justifyContent(FlexAlign.Center).backgroundColor(this.coverFallbackColor(card.title)).borderRadius(2)
                   }
                   Column({ space: 4 }) {
                     Text(card.title.length > 16 ? card.title.substring(0, 16) + '\u2026' : card.title)
@@ -3882,9 +3954,9 @@ tlog('download_start', 'name=' + fileName);    try {
           .width('100%')
         }
 
-        /* 我的珍藏 */
+        /* 我的珍藏 (Android keeps the header visible even when empty) */
+        this.sectionHeader(this.L($r('app.string.sec_favorites')), 1)
         if (this.starredBooks.length > 0) {
-          this.sectionHeader(this.L($r('app.string.sec_favorites')), 1)
           Scroll() {
             Row({ space: 12 }) {
               ForEach(this.starredBooks, (book: RecentBook) => {
@@ -3898,7 +3970,7 @@ tlog('download_start', 'name=' + fileName);    try {
         }
 
         /* 阅读统计: 3 + 2 white cards */
-        this.sectionHeader(this.L($r('app.string.sec_stats')), -1)
+        this.sectionHeader(this.L($r('app.string.sec_stats')) + ' (Pro)', -1)
         Row({ space: 10 }) {
           this.statCard(0)
           this.statCard(1)
@@ -3912,16 +3984,22 @@ tlog('download_start', 'name=' + fileName);    try {
         .width('94%')
         .margin({ top: 10 })
 
-        /* 我的文件: quick circles */
-        this.sectionHeader(this.L($r('app.string.tab_my_files')), 2)
-        Row({ space: 20 }) {
-          if (this.webdavUrl.length > 0) {
-            this.shortcutCircle($r('app.media.my_nas_webdav'), '#4db6ac', 'WebDAV', 2)
+        /* 我的文件: quick circles for every configured source (Android
+           buildFileSources: WebDAV/SMB/SFTP servers + library folders;
+           the whole section hides when nothing is configured) */
+        if (this.homeSources().length > 0) {
+          this.sectionHeader(this.L($r('app.string.tab_my_files')), 2)
+          Scroll() {
+            Row({ space: 20 }) {
+              ForEach(this.homeSources(), (s: HomeSource) => {
+                this.shortcutCircle(s.icon, s.color, s.label, 2)
+              }, (s: HomeSource) => s.kind + '_' + s.label)
+            }
+            .padding({ left: 12, right: 12, top: 4, bottom: 6 })
           }
-          this.shortcutCircle($r('app.media.ic_folder'), '#bdbdbd', 'Download', 2)
+          .scrollable(ScrollDirection.Horizontal)
+          .width('100%')
         }
-        .width('94%')
-        .padding({ top: 4, bottom: 6 })
 
         /* 网上书库: OPDS circles (persisted server list, first 2) */
         this.sectionHeader(this.L($r('app.string.sec_online')), 2)
@@ -3929,14 +4007,14 @@ tlog('download_start', 'name=' + fileName);    try {
           ForEach(this.opdsServers.slice(0, 2), (s: OpdsServer) => {
             Column({ space: 6 }) {
               Column() {
-                Text('OPDS')
-                  .fontSize(12).fontWeight(FontWeight.Bold).fontColor(Color.White)
+                Image($r('app.media.ic_globe'))
+                  .width(28).height(28).fillColor(Color.White)
               }
               .width(64).height(64)
               .justifyContent(FlexAlign.Center)
               .backgroundColor(this.thm())
               .borderRadius(32)
-              Text(s.name.length > 8 ? s.name.substring(0, 8) + '\u2026' : s.name)
+              Text(s.name.length > 10 ? s.name.substring(0, 10) + '\u2026' : s.name)
                 .fontSize(12).fontColor(this.txtMid()).maxLines(1)
             }
             .onClick(() => {
@@ -4277,7 +4355,7 @@ tlog('download_start', 'name=' + fileName);    try {
                 }, (item: RecentBook) => `${item.path}_${item.page}_${item.status}_${item.star}`)
               }
               .columnsTemplate(this.coverColsTemplate())
-              .columnsGap(8).rowsGap(12)
+              .columnsGap(8).rowsGap(14)
               .width('94%')
               .padding({ top: 4 })
             }
@@ -4546,13 +4624,24 @@ tlog('download_start', 'name=' + fileName);    try {
   LibGridCell(book: RecentBook) {
     Column({ space: 4 }) {
       Stack({ alignContent: Alignment.Bottom }) {
-        /* shelf plank under the book (hr04 bookshelf) */
-        Column()
-          .width('108%').height(12)
-          .backgroundColor('#4e342e')
-          .borderRadius(2)
-          .shadow({ radius: 6, color: '#77000000', offsetX: 0, offsetY: 4 })
-          .offset({ y: 6 })
+        /* shelf plank under the book (Android ShelfBoardsDecoration: walnut
+           board + lit/dark edges; negative margins bridge the column gap so
+           boards run continuously across the row) */
+        Column() {
+          Column()
+            .width('100%').height(2)
+            .backgroundColor('#C29A6E')
+          Column()
+            .width('100%').layoutWeight(1)
+            .linearGradient({ angle: 180, colors: [['#94745A', 0.0], ['#6b5140', 1.0]] })
+          Column()
+            .width('100%').height(3)
+            .backgroundColor('#4A3018')
+        }
+        .width('100%').height(20)
+        .margin({ left: -4, right: -4 })
+        .shadow({ radius: 5, color: '#38000000', offsetX: 0, offsetY: -3 })
+        .offset({ y: 9 })
         if (book.coverPath.length > 0 && this.settings.showBookCovers) {
           Image(book.coverPath)
             .width(this.settings.coverGridSize > 0 ? this.settings.coverGridSize : '100%')
@@ -4569,47 +4658,45 @@ tlog('download_start', 'name=' + fileName);    try {
               .fontSize(14).fontColor('#fff').maxLines(3).textAlign(TextAlign.Center)
           }
           .width('100%').aspectRatio(0.72)
-          .justifyContent(FlexAlign.Center).padding(6).backgroundColor('#8d7b74')
+          .justifyContent(FlexAlign.Center).padding(6).backgroundColor(this.coverFallbackColor(book.title))
         }
         if (!this.selMode) {
-          Row({ space: 6 }) {
+          Row({ space: 4 }) {
             if (book.totalPages > 0) {
               Text('' + Math.floor((book.page + 1) * 100 / book.totalPages) + '%')
-                .fontSize(11).fontColor(book.status === 2 ? '#7cb342' : '#ffffff')
+                .fontSize(10).fontColor(book.status === 2 ? '#7cb342' : '#ffffff')
                 .backgroundColor('#66000000')
-                .width(44).height(44).borderRadius(22).textAlign(TextAlign.Center)
+                .width(36).height(36).borderRadius(18).textAlign(TextAlign.Center)
             }
             Blank()
             Column() {
               Image(book.star ? $r('app.media.ic_star') : $r('app.media.ic_star_border'))
-                .width(20).height(20).fillColor(Color.White)
+                .width(16).height(16).fillColor(Color.White)
             }
-            .width(36).height(36).justifyContent(FlexAlign.Center)
-            .backgroundColor('#66000000').borderRadius(18)
+            .width(28).height(28).justifyContent(FlexAlign.Center)
+            .backgroundColor('#66000000').borderRadius(14)
             .onClick(() => {
               this.onToggleStar(book);
             })
             Column() {
               Image($r('app.media.ic_more_vert'))
-                .width(20).height(20).fillColor(Color.White)
+                .width(16).height(16).fillColor(Color.White)
             }
-            .width(36).height(36).justifyContent(FlexAlign.Center)
-            .backgroundColor('#66000000').borderRadius(18)
+            .width(28).height(28).justifyContent(FlexAlign.Center)
+            .backgroundColor('#66000000').borderRadius(14)
             .onClick(() => {
               this.libMenuPath = book.path;
               console.info(`[Index] Book menu: ${book.title}`);
             })
           }
           .width('100%')
-          .padding({ left: 6, right: 6, bottom: 6 })
+          .padding({ left: 4, right: 4, bottom: 6 })
           .onClick(() => {
             /* swallow taps on the overlay row so the cover tap doesn't fire */
           })
         }
       }
       .width('100%')
-      .borderRadius(3)
-      .clip(true)
       .onClick(() => {
         if (this.selMode) {
           this.toggleSelect(book.path);
@@ -4630,16 +4717,124 @@ tlog('download_start', 'name=' + fileName);    try {
     }
   }
 
+  /** Manual sync run + AI profile merge (0.9.14). AI-sync failures never
+   * fail the main progress/bookmark sync; the outcome goes to the log. */
+  private runSyncWithAi(ctx: Context, cfg: SyncConfig): Promise<SyncLogEntry> {
+    return runSync(ctx, cfg).then((entry: SyncLogEntry) => {
+      syncAiProfiles(ctx, cfg).then((msg: string) => {
+        console.info('[Sync] ' + msg);
+      });
+      return entry;
+    });
+  }
+
   /* ---- Phase 10: AI 大模型接入 (Android hr08) ---- */
 
   private saveAiDialog(): void {
     if (this.aiCfg.maxTokens <= 0) {
-      this.aiCfg.maxTokens = 8192;
+      this.aiCfg.maxTokens = 4096;
     }
-    saveAiConfig(getContext(this), this.aiCfg).then(() => {
+    /* named-profile save: upsert under the selected name, make it active,
+     * clear its tombstone and mirror the legacy blob (Android 0926 parity).
+     * An unnamed filled form lands under the stable name "default". */
+    let name = this.aiVendorName;
+    if (name.length === 0 && (this.aiCfg.url.length > 0 || this.aiCfg.key.length > 0)) {
+      name = 'default';
+    }
+    if (name.length === 0) {
+      this.status = this.L($r('app.string.ai_saved'));
+      this.showAiDialog = false;
+      return;
+    }
+    const e: AiVendorEntry = {
+      name: name, protocol: this.aiCfg.protocol, url: this.aiCfg.url, key: this.aiCfg.key,
+      model: this.aiCfg.model, maxTokens: this.aiCfg.maxTokens, thinking: this.aiCfg.thinking
+    };
+    saveVendor(getContext(this), e).then(() => {
       this.status = this.L($r('app.string.ai_saved'));
       this.showAiDialog = false;
     });
+  }
+
+  private refreshAiVendors(): void {
+    listVendors(getContext(this)).then((v: AiVendorEntry[]) => {
+      this.aiVendorEntries = v;
+      const names: string[] = [];
+      for (let i = 0; i < v.length; i++) {
+        names.push(v[i].name);
+      }
+      this.aiVendorNames = names;
+    });
+    activeVendorName(getContext(this)).then((n: string) => {
+      this.aiVendorName = n;
+    });
+  }
+
+  private selectAiVendor(name: string): void {
+    for (let i = 0; i < this.aiVendorEntries.length; i++) {
+      const e = this.aiVendorEntries[i];
+      if (e.name === name) {
+        this.aiCfg.provider = e.name;
+        this.aiCfg.protocol = e.protocol;
+        this.aiCfg.url = e.url;
+        this.aiCfg.key = e.key;
+        this.aiCfg.model = e.model;
+        this.aiCfg.maxTokens = e.maxTokens;
+        this.aiCfg.thinking = e.thinking;
+        this.aiVendorName = name;
+        return;
+      }
+    }
+  }
+
+  private beginAddAiVendor(): void {
+    this.aiAddingName = true;
+    this.aiNewName = '';
+  }
+
+  private confirmAddAiVendor(): void {
+    const name = this.aiNewName.trim();
+    if (name.length === 0) {
+      promptAction.showToast({ message: $r('app.string.ai_profile_name_empty') });
+      return;
+    }
+    /* clean sheet with the protocol's default endpoint (Android parity) */
+    this.aiCfg.protocol = PROTOCOL_OPENAI;
+    this.aiCfg.url = defaultUrl(PROTOCOL_OPENAI);
+    this.aiCfg.key = '';
+    this.aiCfg.model = '';
+    this.aiCfg.maxTokens = 4096;
+    this.aiCfg.thinking = false;
+    this.aiVendorName = name;
+    this.aiAddingName = false;
+  }
+
+  private removeAiVendor(): void {
+    if (this.aiVendorName.length === 0) {
+      return;
+    }
+    deleteVendor(getContext(this), this.aiVendorName).then(() => {
+      /* clean sheet so a later save cannot re-persist the deleted values */
+      this.aiCfg.protocol = PROTOCOL_OPENAI;
+      this.aiCfg.url = defaultUrl(PROTOCOL_OPENAI);
+      this.aiCfg.key = '';
+      this.aiCfg.model = '';
+      this.aiCfg.maxTokens = 4096;
+      this.aiCfg.thinking = false;
+      this.aiVendorName = '';
+      this.refreshAiVendors();
+      this.status = this.L($r('app.string.ai_profile_deleted'));
+    });
+  }
+
+  private switchAiProtocol(p: string): void {
+    const was = this.aiCfg.url;
+    this.aiCfg.protocol = p;
+    const d = defaultUrl(p);
+    if (was.length === 0 || was === defaultUrl(PROTOCOL_OPENAI)
+      || was === defaultUrl(PROTOCOL_ANTHROPIC) || was === defaultUrl(PROTOCOL_GOOGLE)) {
+      this.aiCfg.url = d;
+    }
   }
 
   private pickAiProvider(idx: number): void {
@@ -4673,7 +4868,7 @@ tlog('download_start', 'name=' + fileName);    try {
     this.aiTestOut = '';
     saveAiConfig(getContext(this), this.aiCfg);
     testChat(this.aiCfg, this.aiTestIn, getContext(this)).then((out: string) => {
-      this.aiTestOut = out;
+      this.aiTestOut = lastTruncated ? out + '\n' + this.L($r('app.string.ai_reply_truncated')) : out;
       this.aiBusy = false;
     }).catch((e: Object) => {
       this.aiTestOut = '\u6D4B\u8BD5\u5931\u8D25\uFF1A' + (e instanceof Error ? e.message : String(e));
@@ -4704,10 +4899,67 @@ tlog('download_start', 'name=' + fileName);    try {
         }
         .width('100%')
 
-        Row({ space: 8 }) {
+        Row({ space: 6 }) {
+          Text($r('app.string.ai_profile')).fontSize(14).fontColor(this.txtPri()).width(70)
+          ForEach(this.aiVendorNames, (n: string) => {
+            Text(n)
+              .fontSize(12)
+              .fontColor(this.aiVendorName === n ? Color.White : this.thm())
+              .backgroundColor(this.aiVendorName === n ? this.thm() : Color.Transparent)
+              .border({ width: 1, color: this.thm() })
+              .borderRadius(10)
+              .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+              .onClick(() => {
+                this.selectAiVendor(n);
+              })
+          }, (n: string) => n)
+          Text($r('app.string.ai_profile_add'))
+            .fontSize(12).fontColor('#00897B')
+            .onClick(() => {
+              this.beginAddAiVendor();
+            })
+          if (this.aiVendorName.length > 0) {
+            Text($r('app.string.ai_profile_delete'))
+              .fontSize(12).fontColor('#d32f2f')
+              .onClick(() => {
+                this.removeAiVendor();
+              })
+          }
+        }
+        .width('100%')
+
+        if (this.aiAddingName) {
+          Row({ space: 8 }) {
+            TextInput({ text: this.aiNewName, placeholder: $r('app.string.ai_profile_name_hint') })
+              .fontSize(13).height(36).layoutWeight(1)
+              .onChange((v: string) => {
+                this.aiNewName = v;
+              })
+            Button($r('app.string.common_confirm'))
+              .fontSize(12).height(32)
+              .backgroundColor(this.thm()).fontColor(Color.White)
+              .onClick(() => {
+                this.confirmAddAiVendor();
+              })
+          }
+          .width('100%')
+        }
+
+        Row({ space: 6 }) {
           Text($r('app.string.ai_protocol')).fontSize(14).fontColor(this.txtPri()).width(70)
-          Text($r('app.string.ai_openai_compat'))
-            .fontSize(14).fontColor(this.thm())
+          ForEach([PROTOCOL_OPENAI, PROTOCOL_ANTHROPIC, PROTOCOL_GOOGLE], (p: string) => {
+            Text(p === PROTOCOL_OPENAI ? $r('app.string.ai_proto_openai')
+              : (p === PROTOCOL_ANTHROPIC ? $r('app.string.ai_proto_anthropic') : $r('app.string.ai_proto_google')))
+              .fontSize(12)
+              .fontColor(this.aiCfg.protocol === p ? Color.White : this.thm())
+              .backgroundColor(this.aiCfg.protocol === p ? this.thm() : Color.Transparent)
+              .border({ width: 1, color: this.thm() })
+              .borderRadius(10)
+              .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+              .onClick(() => {
+                this.switchAiProtocol(p);
+              })
+          }, (p: string) => p)
         }
         .width('100%')
 
@@ -4744,13 +4996,18 @@ tlog('download_start', 'name=' + fileName);    try {
         Row({ space: 8 }) {
           Text($r('app.string.ai_key')).fontSize(14).fontColor(this.txtPri()).width(70)
           TextInput({ text: this.aiCfg.key, placeholder: 'sk-...' })
-            .type(InputType.Password)
+            .type(this.aiKeyVisible ? InputType.Normal : InputType.Password)
             .fontSize(13).height(38).layoutWeight(1)
             .backgroundColor(this.cardBg())
             .border({ width: 1, color: this.divColor() })
             .borderRadius(4)
             .onChange((v: string) => {
               this.aiCfg.key = v;
+            })
+          Text(this.aiKeyVisible ? $r('app.string.ai_key_hide') : $r('app.string.ai_key_show'))
+            .fontSize(13).fontColor('#00897B')
+            .onClick(() => {
+              this.aiKeyVisible = !this.aiKeyVisible;
             })
         }
         .width('100%')
@@ -4882,7 +5139,8 @@ tlog('download_start', 'name=' + fileName);    try {
         this.aiCfg = c;
         if (!aiConfigReady(c)) {
           this.status = this.L($r('app.string.ai_not_configured'));
-          this.showAiDialog = true;
+          this.refreshAiVendors();
+            this.showAiDialog = true;
           loadAiConfig(getContext(this));
         } else {
           this.aiIntroRun(book);
@@ -5060,7 +5318,7 @@ tlog('download_start', 'name=' + fileName);    try {
     this.syncBusy = true;
     this.syncTestOut = this.L($r('app.string.sync_running'));
     saveSyncConfig(getContext(this), this.syncCfg);
-    runSync(getContext(this), this.syncCfg).then((entry: SyncLogEntry) => {
+    this.runSyncWithAi(getContext(this), this.syncCfg).then((entry: SyncLogEntry) => {
       this.syncCfg.lastSyncTime = entry.time;
       this.syncCfg.lastUp = entry.up;
       this.syncCfg.lastLinked = entry.linked;
@@ -6031,7 +6289,7 @@ tlog('download_start', 'name=' + fileName);    try {
       /* nav items: 最近阅读 / 书库 / 我的文件 / 网上书库 / 书签笔记 */
       Column({ space: 0 }) {
         this.drawerNavItem($r('app.media.ic_toc'), this.L($r('app.string.sec_recent')), 0)
-        this.drawerNavItem($r('app.media.ic_book_open'), this.L($r('app.string.tab_library')), 1)
+        this.drawerNavItem($r('app.media.ic_book_open'), this.L($r('app.string.drawer_library')), 1)
         this.drawerNavItem($r('app.media.ic_folder'), this.L($r('app.string.tab_my_files')), 2)
         this.drawerNavItem($r('app.media.ic_globe'), this.L($r('app.string.sec_online')), 3)
         this.drawerNavItem($r('app.media.ic_bookmark'), this.L($r('app.string.sec_bookmarks')), 4)
@@ -6044,7 +6302,7 @@ tlog('download_start', 'name=' + fileName);    try {
          (2026-09-18: anchored above the bottom bar, Android drawerQuote parity) */
       Text(this.drawerQuote)
         .fontSize(15)
-        .fontColor(this.isDark() ? '#bbbbbb' : '#555')
+        .fontColor(this.thm())
         .lineHeight(22)
         .padding({ left: 12, right: 12, top: 8, bottom: 8 })
         .width('100%')
@@ -6055,7 +6313,7 @@ tlog('download_start', 'name=' + fileName);    try {
       /* bottom bar: 设置选项 / 关于说明 / 晚上模式 / 偏好 (Round 7: prefs entry optional) */
       Row() {
         if (this.settings.showPrefsInDrawer) {
-          this.drawerBottomButton($r('app.media.ic_settings'), this.L($r('app.string.tab_prefs')), 0)
+          this.drawerBottomButton($r('app.media.ic_settings'), this.L($r('app.string.drawer_settings')), 0)
         }
         this.drawerBottomButton($r('app.media.ic_info'), this.L($r('app.string.drawer_about')), 1)
         this.drawerBottomButton($r('app.media.ic_brightness'), this.L($r('app.string.drawer_night')), 2)
@@ -6071,11 +6329,11 @@ tlog('download_start', 'name=' + fileName);    try {
   /** One drawer nav row. target: 0/1=library, 2/3=my files (网上书库), 4=bookmarks sub-page. */
   @Builder
   drawerNavItem(icon: Resource, label: string, target: number) {
-    Row({ space: 10 }) {
-      Image(icon).width(20).height(20).fillColor(this.isDark() ? '#dddddd' : this.thm())
-      Text(label).fontSize(14).fontColor(this.drawerFg())
+    Row({ space: 18 }) {
+      Image(icon).width(24).height(24).fillColor(this.isDark() ? '#9e9e9e' : '#737373')
+      Text(label).fontSize(16).fontColor(this.drawerFg())
     }
-    .width('100%').height(48)
+    .width('100%').height(52)
     .padding({ left: 16 })
     .onClick(() => {
       this.showDrawer = false;
@@ -6094,11 +6352,17 @@ tlog('download_start', 'name=' + fileName);    try {
   @Builder
   drawerBottomButton(icon: Resource, label: string, kind: number) {
     Column({ space: 2 }) {
-      Image(icon).width(18).height(18).fillColor(this.isDark() ? '#dddddd' : this.thm())
-      Text(label).fontSize(10).fontColor(this.isDark() ? '#999999' : '#666')
+      Column() {
+        Image(icon).width(22).height(22).fillColor(this.isDark() ? '#9e9e9e' : '#737373')
+      }
+      .width(46).height(46)
+      .justifyContent(FlexAlign.Center)
+      .borderRadius(23)
+      .backgroundColor(this.isDark() ? '#333333' : '#e3e3e3')
+      Text(label).fontSize(10).fontColor(this.isDark() ? '#cccccc' : '#333333')
     }
     .layoutWeight(1)
-    .height(52)
+    .height(58)
     .justifyContent(FlexAlign.Center)
     .onClick(() => {
       if (kind === 0) {
@@ -6971,14 +7235,9 @@ tlog('download_start', 'name=' + fileName);    try {
     Row({ space: 12 }) {
       Image($r('app.media.ic_globe'))
         .width(24).height(24).fillColor(this.thm())
-      Column({ space: 2 }) {
-        Text(s.name)
-          .fontSize(15).fontColor(this.txtSec()).maxLines(1)
-        Text(s.url)
-          .fontSize(11).fontColor(this.txtFaint()).maxLines(1)
-      }
-      .alignItems(HorizontalAlign.Start)
-      .layoutWeight(1)
+      Text(s.name)
+        .fontSize(16).fontColor(this.thm()).maxLines(1)
+        .layoutWeight(1)
       Image($r('app.media.ic_pencil'))
         .width(20).height(20).fillColor(this.thm())
         .onClick(() => {
@@ -6991,11 +7250,8 @@ tlog('download_start', 'name=' + fileName);    try {
         })
     }
     .width('94%')
-    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-    .backgroundColor(this.cardBg())
-    .borderRadius(3)
-    .margin({ bottom: 8 })
-    .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
+    .padding({ left: 12, right: 12, top: 12, bottom: 12 })
+    .border({ width: { bottom: 0.5 }, color: { bottom: this.divColor() } })
     .onClick(() => {
       this.netSection = 0;
       this.netBrowseTitle = s.name;
@@ -7053,14 +7309,9 @@ tlog('download_start', 'name=' + fileName);    try {
     Row({ space: 12 }) {
       Image($r('app.media.my_nas_webdav'))
         .width(24).height(24)
-      Column({ space: 2 }) {
-        Text(s.name)
-          .fontSize(15).fontColor(this.txtSec()).maxLines(1)
-        Text(this.davRowSubtitle(s))
-          .fontSize(11).fontColor(this.txtFaint()).maxLines(1)
-      }
-      .alignItems(HorizontalAlign.Start)
-      .layoutWeight(1)
+      Text(s.name)
+        .fontSize(16).fontColor(this.thm()).maxLines(1)
+        .layoutWeight(1)
       Image($r('app.media.ic_refresh'))
         .width(20).height(20).fillColor(this.thm())
         .onClick(() => {
@@ -7079,11 +7330,8 @@ tlog('download_start', 'name=' + fileName);    try {
         })
     }
     .width('94%')
-    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-    .backgroundColor(this.cardBg())
-    .borderRadius(3)
-    .margin({ bottom: 8 })
-    .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
+    .padding({ left: 12, right: 12, top: 12, bottom: 12 })
+    .border({ width: { bottom: 0.5 }, color: { bottom: this.divColor() } })
     .onClick(() => {
       this.webdavUrl = s.url;
       this.webdavPath = this.davNormStart(s.startPath);
@@ -7404,14 +7652,9 @@ tlog('download_start', 'name=' + fileName);    try {
     Row({ space: 12 }) {
       Image($r('app.media.my_nas_smb'))
         .width(24).height(24)
-      Column({ space: 2 }) {
-        Text(s.name)
-          .fontSize(15).fontColor(this.txtSec()).maxLines(1)
-        Text(`SMB \\\\${s.host}\\${s.share}`)
-          .fontSize(11).fontColor(this.txtFaint()).maxLines(1)
-      }
-      .alignItems(HorizontalAlign.Start)
-      .layoutWeight(1)
+      Text(s.name)
+        .fontSize(16).fontColor(this.thm()).maxLines(1)
+        .layoutWeight(1)
       Image($r('app.media.ic_refresh'))
         .width(20).height(20).fillColor(this.thm())
         .onClick(() => {
@@ -7429,11 +7672,8 @@ tlog('download_start', 'name=' + fileName);    try {
         })
     }
     .width('94%')
-    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-    .backgroundColor(this.cardBg())
-    .borderRadius(3)
-    .margin({ bottom: 8 })
-    .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
+    .padding({ left: 12, right: 12, top: 12, bottom: 12 })
+    .border({ width: { bottom: 0.5 }, color: { bottom: this.divColor() } })
     .onClick(() => {
       this.smbConnectServer(idx);
     })
@@ -7445,14 +7685,9 @@ tlog('download_start', 'name=' + fileName);    try {
     Row({ space: 12 }) {
       Image($r('app.media.my_nas_sftp'))
         .width(24).height(24)
-      Column({ space: 2 }) {
-        Text(s.name)
-          .fontSize(15).fontColor(this.txtSec()).maxLines(1)
-        Text(`SFTP ${s.host}:${s.port > 0 ? s.port : 22}`)
-          .fontSize(11).fontColor(this.txtFaint()).maxLines(1)
-      }
-      .alignItems(HorizontalAlign.Start)
-      .layoutWeight(1)
+      Text(s.name)
+        .fontSize(16).fontColor(this.thm()).maxLines(1)
+        .layoutWeight(1)
       Image($r('app.media.ic_refresh'))
         .width(20).height(20).fillColor(this.thm())
         .onClick(() => {
@@ -7470,11 +7705,8 @@ tlog('download_start', 'name=' + fileName);    try {
         })
     }
     .width('94%')
-    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-    .backgroundColor(this.cardBg())
-    .borderRadius(3)
-    .margin({ bottom: 8 })
-    .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
+    .padding({ left: 12, right: 12, top: 12, bottom: 12 })
+    .border({ width: { bottom: 0.5 }, color: { bottom: this.divColor() } })
     .onClick(() => {
       this.sftpConnectServer(idx);
     })
@@ -7808,7 +8040,7 @@ tlog('download_start', 'name=' + fileName);    try {
       Image($r('app.media.ic_folder'))
         .width(26).height(26).fillColor(this.thm())
       Text(f.name)
-        .fontSize(16).fontColor(this.txtSec())
+        .fontSize(16).fontColor(this.thm())
         .maxLines(1)
         .layoutWeight(1)
       /* Android 2026-09-25: per-row scan / edit / delete like server rows */
@@ -7833,10 +8065,7 @@ tlog('download_start', 'name=' + fileName);    try {
     }
     .width('94%')
     .padding({ left: 12, right: 12, top: 12, bottom: 12 })
-    .backgroundColor(this.cardBg())
-    .borderRadius(3)
-    .margin({ bottom: 8 })
-    .shadow({ radius: 2, color: '#22000000', offsetX: 0, offsetY: 1 })
+    .border({ width: { bottom: 0.5 }, color: { bottom: this.divColor() } })
     .onClick(() => {
       this.enterBrowseAbs(f.path);
     })
@@ -7848,11 +8077,6 @@ tlog('download_start', 'name=' + fileName);    try {
       Column() {
         /* 网上书库（OPDS）: persisted server list (hr05) */
         this.browseSectionHeader(this.L($r('app.string.browse_opds')), 1)
-        if (this.opdsServers.length === 0) {
-          Text($r('app.string.opds_none'))
-            .fontSize(13).fontColor(this.txtFaint())
-            .width('94%').padding({ left: 12, bottom: 8 })
-        }
         ForEach(this.opdsServers, (s: OpdsServer) => {
           this.browseOpdsRow(s)
         }, (s: OpdsServer) => s.url)
@@ -7860,36 +8084,21 @@ tlog('download_start', 'name=' + fileName);    try {
         Divider().color(this.divColor()).margin({ top: 8 })
 
         /* WebDAV: persisted server list (hr05/hr06) */
-        this.browseSectionHeader('WebDAV', 2)
-        if (this.davServers.length === 0) {
-          Text($r('app.string.dav_none'))
-            .fontSize(13).fontColor(this.txtFaint())
-            .width('94%').padding({ left: 12, bottom: 8 })
-        }
+        this.browseSectionHeader('WebDAV(Pro)', 2)
         ForEach(this.davServers, (s: DavServer, idx: number) => {
           this.browseDavRow(s, idx)
         }, (s: DavServer) => s.url)
         Divider().color(this.divColor()).margin({ top: 8 })
 
         /* SMB servers (native libsmb2 client) */
-        this.browseSectionHeader('SMB', 5)
-        if (this.smbServers.length === 0) {
-          Text('暂无 SMB 服务器，点击右上角 + 添加（Windows 共享 / Samba）')
-            .fontSize(13).fontColor(this.txtFaint())
-            .width('94%').padding({ left: 12, bottom: 8 })
-        }
+        this.browseSectionHeader('SMB (Pro)', 5)
         ForEach(this.smbServers, (s: SmbServer, idx: number) => {
           this.browseSmbRow(s, idx)
         }, (s: SmbServer) => s.host)
         Divider().color(this.divColor()).margin({ top: 8 })
 
         /* SFTP servers (native libssh2 client) */
-        this.browseSectionHeader('SFTP', 6)
-        if (this.sftpServers.length === 0) {
-          Text('暂无 SFTP 服务器，点击右上角 + 添加（SSH 文件服务器）')
-            .fontSize(13).fontColor(this.txtFaint())
-            .width('94%').padding({ left: 12, bottom: 8 })
-        }
+        this.browseSectionHeader('SFTP (Pro)', 6)
         ForEach(this.sftpServers, (s: SftpServer, idx: number) => {
           this.browseSftpRow(s, idx)
         }, (s: SftpServer) => s.host)
@@ -8363,28 +8572,25 @@ tlog('download_start', 'name=' + fileName);    try {
   /** Round 7: collapsible group header bar (Android settings section + expand icon). */
   @Builder
   settingsGroupBar(title: string, key: string) {
-    Row({ space: 8 }) {
-      Image($r('app.media.ic_sliders'))
-        .width(18).height(18).fillColor(Color.White)
+    /* Android hr07: plain blue section bar (title only, not collapsible;
+     * the key stays for the always-expanded group keys in groupExp) */
+    Row() {
       Text(title)
-        .fontSize(15).fontWeight(FontWeight.Medium).fontColor(Color.White)
+        .fontSize(this.fsp(15)).fontWeight(FontWeight.Medium).fontColor(Color.White)
         .layoutWeight(1)
-      Image(this.groupExp[key] === true ? $r('app.media.ic_chevron_up') : $r('app.media.ic_chevron_down'))
-        .width(18).height(18).fillColor(Color.White)
     }
     .width('100%')
-    .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
     .backgroundColor(this.barColor())
     .borderRadius(2)
-    .onClick(() => {
-      this.toggleGroup(key);
-    })
   }
 
   /** Round 7 + 2026-09-18: config-button row (Android hr07: sliders icon +
    *  green underlined link + chevron; taps toggle its config container). */
   @Builder
   settingsSubBar(title: string, key: string) {
+    /* Android hr07: sliders icon + green underlined link row (no chevron,
+     * no card surface); tap toggles its inline config container */
     Row({ space: 10 }) {
       Image($r('app.media.ic_sliders'))
         .width(18).height(18).fillColor(this.isDark() ? this.thm() : '#00897B')
@@ -8392,14 +8598,9 @@ tlog('download_start', 'name=' + fileName);    try {
         .fontSize(this.fsp(15)).fontColor(this.isDark() ? this.thm() : '#00897B')
         .decoration({ type: TextDecorationType.Underline, color: this.isDark() ? this.thm() : '#00897B' })
         .layoutWeight(1)
-      Image(this.groupExp[key] === true ? $r('app.media.ic_chevron_up') : $r('app.media.ic_chevron_down'))
-        .width(16).height(16).fillColor(this.txtHint())
     }
     .width('100%')
     .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-    .backgroundColor(this.cardBg())
-    .borderRadius(3)
-    .margin({ top: 2, bottom: 2 })
     .onClick(() => {
       this.toggleGroup(key);
     })
@@ -8566,14 +8767,14 @@ tlog('download_start', 'name=' + fileName);    try {
             .fontSize(this.fsp(14)).fontColor(this.txtPri())
           Blank()
           Column() {
-            Text(getCurrentProfile().length > 0 ? getCurrentProfile().charAt(0).toUpperCase() : 'H')
+            Text(this.profileDisplayName().length > 0 ? this.profileDisplayName().charAt(0).toUpperCase() : 'H')
               .fontSize(18).fontWeight(FontWeight.Bold).fontColor(Color.White)
           }
           .width(42).height(42)
           .justifyContent(FlexAlign.Center)
           .backgroundColor(this.thm())
           .borderRadius(21)
-          Text(getCurrentProfile())
+          Text(this.profileDisplayName())
             .fontSize(this.fsp(15)).fontColor(this.thm())
             .decoration({ type: TextDecorationType.Underline, color: this.thm() })
           Image($r('app.media.ic_settings'))
@@ -8958,7 +9159,7 @@ tlog('download_start', 'name=' + fileName);    try {
           this.settingsKvSheet(this.L($r('app.string.set_orientation')), 'orient')
           this.settingsKvSheet(this.L($r('app.string.set_language')), 'lang')
           Row() {
-            Text($r('app.string.sync_title'))
+            Text(this.L($r('app.string.sync_title')) + '(Pro)')
               .fontSize(this.fsp(14)).fontColor(this.txtPri()).layoutWeight(1)
             Text(this.syncCfg.enabled
               ? (this.syncCfg.lastSyncTime.length > 0 ? '\u4E0A\u6B21\uFF1A' + this.syncCfg.lastSyncTime.substring(0, 16).replace('T', ' ') : $r('app.string.set_enabled'))
@@ -8978,7 +9179,7 @@ tlog('download_start', 'name=' + fileName);    try {
             });
           })
           Row() {
-            Text($r('app.string.set_ai_model'))
+            Text(this.L($r('app.string.set_ai_model')) + '(Pro)')
               .fontSize(this.fsp(14)).fontColor(this.txtPri()).layoutWeight(1)
             Text(this.aiCfg.model.length > 0 ? this.aiCfg.provider + ' \u00B7 ' + this.aiCfg.model : $r('app.string.set_not_configured'))
               .fontSize(14).fontColor(this.thm())
@@ -8994,7 +9195,8 @@ tlog('download_start', 'name=' + fileName);    try {
               this.aiTestIn = '';
               this.aiTestOut = '';
               this.aiModels = [];
-              this.showAiDialog = true;
+              this.refreshAiVendors();
+            this.showAiDialog = true;
             });
           })
           Row({ space: 8 }) {
@@ -9051,7 +9253,7 @@ tlog('download_start', 'name=' + fileName);    try {
           }
 
           /* 在线阅读与缓存 (Round 8; moved into 常规设置, 2026-09-18) */
-          this.settingsSubBar('在线阅读与缓存', 'remote')
+          this.settingsSubBar('在线阅读(Pro)', 'remote')
           if (this.groupExp['remote'] === true) {
             this.settingsToggleRow('在线优先阅读', 'remoteOnlineFirst', '直开格式直接流式打开')
             this.settingsToggleRow('仅 WiFi 下预取与整本缓存', 'remotePrefetchWifiOnly', '开：流量下只随读随取；关：流量与 WiFi 同等对待')
@@ -9220,6 +9422,17 @@ tlog('download_start', 'name=' + fileName);    try {
   }
 
   /* ===================== Round 7: helpers, dialogs and About ===================== */
+
+  /** Android-style placeholder cover color: stable per title (BookColors
+   *  shelf palette), so coverless books render as colored book spines. */
+  private coverFallbackColor(title: string): string {
+    const palette: string[] = ['#7b3030', '#5e4b8b', '#8a8a4a', '#3d6b52', '#4a5a7a', '#7a5a3d', '#8b3d5e', '#4f6b8b'];
+    let h = 0;
+    for (let i = 0; i < title.length; i++) {
+      h = (h * 31 + title.charCodeAt(i)) % 100000;
+    }
+    return palette[h % palette.length];
+  }
 
   /** Dynamic theme (brand) color from AppStorage (prefs themeColor, '' = default). */
   private thm(): string {

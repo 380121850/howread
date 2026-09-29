@@ -13,6 +13,10 @@
       "value": "书库"
     },
     {
+      "name": "drawer_library",
+      "value": "我的书架"
+    },
+    {
       "name": "tab_my_files",
       "value": "我的文件"
     },
@@ -1814,7 +1818,7 @@
     },
     {
       "name": "set_formats_group",
-      "value": "格式设置"
+      "value": "格式配置"
     },
     {
       "name": "set_formats_hint",
@@ -1826,7 +1830,7 @@
     },
     {
       "name": "set_covers",
-      "value": "封面配置"
+      "value": "书籍封面配置"
     },
     {
       "name": "set_reading_cfg",
@@ -2191,6 +2195,54 @@
     {
       "name": "dav_dir_empty",
       "value": "无子目录"
+    },
+    {
+      "name": "ai_profile",
+      "value": "配置"
+    },
+    {
+      "name": "ai_profile_add",
+      "value": "新增"
+    },
+    {
+      "name": "ai_profile_delete",
+      "value": "删除"
+    },
+    {
+      "name": "ai_profile_name_hint",
+      "value": "输入配置名称"
+    },
+    {
+      "name": "ai_profile_name_empty",
+      "value": "配置名称不能为空"
+    },
+    {
+      "name": "ai_profile_deleted",
+      "value": "已删除该 AI 配置"
+    },
+    {
+      "name": "ai_key_show",
+      "value": "显示"
+    },
+    {
+      "name": "ai_key_hide",
+      "value": "隐藏"
+    },
+    {
+      "name": "ai_reply_truncated",
+      "value": "（回复在输出长度上限处截断）"
+    },
+    {
+      "name": "ai_proto_openai",
+      "value": "OpenAI兼容"
+    },
+    {
+      "name": "ai_proto_anthropic",
+      "value": "Claude"
+    },
+    {
+      "name": "ai_proto_google",
+      "value": "Gemini"
     }
   ]
 }

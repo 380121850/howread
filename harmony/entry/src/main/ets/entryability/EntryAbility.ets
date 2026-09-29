@@ -62,6 +62,13 @@ export default class EntryAbility extends UIAbility {
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
     hilog.info(0x0000, TAG, '%{public}s', 'Ability onWindowStageCreate');
+    /* Android parity: brand-blue status bar merged with the toolbar */
+    windowStage.getMainWindow((err, win) => {
+      if (err.code) {
+        return;
+      }
+      win.setWindowSystemBarProperties({ statusBarColor: '#3949AB', statusBarContentColor: '#FFFFFF' });
+    });
     windowStage.loadContent('pages/Index', (err) => {
       if (err.code) {
         hilog.error(0x0000, TAG, 'Failed to load content. Cause: %{public}s', JSON.stringify(err));

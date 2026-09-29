@@ -21,6 +21,10 @@
       "value": "Library"
     },
     {
+      "name": "drawer_library",
+      "value": "My shelf"
+    },
+    {
       "name": "tab_my_files",
       "value": "My Files"
     },
@@ -2199,6 +2203,54 @@
     {
       "name": "dav_dir_empty",
       "value": "No subdirectories"
+    },
+    {
+      "name": "ai_profile",
+      "value": "Profile"
+    },
+    {
+      "name": "ai_profile_add",
+      "value": "New"
+    },
+    {
+      "name": "ai_profile_delete",
+      "value": "Delete"
+    },
+    {
+      "name": "ai_profile_name_hint",
+      "value": "Profile name"
+    },
+    {
+      "name": "ai_profile_name_empty",
+      "value": "Profile name is required"
+    },
+    {
+      "name": "ai_profile_deleted",
+      "value": "Profile deleted"
+    },
+    {
+      "name": "ai_key_show",
+      "value": "Show"
+    },
+    {
+      "name": "ai_key_hide",
+      "value": "Hide"
+    },
+    {
+      "name": "ai_reply_truncated",
+      "value": "(Reply truncated at the output length limit)"
+    },
+    {
+      "name": "ai_proto_openai",
+      "value": "OpenAI-compatible"
+    },
+    {
+      "name": "ai_proto_anthropic",
+      "value": "Claude"
+    },
+    {
+      "name": "ai_proto_google",
+      "value": "Gemini"
     }
   ]
 }

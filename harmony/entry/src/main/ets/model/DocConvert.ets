@@ -409,10 +409,57 @@ export async function convertToHtml(ctx: Context, srcPath: string, ext: string):
   if (ext === 'rtf') {
     return convertRtf(readTextFile(srcPath), key, outPath);
   }
+  if (ext === 'odt') {
+    return await convertOdt(ctx, srcPath, key, outPath);
+  }
   throw new Error('unsupported ext: ' + ext);
+}
+
+/**
+ * ODT -> HTML (Android OdtContext parity): the content.xml inside the zip
+ * carries the body as <text:p> paragraphs; unzip, extract and wrap them.
+ */
+async function convertOdt(ctx: Context, src: string, key: string, outPath: string): Promise<string> {
+  const dir = ctx.cacheDir + '/converted/odt_' + key;
+  try {
+    fs.rmdirSync(dir);
+  } catch (e) {
+    /* fresh */
+  }
+  fs.mkdirSync(dir, true);
+  const zopt: zlib.Options = { level: 1 };
+  await zlib.unzipFile(src, dir, zopt);
+  const xml = readTextFile(dir + '/content.xml');
+  let body = '';
+  const re = /<text:p[^>]*>([\s\S]*?)<\/text:p>|<text:p[^>]*\/>/gi;
+  let m = re.exec(xml);
+  while (m !== null) {
+    let seg = m[1] === undefined ? '' : m[1];
+    seg = seg.replace(/<text:span[^>]*>/g, '').replace(/<\/text:span>/g, '')
+      .replace(/<text:s\/>/g, ' ').replace(/<text:tab\/>/g, '\t');
+    const text = seg.replace(/<[^>]*>/g, '').trim();
+    if (text.length > 0) {
+      body += '<p>' + text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</p>\n';
+    }
+    m = re.exec(xml);
+  }
+  try {
+    fs.rmdirSync(dir);
+  } catch (e) {
+    /* best effort */
+  }
+  if (body.length === 0) {
+    throw new Error('odt: no paragraphs found');
+  }
+  const html = '<html><head><meta charset="utf-8"></head><body>\n' + body + '</body></html>';
+  const f = fs.openSync(outPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+  fs.writeSync(f.fd, html);
+  fs.closeSync(f);
+  console.info(`[DocConvert] odt html written: ${outPath}`);
+  return outPath;
 }
 
 /** True when the reader needs the conversion path for this extension. */
 export function isConvertibleExt(ext: string): boolean {
-  return ext === 'docx' || ext === 'rtf';
+  return ext === 'docx' || ext === 'rtf' || ext === 'odt';
 }

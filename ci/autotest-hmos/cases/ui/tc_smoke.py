@@ -98,6 +98,10 @@ def sm04_open_pdf_and_flip(dev, case_id, cfg, fixtures):
     with dev.step(case_id, 'seeded big25 visible in library'):
         if not dev.click_id('app_tab_1'):
             dev.click_text('书库')
+        # 2026-09-29: the library defaults to the shelf view (Android parity)
+        # where titles are not text nodes — switch to the list view first
+        dev.click_xy(1253, 391)
+        time.sleep(1.2)
         if not dev.wait_text('big25.pdf', timeout=15):
             dev.swipe(660, 1800, 660, 800)
             if not dev.wait_text('big25.pdf', timeout=8):
@@ -193,6 +197,13 @@ def sm05_exit_confirm(dev, case_id, cfg, fixtures):
         if not dev.wait_text('书库设置', timeout=8):
             raise TestFail('prefs page not shown')
     with dev.step(case_id, 'enable exit-confirm toggle'):
+        # 2026-09-29: sub-groups start collapsed (Android parity); the
+        # exit-confirm toggle lives inside 阅读配置
+        if not dev.exists_text('退出确认对话框'):
+            if not dev.click_text('阅读配置'):
+                dev.save_dump('reading_cfg_missing')
+                raise TestFail('阅读配置 sub-group not found in prefs')
+            time.sleep(1.0)
         if not _prefs_scroll_to(dev, '退出确认对话框'):
             dev.save_dump('toggle_not_found')
             raise TestFail('退出确认对话框 toggle not found in prefs')
@@ -216,6 +227,9 @@ def sm05_exit_confirm(dev, case_id, cfg, fixtures):
         if not dev.wait_text('书库设置', timeout=8):
             raise TestFail('app left prefs after cancel')
     with dev.step(case_id, 'restore toggle off'):
+        if not dev.exists_text('退出确认对话框'):
+            dev.click_text('阅读配置')
+            time.sleep(1.0)
         if _prefs_scroll_to(dev, '退出确认对话框'):
             dev.hilog_clear()
             _click_toggle_near(dev, '退出确认对话框')

@@ -23,7 +23,14 @@ const BI_CSS = '<style>p.aitran{color:#1565C0;opacity:0.92;margin-top:0.1em;}</s
 
 export function isBilingualDoc(path: string): boolean {
   const p = path.toLowerCase();
-  return p.endsWith('.epub') || p.endsWith('.txt') || p.endsWith('.html') || p.endsWith('.htm');
+  /* 0.9.14 (Android 09-26 batches 1+2): .fb2 joins via its own extractor;
+   * .docx/.rtf/.odt reach this as their converted .html copies */
+  return p.endsWith('.epub') || p.endsWith('.txt') || p.endsWith('.html') || p.endsWith('.htm')
+    || p.endsWith('.fb2');
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 /** FNV-1a hex hash — stable cache key (md5 not required). */
@@ -545,12 +552,135 @@ export async function buildBilingualTxt(ctx: Context, cfg: AiConfig, srcPath: st
   }
 }
 
+/**
+ * Build a bilingual single-HTML file (Android BilingualBuilder targetFileHtml
+ * parity): enumerate <p>…</p> paragraphs, skip whitespace-only ones (DOC-era
+ * converters emit them), insert the translated <p class="aitran"> after each
+ * source paragraph. HTML/DOCX/RTF/ODT books reach this through their
+ * converted (or native) HTML form.
+ */
+export async function buildBilingualHtml(ctx: Context, cfg: AiConfig, srcPath: string,
+  dst: string, onProg: (msg: string) => void): Promise<string> {
+  try {
+    const dir = workDir(ctx);
+    ensureDir(dir);
+    const html = readFile(srcPath);
+    const raw = findParas(html);
+    const hits: ParaHit[] = [];
+    for (let i = 0; i < raw.length; i++) {
+      if (raw[i].text.length > 0) {
+        hits.push(raw[i]);
+      }
+    }
+    if (hits.length === 0) {
+      onProg('\u672A\u627E\u5230\u53EF\u7FFB\u8BD1\u7684\u6BB5\u843D');
+      return '';
+    }
+    const paras: string[] = [];
+    for (let k = 0; k < hits.length; k++) {
+      paras.push(hits[k].text);
+    }
+    const bookKey = hashKey(baseName(srcPath));
+    const cache = await loadCache(ctx, bookKey);
+    const trans = await translateParas(cfg, dst, paras, cache, onProg);
+    await saveCache(ctx, bookKey, cache);
+    /* rebuild: insert the translated <p> right after each source </p> */
+    let out = '';
+    let pos = 0;
+    let hitIdx = 0;
+    const re = /<\/p>/gi;
+    let m = re.exec(html);
+    while (m !== null) {
+      const closeEnd = m.index + m[0].length;
+      if (hitIdx < hits.length && hits[hitIdx].end <= m.index) {
+        const t = trans[hitIdx];
+        out += html.substring(pos, closeEnd);
+        if (t !== undefined && t.length > 0) {
+          out += '<p class="aitran">' + t + '</p>';
+        }
+        pos = closeEnd;
+        hitIdx++;
+      }
+      m = re.exec(html);
+    }
+    out += html.substring(pos);
+    const headIdx = out.toLowerCase().indexOf('</head>');
+    if (headIdx >= 0) {
+      out = out.substring(0, headIdx) + BI_CSS + out.substring(headIdx);
+    } else {
+      out = BI_CSS + out;
+    }
+    const outPath = dir + '/bi_' + baseName(srcPath);
+    writeFile(outPath, out);
+    onProg('\u5B8C\u6210');
+    return outPath;
+  } catch (e) {
+    console.error('[Bilingual] html pipeline failed: ' + String(e));
+    onProg('\u5931\u8D25\uFF1A' + String(e));
+    return '';
+  }
+}
+
+/**
+ * Build a bilingual HTML from an FB2 source (Android batch-1 parity: the
+ * fb2 body paragraphs are extracted and re-rendered as a standalone HTML
+ * book the reader can reflow).
+ */
+export async function buildBilingualFb2(ctx: Context, cfg: AiConfig, srcPath: string,
+  dst: string, onProg: (msg: string) => void): Promise<string> {
+  try {
+    const dir = workDir(ctx);
+    ensureDir(dir);
+    const xml = readFile(srcPath);
+    const paras: string[] = [];
+    const re = /<p[^>]*>([\s\S]*?)<\/p>/gi;
+    let m = re.exec(xml);
+    while (m !== null) {
+      const t = stripTags(m[1]);
+      if (t.length > 0) {
+        paras.push(t);
+      }
+      m = re.exec(xml);
+    }
+    if (paras.length === 0) {
+      onProg('\u672A\u627E\u5230\u53EF\u7FFB\u8BD1\u7684\u6BB5\u843D');
+      return '';
+    }
+    onProg('\u679A\u4E3E ' + paras.length + ' \u6BB5');
+    const bookKey = hashKey(baseName(srcPath));
+    const cache = await loadCache(ctx, bookKey);
+    const trans = await translateParas(cfg, dst, paras, cache, onProg);
+    await saveCache(ctx, bookKey, cache);
+    let body = '';
+    for (let i = 0; i < paras.length; i++) {
+      body += '<p>' + escapeHtml(paras[i]) + '</p>';
+      if (trans[i].length > 0) {
+        body += '<p class="aitran">' + trans[i] + '</p>';
+      }
+    }
+    const outPath = dir + '/bi_' + baseName(srcPath) + '.html';
+    writeFile(outPath, '<html><head><meta charset="utf-8">' + BI_CSS + '</head><body>' + body + '</body></html>');
+    onProg('\u5B8C\u6210');
+    return outPath;
+  } catch (e) {
+    console.error('[Bilingual] fb2 pipeline failed: ' + String(e));
+    onProg('\u5931\u8D25\uFF1A' + String(e));
+    return '';
+  }
+}
+
 /** Build the bilingual variant of any supported document. */
 export function buildBilingual(ctx: Context, cfg: AiConfig, srcPath: string,
   dst: string, onProg: (msg: string) => void): Promise<string> {
   const p = srcPath.toLowerCase();
   if (p.endsWith('.epub')) {
     return buildBilingualEpub(ctx, cfg, srcPath, dst, onProg);
+  }
+  if (p.endsWith('.fb2')) {
+    return buildBilingualFb2(ctx, cfg, srcPath, dst, onProg);
+  }
+  if (p.endsWith('.html') || p.endsWith('.htm')) {
+    return buildBilingualHtml(ctx, cfg, srcPath, dst, onProg);
   }
   return buildBilingualTxt(ctx, cfg, srcPath, dst, onProg);
 }

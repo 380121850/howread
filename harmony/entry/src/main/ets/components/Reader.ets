@@ -41,7 +41,7 @@ import {
 import { saveRecentBook, getPageForPath, RecentBook } from '../model/ReadingProgress';
 import { recordReadTime, recordPagesRead } from '../model/ReadingStats';
 import { getBookmarks, addBookmark, removeBookmark, Bookmark } from '../model/Bookmarks';
-import { AiConfig, loadAiConfig, chatCompletion, chatCompletionStream, aiConfigReady, AiMessage } from '../model/AiClient';
+import { AiConfig, loadAiConfig, chatCompletion, chatCompletionStream, aiConfigReady, AiMessage, lastTruncated} from '../model/AiClient';
 import { getNotes, addNote, removeNote, AiNote } from '../model/Notes';
 import { exportNotesFile, ExportData } from '../model/Export';
 import { isBilingualDoc, buildBilingual } from '../model/Bilingual';
@@ -53,8 +53,7 @@ import {
   RemoteSession, RemoteFileSource, WebDavFileSource, SmbFileSource, SftpFileSource,
   loadRemoteCacheSettings, parseRemoteUri, resolveWebDavServer, resolveSmbServer, resolveSftpServer,
   fileExtOf, isDirectOpenExt, isPageFormatExt, mobiIsEncrypted, sha256Hex,
-  BlockCacheStore, RemoteProbe, readPageTreeSidecar, writePageTreeSidecar, PageTreeSidecar
-} from '../model/RemoteBook';
+  BlockCacheStore, RemoteProbe, readPageTreeSidecar, writePageTreeSidecar, PageTreeSidecar,  materializeBook } from '../model/RemoteBook';
 
 const LEFT_ZONE_RATIO: number = 0.3;
 const RIGHT_ZONE_RATIO: number = 0.3;
@@ -557,6 +556,7 @@ struct Reader {
   @State bookmarks: Bookmark[] = [];
   /* ---- Phase 10: AI 大模型接入 (hr13/17/18 parity) ---- */
   @State showTrans: boolean = false;        /* AI 翻译 dialog (hr18) */
+  @State biRemoteReady: boolean = false;     /* remote book fully cached (bilingual ok) */
   @State transSrcIdx: number = 0;
   @State transDstIdx: number = 1;
   @State transSave: boolean = true;
@@ -601,7 +601,7 @@ struct Reader {
   @State showPwd: boolean = false;          /* password dialog */
   @State pwdInput: string = '';
   @State renderEpoch: number = 0;           /* bumped after unlock to force re-render */
-  private aiCfg: AiConfig = { provider: '', url: '', key: '', model: '', maxTokens: 8192, thinking: false };
+  private aiCfg: AiConfig = { protocol: 'openai', provider: '', url: '', key: '', model: '', maxTokens: 8192, thinking: false };
   @State annotations: AnnotationInfo[] = []; /* current page annotations */
   @State drawMode: boolean = false;         /* freehand drawing mode */
   @State drawPoints: TextRect[] = [];
@@ -3147,12 +3147,33 @@ struct Reader {
     this.transToken++;
     this.transResult = '';
     this.transBusy = false;
+    /* 0.9.14: remote books get the bilingual checkbox only once the whole
+     * book is offline (Android RemoteBilingualBase.isFullyAvailable parity) */
+    this.biRemoteReady = false;
+    if (this.isRemote && this.remoteUri.length > 0) {
+      const low = this.remoteUri.toLowerCase();
+      if (low.endsWith('.epub') || low.endsWith('.html') || low.endsWith('.htm')) {
+        const ctx2 = getContext(this);
+        sha256Hex(this.remoteUri).then((key2: string) => {
+          BlockCacheStore.readMeta(ctx2, key2).then((meta) => {
+            this.biRemoteReady = meta !== null && meta.fullyCached;
+            console.info('[Reader] remote bilingual available: ' + this.biRemoteReady);
+          });
+        });
+      }
+    }
     this.showTrans = true;
     console.info('[Reader] AI translate dialog opened');
   }
 
-  /** In-page bilingual is only possible for reflowable EPUB/TXT/HTML books. */
+  /** In-page bilingual: local reflowable books, or a remote book whose
+   * full content is already cached offline (0.9.14, Android parity). */
   private biSupported(): boolean {
+    if (this.isRemote) {
+      const low = this.remoteUri.toLowerCase();
+      const okExt = low.endsWith('.epub') || low.endsWith('.html') || low.endsWith('.htm');
+      return okExt && this.biRemoteReady;
+    }
     return isBilingualDoc(this.documentPath);
   }
 
@@ -3237,25 +3258,41 @@ struct Reader {
       }
       this.transBusy = true;
       this.transResult = this.L($r('app.string.tts_preparing2'));
-      const srcPath = this.documentPath;
-      buildBilingual(getContext(this), this.aiCfg, srcPath, dst, (msg: string) => {
-        this.transResult = msg;
-      }).then((outPath: string) => {
-        this.transBusy = false;
-        if (outPath.length === 0) {
-          /* failure message already in transResult; make it visible */
-          promptAction.showToast({ message: this.transResult.substring(0, 60) });
-          return;
-        }
-        this.biOriginalPath = srcPath;
-        this.swapDoc(outPath).then(() => {
-          this.showTrans = false;
-          promptAction.showToast({ message: $r('app.string.trans_bi_done') });
+      const buildFrom = (localPath: string): void => {
+        buildBilingual(getContext(this), this.aiCfg, localPath, dst, (msg: string) => {
+          this.transResult = msg;
+        }).then((outPath: string) => {
+          this.transBusy = false;
+          if (outPath.length === 0) {
+            /* failure message already in transResult; make it visible */
+            promptAction.showToast({ message: this.transResult.substring(0, 60) });
+            return;
+          }
+          this.biOriginalPath = localPath;
+          this.swapDoc(outPath).then(() => {
+            this.showTrans = false;
+            promptAction.showToast({ message: $r('app.string.trans_bi_done') });
+          }).catch((e: Object) => {
+            this.transBusy = false;
+            promptAction.showToast({ message: '\u53CC\u8BED\u7248\u5E94\u7528\u5931\u8D25\uFF1A' + String(e).substring(0, 40) });
+          });
+        });
+      };
+      if (this.isRemote && this.remoteSession !== undefined) {
+        /* 0.9.14 (Android RemoteBilingualBase): assemble the offline base
+         * from the block cache, rewrite it, and swap; restoring swaps back
+         * to the assembled local original, no network needed */
+        const ext = this.remoteUri.toLowerCase().endsWith('.epub') ? 'epub' : 'html';
+        this.transResult = '\u6B63\u5728\u7EC4\u88C5\u79BB\u7EBF\u57FA\u5E95\u2026';
+        materializeBook(this.remoteSession, ext).then((localPath: string) => {
+          buildFrom(localPath);
         }).catch((e: Object) => {
           this.transBusy = false;
-          promptAction.showToast({ message: '\u53CC\u8BED\u7248\u5E94\u7528\u5931\u8D25\uFF1A' + String(e).substring(0, 40) });
+          this.transResult = '\u7EC4\u88C5\u5931\u8D25\uFF1A' + String(e).substring(0, 60);
         });
-      });
+        return;
+      }
+      buildFrom(this.documentPath);
       return;
     }
     const text = this.selText.length > 0 ? this.selText : this.pageTextForTrans();
@@ -3284,7 +3321,7 @@ struct Reader {
       if (tok !== this.transToken) {
         return;
       }
-      this.transResult = out;
+      this.transResult = lastTruncated ? out + '\n' + this.L($r('app.string.ai_reply_truncated')) : out;
       this.transBusy = false;
       this.showTransPanel = true;
       this.showTrans = false;

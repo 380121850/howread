@@ -57,9 +57,14 @@ def _ensure_home(dev, cfg):
 def _open_book(dev, title, expect_pages=None, timeout=30):
     dev.click_id('app_tab_1') or dev.click_text('书库')
     if not dev.wait_text(title, 12):
-        dev.swipe(660, 1800, 660, 800)
+        # 2026-09-29: shelf view is the default (Android parity) and has no
+        # title text nodes — fall back to the list view via the view toggle
+        dev.click_xy(1253, 391)
+        time.sleep(1.2)
         if not dev.wait_text(title, 8):
-            raise TestFail('%s not in library' % title)
+            dev.swipe(660, 1800, 660, 800)
+            if not dev.wait_text(title, 8):
+                raise TestFail('%s not in library' % title)
     dev.hilog_clear()
     if not dev.click_text(title):
         raise TestFail('click %s failed' % title)

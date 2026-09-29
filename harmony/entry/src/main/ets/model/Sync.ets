@@ -4,6 +4,7 @@ import util from '@ohos.util';
 import { RecentBook, exportRecentBooks, saveRecentBook } from './ReadingProgress';
 import { exportBookmarks, replaceBookmarks, Bookmark } from './Bookmarks';
 import { loadProxy, proxyOpt } from './HttpUtil';
+import { exportAiPayload, mergeAiPayloads, importAiPayload } from './AiVendors';
 
 /**
  * WebDAV sync (Android syncThreeWayFile parity, round 4 C):
@@ -523,4 +524,28 @@ export async function runSync(ctx: Context, cfg: SyncConfig): Promise<SyncLogEnt
   await saveSyncConfig(ctx, cfg);
   console.info(`[Sync] pass done: linked=${entry.linked} up=${entry.up} ms=${entry.ms}`);
   return entry;
+}
+
+/* ---------------- 0.9.14: AI profile sync (Android app-AI.json parity) ----
+ * Merged, never whole-file: the remote key-less payload merges into the
+ * local list, the merged result is uploaded and imported back locally.
+ * Keys never leave the device; deletion tombstones live in AiVendors. */
+export async function syncAiProfiles(ctx: Context, c: SyncConfig): Promise<string> {
+  const fileName = 'app-AI.json';
+  try {
+    const remote = await davGet(c, fileName, ctx);
+    const local = await exportAiPayload(ctx);
+    let merged = local;
+    if (remote !== undefined && remote.trim().length > 0) {
+      merged = mergeAiPayloads(local, remote);
+    }
+    const ok = await davPut(c, fileName, merged, ctx);
+    if (!ok) {
+      return 'AI 配置上传失败';
+    }
+    await importAiPayload(ctx, merged);
+    return 'AI 配置已同步';
+  } catch (e) {
+    return 'AI 配置同步失败：' + String(e).substring(0, 40);
+  }
 }

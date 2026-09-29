@@ -548,3 +548,13 @@ TTS 朗读、搜索全书、批注/高亮编辑、OPDS 书源、云同步等。*
 | EPUB reflow 布局参数与 Android 端不一致 | 阶段 3 格式验证时与 Android 端截图对比页数与排版 |
 | 鸿蒙文件授权模型（scoped storage）限制书库扫描 | 阶段 4 先做 picker + 最近阅读，目录扫描视系统能力降级 |
 | MuPDF AGPL 许可与 Librera 发布方式 | 发布前确认许可合规路径（沿用 Android 版现有做法） |
+
+## 阶段 16m（0.9.13，2026-09-29）：UI 布局对齐安卓 1.3.11
+
+- 对照 P30 真机逐屏适配：状态栏沉浸（EntryAbility statusBarColor）；首页%（进度角标）/我的珍藏常驻/统计 (Pro)+中文时长/我的文件多源圆钮/OPDS 地球；书库默认书架（木纹+连续隔板+格内徽标+彩色书脊占位，columnsGap 8 + 板条负边距 bridging）；我的文件 (Pro) 标题+扁平行；偏好紧凑链接列表（组条纯蓝、子项绿色链接行、默认收起）；抽屉（我的书架/灰图标/蓝格言/圆底按钮）。新增 HomeSource/coverFallbackColor/profileDisplayName。
+- 版本 0.9.13/51；50.104 出四件套；L0 7/7（SM-04/05、_open_book 适配书架默认视图）。
+
+## 阶段 16n（0.9.14，2026-09-29）：同步安卓 09-26 AI 批次
+
+- AiClient 重写：openai/anthropic/google 三协议 + 错误分类 + lastTruncated；AiVendors.ets 多配置（指针/墓碑/明文密钥/镜像旧配置）；对话框配置行+协议芯片+密钥显隐；Bilingual 单 HTML/FB2 通道；DocConvert ODT；Reader 远程 100% 缓存双语（materializeBook）；Sync app-AI.json 合并。约束：MOBI 系双语（MuPDF 直开无转换链）、DOC。
+- 版本 0.9.14/52；50.104 四件套；L0 7/7。
