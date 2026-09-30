@@ -999,6 +999,7 @@ public class ExtUtils {
         }
         intent.setData(checkPlaylisturi(uri, intent, playlist));
 
+        android.util.Log.i("BENCH", "open-intent " + uri);
         android.util.Log.i("REMOTE", "showDocumentInner startActivity " + uri);
         c.startActivity(intent);
         android.util.Log.i("REMOTE", "showDocumentInner startActivity returned");

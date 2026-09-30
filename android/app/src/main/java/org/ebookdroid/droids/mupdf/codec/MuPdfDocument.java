@@ -67,7 +67,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
         }
 
         final CodecPageInfo cpi = new CodecPageInfo();
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
             MuPdfDocument.getPageInfo(docHandle, targetPage, cpi);
         } finally {
@@ -104,7 +104,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
         if (fname != null && fname.startsWith(com.foobnix.remote.RemoteBook.PREFIX)) {
             return openRemoteFile(format, fname, pwd, css);
         }
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
             int allocatedMemory = AppState.get().allocatedMemorySize * 1024 * 1024;
             // int allocatedMemory = CoreSettings.get().pdfStorageSize;
@@ -139,9 +139,11 @@ public class MuPdfDocument extends AbstractCodecDocument {
                     LOG.e(t);
                 }
             }
+            final long benchOpenT0 = android.os.SystemClock.elapsedRealtime();
             final long open = open(allocatedMemory, format, fname, pwd, css,
                     BookCSS.get().documentStyle == BookCSS.STYLES_ONLY_USER ? 0 : 1, BookCSS.get().imageScale,
                     AppState.get().antiAliasLevel, accel, isImageScale, deferHtml);
+            android.util.Log.i("BENCH", "native-open " + (android.os.SystemClock.elapsedRealtime() - benchOpenT0) + "ms " + ExtUtils.getFileName(fname));
             LOG.d("TEST", "Open document " + fname + " " + open);
             LOG.d("TEST", "Open document css ", css);
             LOG.d("TEST", "Open document isImageScale ", isImageScale);
@@ -569,7 +571,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
             LOG.d("getPageCount from cache", cacheCount);
             return cacheCount;
         }
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
             if (isRecycled()) {
                 LOG.d("getPageCount", "getPageCount isRecycled");
@@ -599,7 +601,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
     }
 
     @Override public void setMeta(String key, String value) {
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
             LOG.d(this.getClass(), "setMetaData", key, value);
             setMetaData(documentHandle, key, value);
@@ -688,7 +690,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
             // Chapter-wise layout only applies to reflowable documents.
             return getPageCount(w, h, size);
         }
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
             if (isRecycled()) {
                 return 0;
@@ -720,7 +722,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
 
     @Override public CodecPageInfo getPageInfo(final int pageNumber) {
         final CodecPageInfo info = new CodecPageInfo();
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
             final int res = getPageInfo(documentHandle, pageNumber + 1, info);
             if (res == -1) {
@@ -736,7 +738,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
     }
 
     @Override protected void freeDocument() {
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
             cacheHandle = -1;
             free(documentHandle);
@@ -748,7 +750,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
     }
 
     @Override public String getMeta(final String option) {
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
 
             if (true) {
@@ -819,7 +821,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
 
     @Override public void saveAnnotations(String path) {
         LOG.d("Save Annotations saveInternal 1");
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
             saveInternal(documentHandle, path);
             // only trust the save when the output really appeared: a native
@@ -839,7 +841,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
     }
 
     @Override public void deleteAnnotation(long pageHandle, int index) {
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
             deleteAnnotationInternal(documentHandle, pageHandle, index);
             markDirty();

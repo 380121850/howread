@@ -15,10 +15,10 @@ import com.foobnix.android.utils.LOG;
  */
 public class FirstPaintGate {
 
-    private static final long QUIET_MS = 500;
-    private static final long NO_DECODE_MS = 2000;
+    private static final long QUIET_MS = 150;
+    private static final long NO_DECODE_MS = 1200;
     private static final long HARD_CAP_MS = 8000;
-    private static final long TICK_MS = 200;
+    private static final long TICK_MS = 100;
 
     private static final Handler UI = new Handler(Looper.getMainLooper());
 
@@ -97,6 +97,7 @@ public class FirstPaintGate {
             final long now = android.os.SystemClock.elapsedRealtime();
             if (firstDecodeAt == 0) {
                 firstDecodeAt = now;
+                android.util.Log.i("BENCH", "first-node-decoded " + (now - armAt) + "ms after open");
             }
             lastDecodeAt = now;
         }

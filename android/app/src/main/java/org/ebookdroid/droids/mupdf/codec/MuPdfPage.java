@@ -58,7 +58,7 @@ public class MuPdfPage extends AbstractCodecPage {
     }
 
     static MuPdfPage createPage(final MuPdfDocument dochandle, final int pageno) {
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
             if(dochandle.isRecycled()){
                 LOG.d("MUPDF! +create page isRecycled");
@@ -184,7 +184,7 @@ public class MuPdfPage extends AbstractCodecPage {
     @Override
     public void recycle() {
         try {
-            TempHolder.lock.lock();
+            TempHolder.lockDiag(Thread.currentThread().getName());
             if (pageHandle != 0 && muPdfDocument != null && muPdfDocument.getDocumentHandle() != 0 && !muPdfDocument.isRecycled()) {
                 LOG.d("MUPDF! -recycle page", docHandle, pageNumber);
                 free(docHandle, pageHandle);
@@ -204,7 +204,7 @@ public class MuPdfPage extends AbstractCodecPage {
 
     private RectF getBounds() {
         final float[] box = new float[4];
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
             getBounds(docHandle, pageHandle, box);
         } finally {
@@ -215,7 +215,7 @@ public class MuPdfPage extends AbstractCodecPage {
     }
 
     public BitmapRef renderSimple(final Rect viewbox, final float[] ctm) {
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
 
 
@@ -244,7 +244,7 @@ public class MuPdfPage extends AbstractCodecPage {
     }
 
     public BitmapRef render(final Rect viewbox, final float[] ctm, boolean cache) {
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         final long renderT0 = android.os.SystemClock.elapsedRealtime();
         try {
 
@@ -337,7 +337,7 @@ public class MuPdfPage extends AbstractCodecPage {
             return new ArrayList<PageLink>();
         }
 
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
             return MuPdfLinks.getPageLinks(docHandle, pageHandle, pageBounds);
         } finally {
@@ -347,7 +347,7 @@ public class MuPdfPage extends AbstractCodecPage {
 
     @Override
     public int getCharCount() {
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
             return getCharCount(docHandle, pageHandle);
         } finally {
@@ -368,7 +368,7 @@ public class MuPdfPage extends AbstractCodecPage {
     @Override
     public String getPageHTML() {
         LOG.d("getPageAsHtml");
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
             byte[] pageAsHtml = getPageAsHtml(docHandle, pageHandle, -1);
             String string = new String(pageAsHtml);
@@ -385,7 +385,7 @@ public class MuPdfPage extends AbstractCodecPage {
     @Override
     public String getPageHTMLWithImages() {
         LOG.d("getPageAsHtml");
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
             // FZ_STEXT_PRESERVE_LIGATURES = 1,
             // FZ_STEXT_PRESERVE_WHITESPACE = 2,
@@ -409,7 +409,7 @@ public class MuPdfPage extends AbstractCodecPage {
             return;
         }
         LOG.d("addMarkupAnnotation", quadPoints.length, type, color[0], color[1], color[2]);
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
             addMarkupAnnotationInternal(docHandle, pageHandle, quadPoints, type.ordinal(), color);
             muPdfDocument.markDirty();
@@ -426,7 +426,7 @@ public class MuPdfPage extends AbstractCodecPage {
             return;
         }
         LOG.d("addTextNote", quadPoints.length, text);
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
             addTextNoteInternal(docHandle, pageHandle, quadPoints, text, color);
             muPdfDocument.markDirty();
@@ -437,7 +437,7 @@ public class MuPdfPage extends AbstractCodecPage {
 
     @Override
     public List<Annotation> getAnnotationsImpl() {
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         List<Annotation> result = new ArrayList<Annotation>();
         try {
             Annotation[] list = getAnnotationsInternal(docHandle, pageHandle);
@@ -462,7 +462,7 @@ public class MuPdfPage extends AbstractCodecPage {
     @Override
     public void addAnnotation(float[] color, PointF[][] points, float width, float alpha) {
         LOG.d("addInkAnnotationInternal", color[0], color[1], color[2]);
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
             addInkAnnotationInternal(docHandle, pageHandle, color, points, (int) width, alpha);
             muPdfDocument.markDirty();
@@ -472,7 +472,7 @@ public class MuPdfPage extends AbstractCodecPage {
     }
 
     public TextChar[][][][] text() {
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
             return text(docHandle, pageHandle);
         } catch (Throwable e) {
@@ -515,7 +515,7 @@ public class MuPdfPage extends AbstractCodecPage {
     public TextWord[][] getText_116() {
         List<TextChar> chars = null;
 
-        TempHolder.lock.lock();
+        TempHolder.lockDiag(Thread.currentThread().getName());
         try {
             chars = text116(docHandle, pageHandle);
         } finally {

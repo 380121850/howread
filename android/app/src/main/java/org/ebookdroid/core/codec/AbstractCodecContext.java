@@ -113,6 +113,7 @@ public abstract class AbstractCodecContext implements CodecContext {
 
         if (cacheFileName != null && cacheFileName.isFile()) {
             LOG.d("Open-Document from cache", fileNameOriginal);
+            android.util.Log.i("BENCH", "codec-cache hit " + fileNameOriginal);
             return openDocumentInnerCanceled(fileNameOriginal, password);
         }
 
@@ -126,7 +127,10 @@ public abstract class AbstractCodecContext implements CodecContext {
                 return null;
             }
             try {
-                return openDocumentInnerCanceled(fileName, password);
+                final long benchConvertT0 = android.os.SystemClock.elapsedRealtime();
+                final CodecDocument benchDoc = openDocumentInnerCanceled(fileName, password);
+                android.util.Log.i("BENCH", "codec-convert " + (android.os.SystemClock.elapsedRealtime() - benchConvertT0) + "ms " + fileNameOriginal);
+                return benchDoc;
             } catch (MuPdfPasswordException e) {
                 throw new MuPdfPasswordRequiredException();
             } catch (Throwable e) {

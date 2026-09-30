@@ -192,6 +192,7 @@ public class VerticalViewActivity extends AbstractActionActivity<VerticalViewAct
         frameLayout.addView(view.getView());
 
         getController().afterCreate(this);
+        android.util.Log.i("BENCH", "vv-onCreate done");
 
         // ADS.activate(this, adView);
 

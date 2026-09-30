@@ -6,7 +6,31 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class TempHolder {
-    public static final ReentrantLock lock = new ReentrantLock();
+    private static final class DiagLock extends ReentrantLock {
+        public Thread owner() {
+            return getOwner();
+        }
+    }
+
+    private static final DiagLock diag = new DiagLock();
+    public static final ReentrantLock lock = diag;
+
+    /** Diagnostic wrapper: logs when a thread waited >200ms for the native
+     *  lock and names the thread that held it. Same semantics as lock(). */
+    public static void lockDiag(final String where) {
+        final long t0 = android.os.SystemClock.elapsedRealtime();
+        Thread holder = null;
+        final boolean contended = !lock.tryLock();
+        if (contended) {
+            holder = diag.owner();
+            lock.lock();
+        }
+        final long waited = android.os.SystemClock.elapsedRealtime() - t0;
+        if (waited > 200) {
+            android.util.Log.i("BENCH", "lock-wait " + where + " waited=" + waited
+                    + "ms holder=" + (holder != null ? holder.getName() : "?"));
+        }
+    }
 
     public static final TempHolder inst = new TempHolder();
     public static volatile int listHash = 0;

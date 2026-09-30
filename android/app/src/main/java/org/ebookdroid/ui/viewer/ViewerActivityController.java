@@ -1017,6 +1017,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                     LOG.e(e);
                 }
 
+                android.util.Log.i("BENCH", "meta-done " + (android.os.SystemClock.elapsedRealtime() - benchT0) + "ms");
                 android.util.Log.i("REMOTE", "calling documentModel.open");
                 // fresh load: wipe a cancel flag left by a previous book
                 TempHolder.get().loadingCancelled.set(false);
@@ -1090,6 +1091,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                 }
 
                 getDocumentController().init(this);
+                android.util.Log.i("BENCH", "layout-done " + (android.os.SystemClock.elapsedRealtime() - benchT0) + "ms");
                 return null;
             } catch (final MuPdfPasswordException pex) {
                 return pex;

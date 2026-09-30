@@ -333,7 +333,9 @@ public class DecodeServiceBase implements DecodeService {
     }
 
     void performDecode(final DecodeTask task) {
-        if (executor.isTaskDead(task)) {
+        final boolean benchDead = executor.isTaskDead(task);
+        android.util.Log.i("BENCH", "decode-take pg=" + task.pageNumber + " dead=" + benchDead);
+        if (benchDead) {
             return;
         }
         inFlightDecodes.incrementAndGet();
@@ -346,8 +348,10 @@ public class DecodeServiceBase implements DecodeService {
 
     private void performDecodeInner(final DecodeTask task) {
         if (executor.isTaskDead(task)) {
+            android.util.Log.i("BENCH", "inner-dead pg=" + task.pageNumber);
             return;
         }
+        android.util.Log.i("BENCH", "inner-start pg=" + task.pageNumber);
 
         CodecPageHolder holder = null;
         CodecPage vuPage = null;
@@ -356,8 +360,11 @@ public class DecodeServiceBase implements DecodeService {
 
         // TempHolder.lock.lock();
         try {
+            final long benchPgT0 = android.os.SystemClock.elapsedRealtime();
             holder = getPageHolder(task.id, task.pageNumber);
+            android.util.Log.i("BENCH", "holder-ok pg=" + task.pageNumber);
             vuPage = holder.getPage(task.id);
+            android.util.Log.i("BENCH", "decode-page pg=" + task.pageNumber + " load=" + (android.os.SystemClock.elapsedRealtime() - benchPgT0) + "ms");
             if (executor.isTaskDead(task)) {
                 return;
             }
@@ -375,8 +382,10 @@ public class DecodeServiceBase implements DecodeService {
                 return;
             }
             // TempHolder.lock.lock();
+            final long benchRdT0 = android.os.SystemClock.elapsedRealtime();
             final BitmapRef bitmap = vuPage.renderBitmap(r.width(), r.height(), actualSliceBounds, true);
             // TempHolder.lock.unlock();
+            android.util.Log.i("BENCH", "render-page pg=" + task.pageNumber + " render=" + (android.os.SystemClock.elapsedRealtime() - benchRdT0) + "ms " + r.width() + "x" + r.height());
 
             if (shutdownStarted || executor.isTaskDead(task)) {
                 BitmapManager.release(bitmap);
@@ -746,10 +755,14 @@ public class DecodeServiceBase implements DecodeService {
         final AtomicBoolean run = new AtomicBoolean(true);
 
         ExecutorRunnable() {
-            //Thread t = new Thread(this, "@T Decoding");
-            //t.setPriority(CoreSettings.getInstance().decodingThreadPriority);
-            //t.start();
-            AppsConfig.executorService.execute(this);
+            // Dedicated thread, not the shared 2-thread executorService: the
+            // loop lives as long as the document, and hosting it on the pool
+            // both starves page decoding behind thumbnail/startup tasks and
+            // permanently eats one pool slot. Page decoding serializes on
+            // TempHolder.lock anyway, so a dedicated thread is safe.
+            final Thread t = new Thread(this, "@T Decoding");
+            t.setPriority(Thread.NORM_PRIORITY - 1);
+            t.start();
         }
 
         @Override

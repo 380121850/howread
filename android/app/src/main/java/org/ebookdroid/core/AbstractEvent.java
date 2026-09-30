@@ -103,6 +103,7 @@ public abstract class AbstractEvent implements IEvent {
     }
 
     protected final void decodePageTreeNodes(final ViewState viewState, final List<PageTreeNode> nodesToDecode) {
+        android.util.Log.i("BENCH", "remap nodes=" + nodesToDecode.size() + " fp=" + viewState.pages.firstVisible);
         final PageTreeNode best = Collections.min(nodesToDecode, new PageTreeNodeComparator(viewState));
         final DecodeService ds = ctrl.getBase().getDecodeService();
 
