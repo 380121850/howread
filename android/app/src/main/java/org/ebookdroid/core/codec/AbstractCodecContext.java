@@ -81,33 +81,39 @@ public abstract class AbstractCodecContext implements CodecContext {
 
     @Override
     public CodecDocument openDocument(String fileNameOriginal, String password) {
+        // 同一物理文件常以不同路径身份出现（书架原生 /storage/emulated/0/... vs
+        // 符号链接 /sdcard/...；12S 现场：同一本书在书架出现两份，一份取词正常
+        // 一份文字层永久死亡——两身份各自一套转换缓存/体检记忆/kept 闩，坏状态
+        // 只毒化其中一套）。打开入口统一规范化为 /sdcard/ 形态：双身份共享同一
+        // 转换缓存键与状态，坏缓存不再按身份分裂。
+        final String normPath = normalizeStoragePath(fileNameOriginal);
         // Guarantee the native MuPDF library is loaded before any document
         // is opened (reader, cover thumbnail, library scan all funnel here).
         // Usually already preloaded on a background thread from Application.
         AppsConfig.ensureMuPdfLoaded();
-        LOG.d("Open-Document", fileNameOriginal);
+        LOG.d("Open-Document", normPath);
         // TempHolder.loadingCancelled = false;
-        if (com.foobnix.remote.RemoteBook.isRemotePath(fileNameOriginal)) {
+        if (com.foobnix.remote.RemoteBook.isRemotePath(normPath)) {
             // Remote book: the chunk-cache stream is assembled inside
             // MuPdfDocument; skip every local-file step (salt, unzip, cache
             // files) — there is no local file to touch.
-            LOG.remote("codec openDocument begin " + fileNameOriginal);
+            LOG.remote("codec openDocument begin " + normPath);
             try {
-                return openDocumentInnerCanceled(fileNameOriginal, password);
+                return openDocumentInnerCanceled(normPath, password);
             } catch (Throwable e) {
                 LOG.remote("remote open failed: " + e, e);
                 throw e;
             }
         }
-        if (ExtUtils.isZip(fileNameOriginal)) {
-            LOG.d("Open-Document ZIP", fileNameOriginal);
-            return openDocumentInnerCanceled(fileNameOriginal, password);
+        if (ExtUtils.isZip(normPath)) {
+            LOG.d("Open-Document ZIP", normPath);
+            return openDocumentInnerCanceled(normPath, password);
         }
 
-        LOG.d("Open-Document 2 LANG:", AppSP.get().hypenLang, fileNameOriginal);
+        LOG.d("Open-Document 2 LANG:", AppSP.get().hypenLang, normPath);
 
-        File cacheFileName = getCacheFileName(fileNameOriginal + getFileNameSalt(fileNameOriginal));
-        if (!BookType.ODT.is(fileNameOriginal)) {
+        File cacheFileName = getCacheFileName(normPath + getFileNameSalt(normPath));
+        if (!BookType.ODT.is(normPath)) {
             // Keep the most recent conversion products (incl. the current
             // book) instead of wiping all other books on every open.
             CacheZipUtils.trimFiles(CacheZipUtils.CACHE_BOOK_DIR.listFiles(), cacheFileName, 8);
@@ -115,18 +121,18 @@ public abstract class AbstractCodecContext implements CodecContext {
         }
 
         if (cacheFileName != null && cacheFileName.isFile()) {
-            LOG.d("Open-Document from cache", fileNameOriginal);
-            LOG.bench("codec-cache hit " + fileNameOriginal);
+            LOG.d("Open-Document from cache", normPath);
+            LOG.bench("codec-cache hit " + normPath);
             CodecDocument cachedDoc = null;
             boolean openFailed = false;
             try {
-                cachedDoc = openDocumentInnerCanceled(fileNameOriginal, password);
+                cachedDoc = openDocumentInnerCanceled(normPath, password);
             } catch (final MuPdfPasswordException pe) {
                 throw new MuPdfPasswordRequiredException();
             } catch (final Throwable t) {
                 // 直接判定一：缓存文件连打开都失败（现场 warmer 的
                 // "PDF file not found or corrupted"）= 缓存损坏
-                LOG.bench("codec-cache CORRUPT (open failed) -> delete & reconvert: " + fileNameOriginal);
+                LOG.bench("codec-cache CORRUPT (open failed) -> delete & reconvert: " + normPath);
                 LOG.e(t);
                 try {
                     cacheFileName.delete();
@@ -149,18 +155,18 @@ public abstract class AbstractCodecContext implements CodecContext {
                     markProbeResult(cacheFileName, true);
                     return cachedDoc;
                 }
-                if (isConvertKept(fileNameOriginal)) {
+                if (isConvertKept(normPath)) {
                     // 同一本书已删过一次缓存、重转仍是文字空：该设备的转换本就
                     // 产不出文字层，删了还会再犯。保留缓存（渲染/阅读不受影响，
                     // 长按走 refetch 重试与整页文字兜底），并不再重复探测。
                     markProbeResult(cacheFileName, false);
                     return cachedDoc;
                 }
-                LOG.bench("codec-cache CORRUPT (text probe empty) -> delete & reconvert: " + fileNameOriginal);
+                LOG.bench("codec-cache CORRUPT (text probe empty) -> delete & reconvert: " + normPath);
                 try {
                     cacheFileName.delete();
                     lastDeletedConversionCache = cacheFileName.getPath();
-                    markConvertKept(fileNameOriginal);
+                    markConvertKept(normPath);
                 } catch (final Throwable ignored) {
                 }
                 // 落到底部全新转换路径当场重建
@@ -170,7 +176,7 @@ public abstract class AbstractCodecContext implements CodecContext {
         CacheZipUtils.cacheLock2.lock();
         CacheZipUtils.createAllCacheDirs();
         try {
-            String fileName = CacheZipUtils.extracIfNeed(fileNameOriginal, CacheDir.ZipApp).unZipPath;
+            String fileName = CacheZipUtils.extracIfNeed(normPath, CacheDir.ZipApp).unZipPath;
             LOG.d("Open-Document extract", fileName);
             if (!ExtUtils.isValidFile(fileName)) {
                 LOG.d( "isValidFile",fileName);
@@ -179,7 +185,7 @@ public abstract class AbstractCodecContext implements CodecContext {
             try {
                 final long benchConvertT0 = android.os.SystemClock.elapsedRealtime();
                 final CodecDocument benchDoc = openDocumentInnerCanceled(fileName, password);
-                LOG.bench("codec-convert " + (android.os.SystemClock.elapsedRealtime() - benchConvertT0) + "ms " + fileNameOriginal);
+                LOG.bench("codec-convert " + (android.os.SystemClock.elapsedRealtime() - benchConvertT0) + "ms " + fileName);
                 return benchDoc;
             } catch (MuPdfPasswordException e) {
                 throw new MuPdfPasswordRequiredException();
@@ -270,6 +276,22 @@ public abstract class AbstractCodecContext implements CodecContext {
         } catch (final Throwable t) {
             return false;
         }
+    }
+
+    /** 存储路径规范化：/storage/emulated/0/ 与 /sdcard/ 是同一卷的两种形态，
+     * 统一成 /sdcard/ 使转换缓存键、体检记忆、kept 闩对双身份稳定一致；
+     * internal-storage: 前缀（书架 DB 相对形态）一并归一。 */
+    public static String normalizeStoragePath(final String path) {
+        if (path == null) {
+            return null;
+        }
+        if (path.startsWith("/storage/emulated/0/")) {
+            return "/sdcard/" + path.substring("/storage/emulated/0/".length());
+        }
+        if (path.startsWith("internal-storage:")) {
+            return "/sdcard" + path.substring("internal-storage:".length());
+        }
+        return path;
     }
 
     private static void markConvertKept(final String book) {

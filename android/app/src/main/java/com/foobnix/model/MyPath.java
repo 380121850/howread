@@ -48,6 +48,26 @@ public class MyPath {
         return path.replace(INTERNAL_PREFIX, INTERNAL_ROOT);
     }
 
+    /** 任意形态的存储路径统一为书架原生相对形态 internal-storage:/...：
+     *  /storage/emulated/0/、/sdcard/ 与 internal-storage: 是同一卷的三种引用，
+     *  统一后同一物理文件在数据库/书架只占一行。其余形态原样返回。 */
+    public static String canonicalize(String path) {
+        if (path == null) {
+            return path;
+        }
+        if (path.startsWith(INTERNAL_PREFIX)) {
+            return path;
+        }
+        String abs = path;
+        if (abs.startsWith("/sdcard/")) {
+            abs = INTERNAL_ROOT + abs.substring("/sdcard".length());
+        }
+        if (abs.startsWith(INTERNAL_ROOT + "/")) {
+            return toRelative(abs);
+        }
+        return path;
+    }
+
     public static String getSyncPath(String path) {
         if (path == null) {
             return null;

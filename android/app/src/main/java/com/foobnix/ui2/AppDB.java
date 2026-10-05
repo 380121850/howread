@@ -17,6 +17,7 @@ import com.foobnix.dao2.FileMeta;
 import com.foobnix.dao2.FileMetaDao;
 import com.foobnix.model.AppData;
 import com.foobnix.model.AppState;
+import com.foobnix.model.MyPath;
 import com.foobnix.model.SimpleMeta;
 import com.foobnix.pdf.info.AppsConfig;
 import com.foobnix.pdf.info.Clouds;
@@ -126,6 +127,51 @@ public class AppDB {
         daoSession = daoMaster.newSession();
 
         fileMetaDao = daoSession.getFileMetaDao();
+
+        // 后台合并重复行：同一物理文件曾以不同路径形态（/storage/emulated/0、
+        // /sdcard、internal-storage:）入库时会在书架出现两份。统一键合并为一行，
+        // 代表行优先取书架原生 internal-storage: 形态。
+        final FileMetaDao dedupeDao = fileMetaDao;
+        new Thread("@T AppDB dedupe") {
+            @Override public void run() {
+                try {
+                    final List<FileMeta> all = dedupeDao.loadAll();
+                    final java.util.LinkedHashMap<String, FileMeta> keep = new java.util.LinkedHashMap<String, FileMeta>();
+                    final List<FileMeta> remove = new ArrayList<FileMeta>();
+                    for (final FileMeta m : all) {
+                        final String key = MyPath.canonicalize(m.getPath());
+                        if (key == null) {
+                            continue;
+                        }
+                        final FileMeta cur = keep.get(key);
+                        if (cur == null) {
+                            keep.put(key, m);
+                            continue;
+                        }
+                        final boolean mNative = m.getPath().startsWith(com.foobnix.model.MyPath.INTERNAL_PREFIX);
+                        final boolean curNative = cur.getPath().startsWith(com.foobnix.model.MyPath.INTERNAL_PREFIX);
+                        if (mNative && !curNative) {
+                            remove.add(cur);
+                            keep.put(key, m);
+                        } else {
+                            remove.add(m);
+                        }
+                    }
+                    if (!remove.isEmpty()) {
+                        for (final FileMeta m : remove) {
+                            try {
+                                dedupeDao.delete(m);
+                            } catch (final Throwable t) {
+                                LOG.w(t);
+                            }
+                        }
+                        LOG.bench("AppDB dedupe merged " + remove.size() + " duplicate path rows");
+                    }
+                } catch (final Throwable t) {
+                    LOG.w(t);
+                }
+            }
+        }.start();
 
         if (oldHelper != null) {
             // 延迟关闭：给仍在旧连接上的 in-flight 查询留出收尾窗口
@@ -280,6 +326,9 @@ public class AppDB {
     }
 
     public void save(FileMeta meta) {
+        if (meta != null) {
+            meta.setPath(MyPath.canonicalize(meta.getPath()));
+        }
         fileMetaDao.save(meta);
     }
 
@@ -391,10 +440,12 @@ public class AppDB {
         if (fileMetaDao == null) {
             return null;
         }
-        return fileMetaDao.load(path);
+        return fileMetaDao.load(MyPath.canonicalize(path));
     }
 
     public FileMeta getOrCreate(String path) {
+        // 同一物理文件的多种路径引用形态统一成一行（见 MyPath.canonicalize）
+        path = MyPath.canonicalize(path);
         if (fileMetaDao == null) {
             FileMeta fileMeta = new FileMeta(path);
             fileMeta.setPages(200);
