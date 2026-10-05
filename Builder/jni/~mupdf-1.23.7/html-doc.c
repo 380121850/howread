@@ -339,16 +339,27 @@ fz_document_handler xhtml_document_handler =
 	xhtdoc_mimetypes
 };
 
+/* HowRead: big fb2 files open as a chunked section-based document
+ * (fb2-chunk-doc.c); the original whole-file handler stays reachable as
+ * the fallback via fz_open_fb2legacy_document_with_buffer. */
+extern fz_document *fz_open_fb2chunk_document_with_buffer(fz_context *ctx, fz_buffer *buf);
+
+fz_document *
+fz_open_fb2legacy_document_with_buffer(fz_context *ctx, fz_archive *zip, fz_buffer *buf)
+{
+	return htdoc_open_document_with_buffer(ctx, zip, buf, FORMAT_FB2);
+}
+
 static fz_document *
 fb2doc_open_document_with_stream(fz_context *ctx, fz_stream *file)
 {
-	return htdoc_open_document_with_buffer(ctx, NULL, fz_read_all(ctx, file, 0), FORMAT_FB2);
+	return fz_open_fb2chunk_document_with_buffer(ctx, fz_read_all(ctx, file, 0));
 }
 
 static fz_document *
 fb2doc_open_document(fz_context *ctx, const char *filename)
 {
-	return htdoc_open_document_with_buffer(ctx, NULL, fz_read_file(ctx, filename), FORMAT_FB2);
+	return fz_open_fb2chunk_document_with_buffer(ctx, fz_read_file(ctx, filename));
 }
 
 static const char *fb2doc_extensions[] =
@@ -438,6 +449,7 @@ fz_document_handler mobi_document_handler =
  * read in full before the first page renders. Implemented in txt-chunk-doc.c
  * via the generic chapter API (count_chapters/count_pages/load_page). */
 extern fz_document *fz_open_txtchunk_document_with_stream(fz_context *ctx, fz_stream *file);
+extern fz_document *fz_open_txtchunk_document_with_filename(fz_context *ctx, const char *filename);
 
 static fz_document *
 txt_open_document_with_stream(fz_context *ctx, fz_stream *file)
@@ -445,10 +457,19 @@ txt_open_document_with_stream(fz_context *ctx, fz_stream *file)
 	return fz_open_txtchunk_document_with_stream(ctx, file);
 }
 
+fz_document *
+fz_open_txtlegacy_document_with_filename(fz_context *ctx, const char *filename)
+{
+	return htdoc_open_document_with_buffer(ctx, NULL, fz_read_file(ctx, filename), FORMAT_TXT);
+}
+
 static fz_document *
 txt_open_document(fz_context *ctx, const char *filename)
 {
-	return htdoc_open_document_with_buffer(ctx, NULL, fz_read_file(ctx, filename), FORMAT_TXT);
+	/* 0.9.18: local plain text opens through the chunked document with the
+	 * same encoding gate as Android (UTF-8/ASCII/UTF-16 chunked, other
+	 * encodings fall back to the whole-file handler above). */
+	return fz_open_txtchunk_document_with_filename(ctx, filename);
 }
 
 static const char *txt_extensions[] =

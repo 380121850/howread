@@ -1505,7 +1505,22 @@ JNIEXPORT jstring
     }
 
     char linkbuf[4048];
-    int pageNo = -1; // outline->page;
+    // Resolve the real destination: PDF fills outline->page at load time;
+    // reflow formats (epub/fb2) leave it at -1, so fall back to resolving
+    // the outline uri (chapter + anchor). Returning a real "#N" lets the
+    // app-side TOC jump work for converted fb2 chapter files too.
+    int pageNo = -1;
+    fz_location ploc = outline->page;
+    if (ploc.chapter >= 0 && ploc.page >= 0) {
+        pageNo = fz_page_number_from_location(doc->ctx, doc->document, ploc);
+    }
+    if (pageNo < 0 && outline->uri != NULL && outline->uri[0] != '\0') {
+        pageNo = fz_page_number_from_location(
+          doc->ctx, doc->document, fz_resolve_link(doc->ctx, doc->document, outline->uri, NULL, NULL));
+    }
+    if (pageNo < 0) {
+        pageNo = -1; // unresolvable: keep the legacy "#0" marker
+    }
 
     snprintf(linkbuf, sizeof(linkbuf), "#%d", pageNo + 1);
 
@@ -2651,8 +2666,13 @@ Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_getPageTreeNums(JNIEnv *env
 	renderdocument_t *doc = (renderdocument_t *)(long)handle;
 	if (!doc || !doc->ctx || !doc->document)
 		return NULL;
+	/* only a real pdf_document has the page-tree fields: a html/epub
+	 * document blind-cast here reads foreign memory (SIGSEGV) */
+	pdf_document *pdfdoc = pdf_document_from_fz_document(doc->ctx, doc->document);
+	if (!pdfdoc)
+		return NULL;
 	int count = 0;
-	int *nums = pdf_get_page_object_numbers(doc->ctx, (pdf_document *)doc->document, &count);
+	int *nums = pdf_get_page_object_numbers(doc->ctx, pdfdoc, &count);
 	if (!nums || count <= 0)
 	{
 		if (nums)
@@ -2733,8 +2753,11 @@ Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_getPageTreeSizes(JNIEnv *en
 	renderdocument_t *doc = (renderdocument_t *)(long)handle;
 	if (!doc || !doc->ctx || !doc->document)
 		return NULL;
+	pdf_document *pdfdoc = pdf_document_from_fz_document(doc->ctx, doc->document);
+	if (!pdfdoc)
+		return NULL;
 	int count = 0;
-	int *sizes = pdf_get_page_sizes(doc->ctx, (pdf_document *)doc->document, &count);
+	int *sizes = pdf_get_page_sizes(doc->ctx, pdfdoc, &count);
 	if (!sizes || count <= 0)
 	{
 		if (sizes)
@@ -2754,7 +2777,10 @@ Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_setLazyPageTree(JNIEnv *env
 	renderdocument_t *doc = (renderdocument_t *)(long)handle;
 	if (!doc || !doc->ctx || !doc->document)
 		return;
-	((pdf_document *)doc->document)->howread_lazy = on ? 1 : 0;
+	pdf_document *pdfdoc = pdf_document_from_fz_document(doc->ctx, doc->document);
+	if (!pdfdoc)
+		return;
+	pdfdoc->howread_lazy = on ? 1 : 0;
 }
 
 JNIEXPORT jlong JNICALL
@@ -2763,7 +2789,10 @@ Java_org_ebookdroid_droids_mupdf_codec_MuPdfDocument_getWalkMs(JNIEnv *env, jcla
 	renderdocument_t *doc = (renderdocument_t *)(long)handle;
 	if (!doc || !doc->ctx || !doc->document)
 		return 0;
-	return (jlong)pdf_get_walk_ms(doc->ctx, (pdf_document *)doc->document);
+	pdf_document *pdfdoc = pdf_document_from_fz_document(doc->ctx, doc->document);
+	if (!pdfdoc)
+		return 0;
+	return (jlong)pdf_get_walk_ms(doc->ctx, pdfdoc);
 }
 
 JNIEXPORT jboolean JNICALL

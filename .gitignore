@@ -83,3 +83,6 @@ harmony/*.csr
 /Builder/jni/obj/
 /Builder/jni/libs/
 /Builder/openssl/build-*
+__pycache__/
+*.pyc
+*.bak_*

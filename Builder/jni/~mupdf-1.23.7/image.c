@@ -1236,7 +1236,7 @@ fz_new_deferred_archive_image(fz_context *ctx, fz_archive *arch, const char *pat
 {
 	fz_deferred_image *image;
 
-	image = fz_new_derived_image(ctx, w, h, 8, NULL, 0, 0, 0, 0, NULL, NULL, NULL,
+	image = fz_new_derived_image(ctx, w, h, 8, fz_device_rgb(ctx), 0, 0, 0, 0, NULL, NULL, NULL,
 			fz_deferred_image,
 			deferred_archive_image_get_pixmap,
 			deferred_archive_image_get_size,

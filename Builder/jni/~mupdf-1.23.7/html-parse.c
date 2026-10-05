@@ -979,7 +979,9 @@ sniff_image_entry_dims(fz_context *ctx, fz_archive *zip, const char *path, int *
 	{
 		*out_w = w;
 		*out_h = h;
+#ifdef __ANDROID__
 		__android_log_print(ANDROID_LOG_INFO, "REMOTE", "img sniff %s -> %dx%d", path, w, h);
+#endif
 	}
 	return ok;
 }
@@ -1703,9 +1705,8 @@ xml_to_boxes(fz_context *ctx, fz_html_font_set *set, fz_archive *zip, const char
 
 		if (user_css)
 		{
-
+			fz_parse_css(ctx, g.css, user_css, "<user>");
 		}
-		fz_parse_css(ctx, g.css, user_css, "<user>");
         fz_add_css_font_faces(ctx, g.set, g.zip, ".", g.css);
 	}
 	fz_catch(ctx)

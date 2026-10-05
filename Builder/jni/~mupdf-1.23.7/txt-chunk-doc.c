@@ -46,6 +46,7 @@ typedef struct
     txtchunk_chapter *chapters;
     float layout_w, layout_h, layout_em;
     int laid_out;
+    int utf16_bom;       /* 1 = LE (FF FE), 2 = BE (FE FF) leading BOM */
     fz_html *hot;        /* most recently parsed chapter tree (or NULL) */
     int hot_chapter;     /* chapter index of hot, or -1 */
 }
@@ -86,6 +87,14 @@ txtchunk_read_chapter(fz_context *ctx, txtchunk_document *doc, int k)
     buf = fz_new_buffer(ctx, (size_t)want + 1);
     fz_try(ctx)
     {
+        if (k > 0 && doc->utf16_bom)
+        {
+            /* re-tag non-first chunks with the file's BOM so the per-chunk
+             * encoding sniff keeps seeing UTF-16 (chunk offsets are even,
+             * so 2-byte pair alignment is preserved) */
+            fz_append_byte(ctx, buf, doc->utf16_bom == 1 ? 0xFF : 0xFE);
+            fz_append_byte(ctx, buf, doc->utf16_bom == 1 ? 0xFE : 0xFF);
+        }
         while (got < want)
         {
             int64_t left = want - got;
@@ -340,6 +349,19 @@ txtchunk_open_document_with_stream(fz_context *ctx, fz_stream *file)
         if (size <= 0)
             fz_throw(ctx, FZ_ERROR_GENERIC, "text file is empty");
         doc->filesize = size;
+        /* remember a leading UTF-16 BOM so later chunks can be re-tagged
+         * (only chunk 0 carries the file's BOM; the per-chunk encoding
+         * sniff would misread BOM-less UTF-16 as 8-bit text) */
+        doc->utf16_bom = 0;
+        {
+            int b0 = fz_read_byte(ctx, file);
+            int b1 = (b0 == EOF) ? EOF : fz_peek_byte(ctx, file);
+            if (b0 == 0xFF && b1 == 0xFE)
+                doc->utf16_bom = 1;
+            else if (b0 == 0xFE && b1 == 0xFF)
+                doc->utf16_bom = 2;
+            fz_seek(ctx, file, 0, 0);
+        }
         doc->set = fz_new_html_font_set(ctx);
         doc->nchapters = (int)((size + TXTCHUNK_SIZE - 1) / TXTCHUNK_SIZE);
         if (doc->nchapters < 1)
@@ -368,4 +390,103 @@ fz_document *
 fz_open_txtchunk_document_with_stream(fz_context *ctx, fz_stream *file)
 {
     return txtchunk_open_document_with_stream(ctx, file);
+}
+
+extern fz_document *fz_open_txtlegacy_document_with_filename(fz_context *ctx, const char *filename);
+
+/* UTF-8 continuation-byte shape check for the chunked-txt gate. */
+static int txtchunk_seq_ok(const unsigned char *d, int64_t n, int64_t i, int need)
+{
+    int64_t k;
+    if (i + need >= n)
+        return -1; /* sequence may continue past the sample: stop scanning */
+    for (k = 1; k <= need; k++)
+        if ((d[i + k] & 0xC0) != 0x80)
+            return 0;
+    return 1;
+}
+
+/* Encoding gate for local plain text, mirroring the Android
+ * isLocalChunkedTxtCandidate decision: UTF-8 / ASCII (and UTF-16 files,
+ * whose non-first chunks are re-tagged with the BOM) open as chunked
+ * documents; anything else (GBK and friends) falls back to the legacy
+ * whole-file handler. Rewinds the stream before returning. */
+static int txtchunk_sniff_candidate(fz_context *ctx, fz_stream *file)
+{
+    unsigned char buf[8192];
+    int64_t total = 0;
+    int plausibly_utf8 = 1;
+
+    {
+        int b0 = fz_read_byte(ctx, file);
+        int b1 = (b0 == EOF) ? EOF : fz_read_byte(ctx, file);
+        if ((b0 == 0xFF && b1 == 0xFE) || (b0 == 0xFE && b1 == 0xFF))
+        {
+            fz_seek(ctx, file, 0, 0);
+            return 1; /* UTF-16 with BOM: chunked (chunks re-tagged) */
+        }
+    }
+    fz_seek(ctx, file, 0, 0);
+
+    while (total < 65536 && plausibly_utf8)
+    {
+        size_t n = fz_read(ctx, file, buf, sizeof(buf));
+        int64_t i;
+        if (n == 0)
+            break;
+        total += n;
+        for (i = 0; i < (int64_t)n && plausibly_utf8; i++)
+        {
+            unsigned char c = buf[i];
+            if (c < 0x80)
+                continue;
+            if ((c & 0xE0) == 0xC0)
+            {
+                int r = txtchunk_seq_ok(buf, (int64_t)n, i, 1);
+                if (r < 0) { total = 65536; break; }
+                if (r == 0) plausibly_utf8 = 0;
+                i += 1;
+            }
+            else if ((c & 0xF0) == 0xE0)
+            {
+                int r = txtchunk_seq_ok(buf, (int64_t)n, i, 2);
+                if (r < 0) { total = 65536; break; }
+                if (r == 0) plausibly_utf8 = 0;
+                i += 2;
+            }
+            else if ((c & 0xF8) == 0xF0)
+            {
+                int r = txtchunk_seq_ok(buf, (int64_t)n, i, 3);
+                if (r < 0) { total = 65536; break; }
+                if (r == 0) plausibly_utf8 = 0;
+                i += 3;
+            }
+            else
+                plausibly_utf8 = 0;
+        }
+    }
+    fz_seek(ctx, file, 0, 0);
+    return plausibly_utf8;
+}
+
+fz_document *
+fz_open_txtchunk_document_with_filename(fz_context *ctx, const char *filename)
+{
+    fz_stream *file = fz_open_file(ctx, filename);
+    fz_document *doc;
+    fz_try(ctx)
+    {
+        if (!txtchunk_sniff_candidate(ctx, file))
+        {
+            fz_drop_stream(ctx, file);
+            return fz_open_txtlegacy_document_with_filename(ctx, filename);
+        }
+        doc = txtchunk_open_document_with_stream(ctx, file);
+    }
+    fz_catch(ctx)
+    {
+        fz_drop_stream(ctx, file);
+        fz_rethrow(ctx);
+    }
+    return doc;
 }
