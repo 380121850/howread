@@ -59,7 +59,7 @@ public class RemoteLibraryCleaner {
                     removed++;
                 }
             }
-            android.util.Log.i("REMOTE", "purgeUnconfigured removed=" + removed);
+            LOG.remote("purgeUnconfigured removed=" + removed);
             if (removed > 0) {
                 refresh();
             }
@@ -83,7 +83,7 @@ public class RemoteLibraryCleaner {
                     removed++;
                 }
             }
-            android.util.Log.i("REMOTE", "pruneSeen " + type + "/" + serverId
+            LOG.remote("pruneSeen " + type + "/" + serverId
                     + " seen=" + seen.size() + " removed=" + removed);
             if (removed > 0) {
                 refresh();
@@ -103,7 +103,7 @@ public class RemoteLibraryCleaner {
                     removed++;
                 }
             }
-            android.util.Log.i("REMOTE", "purgeServer " + prefix + " removed=" + removed);
+            LOG.remote("purgeServer " + prefix + " removed=" + removed);
             if (removed > 0) {
                 refresh();
             }

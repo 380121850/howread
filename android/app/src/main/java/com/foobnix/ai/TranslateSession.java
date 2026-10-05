@@ -1,5 +1,7 @@
 package com.foobnix.ai;
 
+import com.foobnix.android.utils.LOG;
+
 import android.content.Context;
 
 import com.foobnix.android.utils.TxtUtils;
@@ -43,6 +45,7 @@ public class TranslateSession {
         public volatile String tran;    // final translation (null until done)
         public volatile String partial; // growing stream text (while running)
         public volatile float topY = -1; // first-line top / page height (-1 unknown)
+        public volatile float[] rect;    // 段落包围盒 {l,t,r,b}（页宽/页高分数；null 未定位）
 
         Slot(int page, String pid, String orig) {
             this.page = page;
@@ -79,6 +82,14 @@ public class TranslateSession {
         TranslateSession s = CURRENT;
         if (s != null && dc != null && dc.getCurrentBook() != null) {
             s.onReaderPageChanged(dc);
+        }
+    }
+
+    /** Stop whichever panel session is active (mode switches / re-entry). */
+    public static void cancelCurrent() {
+        TranslateSession s = CURRENT;
+        if (s != null) {
+            s.cancel();
         }
     }
 
@@ -197,12 +208,18 @@ public class TranslateSession {
         if (stopped) {
             return;
         }
-        lastDc = dc;
-        int page = dc.getCurentPageFirst1();
-        if (page <= 0 || page == displayedPage) {
-            return; // frequent feeds (scroll events) are cheap no-ops
+        try {
+            lastDc = dc;
+            int page = dc.getCurentPageFirst1();
+            if (page <= 0 || page == displayedPage) {
+                return; // frequent feeds (scroll events) are cheap no-ops
+            }
+            recenter(dc, page);
+        } catch (Throwable t) {
+            // 会话可能跨阅读器残留（静态 CURRENT）：喂进来的控制器可能处于
+            // 任何生命周期阶段，任何异常都不允许沿 updateUI 传进 UI 线程
+            LOG.benchW("TranslateSession feed fail", t);
         }
-        recenter(dc, page);
     }
 
     /**
@@ -256,11 +273,16 @@ public class TranslateSession {
         if (dc == null || page < 1 || pages.containsKey(page)) {
             return;
         }
-        String[] paras = dc.getPageParagraphs(page - 1); // 0-based
+        String[] paras = null;
+        try {
+            paras = dc.getPageParagraphs(page - 1); // 0-based
+        } catch (Throwable t) {
+            LOG.benchW("TranslateSession paragraphs fail p=" + page, t);
+        }
         if (paras == null) {
             // recycled page outside the decode window: retried on the next
             // re-center (the current page is always live)
-            android.util.Log.i("BENCH", "TranslateSession page " + page + " paras=null (recycled)");
+            LOG.bench("TranslateSession page " + page + " paras=null (recycled)");
             return;
         }
         int chapter = chapterIndexForPage(outline, page);
@@ -274,7 +296,18 @@ public class TranslateSession {
             }
             cleaned.add(orig);
         }
-        float[] tops = dc.getParagraphTops(page - 1, cleaned.toArray(new String[cleaned.size()]));
+        float[] tops = null;
+        try {
+            tops = dc.getParagraphTops(page - 1, cleaned.toArray(new String[cleaned.size()]));
+        } catch (Throwable t) {
+            LOG.benchW("TranslateSession tops fail p=" + page, t);
+        }
+        float[][] rects = null;
+        try {
+            rects = dc.getParagraphRects(page - 1, cleaned.toArray(new String[cleaned.size()]));
+        } catch (Throwable t) {
+            LOG.bench("TranslateSession getParagraphRects fail " + t);
+        }
         List<Slot> slots = new ArrayList<Slot>();
         int aligned = 0;
         for (int i = 0; i < cleaned.size(); i++) {
@@ -286,14 +319,17 @@ public class TranslateSession {
                 s.topY = tops[i];
                 aligned++;
             }
+            if (rects != null && i < rects.length && rects[i] != null && rects[i].length >= 4) {
+                s.rect = rects[i];
+            }
             String cached = cache == null ? null : cache.lookup(pid, src, tgt, orig);
             if (cached != null) {
                 s.tran = cached;
-                android.util.Log.i("BENCH", "TranslateSession " + pid + " cache HIT");
+                LOG.bench("TranslateSession " + pid + " cache HIT");
             }
             slots.add(s);
         }
-        android.util.Log.i("BENCH", "TranslateSession page " + page + " slots=" + slots.size()
+        LOG.bench("TranslateSession page " + page + " slots=" + slots.size()
                 + " aligned=" + aligned);
         pages.put(page, slots);
         for (Slot s : slots) {
@@ -328,7 +364,7 @@ public class TranslateSession {
     private void translate(final Slot s) {
         String prompt = s.orig + "\n\n" + suffix;
         long t0 = System.currentTimeMillis();
-        android.util.Log.i("BENCH", "TranslateSession " + s.pid + " AI ask p=" + s.page
+        LOG.bench("TranslateSession " + s.pid + " AI ask p=" + s.page
                 + " orig.len=" + s.orig.length());
         AiClient.TestResult res = AiClient.ask(appContext, prompt, new AiClient.StreamCallback() {
             @Override public void onDelta(String fullTextSoFar) {
@@ -339,7 +375,7 @@ public class TranslateSession {
                 }
             }
         });
-        android.util.Log.i("BENCH", "TranslateSession " + s.pid + " AI res ok=" + res.ok
+        LOG.bench("TranslateSession " + s.pid + " AI res ok=" + res.ok
                 + " err=" + res.error + " detail=" + res.detail
                 + " ms=" + (System.currentTimeMillis() - t0)
                 + " reply.len=" + (res.reply == null ? -1 : res.reply.length()));

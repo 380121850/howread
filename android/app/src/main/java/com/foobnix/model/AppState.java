@@ -385,6 +385,8 @@ public class AppState {
     // bilingual checkbox (it always starts unchecked); kept only so old
     // persisted app-State.json files still load
     public boolean aiDefaultModeBilingual = false;
+    // PDF 翻译方式：0 对照面板 / 1 原位浮层 / 2 原位替换 / 3 重排双语
+    public int aiPdfTranslateMode = 0;
     public boolean opdsLargeCovers = true;
     public boolean createBookNameFolder = false;
     public String readColors = READ_COLORS_DEAFAUL;
@@ -414,6 +416,11 @@ public class AppState {
     @IgnoreHashCode public int chapterFormat = CHAPTER_FORMAT_3;
     public int outlineMode = OUTLINE_ONLY_HEADERS;
     @IgnoreHashCode public boolean isAllowTextSelection = true;
+
+    /** 常规设置 → 调试日志：打开后 LOG/BENCH/REMOTE 同步写入 debug-log.txt 供导出。debug 包默认开、release 默认关。 */
+    public boolean isDebugLogEnabled = false;
+    /** 用户手动改过开关（未改过则每次启动按构建类型给默认值，见 DebugLog.init） */
+    public boolean isDebugLogEnabledUserSet = false;
     //public boolean isFullScreen = true;
     //public boolean isFullScreenMain = false;
     public boolean isAccurateFontSize = false;
@@ -704,7 +711,9 @@ public class AppState {
     public boolean isShowSyncBooks = true;
     public boolean isShowTestBooks = false;
     public boolean isShowDiscardedBooks = true;
-    @IgnoreHashCode public int sortBookmarksOrder = BOOKMARK_SORT_PAGE_ASC;
+    @IgnoreHashCode public int sortBookmarksOrder = BOOKMARK_SORT_DATE_ASC;
+    /** 一次性迁移：旧版本默认页码排序，升级后统一为时间倒序（最新在前），用户仍可在书签对话框改回 */
+    public boolean sortBookmarksMigrated = false;
     public boolean isEnableTextReplacement = false;
     public long textReplacementHash = 0;
     public boolean isShowSeriesNumberInTitle = true;

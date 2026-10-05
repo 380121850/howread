@@ -104,6 +104,17 @@ public class MuPdfDocument extends AbstractCodecDocument {
         if (fname != null && fname.startsWith(com.foobnix.remote.RemoteBook.PREFIX)) {
             return openRemoteFile(format, fname, pwd, css);
         }
+        // 本地 txt/md 走引擎分块流入口（按需排版，与远程 txt 同一条路径）：
+        // 大文本不再全文转 EPUB/PDF（2MB 文本排版内存放大 150 倍、低端机
+        // 打开数十秒）。编码不友好（GBK 等）的文件由候选判定排除，保持旧链路。
+        if (fname != null && com.foobnix.pdf.info.ExtUtils.isLocalChunkedTxtCandidate(fname)) {
+            final long gateT0 = android.os.SystemClock.elapsedRealtime();
+            final long open = openLocalTxtStream(format, fname, pwd, css);
+            LOG.bench("native-open txt-chunked "
+                    + (android.os.SystemClock.elapsedRealtime() - gateT0) + "ms "
+                    + com.foobnix.pdf.info.ExtUtils.getFileName(fname));
+            return open;
+        }
         TempHolder.lockDiag(Thread.currentThread().getName());
         try {
             int allocatedMemory = AppState.get().allocatedMemorySize * 1024 * 1024;
@@ -133,7 +144,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
                 try {
                     if (new File(fname).length() >= 100L * 1024 * 1024) {
                         deferHtml = 1;
-                        android.util.Log.i("REMOTE", "local big epub: deferred image layout on");
+                        LOG.remote("local big epub: deferred image layout on");
                     }
                 } catch (Throwable t) {
                     LOG.e(t);
@@ -143,7 +154,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
             final long open = open(allocatedMemory, format, fname, pwd, css,
                     BookCSS.get().documentStyle == BookCSS.STYLES_ONLY_USER ? 0 : 1, BookCSS.get().imageScale,
                     AppState.get().antiAliasLevel, accel, isImageScale, deferHtml);
-            android.util.Log.i("BENCH", "native-open " + (android.os.SystemClock.elapsedRealtime() - benchOpenT0) + "ms " + ExtUtils.getFileName(fname));
+            LOG.bench("native-open " + (android.os.SystemClock.elapsedRealtime() - benchOpenT0) + "ms " + ExtUtils.getFileName(fname));
             LOG.d("TEST", "Open document " + fname + " " + open);
             LOG.d("TEST", "Open document css ", css);
             LOG.d("TEST", "Open document isImageScale ", isImageScale);
@@ -166,13 +177,13 @@ public class MuPdfDocument extends AbstractCodecDocument {
      */
     private static long openRemoteFile(final int format, final String fname, final String pwd, final String css) {
         final long lockT0 = android.os.SystemClock.elapsedRealtime();
-        android.util.Log.i("REMOTE", "openRemoteFile enter, waiting lock");
+        LOG.remote("openRemoteFile enter, waiting lock");
         // cancellable wait: a plain lock() left "cancel/back" unresponsive
         // for as long as other work (cover probes, renders) held the lock
         while (true) {
             if (!com.foobnix.remote.OpenGate.isProbe()
                     && TempHolder.get().loadingCancelled.get()) {
-                android.util.Log.i("REMOTE", "openRemoteFile cancelled while waiting lock ("
+                LOG.remote("openRemoteFile cancelled while waiting lock ("
                         + (android.os.SystemClock.elapsedRealtime() - lockT0) + "ms)");
                 throw new RuntimeException("Open cancelled");
             }
@@ -186,7 +197,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
             }
         }
         final long lockedT0 = android.os.SystemClock.elapsedRealtime();
-        android.util.Log.i("REMOTE", "openRemoteFile locked, waited " + (lockedT0 - lockT0) + "ms");
+        LOG.remote("openRemoteFile locked, waited " + (lockedT0 - lockT0) + "ms");
         try {
             int allocatedMemory = AppState.get().allocatedMemorySize * 1024 * 1024;
             int isImageScale = AppState.get().enableImageScale ? 1 : 0;
@@ -194,18 +205,18 @@ public class MuPdfDocument extends AbstractCodecDocument {
             try {
                 session = com.foobnix.remote.RemoteSessionFactory.obtain(fname);
             } catch (java.io.IOException e) {
-                android.util.Log.i("REMOTE", "session obtain failed: " + e, e);
+                LOG.remote("session obtain failed: " + e, e);
                 LOG.e(e);
                 throw new RuntimeException("Cannot open remote book: " + e.getMessage(), e);
             }
             com.foobnix.remote.RemoteSeekableStream stream = new com.foobnix.remote.RemoteSeekableStream(session);
             final long openT0 = android.os.SystemClock.elapsedRealtime();
-            android.util.Log.i("REMOTE", "native openStream begin size=" + session.size);
+            LOG.remote("native openStream begin size=" + session.size);
             final long open = openStream(allocatedMemory, format, com.foobnix.remote.RemoteBook.magicFor(fname),
                     pwd, css,
                     BookCSS.get().documentStyle == BookCSS.STYLES_ONLY_USER ? 0 : 1, BookCSS.get().imageScale,
                     AppState.get().antiAliasLevel, isImageScale, stream);
-            android.util.Log.i("REMOTE", "native openStream done handle=" + open
+            LOG.remote("native openStream done handle=" + open
                     + " in " + (android.os.SystemClock.elapsedRealtime() - openT0) + "ms");
             com.foobnix.remote.RemoteTimeline.mark("MuPDF document open done");
             if (session != null) {
@@ -228,7 +239,39 @@ public class MuPdfDocument extends AbstractCodecDocument {
                 if (!session.isOffline()) {
                     session.invalidateCache();
                 }
-                android.util.Log.i("REMOTE", "openStream failed, block cache invalidated: " + fname);
+                LOG.remote("openStream failed, block cache invalidated: " + fname);
+                throw new RuntimeException("Document is corrupted");
+            }
+            return open;
+        } finally {
+            TempHolder.lock.unlock();
+        }
+    }
+
+    /**
+     * 本地 txt 的引擎流入口：RandomAccessFile 桥接为 SeekableInputStream，
+     * 与远程书同一条 chunked 按需排版路径（无 session/accelerator/侧车）。
+     */
+    private static long openLocalTxtStream(final int format, final String fname,
+            final String pwd, final String css) {
+        TempHolder.lock.lock();
+        try {
+            int allocatedMemory = AppState.get().allocatedMemorySize * 1024 * 1024;
+            int isImageScale = AppState.get().enableImageScale ? 1 : 0;
+            final long open;
+            try {
+                com.foobnix.remote.LocalSeekableStream stream =
+                        new com.foobnix.remote.LocalSeekableStream(new java.io.File(fname));
+                open = openStream(allocatedMemory, format, com.foobnix.remote.RemoteBook.magicFor(fname),
+                        pwd, css,
+                        BookCSS.get().documentStyle == BookCSS.STYLES_ONLY_USER ? 0 : 1,
+                        BookCSS.get().imageScale,
+                        AppState.get().antiAliasLevel, isImageScale, stream);
+            } catch (java.io.IOException e) {
+                throw new RuntimeException("Cannot open local txt: " + e.getMessage(), e);
+            }
+            LOG.d("MUPDF! >>> openStream(local txt)", open, fname);
+            if (open == -1) {
                 throw new RuntimeException("Document is corrupted");
             }
             return open;
@@ -335,28 +378,28 @@ public class MuPdfDocument extends AbstractCodecDocument {
             return;
         }
         if (!locked) {
-            android.util.Log.i("REMOTE", "lazy tree finish skipped: native lock busy");
+            LOG.remote("lazy tree finish skipped: native lock busy");
             return;
         }
         try {
             if (documentHandle == 0 || isRecycled()
                     || TempHolder.get().lastRecycledDocument == documentHandle) {
-                android.util.Log.i("REMOTE", "lazy tree finish skip: doc handle=" + documentHandle);
+                LOG.remote("lazy tree finish skip: doc handle=" + documentHandle);
                 return;
             }
             if (!isBookFullyCached(bookPath)) {
-                android.util.Log.i("REMOTE", "lazy tree finish skip: not fully cached");
+                LOG.remote("lazy tree finish skip: not fully cached");
                 return;
             }
             int[] nums = getPageTreeNums();
             if (nums == null || nums.length == 0) {
                 if (!finishLazyPageTree(documentHandle)) {
-                    android.util.Log.i("REMOTE", "lazy tree finish skip: walk failed");
+                    LOG.remote("lazy tree finish skip: walk failed");
                     return;
                 }
-                android.util.Log.i("REMOTE", "lazy page tree finished: full walk done");
+                LOG.remote("lazy page tree finished: full walk done");
             } else {
-                android.util.Log.i("REMOTE", "lazy tree finish: nums already present " + nums.length);
+                LOG.remote("lazy tree finish: nums already present " + nums.length);
             }
         } finally {
             TempHolder.lock.unlock();
@@ -364,7 +407,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
         boolean saved = false;
         for (com.foobnix.remote.RemoteBookSession s
                 : com.foobnix.remote.RemoteSessionFactory.liveSessions()) {
-            android.util.Log.i("REMOTE", "lazy tree finish: live session " + s.remotePath);
+            LOG.remote("lazy tree finish: live session " + s.remotePath);
             if (bookPath.equals(s.remotePath)) {
                 savePageTreeSidecar(bookPath, s.versionTag, s.size);
                 saved = true;
@@ -372,7 +415,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
             }
         }
         if (!saved) {
-            android.util.Log.i("REMOTE", "lazy tree finish: no live session for " + bookPath);
+            LOG.remote("lazy tree finish: no live session for " + bookPath);
         }
     }
 
@@ -392,7 +435,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
             // an epub page tree does not exist: the natives below would cast
             // a html-engine document to pdf_document and crash (remote
             // bilingual reloads hit this on every silent reopen)
-            android.util.Log.i("REMOTE", "page tree save skipped: text format");
+            LOG.remote("page tree save skipped: text format");
             return;
         }
         if (!com.foobnix.remote.RemoteBook.isRemotePathLoose(bookPath)) {
@@ -407,13 +450,13 @@ public class MuPdfDocument extends AbstractCodecDocument {
             return;
         }
         if (!locked) {
-            android.util.Log.i("REMOTE", "page tree save skipped: native lock busy");
+            LOG.remote("page tree save skipped: native lock busy");
             return;
         }
         try {
             if (TempHolder.get().lastRecycledDocument == documentHandle) {
                 // best-effort save: this exact document was already torn down
-                android.util.Log.i("REMOTE", "page tree save skipped: stale doc handle");
+                LOG.remote("page tree save skipped: stale doc handle");
                 return;
             }
             int[] nums = getPageTreeNums();
@@ -446,13 +489,13 @@ public class MuPdfDocument extends AbstractCodecDocument {
                 }
                 long walkMs = (documentHandle != 0 && !isRecycled())
                         ? getWalkMs(documentHandle) : 0;
-                android.util.Log.i("REMOTE", "page tree map saved: " + nums.length
+                LOG.remote("page tree map saved: " + nums.length
                         + " pages (sizes " + m + ", walk " + walkMs + "ms) -> " + f.getName());
             } finally {
                 o.close();
             }
         } catch (Exception e) {
-            android.util.Log.i("REMOTE", "page tree map save failed: " + e);
+            LOG.remote("page tree map save failed: " + e);
         } finally {
             TempHolder.lock.unlock();
         }
@@ -471,7 +514,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
         try {
             java.io.File f = pageMapFile(bookPath);
             if (!f.isFile() || f.length() < 24) {
-                android.util.Log.i("REMOTE", "page tree sidecar not found: "
+                LOG.remote("page tree sidecar not found: "
                         + f.getAbsolutePath() + " (exists=" + f.exists()
                         + ", len=" + f.length() + ")");
                 return false;
@@ -480,21 +523,21 @@ public class MuPdfDocument extends AbstractCodecDocument {
                     new java.io.FileInputStream(f));
             try {
                 if (in.readInt() != 0x50474D31) {
-                    android.util.Log.i("REMOTE", "page tree sidecar magic mismatch: " + f);
+                    LOG.remote("page tree sidecar magic mismatch: " + f);
                     return false;
                 }
                 if (in.readLong() != fileSize) {
-                    android.util.Log.i("REMOTE", "page tree map size mismatch, ignored");
+                    LOG.remote("page tree map size mismatch, ignored");
                     return false;
                 }
                 String tag = in.readUTF();
                 if (!tag.equals(versionTag == null ? "" : versionTag)) {
-                    android.util.Log.i("REMOTE", "page tree map version mismatch, ignored");
+                    LOG.remote("page tree map version mismatch, ignored");
                     return false;
                 }
                 int n = in.readInt();
                 if (n <= 0 || n > 200000) {
-                    android.util.Log.i("REMOTE", "page tree sidecar bad count: " + n);
+                    LOG.remote("page tree sidecar bad count: " + n);
                     return false;
                 }
                 int[] nums = new int[n];
@@ -513,7 +556,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
                     m = 0; // v1 sidecar: no sizes appended
                 }
                 if (m <= 0 || m > n) {
-                    android.util.Log.i("REMOTE",
+                    LOG.remote(
                             "page tree sidecar has no sizes (v1), ignored for rebuild: " + n + " pages");
                     return false;
                 }
@@ -524,10 +567,10 @@ public class MuPdfDocument extends AbstractCodecDocument {
                 boolean ok = setPageTreeNums(handle, nums);
                 if (ok) {
                     if (setPageTreeSizes(handle, wh)) {
-                        android.util.Log.i("REMOTE", "page tree map injected: " + n
+                        LOG.remote("page tree map injected: " + n
                                 + " pages (tree walk skipped, sizes " + m + ")");
                     } else {
-                        android.util.Log.i("REMOTE", "page tree map injected: " + n
+                        LOG.remote("page tree map injected: " + n
                                 + " pages (tree walk skipped, sizes inject failed)");
                     }
                 }
@@ -536,7 +579,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
                 in.close();
             }
         } catch (Exception e) {
-            android.util.Log.i("REMOTE", "page tree map load skipped: " + e);
+            LOG.remote("page tree map load skipped: " + e);
             return false;
         }
     }
@@ -657,7 +700,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
     @Override public int getPageCount() {
         LOG.d("MuPdfDocument,getPageCount", getW(), getH(), BookCSS.get().fontSizeSp);
         final int r = getPageCountWithException(documentHandle, getW(), getH(), BookCSS.get().fontSizeSp);
-        android.util.Log.i("REMOTE", "getPageCount handle=" + documentHandle
+        LOG.remote("getPageCount handle=" + documentHandle
                 + " w=" + getW() + " h=" + getH() + " -> " + r);
         return r;
     }
@@ -704,7 +747,7 @@ public class MuPdfDocument extends AbstractCodecDocument {
             // layout inside a single call.
             final int n = getPageCountProgressive(documentHandle, w, h, Dips.spToPx(size), Math.max(1, uptoPage));
             LOG.d("MuPdfDocument getPageCountProgressive", uptoPage, "->", n);
-            android.util.Log.i("REMOTE", "getPageCountProgressive handle=" + documentHandle
+            LOG.remote("getPageCountProgressive handle=" + documentHandle
                     + " w=" + w + " h=" + h + " upto=" + uptoPage + " -> " + n);
             return n;
         } finally {

@@ -156,7 +156,7 @@ public abstract class HorizontalModeController extends DocumentController {
         final boolean remoteText = com.foobnix.remote.RemoteBook.isRemotePath(bookPath)
                 && remoteDeferFormat;
         final boolean deferRemote = remoteText && deferRemoteLayout();
-        android.util.Log.i("REMOTE", "hcontroller remoteText=" + remoteText
+        LOG.remote("hcontroller remoteText=" + remoteText
                 + " isTextFormat=" + isTextFormat + " deferRemote=" + deferRemote
                 + " book=" + bookPath);
         codeDocument = ImageExtractor.getNewCodecContext(bookPath, pasw, imageWidth, imageHeight, !deferRemote);
@@ -639,7 +639,7 @@ public abstract class HorizontalModeController extends DocumentController {
                     codeDocument = null;
                     final long recycleMs = android.os.SystemClock.elapsedRealtime() - recycleT0;
                     if (recycleMs > 500) {
-                        android.util.Log.i("REMOTE", "codec recycle blocked UI " + recycleMs + "ms");
+                        LOG.remote("codec recycle blocked UI " + recycleMs + "ms");
                     }
                 }
                 try {
@@ -710,7 +710,7 @@ public abstract class HorizontalModeController extends DocumentController {
             return codeDocument.getPageCount(imageWidth, imageHeight, BookCSS.get().fontSizeSp);
         } catch (Throwable t) {
             LOG.e(t);
-            android.util.Log.i("REMOTE", "one-shot remote layout failed: " + t);
+            LOG.remote("one-shot remote layout failed: " + t);
             return 0;
         } finally {
             remoteLayoutRunning = false;
@@ -802,7 +802,7 @@ public abstract class HorizontalModeController extends DocumentController {
                 int base = (last || est <= 1) ? count : est;
                 int target = Math.max(0, Math.min(Math.round(base * pendingRestorePercent) - 1, count - 1));
                 if (last || target < count) {
-                    android.util.Log.i("REMOTE", "remoteLand est=" + est + " base=" + base
+                    LOG.remote("remoteLand est=" + est + " base=" + base
                             + " pct=" + pendingRestorePercent + " -> page " + target
                             + " of " + count + (last ? " (last)" : ""));
                     currentPage = target;
@@ -822,7 +822,7 @@ public abstract class HorizontalModeController extends DocumentController {
             // derived from the real final count
             int target = Math.max(0, Math.min(Math.round(count * pendingRestorePercent) - 1, count - 1));
             if (Math.abs(target - currentPage) > 2) {
-                android.util.Log.i("REMOTE", "remoteLand re-anchor " + currentPage + " -> " + target
+                LOG.remote("remoteLand re-anchor " + currentPage + " -> " + target
                         + " of " + count + " (est was " + pendingRestorePages + ")");
                 currentPage = target;
                 justLanded = true;
@@ -872,7 +872,7 @@ public abstract class HorizontalModeController extends DocumentController {
         try {
             final FileMeta meta = AppDB.get().load(bookPath);
             final Long size = meta == null ? null : meta.getSize();
-            android.util.Log.i("REMOTE", "deferRemoteLayout size=" + size);
+            LOG.remote("deferRemoteLayout size=" + size);
             return size == null || size >= 10L * 1024 * 1024;
         } catch (Throwable t) {
             return true;
@@ -919,7 +919,35 @@ public abstract class HorizontalModeController extends DocumentController {
 
     }
 
-    @Override
+        /** fb2split 切章产物(链接形如 fb2_NNN.fb2#N)的目录页码全局化:引擎
+     * getLinkPage 返回的是 part 内页码,需叠加该 part 之前所有 spine 章的
+     * 累计页数(accelerator 已带各章页数,重开时零排版成本)。非切章产物恒 0。 */
+    private int fb2SplitBaseOffset(String linkUri, org.ebookdroid.core.codec.CodecDocument cdoc) {
+        if (linkUri == null || cdoc == null || cdoc.isRecycled()
+                || !(cdoc instanceof org.ebookdroid.droids.mupdf.codec.MuPdfDocument)) {
+            return 0;
+        }
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("fb2_(\\d+)\\.fb2").matcher(linkUri);
+        if (!m.find()) {
+            return 0;
+        }
+        try {
+            int partIdx = Integer.parseInt(m.group(1)); // 1-based
+            if (partIdx <= 1) {
+                return 0;
+            }
+            org.ebookdroid.droids.mupdf.codec.MuPdfDocument mdoc =
+                    (org.ebookdroid.droids.mupdf.codec.MuPdfDocument) cdoc;
+            return mdoc.getPageCountProgressive(com.foobnix.android.utils.Dips.screenWidth(),
+                    com.foobnix.android.utils.Dips.screenHeight(),
+                    com.foobnix.pdf.info.model.BookCSS.get().fontSizeSp, partIdx - 1);
+        } catch (Throwable t) {
+            LOG.e(t);
+            return 0;
+        }
+    }
+@Override
+
     public void getOutline(final com.foobnix.android.utils.ResultResponse<List<OutlineLinkWrapper>> outlineResonse,
                            boolean forse) {
 
@@ -963,6 +991,7 @@ public abstract class HorizontalModeController extends DocumentController {
                                         new OutlineLinkWrapper(ol.getTitle(), ol.getLink(), ol.getLevel(), ol.linkUri));
                             } else {
                                 int page = MuPdfLinks.getLinkPageWrapper(ol.docHandle, ol.linkUri) + 1;
+                                page += fb2SplitBaseOffset(ol.linkUri, codeDocument);
                                 outline.add(
                                         new OutlineLinkWrapper(ol.getTitle(), "#" + page, ol.getLevel(), ol.linkUri));
                             }

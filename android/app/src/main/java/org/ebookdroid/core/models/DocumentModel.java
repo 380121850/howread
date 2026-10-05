@@ -85,7 +85,7 @@ public class DocumentModel extends ListenerProxy {
     }
 
     public void open(String fileName, String password) {
-        android.util.Log.i("REMOTE", "DocumentModel.open valid=" + ExtUtils.isValidFile(fileName)
+        LOG.remote("DocumentModel.open valid=" + ExtUtils.isValidFile(fileName)
                 + " decodeService=" + decodeService);
         if (!ExtUtils.isValidFile(fileName)) {
             throw new IllegalArgumentException("Invalid file:" + fileName);
@@ -299,7 +299,7 @@ public class DocumentModel extends ListenerProxy {
         } catch (Exception e) {
             LOG.w(e);
         }
-        android.util.Log.i("REMOTE", "lazy page sizes: " + pagesCount
+        LOG.remote("lazy page sizes: " + pagesCount
                 + " pages (window " + Math.max(0, center - 2) + ".."
                 + Math.min(pagesCount - 1, center + 4) + ")");
         return infos;
@@ -327,8 +327,15 @@ public class DocumentModel extends ListenerProxy {
                 progressive = pagesCount > 0;
             }
         } else {
-            pagesCount = base.getDecodeService()
-                             .getPageCount();
+            // 大部头（html 引擎万页级）全量计数可达数秒：首窗改用“阅读位置
+            // +窗口”的渐进计数（全量计数由 phase2 后台补齐）。
+            final int upto0 = Math.max(400, (bs != null && bs.pg > 0 ? bs.pg : 0) + 400);
+            pagesCount = base.getDecodeService().getPageCountProgressive(upto0);
+            if (pagesCount > 0) {
+                progressive = true;
+            } else {
+                pagesCount = base.getDecodeService().getPageCount();
+            }
         }
         if (pagesCount <= 0) {
             CacheZipUtils.emptyAllCacheDirs();
@@ -413,7 +420,10 @@ public class DocumentModel extends ListenerProxy {
         }
 
         @Override public boolean hasNext() {
-            return 0 <= index && index < end;
+            // pages 会在视图销毁（recycle）时被清空，而同一手势的后续触摸事件
+            // 仍会进入视图迭代页面（12S 现场：length=0 index=3539 崩溃）——
+            // 必须同时受当前数组长度约束。
+            return 0 <= index && index < end && index < pages.length;
         }
 
         @Override public Page next() {

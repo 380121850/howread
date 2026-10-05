@@ -79,7 +79,7 @@ public class SyncChangeLog {
         synchronized (ITEMS) {
             ITEMS.add(it);
         }
-        android.util.Log.i("BENCH", "syncChange " + file + " " + key + " [" + action + "] "
+        LOG.bench("syncChange " + file + " " + key + " [" + action + "] "
                 + it.optString("o") + " -> " + it.optString("n"));
     }
 

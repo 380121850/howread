@@ -121,6 +121,8 @@ public class OpdsFragment2 extends UIFragment<Entry> {
     List<WebDavItem> webDavItems = new ArrayList<WebDavItem>();
     List<WebDavItem> rootWebDavItems = new ArrayList<WebDavItem>();
     WebDavAdapter webDavAdapter;
+    /** Multi-select download toolbar (Select all / Download / Cancel). */
+    android.view.View selToolBar;
     NetworkRootAdapter networkRootAdapter;
 
     public OpdsFragment2() {
@@ -197,6 +199,13 @@ public class OpdsFragment2 extends UIFragment<Entry> {
 
         searchAdapter = new EntryAdapter();
         webDavAdapter = new WebDavAdapter();
+        selToolBar = buildSelectionToolbar(view);
+        webDavAdapter.setOnSelectionMode(inSelection -> {
+            if (selToolBar != null) {
+                selToolBar.setVisibility(inSelection ? android.view.View.VISIBLE : android.view.View.GONE);
+            }
+            return false;
+        });
 
         networkRootAdapter = new NetworkRootAdapter(searchAdapter, webDavAdapter);
         networkRootAdapter.setOnAddOpds(new Runnable() {
@@ -938,6 +947,142 @@ public class OpdsFragment2 extends UIFragment<Entry> {
             MyProgressBar.setVisibility(View.VISIBLE);
         }
         populate();
+    }
+
+    /** Select-all / Download / Cancel bar, inserted under the path header. */
+    private android.view.View buildSelectionToolbar(android.view.View root) {
+        android.app.Activity a = getActivity();
+        android.widget.LinearLayout bar = new android.widget.LinearLayout(a);
+        bar.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        int pad = com.foobnix.android.utils.Dips.dpToPx(8);
+        bar.setPadding(pad, pad / 2, pad, pad / 2);
+        bar.setVisibility(android.view.View.GONE);
+        android.widget.LinearLayout.LayoutParams lp = new android.widget.LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+        ((android.view.ViewGroup) root).addView(bar, 1, lp);
+        android.widget.LinearLayout.LayoutParams bp = new android.widget.LinearLayout.LayoutParams(
+                0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        String[] labels = {getString(R.string.remote_sel_all), getString(R.string.download),
+                getString(R.string.remote_sel_cancel)};
+        Runnable[] acts = {this::onSelAll, this::onSelDownload, this::onSelCancel};
+        for (int i = 0; i < labels.length; i++) {
+            android.widget.TextView t = new android.widget.TextView(a);
+            t.setText(labels[i]);
+            t.setTextSize(16);
+            t.setGravity(android.view.Gravity.CENTER);
+            t.setPadding(0, pad / 2, 0, pad / 2);
+                        t.setPaintFlags(t.getPaintFlags()
+                    | android.graphics.Paint.UNDERLINE_TEXT_FLAG);
+            final Runnable act = acts[i];
+            t.setOnClickListener(v -> act.run());
+            bar.addView(t, bp);
+        }
+        return bar;
+    }
+
+    private void onSelAll() {
+        webDavAdapter.selectAllFiles();
+    }
+
+    private void onSelCancel() {
+        webDavAdapter.exitSelection();
+    }
+
+    private void onSelDownload() {
+        final java.util.List<WebDavItem> files = webDavAdapter.getSelectedItems();
+        if (files.isEmpty()) {
+            android.widget.Toast.makeText(getActivity(), R.string.remote_sel_none,
+                    android.widget.Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String initDir = com.foobnix.model.AppSP.get().lastRemoteDownloadDir;
+        if (com.foobnix.android.utils.TxtUtils.isEmpty(initDir) || !new java.io.File(initDir).isDirectory()) {
+            initDir = com.foobnix.model.AppSP.get().getRootPath(getActivity());
+        }
+        LOG.bench("remote-sel initDir=" + initDir);
+        // The folder chooser starts at AppState.displayPath (EXTRA_INIT_PATH
+        // is not consumed by BrowseFragment2) - point it at the remembered
+        // download dir before opening.
+        com.foobnix.model.AppState.get().displayPath = initDir;
+        com.foobnix.pdf.info.widget.ChooserDialogFragment.chooseFolder(getActivity(), initDir)
+                .setOnSelectListener(new com.foobnix.android.utils.ResultResponse2<String, android.app.Dialog>() {
+                    @Override
+                    public boolean onResultRecive(String nPath, android.app.Dialog dialog) {
+                        dialog.dismiss();
+                        // remember the target: next download starts here
+                        com.foobnix.model.AppSP.get().lastRemoteDownloadDir = nPath;
+                        com.foobnix.model.AppSP.get().save();
+                        final java.io.File target = new java.io.File(nPath);
+                        if (!target.canWrite()) {
+                            android.widget.Toast.makeText(getActivity(), R.string.remote_sel_no_write,
+                                    android.widget.Toast.LENGTH_SHORT).show();
+                            return false;
+                        }
+                        downloadSelectedBatch(files, target);
+                        return true;
+                    }
+                });
+    }
+
+    private void downloadSelectedBatch(final java.util.List<WebDavItem> files, final java.io.File targetDir) {
+        final android.app.Activity a = getActivity();
+        if (a == null) {
+            return;
+        }
+        webDavAdapter.exitSelection();
+        final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
+        new Thread(() -> {
+            int ok = 0;
+            for (int i = 0; i < files.size(); i++) {
+                final WebDavItem it = files.get(i);
+                try {
+                    String rp = com.foobnix.remote.RemoteBook.isRemotePath(it.href) ? it.href
+                            : toRemoteWebDav(it);
+                    final java.io.File out = new java.io.File(targetDir, it.name);
+                    if (rp != null) {
+                        // fetchToCache shows its own progress dialog (needs UI thread);
+                        // wait for its OUTCOME (success or failure/cancel — the
+                        // onFinished callback guarantees the wait never stalls for the
+                        // old 15-minute timeout on a failed file), then copy the
+                        // fetched copy into the target dir on THIS worker thread
+                        // (a whole-book copy on the UI thread could ANR)
+                        final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+                        final java.io.File[] fetched = {null};
+                        ui.post(() -> com.foobnix.remote.RemoteBookOpener.fetchToCache(a, rp, it.size,
+                                f -> fetched[0] = f, latch::countDown));
+                        latch.await(15, java.util.concurrent.TimeUnit.MINUTES);
+                        if (fetched[0] != null) {
+                            try {
+                                java.io.InputStream in = new java.io.FileInputStream(fetched[0]);
+                                java.io.OutputStream os = new java.io.FileOutputStream(out);
+                                byte[] buf = new byte[65536];
+                                int r;
+                                while ((r = in.read(buf)) > 0) {
+                                    os.write(buf, 0, r);
+                                }
+                                in.close();
+                                os.close();
+                                ok++;
+                            } catch (Throwable t) {
+                                LOG.e(t);
+                            }
+                        }
+                    }
+                } catch (Throwable t) {
+                    LOG.e(t);
+                }
+                final int done = ok;
+                final int at = i + 1;
+                ui.post(() -> android.widget.Toast.makeText(a,
+                        a.getString(R.string.remote_sel_progress, at, files.size(), done),
+                        android.widget.Toast.LENGTH_SHORT).show());
+            }
+            final int okF = ok;
+            ui.post(() -> android.widget.Toast.makeText(a,
+                    a.getString(R.string.remote_sel_done, okF, files.size(), targetDir.getPath()),
+                    android.widget.Toast.LENGTH_LONG).show());
+        }, "@T RemoteBatchDownload").start();
     }
 
     public void onClickWebDav(WebDavItem item) {

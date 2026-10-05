@@ -1086,6 +1086,33 @@ napi_value GetDocumentInfo(napi_env env, napi_callback_info info)
     return result;
 }
 
+/* ---- toc page resolution (Android MuPdfOutline_getLink parity, 2026-10-01) ----
+ * The outline's own location wins (PDF fills it at load; epub / chunked fb2
+ * fill it in their document classes); otherwise resolve the outline uri.
+ * Returns the 0-based global page or -1. Must run under the engine lock. */
+static int TocResolvePage(fz_context *ctx, fz_document *doc, fz_outline *o)
+{
+    int pageNo = -1;
+    fz_location ploc = o->page;
+    if (ploc.chapter >= 0 && ploc.page >= 0)
+        pageNo = fz_page_number_from_location(ctx, doc, ploc);
+    if (pageNo < 0 && o->uri != nullptr && o->uri[0] != '\0')
+        pageNo = fz_page_number_from_location(ctx, doc,
+            fz_resolve_link(ctx, doc, o->uri, NULL, NULL));
+    return pageNo;
+}
+
+static void TocResolveAll(fz_context *ctx, fz_document *doc, fz_outline *o)
+{
+    while (o != nullptr) {
+        int p = TocResolvePage(ctx, doc, o);
+        if (p >= 0)
+            o->page = fz_make_location(0, p);
+        TocResolveAll(ctx, doc, o->down);
+        o = o->next;
+    }
+}
+
 /* ---- getToc ---- */
 napi_value GetToc(napi_env env, napi_callback_info info)
 {
@@ -1102,6 +1129,9 @@ napi_value GetToc(napi_env env, napi_callback_info info)
     pthread_mutex_lock(&g_mu);
     if (!fz_setjmp(*fz_push_try(h->ctx))) do {
         toc = fz_load_outline(h->ctx, h->doc);
+        if (toc != nullptr) {
+            TocResolveAll(h->ctx, h->doc, toc);
+        }
     } while (0);
     if (fz_do_catch(h->ctx)) {
         /* no outline is not an error */
@@ -1118,7 +1148,15 @@ napi_value GetToc(napi_env env, napi_callback_info info)
     struct Frame { fz_outline *o; int depth; };
     std::vector<Frame> stack;
     if (toc != nullptr) {
-        stack.push_back({toc, 0});
+        /* seed the whole root chain: epub ncx outlines are flat sibling
+         * lists, so following only toc would drop every root sibling */
+        std::vector<fz_outline *> roots;
+        for (fz_outline *r = toc; r != nullptr; r = r->next) {
+            roots.push_back(r);
+        }
+        for (auto rit = roots.rbegin(); rit != roots.rend(); ++rit) {
+            stack.push_back({*rit, 0});
+        }
     }
     while (!stack.empty()) {
         auto frame = stack.back();
@@ -1126,7 +1164,10 @@ napi_value GetToc(napi_env env, napi_callback_info info)
 
         const char *title = frame.o->title ? frame.o->title : "";
         int32_t page = -1;
-        if (frame.o->uri != nullptr && frame.o->uri[0] != '\0') {
+        if (frame.o->page.chapter == 0 && frame.o->page.page >= 0) {
+            /* resolved against the document (outline location or link) */
+            page = (int32_t)frame.o->page.page;
+        } else if (frame.o->uri != nullptr && frame.o->uri[0] != '\0') {
             /* uri may be "#page=N" style or a bare number; extract N only if it parses as one */
             const char *p = strstr(frame.o->uri, "page=");
             if (p == nullptr) {
@@ -2045,26 +2086,30 @@ napi_value GetTextRects(napi_env env, napi_callback_info info)
 
     pthread_mutex_lock(&g_mu);
     if (!fz_setjmp(*fz_push_try(h->ctx))) do {
-        dl = fz_new_display_list_from_page_number(h->ctx, h->doc, pageNumber);
-        stext = fz_new_stext_page(h->ctx, fz_infinite_rect);
+        /* Extract directly on the page (display-list playback loses char
+         * quad positions on this platform — same route as SearchText). */
+        fz_page *pg = fz_load_page(h->ctx, h->doc, pageNumber);
+        fz_rect pbounds = fz_bound_page(h->ctx, pg);
+        stext = fz_new_stext_page(h->ctx, pbounds);
         fz_stext_options opts;
         memset(&opts, 0, sizeof(opts));
         opts.flags = FZ_STEXT_PRESERVE_WHITESPACE | FZ_STEXT_MEDIABOX_CLIP;
         fz_device *dev = fz_new_stext_device(h->ctx, stext, &opts);
         fz_try(h->ctx) {
-            fz_run_display_list(h->ctx, dl, dev, fz_identity, fz_infinite_rect, nullptr);
+            fz_run_page(h->ctx, pg, dev, fz_identity, nullptr);
         }
         fz_always(h->ctx) {
             fz_close_device(h->ctx, dev);
             fz_drop_device(h->ctx, dev);
+            fz_drop_page(h->ctx, pg);
         }
         fz_catch(h->ctx) {
             fz_rethrow(h->ctx);
         }
 
-        /* Page dimensions from mediabox (fz_rect, not fz_irect) */
-        float pw = stext->mediabox.x1 - stext->mediabox.x0;
-        float ph = stext->mediabox.y1 - stext->mediabox.y0;
+        /* Page dimensions from the real page bounds */
+        float pw = pbounds.x1 - pbounds.x0;
+        float ph = pbounds.y1 - pbounds.y0;
         if (pw <= 0.0f) pw = 612.0f;
         if (ph <= 0.0f) ph = 792.0f;
 
@@ -2093,10 +2138,10 @@ napi_value GetTextRects(napi_env env, napi_callback_info info)
             for (const fz_stext_line *line = block->u.t.first_line; line != nullptr && offset < (int)(bufSize - 128); line = line->next) {
                 if (!first) json[offset++] = ',';
                 first = false;
-                float x0 = (line->bbox.x0 - stext->mediabox.x0) / pw;
-                float y0 = (line->bbox.y0 - stext->mediabox.y0) / ph;
-                float x1 = (line->bbox.x1 - stext->mediabox.x0) / pw;
-                float y1 = (line->bbox.y1 - stext->mediabox.y0) / ph;
+                float x0 = (line->bbox.x0 - pbounds.x0) / pw;
+                float y0 = (line->bbox.y0 - pbounds.y0) / ph;
+                float x1 = (line->bbox.x1 - pbounds.x0) / pw;
+                float y1 = (line->bbox.y1 - pbounds.y0) / ph;
                 if (x0 < 0.0f) x0 = 0.0f; if (x1 > 1.0f) x1 = 1.0f;
                 if (y0 < 0.0f) y0 = 0.0f; if (y1 > 1.0f) y1 = 1.0f;
                 int n = snprintf(json + offset, 100,
@@ -2124,8 +2169,8 @@ napi_value GetTextRects(napi_env env, napi_callback_info info)
                     float cx0 = ch->quad.ll.x, cx1 = ch->quad.lr.x;
                     if (ch->quad.ul.x < cx0) cx0 = ch->quad.ul.x;
                     if (ch->quad.ur.x > cx1) cx1 = ch->quad.ur.x;
-                    cx0 = (cx0 - stext->mediabox.x0) / pw;
-                    cx1 = (cx1 - stext->mediabox.x0) / pw;
+                    cx0 = (cx0 - pbounds.x0) / pw;
+                    cx1 = (cx1 - pbounds.x0) / pw;
                     if (cx0 < 0.0f) cx0 = 0.0f;
                     if (cx1 > 1.0f) cx1 = 1.0f;
                     n = snprintf(json + offset, 32, "%.4f,%.4f,", cx0, cx1);
@@ -2625,16 +2670,32 @@ static std::string OpTocJson(fz_context *ctx, fz_document *doc)
         toc = nullptr; /* no outline is not fatal */
     }
     if (toc != nullptr) {
+        if (!fz_setjmp(*fz_push_try(ctx))) do {
+            TocResolveAll(ctx, doc, toc);
+        } while (0);
+        if (fz_do_catch(ctx)) {
+            /* best effort: unresolved entries keep page -1 */
+        }
         struct Frame { fz_outline *o; int depth; };
         std::vector<Frame> stack;
-        stack.push_back({toc, 0});
+        {
+            std::vector<fz_outline *> roots;
+            for (fz_outline *r = toc; r != nullptr; r = r->next) {
+                roots.push_back(r);
+            }
+            for (auto rit = roots.rbegin(); rit != roots.rend(); ++rit) {
+                stack.push_back({*rit, 0});
+            }
+        }
         bool first = true;
         while (!stack.empty()) {
             Frame frame = stack.back();
             stack.pop_back();
             std::string title = (frame.o->title != nullptr) ? frame.o->title : "";
             int page = -1;
-            if (frame.o->uri != nullptr && frame.o->uri[0] != '\0') {
+            if (frame.o->page.chapter == 0 && frame.o->page.page >= 0) {
+                page = (int)frame.o->page.page;
+            } else if (frame.o->uri != nullptr && frame.o->uri[0] != '\0') {
                 const char *p = strstr(frame.o->uri, "page=");
                 if (p == nullptr) {
                     p = frame.o->uri;
@@ -2720,6 +2781,39 @@ static std::string OpLayoutJson(fz_context *ctx, fz_document *doc, DocumentHandl
         }
         fz_layout_document(ctx, doc, static_cast<float>(w), static_cast<float>(ht), static_cast<float>(em));
         out = std::to_string(fz_count_pages(ctx, doc));
+    } while (0);
+    if (fz_do_catch(ctx)) {
+        out = "-1";
+    }
+    return out;
+}
+
+/* 0.9.16: progressive page counting for reflowable documents (Android
+ * getPageCountProgressive parity, Builder/jni/libmupdf-librera.c). Fixes
+ * the layout geometry, then counts chapter pages one by one and stops as
+ * soon as `upto` is reached - every not-yet-visited chapter is laid out on
+ * demand, so the caller grows the page canvas in bounded steps instead of
+ * one giant full-document layout. Returns the cumulative page count, or
+ * -1 when the document has no chapter support (PDF) / layout failed
+ * (caller falls back to the full count). */
+static std::string OpCountProgressiveJson(fz_context *ctx, fz_document *doc,
+    double w, double ht, double em, int upto)
+{
+    std::string out = "-1";
+    if (!fz_setjmp(*fz_push_try(ctx))) do {
+        fz_layout_document(ctx, doc, static_cast<float>(w), static_cast<float>(ht), static_cast<float>(em));
+        int chapters = fz_count_chapters(ctx, doc);
+        if (chapters <= 0) {
+            break; /* no chapter support: caller falls back to the full count */
+        }
+        int total = 0;
+        for (int i = 0; i < chapters; i++) {
+            total += fz_count_chapter_pages(ctx, doc, i);
+            if (total >= upto) {
+                break;
+            }
+        }
+        out = std::to_string(total);
     } while (0);
     if (fz_do_catch(ctx)) {
         out = "-1";
@@ -3127,15 +3221,23 @@ static std::string OpTextRectsJson(fz_context *ctx, fz_document *doc, int page)
     fz_stext_page *stext = nullptr;
     fz_var(dl);
     fz_var(stext);
+    fz_page *pg = nullptr;
+    fz_rect pbounds = fz_infinite_rect;
+    fz_var(pg);
+    fz_var(pbounds);
     if (!fz_setjmp(*fz_push_try(ctx))) do {
-        dl = fz_new_display_list_from_page_number(ctx, doc, page);
-        stext = fz_new_stext_page(ctx, fz_infinite_rect);
+        /* Extract directly on the page (display-list playback loses char
+         * quad positions on this platform — same route as SearchText). */
+        pg = fz_load_page(ctx, doc, page);
+        if (pg == nullptr) break;
+        pbounds = fz_bound_page(ctx, pg);
+        stext = fz_new_stext_page(ctx, pbounds);
         fz_stext_options opts;
         memset(&opts, 0, sizeof(opts));
         opts.flags = FZ_STEXT_PRESERVE_WHITESPACE | FZ_STEXT_MEDIABOX_CLIP;
         fz_device *dev = fz_new_stext_device(ctx, stext, &opts);
         fz_try(ctx) {
-            fz_run_display_list(ctx, dl, dev, fz_identity, fz_infinite_rect, nullptr);
+            fz_run_page(ctx, pg, dev, fz_identity, nullptr);
         }
         fz_always(ctx) {
             fz_close_device(ctx, dev);
@@ -3146,6 +3248,9 @@ static std::string OpTextRectsJson(fz_context *ctx, fz_document *doc, int page)
         }
     } while (0);
     if (fz_do_always(ctx)) do {
+        if (pg != nullptr) {
+            fz_drop_page(ctx, pg);
+        }
         if (dl != nullptr) {
             fz_drop_display_list(ctx, dl);
         }
@@ -3160,8 +3265,8 @@ static std::string OpTextRectsJson(fz_context *ctx, fz_document *doc, int page)
         return "[]";
     }
 
-    float pw = stext->mediabox.x1 - stext->mediabox.x0;
-    float ph = stext->mediabox.y1 - stext->mediabox.y0;
+    float pw = pbounds.x1 - pbounds.x0;
+    float ph = pbounds.y1 - pbounds.y0;
     if (pw <= 0.0f) pw = 612.0f;
     if (ph <= 0.0f) ph = 792.0f;
 
@@ -3172,10 +3277,10 @@ static std::string OpTextRectsJson(fz_context *ctx, fz_document *doc, int page)
         for (const fz_stext_line *line = block->u.t.first_line; line != nullptr; line = line->next) {
             if (!first) json += ",";
             first = false;
-            float x0 = (line->bbox.x0 - stext->mediabox.x0) / pw;
-            float y0 = (line->bbox.y0 - stext->mediabox.y0) / ph;
-            float x1 = (line->bbox.x1 - stext->mediabox.x0) / pw;
-            float y1 = (line->bbox.y1 - stext->mediabox.y0) / ph;
+            float x0 = (line->bbox.x0 - pbounds.x0) / pw;
+            float y0 = (line->bbox.y0 - pbounds.y0) / ph;
+            float x1 = (line->bbox.x1 - pbounds.x0) / pw;
+            float y1 = (line->bbox.y1 - pbounds.y0) / ph;
             if (x0 < 0.0f) x0 = 0.0f;
             if (x1 > 1.0f) x1 = 1.0f;
             if (y0 < 0.0f) y0 = 0.0f;
@@ -3224,8 +3329,8 @@ static std::string OpTextRectsJson(fz_context *ctx, fz_document *doc, int page)
                 float cx0 = ch->quad.ll.x, cx1 = ch->quad.lr.x;
                 if (ch->quad.ul.x < cx0) cx0 = ch->quad.ul.x;
                 if (ch->quad.ur.x > cx1) cx1 = ch->quad.ur.x;
-                cx0 = (cx0 - stext->mediabox.x0) / pw;
-                cx1 = (cx1 - stext->mediabox.x0) / pw;
+                cx0 = (cx0 - pbounds.x0) / pw;
+                cx1 = (cx1 - pbounds.x0) / pw;
                 if (cx0 < 0.0f) cx0 = 0.0f;
                 if (cx1 > 1.0f) cx1 = 1.0f;
                 if (!fc) json += ",";
@@ -3397,6 +3502,11 @@ static void DocOpExecute(napi_env /*env*/, void *data)
                 break;
             case 12:
                 job->json = std::to_string(fz_authenticate_password(ctx, doc, job->s.c_str()));
+                break;
+            case 15:
+                /* 0.9.16 progressive page count (reflow books):
+                 * a=w, b=h, c=em, s=upto */
+                job->json = OpCountProgressiveJson(ctx, doc, job->a, job->b, job->c, atoi(job->s.c_str()));
                 break;
             case 13: {
                 /* HowRead pagemap export: finish the lazy page tree (only when

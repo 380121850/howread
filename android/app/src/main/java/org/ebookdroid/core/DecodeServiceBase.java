@@ -334,24 +334,26 @@ public class DecodeServiceBase implements DecodeService {
 
     void performDecode(final DecodeTask task) {
         final boolean benchDead = executor.isTaskDead(task);
-        android.util.Log.i("BENCH", "decode-take pg=" + task.pageNumber + " dead=" + benchDead);
+        LOG.bench("decode-take pg=" + task.pageNumber + " dead=" + benchDead);
         if (benchDead) {
             return;
         }
         inFlightDecodes.incrementAndGet();
+        com.foobnix.sys.FirstPaintGate.notifyDecodeStarted();
         try {
             performDecodeInner(task);
         } finally {
             inFlightDecodes.decrementAndGet();
+            com.foobnix.sys.FirstPaintGate.notifyDecodeFinished();
         }
     }
 
     private void performDecodeInner(final DecodeTask task) {
         if (executor.isTaskDead(task)) {
-            android.util.Log.i("BENCH", "inner-dead pg=" + task.pageNumber);
+            LOG.bench("inner-dead pg=" + task.pageNumber);
             return;
         }
-        android.util.Log.i("BENCH", "inner-start pg=" + task.pageNumber);
+        LOG.bench("inner-start pg=" + task.pageNumber);
 
         CodecPageHolder holder = null;
         CodecPage vuPage = null;
@@ -362,9 +364,9 @@ public class DecodeServiceBase implements DecodeService {
         try {
             final long benchPgT0 = android.os.SystemClock.elapsedRealtime();
             holder = getPageHolder(task.id, task.pageNumber);
-            android.util.Log.i("BENCH", "holder-ok pg=" + task.pageNumber);
+            LOG.bench("holder-ok pg=" + task.pageNumber);
             vuPage = holder.getPage(task.id);
-            android.util.Log.i("BENCH", "decode-page pg=" + task.pageNumber + " load=" + (android.os.SystemClock.elapsedRealtime() - benchPgT0) + "ms");
+            LOG.bench("decode-page pg=" + task.pageNumber + " load=" + (android.os.SystemClock.elapsedRealtime() - benchPgT0) + "ms");
             if (executor.isTaskDead(task)) {
                 return;
             }
@@ -385,7 +387,7 @@ public class DecodeServiceBase implements DecodeService {
             final long benchRdT0 = android.os.SystemClock.elapsedRealtime();
             final BitmapRef bitmap = vuPage.renderBitmap(r.width(), r.height(), actualSliceBounds, true);
             // TempHolder.lock.unlock();
-            android.util.Log.i("BENCH", "render-page pg=" + task.pageNumber + " render=" + (android.os.SystemClock.elapsedRealtime() - benchRdT0) + "ms " + r.width() + "x" + r.height());
+            LOG.bench("render-page pg=" + task.pageNumber + " render=" + (android.os.SystemClock.elapsedRealtime() - benchRdT0) + "ms " + r.width() + "x" + r.height());
 
             if (shutdownStarted || executor.isTaskDead(task)) {
                 BitmapManager.release(bitmap);
@@ -403,8 +405,15 @@ public class DecodeServiceBase implements DecodeService {
                 task.node.page.annotations = vuPage.getAnnotations();
             }
 
-            if (task.node.page.texts == null) {
-                task.node.page.texts = vuPage.getText();
+            // 取词可能撞上共享 CodecPage 被回收的窗口（LRU 逐出/文档回收）而拿到
+            // 空结果：空网格一旦写入就会因下方的 ==null 防重条件永久滞留，该页整个
+            // 会话都无法长按选中（渲染不受影响，表现为"这本书长按没反应"）。
+            // 空结果不写入，留待后续解码/长按现场补取。
+            if (task.node.page.texts == null || task.node.page.texts.length == 0) {
+                final TextWord[][] pageTexts = vuPage.getText();
+                if (LengthUtils.isNotEmpty(pageTexts)) {
+                    task.node.page.texts = pageTexts;
+                }
             }
             // TempHolder.lock.unlock();
 
@@ -466,7 +475,7 @@ public class DecodeServiceBase implements DecodeService {
             h.postDelayed(() -> {
                 try {
                     if (!a.isFinishing()) {
-                        android.util.Log.i("REMOTE", "decode retry #" + task.node.remoteDecodeRetries
+                        LOG.remote("decode retry #" + task.node.remoteDecodeRetries
                                 + " page " + task.pageNumber);
                         decodePage(vs, task.node);
                     }
@@ -659,13 +668,18 @@ public class DecodeServiceBase implements DecodeService {
             if (isRecycled.get()) {
                 return;
             }
-            if (page.texts == null) {
+            if (page.texts == null || page.texts.length == 0) {
                 // owned page: recycled right after the text is taken, so it
                 // must not be the shared cache instance other threads may
-                // still be rendering
+                // still be rendering. Empty results are NOT cached (see
+                // performDecodeInner): a recycled-page race used to stick an
+                // empty grid on the page for the whole session.
                 CodecPage page2 = codecDocument.getOwnedPage(page.index.docIndex);
                 if (page2 != null) {
-                    page.texts = page2.getText();
+                    final TextWord[][] pageTexts = page2.getText();
+                    if (LengthUtils.isNotEmpty(pageTexts)) {
+                        page.texts = pageTexts;
+                    }
                     page2.recycle();
                 }
             }
@@ -877,12 +891,18 @@ public class DecodeServiceBase implements DecodeService {
 
             // TempHolder.lock.lock();
             try {
-                final DecodeTask running = decodingTasks.get(task.node);
-                if (running != null && running.equals(task) && !isTaskDead(running)) {
-                    return;
-                }
+                final DecodeTask running;
+                // decodingTasks 是 IdentityHashMap：UI 线程（add）与解码线程
+                // （stopDecoding / recycle）必须互斥，否则桶结构损坏、迭代
+                // 还可能把主线程卡死
+                synchronized (DecodeServiceBase.this) {
+                    running = decodingTasks.get(task.node);
+                    if (running != null && running.equals(task) && !isTaskDead(running)) {
+                        return;
+                    }
 
-                decodingTasks.put(task.node, task);
+                    decodingTasks.put(task.node, task);
+                }
 
                 boolean added = false;
                 for (int index = 0; index < tasks.size(); index++) {
@@ -904,7 +924,7 @@ public class DecodeServiceBase implements DecodeService {
                     stopDecoding(running, null, "canceled by new one");
                 }
             } catch (Exception e) {
-                android.util.Log.i("BENCH", "add error: " + e);
+                LOG.bench("add error: " + e);
                 LOG.e(e);
             } finally {
                 // TempHolder.lock.unlock();
@@ -914,7 +934,10 @@ public class DecodeServiceBase implements DecodeService {
         public void stopDecoding(final DecodeTask task, final PageTreeNode node, final String reason) {
             // TempHolder.lock.lock();
             try {
-                final DecodeTask removed = task == null ? decodingTasks.remove(node) : task;
+                final DecodeTask removed;
+                synchronized (DecodeServiceBase.this) {
+                    removed = task == null ? decodingTasks.remove(node) : task;
+                }
 
                 if (removed != null) {
                     removed.cancelled.set(true);
@@ -939,7 +962,11 @@ public class DecodeServiceBase implements DecodeService {
         public void recycle() {
             // TempHolder.lock.lock();
             try {
-                for (final DecodeTask task : decodingTasks.values()) {
+                final DecodeTask[] pending;
+                synchronized (DecodeServiceBase.this) {
+                    pending = decodingTasks.values().toArray(new DecodeTask[0]);
+                }
+                for (final DecodeTask task : pending) {
                     stopDecoding(task, null, "recycling");
                 }
 
@@ -984,6 +1011,12 @@ public class DecodeServiceBase implements DecodeService {
                     Thread.currentThread().interrupt();
                     break;
                 }
+            }
+            if (inFlightDecodes.get() > 0) {
+                // 有界折中的残余窗口：超期仍在渲染的线程会碰到即将回收的原生
+                // 句柄（单次渲染 >3s）。至少留一条取证线索
+                LOG.e(new java.util.concurrent.TimeoutException(
+                        "shutdown with " + inFlightDecodes.get() + " in-flight decode(s) after 3s"));
             }
 
             // same monitor as nextTask/getPageHolder: without it a concurrent

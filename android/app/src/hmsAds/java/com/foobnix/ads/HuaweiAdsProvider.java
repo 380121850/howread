@@ -46,6 +46,9 @@ public class HuaweiAdsProvider implements AdsProvider {
     private BannerView bannerView;
     private InterstitialAd interstitialAd;
     private RewardAd rewardedAd;
+    /** 加载中的闸：字段只在加载成功回调里赋值后才算"可展示" */
+    private volatile boolean interstitialLoading;
+    private volatile boolean rewardedLoading;
 
     /** True when the ad-unit meta-data holds a non-blank id (ads activated). */
     private static boolean isAdUnitConfigured(String adUnitId) {
@@ -185,6 +188,9 @@ public class HuaweiAdsProvider implements AdsProvider {
         if (a == null || a.isDestroyed() || a.isFinishing()) {
             return;
         }
+        if (interstitialLoading) {
+            return; // 加载中：重叠加载曾互相清引用（失败回调把新广告打掉）
+        }
         if (interstitialAd != null && ADS.secondsRemain(AppSP.get().interstitialLoadAdTime) < ADS.ADS_LIVE_SEC) {
             LOG.d(TAG, "loadInterstitial in cache", ADS.secondsRemain(AppSP.get().interstitialLoadAdTime));
             return;
@@ -198,28 +204,39 @@ public class HuaweiAdsProvider implements AdsProvider {
                 LOG.d(TAG, "Interstitial skipped: no ad unit id configured");
                 return;
             }
-            interstitialAd = new InterstitialAd(LibreraApp.context);
-            interstitialAd.setAdId(adId);
-            interstitialAd.setAdListener(new AdListener() {
+            // 字段只在 onAdLoaded 赋值（与 AdMob 版语义一致）：show 永远打在
+            // 加载完成的实例上；中途失败的加载不会清掉别的实例
+            final InterstitialAd ad = new InterstitialAd(LibreraApp.context);
+            ad.setAdId(adId);
+            ad.setAdListener(new AdListener() {
                 @Override
                 public void onAdLoaded() {
                     LOG.d(TAG, "Interstitial loaded");
+                    interstitialLoading = false;
+                    interstitialAd = ad;
                     AppSP.get().interstitialLoadAdTime = System.currentTimeMillis();
                 }
 
                 @Override
                 public void onAdFailed(int errorCode) {
                     LOG.d(TAG, "Interstitial onAdFailed", errorCode);
-                    interstitialAd = null;
+                    interstitialLoading = false;
+                    if (interstitialAd == ad) {
+                        interstitialAd = null;
+                    }
                 }
 
                 @Override
                 public void onAdClosed() {
-                    interstitialAd = null;
+                    if (interstitialAd == ad) {
+                        interstitialAd = null;
+                    }
                 }
             });
-            interstitialAd.loadAd(new AdParam.Builder().build());
+            interstitialLoading = true;
+            ad.loadAd(new AdParam.Builder().build());
         } catch (Throwable e) {
+            interstitialLoading = false;
             LOG.e(e);
         }
     }
@@ -240,9 +257,12 @@ public class HuaweiAdsProvider implements AdsProvider {
             return;
         }
         try {
-            if (interstitialAd != null) {
+            final InterstitialAd ad = interstitialAd;
+            // 只有真正加载完成的广告才 show：否则不仅什么都不显示，还白白
+            // 记一次展示时间，把随后 5 分钟的展示窗口频控掉
+            if (ad != null && ad.isLoaded()) {
                 LOG.d(TAG, "showInterstitial");
-                interstitialAd.show(a);
+                ad.show(a);
                 AppSP.get().interstitialAdShowTime = System.currentTimeMillis();
                 interstitialAd = null;
             }
@@ -257,6 +277,9 @@ public class HuaweiAdsProvider implements AdsProvider {
     public void loadRewardedAd(Activity a, final Runnable onRewardLoaded) {
         if (a == null || a.isDestroyed() || a.isFinishing()) {
             return;
+        }
+        if (rewardedLoading) {
+            return; // 加载中：不叠第二发
         }
         if (ADS.get().isRewardActivated()) {
             return;
@@ -275,11 +298,14 @@ public class HuaweiAdsProvider implements AdsProvider {
                 return;
             }
             LOG.d(TAG, "RewardedAd load started...");
-            rewardedAd = new RewardAd(LibreraApp.context, adId);
-            rewardedAd.loadAd(new AdParam.Builder().build(), new RewardAdLoadListener() {
+            // 字段只在 onRewardedLoaded 赋值：show 打在的一定是加载完成的实例
+            final RewardAd ad = new RewardAd(LibreraApp.context, adId);
+            ad.loadAd(new AdParam.Builder().build(), new RewardAdLoadListener() {
                 @Override
                 public void onRewardedLoaded() {
                     LOG.d(TAG, "RewardedAd loaded");
+                    rewardedLoading = false;
+                    rewardedAd = ad;
                     AppSP.get().rewardedAdLoadedTime = System.currentTimeMillis();
                     if (onRewardLoaded != null) {
                         onRewardLoaded.run();
@@ -289,10 +315,15 @@ public class HuaweiAdsProvider implements AdsProvider {
                 @Override
                 public void onRewardAdFailedToLoad(int errorCode) {
                     LOG.d(TAG, "RewardedAd failed", errorCode);
-                    rewardedAd = null;
+                    rewardedLoading = false;
+                    if (rewardedAd == ad) {
+                        rewardedAd = null;
+                    }
                 }
             });
+            rewardedLoading = true;
         } catch (Throwable e) {
+            rewardedLoading = false;
             LOG.e(e);
         }
     }
@@ -313,9 +344,11 @@ public class HuaweiAdsProvider implements AdsProvider {
             return;
         }
         try {
-            if (rewardedAd != null) {
+            final RewardAd ad = rewardedAd;
+            // 未加载完成的广告 show 不出画面、onRewarded 也永不回调：必须查 isLoaded
+            if (ad != null && ad.isLoaded()) {
                 LOG.d(TAG, "showRewardedAd");
-                rewardedAd.show(a, new RewardAdStatusListener() {
+                ad.show(a, new RewardAdStatusListener() {
                     @Override
                     public void onRewarded(Reward reward) {
                         if (listener != null) {
@@ -327,6 +360,8 @@ public class HuaweiAdsProvider implements AdsProvider {
                 rewardedAd = null;
             } else {
                 LOG.d(TAG, "showRewardedAd: no loaded ad, reward listener not called");
+                // 现场补一发加载：下一次点击就有广告可看（否则失败后一直空窗）
+                loadRewardedAd(a, null);
             }
         } catch (Throwable e) {
             LOG.e(e);

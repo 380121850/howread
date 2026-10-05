@@ -31,7 +31,8 @@ public class Fb2Context extends PdfContext {
                 AppSP.get().isDouble +
                 //AppState.get().isAccurateFontSize +
                 BookCSS.get().documentStyle +
-                BookCSS.get().isCapitalLetter;
+                BookCSS.get().isCapitalLetter +
+                "fb2split2"; // 切分产物版本：旧单巨章缓存自动失效重建
         cacheFile = new File(CacheZipUtils.CACHE_BOOK_DIR, fileNameOriginal.hashCode() + ".epub");
         return cacheFile;
     }

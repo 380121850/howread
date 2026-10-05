@@ -413,6 +413,19 @@ public class SharedBooks {
             }
 
             final String fileName = ExtUtils.getFileName(bs.path);
+
+            // 已阅读保持:进度一旦到达 100%(含手动标记已读),重新打开/重排版
+            // 产生的低进度回写不再把状态打回"阅读中";只有手动清除或改状态
+            // (BookStateStore.markUnread/markReading)才改变阅读状态。
+            try {
+                LinkedJSONObject prevObj = obj.optJSONObject(fileName);
+                float prevP = prevObj == null ? -1f : (float) prevObj.optDouble("p", -1.0);
+                if (prevP >= 0.9999f && bs.p < 0.9999f) {
+                    bs.p = prevP;
+                }
+            } catch (Exception e) {
+                LOG.e(e);
+            }
             final LinkedJSONObject value = Objects.toJSONObject(bs);
             obj.put(fileName, value);
             cache.put(fileName, bs);

@@ -46,7 +46,7 @@ public class AppsConfig {
 
             );
     //setTestDeviceIds
-    public static final boolean IS_WRITE_LOGS = IS_FDROID;
+    public static final boolean IS_WRITE_LOGS = true; // 全渠道本地崩溃留痕；fdroid 静默退出，其余渠道交回系统默认处理
     public static final String FLAVOR = LibreraBuildConfig.FLAVOR;
     public static final boolean IS_ENABLE_1_PAGE_SEARCH = true;
 

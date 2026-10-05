@@ -440,7 +440,7 @@ public class ProfileStateIO {
                     if (hit < 0) {
                         cur.put(v);
                         changed = true;
-                        android.util.Log.i("BENCH", "ai restore: vendor added " + name);
+                        LOG.bench("ai restore: vendor added " + name);
                     } else {
                         LinkedJSONObject lp = asLinked(cur.opt(hit));
                         if (lp == null || !lp.toString().equals(v.toString())) {
@@ -451,7 +451,7 @@ public class ProfileStateIO {
                             }
                             cur.put(hit, v);
                             changed = true;
-                            android.util.Log.i("BENCH", "ai restore: vendor updated " + name);
+                            LOG.bench("ai restore: vendor updated " + name);
                         }
                     }
                 }
@@ -522,7 +522,7 @@ public class ProfileStateIO {
      *  it; url/key/model resolve through the entry at request time. */
     private static void adoptAiProfile(LinkedJSONObject p, String name, Context c) {
         AppState.get().aiConfigName = name;
-        android.util.Log.i("BENCH", "ai restore: active adopted " + name);
+        LOG.bench("ai restore: active adopted " + name);
     }
 
     /**
@@ -821,6 +821,28 @@ public class ProfileStateIO {
         }
     }
 
+    /**
+     * 书库文件夹（含文件夹墓碑）在 BookCSS.load1() 之后的补做：load1 会把
+     * searchPathsJson 整体换成磁盘 app-CSS.json 的值，启动回灌（loadInit）
+     * 写进内存的文件夹会被它冲掉（其余四类挂在 AppState 上、不受影响）。
+     * AppProfile.init 在 load1 之后调用本方法，冷启动即可看到同步来的文件夹。
+     */
+    public static void importFoldersAfterCssLoad(Context c) {
+        try {
+            if (AppProfile.syncNetworkSources == null || !AppProfile.syncNetworkSources.isFile()) {
+                return;
+            }
+            LinkedJSONObject root = IO.readJsonObject(AppProfile.syncNetworkSources);
+            if (root.length() == 0) {
+                return;
+            }
+            importFolders(root);
+            com.foobnix.remote.RemoteTombstones.apply();
+        } catch (Exception e) {
+            LOG.e(e);
+        }
+    }
+
     /** OPDS entries: restore every catalog line missing locally. */
     private static void importOpdsLines(LinkedJSONObject root) {
         JSONArray arr = root.optJSONArray(SEC_NET_OPDS);
@@ -848,7 +870,7 @@ public class ProfileStateIO {
         }
         if (added > 0) {
             AppState.get().allOPDSLinks = sb.toString();
-            android.util.Log.i("BENCH", "net restore: opds +" + added);
+            LOG.bench("net restore: opds +" + added);
         }
     }
 
@@ -895,7 +917,7 @@ public class ProfileStateIO {
                 WebDavStore.add(ns);
                 locals.add(ns);
                 added++;
-                android.util.Log.i("BENCH", "net restore: webdav +" + url);
+                LOG.bench("net restore: webdav +" + url);
             } else if (applyWebDavUpdate(hit, item)) {
                 updated++;
             }
@@ -915,7 +937,7 @@ public class ProfileStateIO {
             }
         }
         if (added > 0 || updated > 0) {
-            android.util.Log.i("BENCH", "net restore: webdav +" + added + " ~" + updated);
+            LOG.bench("net restore: webdav +" + added + " ~" + updated);
         }
     }
 
@@ -1006,7 +1028,7 @@ public class ProfileStateIO {
                 locals.add(ns);
                 saveRemoteCreds(c, ns, item);
                 added++;
-                android.util.Log.i("BENCH", "net restore: " + type + " +" + ns.host);
+                LOG.bench("net restore: " + type + " +" + ns.host);
             } else {
                 boolean changed = applyRemoteUpdate(hit, item);
                 if (saveRemoteCreds(c, hit, item)) {
@@ -1018,7 +1040,7 @@ public class ProfileStateIO {
             }
         }
         if (added > 0 || updated > 0) {
-            android.util.Log.i("BENCH", "net restore: " + type + " +" + added + " ~" + updated);
+            LOG.bench("net restore: " + type + " +" + added + " ~" + updated);
         }
     }
 
@@ -1125,7 +1147,7 @@ public class ProfileStateIO {
                 out.put(p);
             }
             BookCSS.get().searchPathsJson = out.toString();
-            android.util.Log.i("BENCH", "net restore: folders +" + added);
+            LOG.bench("net restore: folders +" + added);
         }
     }
 

@@ -192,7 +192,7 @@ public class VerticalViewActivity extends AbstractActionActivity<VerticalViewAct
         frameLayout.addView(view.getView());
 
         getController().afterCreate(this);
-        android.util.Log.i("BENCH", "vv-onCreate done");
+        LOG.bench("vv-onCreate done");
 
         // ADS.activate(this, adView);
 
@@ -308,7 +308,7 @@ public class VerticalViewActivity extends AbstractActionActivity<VerticalViewAct
     @Override
     protected void onStart() {
         super.onStart();
-        android.util.Log.i("BENCH", "VV onStart");
+        LOG.bench("VV onStart");
         // Analytics.onStart(this);
         try {
             getController().getDocumentModel().decodeService.restore();
@@ -330,7 +330,7 @@ public class VerticalViewActivity extends AbstractActionActivity<VerticalViewAct
 
     @Override
     protected void onStop() {
-        android.util.Log.i("BENCH", "VV onStop");
+        LOG.bench("VV onStop");
         try {
             // Pause the background phase-two layout while the reader is not
             // visible (resumed in onStart); it would otherwise keep the
@@ -360,15 +360,36 @@ public class VerticalViewActivity extends AbstractActionActivity<VerticalViewAct
     @Override
     protected void onDestroy() {
         TempHolder.readerActive = false;
-        android.util.Log.i("BENCH", "VV onDestroy");
+        LOG.bench("VV onDestroy");
         // leaving the reader also leaves the in-page bilingual mode, so the
         // next session starts from the base book
         com.foobnix.ai.BilingualSession.exitOnReaderDestroy(this);
+        // AI 翻译收尾：面板会话与页面浮层的静态 CURRENT 只在这里清——否则
+        // 跨书残留（旧 worker 继续翻译、旧浮层视图泄漏、下一本书的 updateUI
+        // 被旧会话接管）
+        try {
+            com.foobnix.ai.PdfBilingualOverlay.dismissCurrent();
+        } catch (Throwable t) {
+            LOG.e(t);
+        }
+        try {
+            com.foobnix.ai.TranslateSession.cancelCurrent();
+        } catch (Throwable t) {
+            LOG.e(t);
+        }
         FirstPaintGate.cancel();
         try {
             getController().cancelPhase2();
         } catch (Exception e) {
             LOG.e(e);
+        }
+        // 文档回收接线：beforeDestroy 此前无任何调用点（死代码），不经过
+        // closeActivityFinal 的退出（系统后台回收、最近任务划掉）会整套泄漏
+        // 原生文档；这里无条件调用，recycle 幂等
+        try {
+            getController().beforeDestroy();
+        } catch (Throwable t) {
+            LOG.e(t);
         }
         super.onDestroy();
         if (handler != null) {

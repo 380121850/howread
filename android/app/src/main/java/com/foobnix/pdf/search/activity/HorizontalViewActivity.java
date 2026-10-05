@@ -89,6 +89,7 @@ import com.foobnix.pdf.info.view.MyPopupMenu;
 import com.foobnix.pdf.info.view.ProgressDraw;
 import com.foobnix.pdf.info.view.UnderlineImageView;
 import com.foobnix.pdf.info.widget.DraggbleTouchListener;
+import com.foobnix.pdf.info.widget.SelectionMagnifier;
 import com.foobnix.pdf.info.widget.ShareDialog;
 import com.foobnix.pdf.info.wrapper.DocumentController;
 import com.foobnix.pdf.info.wrapper.MagicHelper;
@@ -271,6 +272,7 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
     protected void onCreate(final Bundle savedInstanceState) {
         AppsConfig.ensureMuPdfLoaded();
         com.foobnix.sys.TempHolder.readerActive = true;
+        LOG.bench("HV onCreate (horizontal reader) book=" + AppSP.get().lastBookPath);
         finishOtherViewer(this, VerticalViewActivity.class);
         quickBookmark = getString(R.string.fast_bookmark);
         LOG.d("getRequestedOrientation", AppState.get().orientation, getRequestedOrientation());
@@ -377,6 +379,11 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
 
         DraggbleTouchListener touch1 = new DraggbleTouchListener(anchorX, (View) anchorX.getParent());
         DraggbleTouchListener touch2 = new DraggbleTouchListener(anchorY, (View) anchorY.getParent());
+
+        // 选中手柄拖动放大镜（API 28+；被放大内容取翻页视图）
+        SelectionMagnifier selectMagnifier = new SelectionMagnifier(viewPager);
+        touch1.setMagnifier(selectMagnifier);
+        touch2.setMagnifier(selectMagnifier);
 
         final Runnable onMoveActionOnce = new Runnable() {
 
@@ -970,7 +977,7 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
             protected void onPreExecute() {
 
                 start = System.currentTimeMillis();
-                android.util.Log.i("BENCH", "h-load-begin "
+                LOG.bench("h-load-begin "
                         + com.foobnix.android.utils.Apps.getBookPathFromActivity(HorizontalViewActivity.this));
 
                 dialog = Dialogs.loadingBook(HorizontalViewActivity.this, new Runnable() {
@@ -1065,7 +1072,7 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
 
             @Override
             protected void onPostExecute(Object result) {
-                android.util.Log.i("BENCH", "h-load-end "
+                LOG.bench("h-load-end "
                         + (System.currentTimeMillis() - start) + "ms result=" + result);
                 com.foobnix.remote.RemoteTimeline.mark("reader shell ready (horizontal)");
                 if (AppsConfig.IS_LOG) {
@@ -1089,7 +1096,7 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
                 if ((Integer) result == -2) {
                     final String failedPath = com.foobnix.android.utils.Apps
                             .getBookPathFromActivity(HorizontalViewActivity.this);
-                    android.util.Log.i("REMOTE", "open failed (-2): " + failedPath);
+                    LOG.remote("open failed (-2): " + failedPath);
                     if (com.foobnix.remote.RemoteBook.isRemotePathLoose(failedPath)) {
                         // a remote book that failed to decode gets a recovery
                         // dialog (retry / download-and-open) instead of a
@@ -1600,10 +1607,24 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
 
     @Override
     protected void onDestroy() {
+        LOG.bench("HV onDestroy");
         com.foobnix.sys.TempHolder.readerActive = false;
         // leaving the reader also leaves the in-page bilingual mode, so the
         // next session starts from the base book
         BilingualSession.exitOnReaderDestroy(this);
+        // AI 翻译收尾（竖屏同款，横屏此前漏掉）：面板会话与页面浮层的静态
+        // CURRENT 也在这里清——否则退出阅读器后旧 worker 继续翻译（烧配额），
+        // 下一本书的 updateUI 还会被旧会话接管，浮层视图整链泄漏
+        try {
+            com.foobnix.ai.PdfBilingualOverlay.dismissCurrent();
+        } catch (Throwable t) {
+            LOG.e(t);
+        }
+        try {
+            com.foobnix.ai.TranslateSession.cancelCurrent();
+        } catch (Throwable t) {
+            LOG.e(t);
+        }
         super.onDestroy();
 
         if (loadinAsyncTask != null) {
@@ -1927,7 +1948,7 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
         overlay.addView(dlBtn, dlLp);
         dlBtn.setOnClickListener(v -> {
             dlBtn.setEnabled(false);
-            android.util.Log.i("REMOTE", "overlay: slow layout, user chose full download: " + book);
+            LOG.remote("overlay: slow layout, user chose full download: " + book);
             com.foobnix.remote.RemoteBookOpener.fetchToCache(HorizontalViewActivity.this, book, 0,
                     target -> {
                         ExtUtils.openFile(HorizontalViewActivity.this,
@@ -2005,7 +2026,7 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
                     while (!isFinishing() && guard++ < 2000) {
                         final long chunkT0 = android.os.SystemClock.elapsedRealtime();
                         final int n = dc.runRemoteLayoutChunk(upto);
-                        android.util.Log.i("BENCH", "remote-layout-chunk upto=" + upto + " n=" + n
+                        LOG.bench("remote-layout-chunk upto=" + upto + " n=" + n
                                 + " " + (android.os.SystemClock.elapsedRealtime() - chunkT0) + "ms");
                         if (n <= 0) {
                             break;
@@ -2043,7 +2064,7 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
                 ui.removeCallbacks(tick);
                 removeRemoteOverlay();
                 hideRemoteLocateBanner();
-                android.util.Log.i("BENCH", "remote-layout-end " + book
+                LOG.bench("remote-layout-end " + book
                         + " total=" + o + " overlay "
                         + (android.os.SystemClock.elapsedRealtime() - t0) + "ms");
                 com.foobnix.remote.RemoteTimeline.mark("deferred layout done, content shown");
@@ -2065,7 +2086,7 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
                 if (total <= 0 && dc.getPagesCount() <= 1) {
                     // layout failed (network / engine error): recovery panel
                     // instead of a silently empty shell
-                    android.util.Log.i("REMOTE", "remote layout produced no pages, showing recovery: " + book);
+                    LOG.remote("remote layout produced no pages, showing recovery: " + book);
                     showLayoutFailure(overlay, tv, ui, tick, book);
                     return;
                 }
@@ -2094,7 +2115,7 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
                                    final android.widget.TextView tv,
                                    final android.os.Handler ui, final Runnable tick,
                                    final String book) {
-        android.util.Log.i("REMOTE", "remote layout failed, offering retry/download: " + book);
+        LOG.remote("remote layout failed, offering retry/download: " + book);
         ui.removeCallbacks(tick);
         tv.setText(R.string.remote_layout_failed);
         if (overlay.getParent() == null) {
@@ -2316,7 +2337,7 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
             @Override
             public void run() {
                 try {
-                    android.util.Log.i("BENCH", "BilingualReload start page0=" + page0 + " anchor=" + anchorMd5);
+                    LOG.bench("BilingualReload start page0=" + page0 + " anchor=" + anchorMd5);
                     ImageExtractor.clearCodeDocument();
                     IMG.clearMemoryCache();
                     LibreraAppGlideModule.clearBitmapCache();
@@ -2331,7 +2352,7 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
                                 // old anchor page
                                 final int pageNow = dc.getCurentPage();
                                 dc = newDc;
-                                android.util.Log.i("BENCH", "BilingualReload ui-swap pageNow=" + pageNow
+                                LOG.bench("BilingualReload ui-swap pageNow=" + pageNow
                                         + " anchorPage=" + anchorPage);
                                 dc.initAnchor(anchor);
                                 viewPager.removeOnPageChangeListener(onViewPagerChangeListener);
@@ -2352,7 +2373,7 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
                                 updateUI(target);
                                 attachBilingual();
                                 feedBilingualView();
-                                android.util.Log.i("BENCH", "BilingualReload done page=" + target
+                                LOG.bench("BilingualReload done page=" + target
                                         + " anchorPage=" + anchorPage + " pageNow=" + pageNow);
                             } catch (Throwable t) {
                                 LOG.e(t);
@@ -2491,7 +2512,7 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
             // the network (this file's damaged outline repairs by fetching
             // scattered objects) — it must not sit on the open path. The TOC
             // panel loads it on demand instead.
-            android.util.Log.i("REMOTE", "outline preload deferred to TOC open: "
+            LOG.remote("outline preload deferred to TOC open: "
                     + com.foobnix.android.utils.Apps.getBookPathFromActivity(this));
         }
 
@@ -3201,7 +3222,7 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
             }
             PageImageState.currentPage = pos;
             dc.setCurrentPage(viewPager.getCurrentItem());
-            android.util.Log.i("REMOTE", "page now " + (pos + 1) + "/"
+            LOG.remote("page now " + (pos + 1) + "/"
                     + dc.getPageCount());
             updateUI(pos);
 

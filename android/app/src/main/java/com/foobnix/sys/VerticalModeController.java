@@ -437,6 +437,219 @@ public class VerticalModeController extends DocumentController {
         return null;
     }
 
+    /**
+     * 段落首行纵向定位（AI 对照翻译面板）：把段落文本匹配到页面字符几何
+     * （text116，阅读序），返回首行 top/页高分数；-1 = 未定位。移植自
+     * HorizontalModeController 同名实现（纵向模式此前 tops 全 -1）。
+     */
+    @Override public float[] getParagraphTops(int page, String[] paragraphs) {
+        float[] out = new float[paragraphs == null ? 0 : paragraphs.length];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = -1;
+        }
+        try {
+            if (ctr == null || paragraphs == null || paragraphs.length == 0) {
+                return out;
+            }
+            org.ebookdroid.core.codec.CodecDocument doc = ctr.getDecodeService().getCodecDocument();
+            if (doc == null || doc.isRecycled()) {
+                return out;
+            }
+            // owned page: recycled below, must not be the shared cache instance
+            org.ebookdroid.core.codec.CodecPage cp = doc.getOwnedPage(page);
+            if (cp == null || cp.isRecycled() || !(cp instanceof MuPdfPage)) {
+                return out;
+            }
+            try {
+                MuPdfPage mp = (MuPdfPage) cp;
+                java.util.ArrayList<org.ebookdroid.droids.mupdf.codec.TextChar> chars = mp.getTextChars();
+                if (chars == null || chars.isEmpty()) {
+                    return out;
+                }
+                float pageH = cp.getHeight();
+                if (pageH <= 0) {
+                    return out;
+                }
+                int n = chars.size();
+                char[] norm = new char[n];
+                float[] tops = new float[n];
+                for (int i = 0; i < n; i++) {
+                    org.ebookdroid.droids.mupdf.codec.TextChar tc = chars.get(i);
+                    char c = (char) tc.c;
+                    norm[i] = Character.isLetterOrDigit(c) ? Character.toLowerCase(c) : 0;
+                    tops[i] = tc.top;
+                }
+                int from = 0;
+                for (int p = 0; p < paragraphs.length; p++) {
+                    String needle = normalizeForAlign(paragraphs[p], 24);
+                    if (needle.length() == 0) {
+                        continue;
+                    }
+                    int at = indexOfAlignRun(norm, from, needle);
+                    if (at < 0) {
+                        continue;
+                    }
+                    out[p] = tops[at] / pageH;
+                    from = at + 1;
+                }
+            } finally {
+                cp.recycle();
+            }
+        } catch (Throwable t) {
+            LOG.e(t);
+        }
+        return out;
+    }
+
+    private static String normalizeForAlign(String s, int cap) {
+        StringBuilder sb = new StringBuilder();
+        if (s == null) {
+            return sb.toString();
+        }
+        for (int i = 0; i < s.length() && sb.length() < cap; i++) {
+            char c = s.charAt(i);
+            if (Character.isLetterOrDigit(c)) {
+                sb.append(Character.toLowerCase(c));
+            }
+        }
+        return sb.toString();
+    }
+
+    /** First index >= from whose normalized run equals needle; -1 when absent. */
+    private static int indexOfAlignRun(char[] norm, int from, String needle) {
+        int nLen = needle.length();
+        int ni = 0;
+        for (int i = from; i < norm.length; i++) {
+            if (norm[i] == 0) {
+                continue;
+            }
+            if (norm[i] == needle.charAt(ni)) {
+                ni++;
+                if (ni == nLen) {
+                    return i - nLen + 1;
+                }
+            } else {
+                ni = norm[i] == needle.charAt(0) ? 1 : 0;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * 每个段落在页面上的归一化包围盒 {l,t,r,b}（页宽/页高分数；null=未定位）。
+     * 把段落文本匹配到页面字符几何（text116，阅读序）后，对命中的连续字符段
+     * 做包围盒聚合——段落 bbox 来自其自身字符，分栏页面的段落天然落在本栏内。
+     */
+    @Override public float[][] getParagraphRects(int page, String[] paragraphs) {
+        float[][] out = new float[paragraphs == null ? 0 : paragraphs.length][];
+        try {
+            if (ctr == null || paragraphs == null || paragraphs.length == 0) {
+                return out;
+            }
+            org.ebookdroid.core.codec.CodecDocument doc = ctr.getDecodeService().getCodecDocument();
+            if (doc == null || doc.isRecycled()) {
+                return out;
+            }
+            org.ebookdroid.core.codec.CodecPage cp = doc.getOwnedPage(page);
+            if (cp == null || cp.isRecycled() || !(cp instanceof MuPdfPage)) {
+                return out;
+            }
+            try {
+                MuPdfPage mp = (MuPdfPage) cp;
+                java.util.ArrayList<org.ebookdroid.droids.mupdf.codec.TextChar> chars = mp.getTextChars();
+                if (chars == null || chars.isEmpty()) {
+                    return out;
+                }
+                float pageW = cp.getWidth();
+                float pageH = cp.getHeight();
+                if (pageW <= 0 || pageH <= 0) {
+                    return out;
+                }
+                int n = chars.size();
+                char[] norm = new char[n];
+                float[] L = new float[n];
+                float[] T = new float[n];
+                float[] R = new float[n];
+                float[] B = new float[n];
+                for (int i = 0; i < n; i++) {
+                    org.ebookdroid.droids.mupdf.codec.TextChar tc = chars.get(i);
+                    char c = (char) tc.c;
+                    norm[i] = Character.isLetterOrDigit(c) ? Character.toLowerCase(c) : 0;
+                    L[i] = tc.left;
+                    T[i] = tc.top;
+                    R[i] = tc.right;
+                    B[i] = tc.bottom;
+                }
+                int from = 0;
+                for (int p = 0; p < paragraphs.length; p++) {
+                    String needle = normalizeForAlign(paragraphs[p], 2000);
+                    if (needle.length() == 0) {
+                        continue;
+                    }
+                    int[] se = indexOfAlignRunRange(norm, from, needle);
+                    if (se == null) {
+                        continue;
+                    }
+                    float l = Float.MAX_VALUE;
+                    float t = Float.MAX_VALUE;
+                    float r = 0;
+                    float b = 0;
+                    boolean any = false;
+                    int consumed = 0;
+                    for (int i = se[0]; i <= se[1] && consumed < needle.length(); i++) {
+                        if (norm[i] == 0) {
+                            continue;
+                        }
+                        org.ebookdroid.droids.mupdf.codec.TextChar tc = chars.get(i);
+                        l = Math.min(l, tc.left);
+                        t = Math.min(t, tc.top);
+                        r = Math.max(r, tc.right);
+                        b = Math.max(b, tc.bottom);
+                        any = true;
+                        consumed++;
+                    }
+                    if (any) {
+                        out[p] = new float[]{l / pageW, t / pageH, r / pageW, b / pageH};
+                        from = se[1] + 1;
+                    }
+                }
+            } finally {
+                cp.recycle();
+            }
+        } catch (Throwable t) {
+            LOG.e(t);
+        }
+        return out;
+    }
+
+    /** 在 norm 中从 from 起查找 needle 的归一化字符连续段，返回 {start,end}；未找到 null。 */
+    private static int[] indexOfAlignRunRange(char[] norm, int from, String needle) {
+        int nLen = needle.length();
+        if (nLen == 0) {
+            return null;
+        }
+        int ni = 0;
+        int start = -1;
+        for (int i = from; i < norm.length; i++) {
+            if (norm[i] == 0) {
+                continue;
+            }
+            if (norm[i] == needle.charAt(ni)) {
+                if (ni == 0) {
+                    start = i;
+                }
+                ni++;
+                if (ni == nLen) {
+                    return new int[]{start, i};
+                }
+            } else {
+                ni = norm[i] == needle.charAt(0) ? 1 : 0;
+                start = ni == 1 ? i : -1;
+            }
+        }
+        return null;
+    }
+
     @Override
     public synchronized String getPageHtml() {
         String pageHTML = ctr.getDecodeService().getPageHTML(getCurentPageFirst1() - 1);
@@ -798,7 +1011,7 @@ public class VerticalModeController extends DocumentController {
             // a plain return here made the reader un-exitable — Back did
             // nothing on a blank screen. Abort in-flight remote reads, close.
             final Object book = getCurrentBook();
-            android.util.Log.i("REMOTE", "close with no decode service: " + book);
+            LOG.remote("close with no decode service: " + book);
             if (book != null && com.foobnix.remote.RemoteBook.isRemotePathLoose(String.valueOf(book))) {
                 com.foobnix.remote.RemoteSessionFactory.abortSession(String.valueOf(book));
             }
@@ -1056,7 +1269,35 @@ public class VerticalModeController extends DocumentController {
         });
     }
 
-    @Override
+        /** fb2split 切章产物(链接形如 fb2_NNN.fb2#N)的目录页码全局化:引擎
+     * getLinkPage 返回的是 part 内页码,需叠加该 part 之前所有 spine 章的
+     * 累计页数(accelerator 已带各章页数,重开时零排版成本)。非切章产物恒 0。 */
+    private int fb2SplitBaseOffset(String linkUri, org.ebookdroid.core.codec.CodecDocument cdoc) {
+        if (linkUri == null || cdoc == null || cdoc.isRecycled()
+                || !(cdoc instanceof org.ebookdroid.droids.mupdf.codec.MuPdfDocument)) {
+            return 0;
+        }
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("fb2_(\\d+)\\.fb2").matcher(linkUri);
+        if (!m.find()) {
+            return 0;
+        }
+        try {
+            int partIdx = Integer.parseInt(m.group(1)); // 1-based
+            if (partIdx <= 1) {
+                return 0;
+            }
+            org.ebookdroid.droids.mupdf.codec.MuPdfDocument mdoc =
+                    (org.ebookdroid.droids.mupdf.codec.MuPdfDocument) cdoc;
+            return mdoc.getPageCountProgressive(com.foobnix.android.utils.Dips.screenWidth(),
+                    com.foobnix.android.utils.Dips.screenHeight(),
+                    com.foobnix.pdf.info.model.BookCSS.get().fontSizeSp, partIdx - 1);
+        } catch (Throwable t) {
+            LOG.e(t);
+            return 0;
+        }
+    }
+@Override
+
     public synchronized void getOutline(final ResultResponse<List<OutlineLinkWrapper>> resultWrapper, boolean forseRealod) {
         if (outline != null) {
             resultWrapper.onResultRecive(outline);
@@ -1093,7 +1334,18 @@ public class VerticalModeController extends DocumentController {
                             if (ol.getLink() != null && ol.getLink().startsWith("#") && !ol.getLink().startsWith("#0")) {
                                 outline.add(new OutlineLinkWrapper(ol.getTitle(), ol.getLink(), ol.getLevel(), ol.linkUri));
                             } else {
-                                int page = MuPdfLinks.getLinkPageWrapper(ol.docHandle, ol.linkUri) + 1;
+                                int rawp = MuPdfLinks.getLinkPageWrapper(ol.docHandle, ol.linkUri);
+                                int page = rawp + 1;
+                                page += fb2SplitBaseOffset(ol.linkUri, ctr.getDocumentModel().decodeService.getCodecDocument());
+                                String altB = ol.linkUri != null && ol.linkUri.contains("/")
+                                        ? ol.linkUri.substring(ol.linkUri.lastIndexOf('/') + 1) : null;
+                                String altC = ol.linkUri != null && ol.linkUri.contains("#")
+                                        ? ol.linkUri.substring(ol.linkUri.indexOf('#')) : null;
+                                int rawB = altB == null ? -9 : MuPdfLinks.getLinkPageWrapper(ol.docHandle, altB);
+                                int rawC = altC == null ? -9 : MuPdfLinks.getLinkPageWrapper(ol.docHandle, altC);
+                                LOG.bench("outline-page uri=" + ol.linkUri
+                                        + " raw=" + rawp + " rawB=" + rawB + "(" + altB + ") rawC=" + rawC
+                                        + "(" + altC + ") final=" + page + " title=" + ol.getTitle());
                                 outline.add(new OutlineLinkWrapper(ol.getTitle(), "#" + page, ol.getLevel(), ol.linkUri));
                             }
 

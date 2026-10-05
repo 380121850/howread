@@ -112,7 +112,14 @@ public class ChooserDialogFragment extends DialogFragment {
         // detached page at the external-storage root makes "up" walk the real
         // file tree (stopping at the root) and never touch the shared path.
         Bundle args = getArguments() != null ? new Bundle(getArguments()) : new Bundle();
-        args.putString("folderPath", validStartDir(Environment.getExternalStorageDirectory().getPath()));
+        // Anchor the detached page at the caller's requested start dir (when
+        // provided) instead of always the storage root: chooseFolder callers
+        // pass EXTRA_INIT_PATH expecting it honoured (e.g. remembered download
+        // dir). "Up one level" still walks the real tree and stops at the
+        // storage root, so the original detach concern is unaffected.
+        String reqInit = args.getString(BrowseFragment2.EXTRA_INIT_PATH);
+        args.putString("folderPath", validStartDir(reqInit != null ? reqInit
+                : Environment.getExternalStorageDirectory().getPath()));
 
         final BrowseFragment2 fr = BrowseFragment2.newInstance(args);
 

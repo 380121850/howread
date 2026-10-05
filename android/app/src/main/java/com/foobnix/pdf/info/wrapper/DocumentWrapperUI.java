@@ -70,6 +70,7 @@ import com.foobnix.pdf.info.view.NoteEditDialog;
 import com.foobnix.pdf.info.view.ProgressDraw;
 import com.foobnix.pdf.info.view.UnderlineImageView;
 import com.foobnix.pdf.info.widget.DraggbleTouchListener;
+import com.foobnix.pdf.info.widget.SelectionMagnifier;
 import com.foobnix.pdf.info.widget.ShareDialog;
 import com.foobnix.pdf.search.activity.ViewBinder;
 import com.foobnix.pdf.search.activity.msg.MessagePageXY;
@@ -758,7 +759,7 @@ public class DocumentWrapperUI {
      */
     public void refreshPageCount() {
         updateUI();
-        progressDraw.updatePageCount(dc.getPageCount() - 1);
+        progressDraw.updatePageCount(dc.getPageCount());
     }
 
     /**
@@ -844,6 +845,10 @@ public class DocumentWrapperUI {
             if (AppSP.get().isCut) {
                 cut.setVisibility(View.VISIBLE);
             }
+        } else if (com.foobnix.ai.AiTranslator.isSupportedFormat(
+                dc.getCurrentBook() == null ? null : dc.getCurrentBook().getPath())) {
+            // PDF 等固定版式但有文本层的格式：AI 对照翻译面板同样可用
+            onTextReplacement.setVisibility(View.VISIBLE);
         }
 
         // recompute the AI-translate gate now that the book is loaded
@@ -1053,6 +1058,11 @@ public class DocumentWrapperUI {
 
         DraggbleTouchListener touch1 = new DraggbleTouchListener(anchorX, (View) anchorX.getParent());
         DraggbleTouchListener touch2 = new DraggbleTouchListener(anchorY, (View) anchorY.getParent());
+
+        // 选中手柄拖动放大镜（API 28+；被放大内容取 documentView 中的页面视图）
+        SelectionMagnifier selectMagnifier = new SelectionMagnifier(a.findViewById(R.id.documentView));
+        touch1.setMagnifier(selectMagnifier);
+        touch2.setMagnifier(selectMagnifier);
 
         final Runnable onMoveActionOnce = new Runnable() {
 
@@ -1699,7 +1709,7 @@ public class DocumentWrapperUI {
         }
 
 
-        if (AppState.get().isShowReadingProgress && AppState.get().isEditMode) {
+        if (dc.isMusicianMode() || (AppState.get().isShowReadingProgress && AppState.get().isEditMode)) {
             progressDraw.setVisibility(View.GONE);
         } else {
             progressDraw.setVisibility(AppState.get().isShowReadingProgress ? View.VISIBLE : View.GONE);
@@ -2096,7 +2106,7 @@ public class DocumentWrapperUI {
 
             updateUI();
 
-            progressDraw.updatePageCount(dc.getPageCount() - 1);
+            progressDraw.updatePageCount(dc.getPageCount());
             titleBar.setOnTouchListener(new HorizontallSeekTouchEventListener(onSeek, dc.getPageCount(), false));
             progressDraw.setOnTouchListener(new HorizontallSeekTouchEventListener(onSeek, dc.getPageCount(), false));
 
@@ -2112,7 +2122,7 @@ public class DocumentWrapperUI {
                     Apps.accessibilityText(a, a.getString(R.string.book_is_open), a.getString(R.string.m_current_page), " " + dc.getCurentPageFirst1());
 
                     progressDraw.updateDivs(list);
-                    progressDraw.updatePageCount(dc.getPageCount() - 1);
+                    progressDraw.updatePageCount(dc.getPageCount());
                     titleBar.setOnTouchListener(new HorizontallSeekTouchEventListener(onSeek, dc.getPageCount(), false));
                     progressDraw.setOnTouchListener(new HorizontallSeekTouchEventListener(onSeek, dc.getPageCount(), false));
 //                    if (TxtUtils.isListEmpty(list)) {

@@ -67,10 +67,57 @@ public class RemoteBilingualBase {
             if (BlockCacheStore.cachedPercent(p) < 100) {
                 return null;
             }
+            // 整书组装是重磁盘 I/O：主线程（阅读器 onResume 的挂载路径）绝不
+            // 在此做——只认已存在的成品；首建由后台 open 线程完成
+            if (isOnMainThread()) {
+                return peekAssembled(cache);
+            }
             return assembledFile(cache);
         } finally {
             closeQuietly(cache);
         }
+    }
+
+    /**
+     * 只读、绝不组装的版本（可在主线程调用）：成品已在磁盘上（且未过期）
+     * 才返回，否则 null——首建交给后台 open 线程。
+     */
+    public static File findLocalBaseForBilingual(String remotePath) {
+        String p = RemoteBook.fixCollapsed(remotePath);
+        if (!rewritableRemote(p)) {
+            return null;
+        }
+        File copy = currentCopy(p);
+        if (copy != null) {
+            return copy;
+        }
+        BlockCacheStore cache = BlockCacheStore.openExisting(RemoteBook.cacheKey(p));
+        if (cache == null) {
+            return null;
+        }
+        try {
+            if (BlockCacheStore.cachedPercent(p) < 100) {
+                return null;
+            }
+            return peekAssembled(cache);
+        } finally {
+            closeQuietly(cache);
+        }
+    }
+
+    /** null unless the assembled base already exists and is current. */
+    private static File peekAssembled(BlockCacheStore cache) {
+        File out = new File(cache.dirPath(), "bilingual-base.epub");
+        File meta = new File(cache.dirPath(), "meta.json");
+        if (out.isFile() && out.length() == cache.getFileSize()
+                && out.lastModified() >= meta.lastModified()) {
+            return out;
+        }
+        return null;
+    }
+
+    private static boolean isOnMainThread() {
+        return android.os.Looper.myLooper() == android.os.Looper.getMainLooper();
     }
 
     /** The downloaded full copy when it matches the current size+version. */
@@ -104,12 +151,11 @@ public class RemoteBilingualBase {
 
     /** Assemble the base from the fully-cached blocks (cache-only reads). */
     private static File assembledFile(BlockCacheStore cache) {
-        File out = new File(cache.dirPath(), "bilingual-base.epub");
-        File meta = new File(cache.dirPath(), "meta.json");
-        if (out.isFile() && out.length() == cache.getFileSize()
-                && out.lastModified() >= meta.lastModified()) {
+        File out = peekAssembled(cache);
+        if (out != null) {
             return out;
         }
+        out = new File(cache.dirPath(), "bilingual-base.epub");
         long size = cache.getFileSize();
         int blockSize = cache.getBlockSize();
         long blocks = (size + blockSize - 1) / blockSize;
@@ -147,7 +193,7 @@ public class RemoteBilingualBase {
                 return null;
             }
         }
-        android.util.Log.i("BENCH", "RemoteBilingualBase assembled size=" + written
+        LOG.bench("RemoteBilingualBase assembled size=" + written
                 + " out=" + out.getName());
         return out;
     }

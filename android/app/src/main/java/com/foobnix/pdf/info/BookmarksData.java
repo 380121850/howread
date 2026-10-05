@@ -203,7 +203,9 @@ public class BookmarksData {
 
 
         LOG.d("getBookmarksByBook", path, all.size());
-        Collections.sort(all, BY_PERCENT);
+        // 书签/笔记列表统一按时间倒序（最新在前）；需要页码序的消费方
+        // （阅读器快速导航条）在本地自行重排
+        Collections.sort(all, BY_TIME);
         return all;
     }
 

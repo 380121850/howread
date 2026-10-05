@@ -13,4 +13,14 @@ public class DefaultGestureDetector extends GestureDetector implements IGestureD
     public boolean enabled() {
         return true;
     }
+
+    @Override
+    public boolean onTouchEvent(final android.view.MotionEvent ev) {
+        final int a = ev.getAction();
+        if (a == android.view.MotionEvent.ACTION_DOWN || a == android.view.MotionEvent.ACTION_UP
+                || a == android.view.MotionEvent.ACTION_CANCEL) {
+            com.foobnix.android.utils.LOG.bench("TouchDG a=" + a);
+        }
+        return super.onTouchEvent(ev);
+    }
 }

@@ -152,7 +152,7 @@ public class RemoteSessionFactory {
                 if (cachedSession != null) {
                     SESSIONS.put(remotePath, cachedSession);
                     verifyVersionAsync(remotePath, cached.getVersionTag(), cached.getFileSize());
-                    android.util.Log.i("REMOTE", "cache-first open: " + remotePath);
+                    LOG.remote("cache-first open: " + remotePath);
                     return cachedSession;
                 }
             }
@@ -165,7 +165,7 @@ public class RemoteSessionFactory {
                 if (session == null) {
                     throw e;
                 }
-                android.util.Log.i("REMOTE", "offline open from block cache: " + remotePath);
+                LOG.remote("offline open from block cache: " + remotePath);
             }
             SESSIONS.put(remotePath, session);
             return session;
@@ -195,7 +195,7 @@ public class RemoteSessionFactory {
                     String tag = src.versionTag();
                     long size = src.size();
                     if (size != expectSize || !tag.equals(expectTag)) {
-                        android.util.Log.i("REMOTE", "cache-first: remote version changed, invalidating: "
+                        LOG.remote("cache-first: remote version changed, invalidating: "
                                 + remotePath);
                         RemoteBookSession s;
                         synchronized (LOCK) {
@@ -213,13 +213,13 @@ public class RemoteSessionFactory {
                         }
                         BlockCacheStore.clearBook(RemoteBook.cacheKey(remotePath));
                     } else {
-                        android.util.Log.i("REMOTE", "cache-first: version verified: " + remotePath);
+                        LOG.remote("cache-first: version verified: " + remotePath);
                     }
                 } finally {
                     src.close();
                 }
             } catch (Throwable ignore) {
-                android.util.Log.i("REMOTE", "cache-first: version verify skipped (offline?): " + remotePath);
+                LOG.remote("cache-first: version verify skipped (offline?): " + remotePath);
             } finally {
                 verifying.remove(remotePath);
             }

@@ -159,6 +159,10 @@ public abstract class DragingPopup {
         return popupView;
     }
 
+    public int getHeaderHeight() {
+        return topHeaderLayout != null ? topHeaderLayout.getHeight() : 0;
+    }
+
     public void beforeCreate() {
 
     }
@@ -179,7 +183,7 @@ public abstract class DragingPopup {
                     && place.width >= MIN_WH && place.height >= MIN_WH
                     && place.x >= 0 && place.y >= 0
                     && place.x + place.width <= Dips.screenWidth()
-                    && place.y + place.height <= Dips.screenHeight();
+                    && place.y + Dips.dpToPx(32) <= Dips.screenHeight(); // 底部允许沉出屏幕，只留标题栏可抓
             if (valid) {
                 AnchorHelper.setXY(anchor, place.x, place.y);
                 popupView.getLayoutParams().width = place.width;
@@ -305,6 +309,8 @@ public abstract class DragingPopup {
         TxtUtils.updateAllLinks(popupView, true);
 
         anchor.addView(popupView);
+        // 显示即放开裁剪链：还原的"半沉"位置（底部越出屏幕）也能完整渲染到窗口底
+        DraggbleTouchListener.unclipChildChain(anchor);
         final DraggbleTouchListener draggbleTouchListener = new DraggbleTouchListener(anchor, this);
         draggbleTouchListener.setOnMoveFinish(new Runnable() {
 

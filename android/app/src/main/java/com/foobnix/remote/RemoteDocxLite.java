@@ -39,7 +39,7 @@ public class RemoteDocxLite {
 
     /** Logs why the restricted path cannot serve this book, then degrades. */
     private static File skip(String why) {
-        android.util.Log.i("REMOTE", "docx lite skip: " + why);
+        LOG.remote("docx lite skip: " + why);
         return null;
     }
 
@@ -161,13 +161,13 @@ public class RemoteDocxLite {
             }
             zos.finish();
             zos.close();
-            android.util.Log.i("REMOTE", "docx lite ok parts=" + parts.size()
+            LOG.remote("docx lite ok parts=" + parts.size()
                     + " bytes=" + out.length()
                     + " ms=" + (android.os.SystemClock.elapsedRealtime() - t0));
             return out;
         } catch (Throwable t) {
             LOG.w(t);
-            android.util.Log.i("REMOTE", "docx lite failed: " + t);
+            LOG.remote("docx lite failed: " + t);
             try {
                 out.delete();
             } catch (Throwable ignore) {
@@ -199,12 +199,12 @@ public class RemoteDocxLite {
             }
         }
         if (v == null || v[2] > PART_MAX || v[1] > PART_MAX) {
-            android.util.Log.i("REMOTE", "docx lite part " + name + " v=" + java.util.Arrays.toString(v));
+            LOG.remote("docx lite part " + name + " v=" + java.util.Arrays.toString(v));
             return null;
         }
         byte[] lh = readRange(s, v[3], 30);
         if (lh == null || lh.length < 30 || u32(lh, 0) != 0x04034b50L) {
-            android.util.Log.i("REMOTE", "docx lite part " + name + " lh bad len="
+            LOG.remote("docx lite part " + name + " lh bad len="
                     + (lh == null ? -1 : lh.length)
                     + " sig=" + (lh == null ? "-" : Long.toHexString(u32(lh, 0))));
             return null;
@@ -213,7 +213,7 @@ public class RemoteDocxLite {
         long data = v[3] + 30 + nameLen + extraLen;
         byte[] raw = readRange(s, data, (int) v[1]);
         if (raw == null || raw.length < v[1]) {
-            android.util.Log.i("REMOTE", "docx lite part " + name + " raw short want=" + v[1]
+            LOG.remote("docx lite part " + name + " raw short want=" + v[1]
                     + " got=" + (raw == null ? -1 : raw.length));
             return null;
         }
@@ -229,11 +229,11 @@ public class RemoteDocxLite {
                 inf.end();
                 return n == outBuf.length ? outBuf : java.util.Arrays.copyOf(outBuf, n);
             } catch (Throwable t) {
-                android.util.Log.i("REMOTE", "docx lite part " + name + " inflate fail: " + t);
+                LOG.remote("docx lite part " + name + " inflate fail: " + t);
                 return null;
             }
         }
-        android.util.Log.i("REMOTE", "docx lite part " + name + " method unsupported: " + v[0]);
+        LOG.remote("docx lite part " + name + " method unsupported: " + v[0]);
         return null;
     }
 
@@ -289,7 +289,7 @@ public class RemoteDocxLite {
             }
             return done == len ? b : java.util.Arrays.copyOf(b, done);
         } catch (Throwable t) {
-            android.util.Log.i("REMOTE", "docx lite range fail off=" + off + " len=" + len + " : " + t);
+            LOG.remote("docx lite range fail off=" + off + " len=" + len + " : " + t);
             return null;
         }
     }

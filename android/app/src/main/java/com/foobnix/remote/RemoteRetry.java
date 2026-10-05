@@ -30,7 +30,7 @@ public class RemoteRetry {
                 }
                 last = e;
                 long sleep = base * (1L << attempt);
-                android.util.Log.i("REMOTE", "retry attempt " + (attempt + 1) + "/" + retries
+                LOG.remote("retry attempt " + (attempt + 1) + "/" + retries
                         + " after " + sleep + "ms: " + e.getMessage());
                 Thread.sleep(sleep);
             }

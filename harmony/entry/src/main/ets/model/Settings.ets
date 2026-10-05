@@ -171,6 +171,9 @@ export interface ReaderSettings {
   remoteWholeBookThresholdMB: number;
   /** Network retry count for range reads */
   remoteRetryCount: number;
+  remoteBatchDir: string;
+  /** last PDF translation mode 0..3 (0.9.20) */
+  pdfTransMode: number;
   /** Initial retry interval in ms (exponential backoff; default 100) */
   remoteRetryIntervalMs: number;
 
@@ -274,6 +277,8 @@ export function defaultSettings(): ReaderSettings {
     remotePrefetchWifiOnly: true,
     remoteWholeBookThresholdMB: 20,
     remoteRetryCount: 3,
+    remoteBatchDir: '',
+    pdfTransMode: 0,
     remoteRetryIntervalMs: 100,
     volumeKeyAction: 1,
     tapLeftAction: 0,
@@ -376,6 +381,8 @@ export async function loadSettings(ctx: Context): Promise<ReaderSettings> {
       remoteWholeBookThresholdMB: typeof r.remoteWholeBookThresholdMB === 'number'
         ? r.remoteWholeBookThresholdMB : d.remoteWholeBookThresholdMB,
       remoteRetryCount: typeof r.remoteRetryCount === 'number' ? r.remoteRetryCount : d.remoteRetryCount,
+      remoteBatchDir: typeof r.remoteBatchDir === 'string' ? r.remoteBatchDir : d.remoteBatchDir,
+      pdfTransMode: typeof r.pdfTransMode === 'number' ? r.pdfTransMode : d.pdfTransMode,
       /* 0.9.6: a stored old default 1000 follows the new default 100
        * (Android AppState migration parity); custom values kept */
       remoteRetryIntervalMs: typeof r.remoteRetryIntervalMs === 'number' && r.remoteRetryIntervalMs !== 1000

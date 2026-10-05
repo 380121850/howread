@@ -125,7 +125,7 @@ public class BookWarmer {
                     }
                     requested = total + 400;
                 }
-                Log.i("BENCH", "warm " + ExtUtils.getFileName(path) + " pages=" + total
+                LOG.bench("warm " + ExtUtils.getFileName(path) + " pages=" + total
                         + " " + (SystemClock.elapsedRealtime() - t0) + "ms");
             }
         } catch (Throwable e) {

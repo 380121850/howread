@@ -588,6 +588,7 @@ public class PageImaveView extends View {
     public String selectText(float x1, float y1, float xInit, float yInit) {
         if (!AppSP.get().isDouble && getPageText(0) == null) {
             LOG.d("get pag No page text", pageNumber);
+            LOG.bench("LongTapH pageText NULL (single) pg=" + pageNumber);
             return null;
         }
 
@@ -634,8 +635,12 @@ public class PageImaveView extends View {
         LOG.d("firstNumber", firstNumber);
         TextWord[][] pageText = getPageText(firstNumber);
         if (pageText == null) {
+            LOG.bench("LongTapH pageText NULL (double) pg=" + pageNumber);
             return null;
         }
+        int scanWords = 0;
+        int scanNeg = 0;
+        int scanHits = 0;
         for (TextWord line[] : pageText) {
             if (line == null) {
                 continue;
@@ -650,9 +655,11 @@ public class PageImaveView extends View {
                 }
 
                 RectF wordRect = transform(textWord, firstNumber);
+                scanWords++;
                 if (single) {
                     boolean intersects = RectF.intersects(wordRect, tapRect);
                     if (intersects || isHyphenWorld) {
+                        scanHits++;
                         LOG.d("ADD TEXT", textWord);
 
                         if (prevWord != null && prevWord.w.endsWith("-") && !isHyphenWorld) {
@@ -707,7 +714,9 @@ public class PageImaveView extends View {
         }
 
 
-        String txt = build.toString();
+        LOG.bench("LongTapH scan words=" + scanWords + " neg=" + scanNeg
+                + " hits=" + scanHits + " build=" + build.length());
+String txt = build.toString();
         if (txt.endsWith("- ")) {
             try {
                 if (firstNumber == 0) {
@@ -820,8 +829,10 @@ public class PageImaveView extends View {
         @Override
         public void onLongPress(MotionEvent e) {
             isIgronerClick = true;
+            LOG.bench("LongTapH gesture fired");
 
             if (AppState.get().isSelectTexByTouch) {
+                LOG.bench("LongTapH blocked: select-by-touch mode (long-press = click)");
                 //EventBus.getDefault().post(new MessageEvent(MessageEvent.MESSAGE_PERFORM_CLICK, e.getX(), e.getY()));
                 isLognPress = false;
                 isIgronerClick = true;
@@ -837,6 +848,7 @@ public class PageImaveView extends View {
             }
 
             if (!AppState.get().isAllowTextSelection) {
+                LOG.bench("LongTapH blocked: text-selection toggle is OFF");
                 Toast.makeText(LibreraApp.context, R.string.text_highlight_mode_is_disable, Toast.LENGTH_LONG).show();
                 return;
             }
@@ -845,6 +857,7 @@ public class PageImaveView extends View {
                 Vibro.vibrate();
             }
             if (AppSP.get().isCut || AppSP.get().isCrop) {
+                LOG.bench("LongTapH blocked: cut/crop mode isCut=" + AppSP.get().isCut + " isCrop=" + AppSP.get().isCrop);
                 if(AppState.get().isCropNotification) {
                     Toast.makeText(LibreraApp.context, R.string.the_page_is_clipped_the_text_selection_does_not_work,
                                  Toast.LENGTH_LONG)
@@ -856,6 +869,7 @@ public class PageImaveView extends View {
             xInit = e.getX();
             yInit = e.getY();
             String selectText = selectText(xInit, yInit, e.getX(), e.getY());
+            LOG.bench("LongTapH result len=" + (selectText == null ? -1 : selectText.length()));
             if (TxtUtils.isEmpty(selectText)) {
                 AppState.get().selectedText = null;
                 EventBus.getDefault().post(new MessagePageXY(MessagePageXY.TYPE_HIDE));

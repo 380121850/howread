@@ -113,19 +113,33 @@ public class AppDB {
         LOG.d("Open-DB", appDB);
         currentDB = appDB;
 
-        if (helper != null) {
-            helper.close();
-        }
-        helper = new DatabaseUpgradeHelper(c, appDB);
+        // 先建新连接、完成切换，再延迟关闭旧库：旧写法先 close 再建新，一旦
+        // 建新失败 AppDB 会停在"已关闭"状态；且 close 若撞上还在旧连接上的
+        // 查询，后台线程抛 already-closed 会杀掉整个进程
+        final DatabaseUpgradeHelper newHelper = new DatabaseUpgradeHelper(c, appDB);
+        final SQLiteDatabase writableDatabase = newHelper.getWritableDatabase();
+        final DaoMaster daoMaster = new DaoMaster(writableDatabase);
 
-
-        SQLiteDatabase writableDatabase = helper.getWritableDatabase();
-        DaoMaster daoMaster = new DaoMaster(writableDatabase);
-
+        final DatabaseUpgradeHelper oldHelper = helper;
+        helper = newHelper;
 
         daoSession = daoMaster.newSession();
 
         fileMetaDao = daoSession.getFileMetaDao();
+
+        if (oldHelper != null) {
+            // 延迟关闭：给仍在旧连接上的 in-flight 查询留出收尾窗口
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        oldHelper.close();
+                    } catch (Throwable t) {
+                        LOG.w(t);
+                    }
+                }
+            }, 5000);
+        }
 
         if (AppsConfig.IS_LOG) {
             QueryBuilder.LOG_SQL = true;

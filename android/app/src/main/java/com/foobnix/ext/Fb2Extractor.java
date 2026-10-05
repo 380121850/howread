@@ -100,8 +100,9 @@ public class Fb2Extractor extends BaseExtractor {
 
     public static boolean convertFolderToEpub(File inputFolder, File outputFile, String author, String title, List<OutlineLink> outline) {
 
+        ZipOutputStream zos = null;
         try {
-            ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(outputFile));
+            zos = new ZipOutputStream(new FileOutputStream(outputFile));
             zos.setLevel(0);
 
             writeToZip(zos, "mimetype", "application/epub+zip");
@@ -134,6 +135,13 @@ public class Fb2Extractor extends BaseExtractor {
         } catch (Exception e) {
             LOG.d("Fb2Context convert false error");
             LOG.e(e);
+        } finally {
+            try {
+                if (zos != null) {
+                    zos.close();
+                }
+            } catch (Exception ignore) {
+            }
         }
         LOG.d("Fb2Context convert false");
         return false;
@@ -446,6 +454,242 @@ public class Fb2Extractor extends BaseExtractor {
         }
         writer.close();
         return out;
+    }
+
+    /** 单个切分结果：part 文件名 / part XML（校验通过）/ 每个 part 覆盖的
+     * title 锚 id 区间（含端点）。 */
+    public static class Fb2Split {
+        final java.util.List<String> names = new ArrayList<String>();
+        final java.util.List<String> parts = new ArrayList<String>();
+        final java.util.List<int[]> anchorRanges = new ArrayList<int[]>();
+
+        String partOfAnchor(long anchor) {
+            for (int i = 0; i < anchorRanges.size(); i++) {
+                int[] r = anchorRanges.get(i);
+                if (r != null && r[0] >= 0 && anchor >= r[0] && anchor <= r[1]) {
+                    return names.get(i);
+                }
+            }
+            return null;
+        }
+    }
+
+    private static final int FB2_SPLIT_BYTES = 256 * 1024;
+    /** 目录锚点内容:NBSP(不可见,且保证 <a> 排版盒存在,可被 find_html_target 寻址) */
+    public static final String NBSP_CHAR = String.valueOf((char) 160);
+
+    /**
+     * 把清洗后的 fb2 XML 按 256KB 切成多个完整 fb2 文档。切点：顶层或一级
+     * section 关闭处；巨章无子 section 时取段落 &lt;/p&gt; 边界（新 part 重开
+     * 一层裸 section）。binary 图片按 l:href 引用归属到引用它的 part；第二
+     * body（脚注）随最后一个 part。逐 part 过 XmlPullParser 校验，异常返回
+     * null（调用方回退单条目）。
+     */
+    static Fb2Split splitFb2Parts(byte[] xmlBytes) throws Exception {
+        String xml = new String(xmlBytes, "utf-8");
+        int fbStart = xml.indexOf("<FictionBook");
+        if (fbStart < 0) {
+            return null;
+        }
+        int fbTagEnd = xml.indexOf('>', fbStart);
+        if (fbTagEnd < 0) {
+            return null;
+        }
+        fbTagEnd += 1;
+        int bodyStart = xml.indexOf("<body", fbTagEnd);
+        int bodyEnd = xml.indexOf("</body>", bodyStart);
+        if (bodyStart < 0 || bodyEnd < 0) {
+            return null;
+        }
+        String header = xml.substring(0, fbTagEnd);
+        String bodyOpen = xml.substring(bodyStart, xml.indexOf('>', bodyStart) + 1);
+        String body = xml.substring(xml.indexOf('>', bodyStart) + 1, bodyEnd);
+        String tail = xml.substring(bodyEnd + "</body>".length());
+
+        // binary 块收集（id → 完整块）
+        java.util.Map<String, String> binaries = new java.util.HashMap<String, String>();
+        StringBuilder tailNoBinary = new StringBuilder();
+        {
+            int pos = 0;
+            while (true) {
+                int b0 = tail.indexOf("<binary", pos);
+                if (b0 < 0) {
+                    tailNoBinary.append(tail, pos, tail.length());
+                    break;
+                }
+                int b1 = tail.indexOf("</binary>", b0);
+                if (b1 < 0) {
+                    tailNoBinary.append(tail, pos, tail.length());
+                    break;
+                }
+                tailNoBinary.append(tail, pos, b0);
+                String block = tail.substring(b0, b1 + "</binary>".length());
+                String id = attrValue(block.substring(0, block.indexOf('>') + 1), "id");
+                if (id != null) {
+                    binaries.put(id, block);
+                }
+                pos = b1 + "</binary>".length();
+            }
+        }
+        if (!tailNoBinary.toString().contains("</FictionBook>")) {
+            return null; // 结构意外，回退
+        }
+
+        Fb2Split r = new Fb2Split();
+        LOG.bench("fb2-split body=" + body.length() + " tail=" + tail.length()
+                + " binaries=" + binaries.size());
+        StringBuilder cur = new StringBuilder();
+        int curAnchorMin = -1, curAnchorMax = -1;
+        int depth = 0;
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("<section|</section|<p[ >]|</p>|<a id=\"(\\d+)\"").matcher(body);
+        int last = 0;
+        while (m.find()) {
+            String tk = m.group();
+            boolean closeSection = tk.startsWith("</section");
+            boolean closeP = tk.equals("</p>");
+            if (tk.startsWith("<section")) {
+                depth++;
+            } else if (closeSection) {
+                depth--;
+            } else if (tk.startsWith("<a id=")) {
+                long a = Long.parseLong(m.group(1));
+                if (curAnchorMin < 0 || a < curAnchorMin) {
+                    curAnchorMin = (int) a;
+                }
+                if (a > curAnchorMax) {
+                    curAnchorMax = (int) a;
+                }
+            }
+            // 切分点必须落在完整标签之后：正则里的 "</section" 不含 '>'，
+            // 直接取 m.end() 会把 part 截在 "</section" 与 '>' 之间（校验器是
+            // FEATURE_RELAXED 的宽容解析，照样放行，损坏 part 被写进缓存）。
+            // 这里把闭合标签补全到 '>' 之后
+            int tokenEnd = m.end();
+            if (closeSection) {
+                int gt = body.indexOf('>', tokenEnd);
+                if (gt >= 0) {
+                    boolean onlyWs = true;
+                    for (int k = tokenEnd; k < gt; k++) {
+                        if (!Character.isWhitespace(body.charAt(k))) {
+                            onlyWs = false;
+                            break;
+                        }
+                    }
+                    if (onlyWs) {
+                        tokenEnd = gt + 1;
+                    }
+                }
+            }
+            boolean boundary = (closeSection && (depth == 0 || depth == 1))
+                    || (closeP && depth <= 1);
+            if (boundary && cur.length() + (tokenEnd - last) >= FB2_SPLIT_BYTES) {
+                cur.append(body, last, tokenEnd);
+                last = tokenEnd;
+                int reopen = depth > 0 ? 1 : 0;
+                appendSplitPart(r, header, bodyOpen, cur, binaries, curAnchorMin, curAnchorMax);
+                cur = new StringBuilder();
+                for (int i = 0; i < reopen; i++) {
+                    cur.append("<section>");
+                }
+                curAnchorMin = -1;
+                curAnchorMax = -1;
+            }
+        }
+        cur.append(body, last, body.length());
+        // 收尾 part：body 剩余 + 第二 body 等（tailNoBinary 自带 </FictionBook>）
+        StringBuilder lastPart = new StringBuilder();
+        lastPart.append(header).append(bodyOpen).append("<body>").append(cur)
+                .append("</body>").append(tailNoBinary);
+        // 末段同样要回填引用到的 binary：此前只有中间 part 回填，末章与脚注
+        // body（随 tail 进入本段）的图片全部丢失
+        String tailStr = tailNoBinary.toString();
+        String lastBinaries = collectReferencedBinaries(cur.toString() + tailStr, binaries);
+        if (lastBinaries.length() > 0) {
+            int end = lastPart.lastIndexOf("</FictionBook>");
+            lastPart.insert(end >= 0 ? end : lastPart.length(), lastBinaries);
+        }
+        r.parts.add(validateFb2Part(lastPart.toString()));
+        r.names.add(partName(r.parts.size() - 1));
+        r.anchorRanges.add(new int[]{curAnchorMin, curAnchorMax});
+        LOG.bench("fb2-split parts=" + r.parts.size()
+                + " nullParts=" + java.util.Collections.frequency(r.parts, null));
+        if (r.parts.size() < 2) {
+            return null;
+        }
+        for (String part : r.parts) {
+            if (part == null) {
+                return null; // 任一 part 校验失败 → 整体回退
+            }
+        }
+        return r;
+    }
+
+    private static String partName(int i) {
+        return String.format(java.util.Locale.US, "fb2_%03d.fb2", i + 1);
+    }
+
+    /** 本段内容里 l:href="#id" 引用到的 binary 块（去重，按出现顺序拼接）。 */
+    private static String collectReferencedBinaries(CharSequence content,
+            java.util.Map<String, String> binaries) {
+        StringBuilder out = new StringBuilder();
+        java.util.regex.Matcher ref = java.util.regex.Pattern
+                .compile("l:href=\"#([^\"]+)\"").matcher(content);
+        java.util.Set<String> added = new java.util.HashSet<String>();
+        while (ref.find()) {
+            String block = binaries.get(ref.group(1));
+            if (block != null && added.add(ref.group(1))) {
+                out.append(block);
+            }
+        }
+        return out.toString();
+    }
+
+    private static void appendSplitPart(Fb2Split r, String header, String bodyOpen,
+            StringBuilder content, java.util.Map<String, String> binaries, int aMin, int aMax) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(header).append(bodyOpen).append("<body>").append(content).append("</body>");
+        // 本 part 引用到的 binary 追加进同文档（XML 模式锚点仅文档内解析）
+        sb.append(collectReferencedBinaries(content, binaries));
+        sb.append("</FictionBook>");
+        r.parts.add(validateFb2Part(sb.toString()));
+        r.names.add(partName(r.parts.size() - 1));
+        r.anchorRanges.add(new int[]{aMin, aMax});
+    }
+
+    private static String attrValue(String tag, String name) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile(name + "=\"([^\"]+)\"").matcher(tag);
+        return m.find() ? m.group(1) : null;
+    }
+
+    private static String validateFb2Part(String partXml) {
+        try {
+            org.xmlpull.v1.XmlPullParser xpp = XmlParser.buildPullParser();
+            xpp.setInput(new java.io.StringReader(partXml));
+            int ev = xpp.getEventType();
+            while (ev != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
+                ev = xpp.next();
+            }
+            return partXml;
+        } catch (Throwable t) {
+            LOG.bench("fb2-split validate FAIL: " + t);
+            return null;
+        }
+    }
+
+    private static String buildSplitOpf(java.util.List<String> names) {
+        StringBuilder manifest = new StringBuilder();
+        StringBuilder spine = new StringBuilder();
+        for (int i = 0; i < names.size(); i++) {
+            manifest.append("  <item id=\"idFb2P").append(i).append("\" href=\"")
+                    .append(names.get(i)).append("\" media-type=\"application/xhtml+xml\"/>\n");
+            spine.append("  <itemref idref=\"idFb2P").append(i).append("\"/>\n");
+        }
+        return content_opf
+                .replace("  <item id=\"idBookFb2\" href=\"fb2.fb2\" media-type=\"application/xhtml+xml\"/>\n",
+                        manifest.toString())
+                .replace("  <itemref idref=\"idBookFb2\"/>\n", spine.toString());
     }
 
     public static String genetateNCX(List<String> titles) {
@@ -1062,15 +1306,23 @@ public class Fb2Extractor extends BaseExtractor {
 
     @Deprecated
     private boolean convertFB2(String inputFile, String toName) {
+        FileOutputStream out = null;
         try {
             String encoding = findHeaderEncoding(inputFile);
             ByteArrayOutputStream generateFb2File = generateFb2File(inputFile, encoding, true, null, new ArrayList<>());
-            FileOutputStream out = new FileOutputStream(toName);
+            out = new FileOutputStream(toName);
             out.write(generateFb2File.toByteArray());
             out.close();
         } catch (Exception e) {
             LOG.e(e);
             return false;
+        } finally {
+            try {
+                if (out != null) {
+                    out.close();
+                }
+            } catch (Exception ignore) {
+            }
         }
         return true;
 
@@ -1078,33 +1330,101 @@ public class Fb2Extractor extends BaseExtractor {
 
     public boolean convert(String inputFile, String toName, boolean fixHTML, Map<String, String> notes) {
 
+        FileOutputStream out = null;
+        ZipOutputStream zos = null;
         try {
-            final FileOutputStream out = new FileOutputStream(new File(toName));
-            ZipOutputStream zos = new ZipOutputStream(out);
+            out = new FileOutputStream(new File(toName));
+            zos = new ZipOutputStream(out);
             zos.setLevel(0);
 
             writeToZip(zos, "mimetype", "application/epub+zip");
             writeToZip(zos, "META-INF/container.xml", container_xml);
-            writeToZip(zos, "OEBPS/content.opf", content_opf);
 
+            final long fb2T0 = android.os.SystemClock.elapsedRealtime();
             String encoding = findHeaderEncoding(inputFile);
             List<String> titles = getFb2Titles(inputFile, encoding);
-
-            String ncx = genetateNCX(titles);
-            writeToZip(zos, "OEBPS/fb2.ncx", ncx);
+            LOG.bench("fb2-titles " + (android.os.SystemClock.elapsedRealtime() - fb2T0) + "ms");
 
             List<SimpleMeta> replacements = AppData.get().getAllTextReplaces();
+            final long tGen = android.os.SystemClock.elapsedRealtime();
             ByteArrayOutputStream generateFb2File = generateFb2File(inputFile, encoding, fixHTML, notes, replacements);
-            writeToZip(zos, "OEBPS/fb2.fb2", new ByteArrayInputStream(generateFb2File.toByteArray()));
+            LOG.bench("fb2-generate " + (android.os.SystemClock.elapsedRealtime() - tGen) + "ms "
+                    + generateFb2File.size() + "b");
+            // 章节切分：html 引擎的排版单位是 spine 条目，单巨章会让重开时的
+            // 首页渲染触发整本书重排（万页书 8 秒级）。按 256KB 切成多个 part
+            // 条目后首屏只排第一小章。任何不确定都回退单条目原路径。
+            Fb2Split split = null;
+            try {
+                final long tSplit = android.os.SystemClock.elapsedRealtime();
+                split = splitFb2Parts(generateFb2File.toByteArray());
+                LOG.bench("fb2-split " + (android.os.SystemClock.elapsedRealtime() - tSplit) + "ms");
+            } catch (Throwable t) {
+                LOG.bench("fb2-split EXC: " + t);
+                LOG.e(t);
+            }
+            final long tNcx = android.os.SystemClock.elapsedRealtime();
+            String ncx = genetateNCX(titles);
+            LOG.bench("fb2-ncx " + (android.os.SystemClock.elapsedRealtime() - tNcx) + "ms titles="
+                    + titles.size() + " ncxB=" + ncx.length());
+            if (split != null && split.names.size() > 1) {
+                for (int i = 0; i < split.names.size(); i++) {
+                    writeToZip(zos, "OEBPS/" + split.names.get(i), new java.io.ByteArrayInputStream(split.parts.get(i).getBytes("utf-8")));
+                }
+                writeToZip(zos, "OEBPS/content.opf", buildSplitOpf(split.names));
+                // 目录锚点映射：src="fb2.fb2#N" → 所在 part 文件（锚随正文走）。
+                // 旧实现逐条 String.replace 全文重扫重建（千章级 = O(N²) 秒级
+                // 开销），改单遍正则重写。
+                final long tMap = android.os.SystemClock.elapsedRealtime();
+                final java.util.regex.Matcher am = java.util.regex.Pattern
+                        .compile("src=\"fb2\\.fb2#(\\d+)\"").matcher(ncx);
+                final StringBuilder ncxSb = new StringBuilder(ncx.length() + 64);
+                int last = 0;
+                int mapped = 0;
+                while (am.find()) {
+                    final int anchor = Integer.parseInt(am.group(1));
+                    final String part = split.partOfAnchor(anchor);
+                    ncxSb.append(ncx, last, am.start());
+                    ncxSb.append("src=\"").append(part != null ? part : "fb2.fb2")
+                            .append('#').append(anchor).append('"');
+                    last = am.end();
+                    if (part != null) {
+                        mapped++;
+                    }
+                }
+                ncxSb.append(ncx, last, ncx.length());
+                ncx = ncxSb.toString();
+                LOG.bench("fb2-ncx-map " + (android.os.SystemClock.elapsedRealtime() - tMap)
+                        + "ms mapped=" + mapped);
+                LOG.d("Fb2Context convert split parts", split.names.size());
+            } else {
+                writeToZip(zos, "OEBPS/fb2.fb2", new ByteArrayInputStream(generateFb2File.toByteArray()));
+                writeToZip(zos, "OEBPS/content.opf", content_opf);
+            }
+            writeToZip(zos, "OEBPS/fb2.ncx", ncx);
             LOG.d("Fb2Context convert true");
             zos.close();
             out.close();
+            LOG.bench("fb2-zip+write done");
             return true;
         } catch (Exception e) {
             LOG.d("Fb2Context convert false error");
             LOG.e(e);
         } catch (Throwable e) {
             LOG.e(e);
+        } finally {
+            // 异常路径也要关流：磁盘满/写失败时原实现泄漏句柄并留半成品缓存
+            try {
+                if (zos != null) {
+                    zos.close();
+                }
+            } catch (Exception ignore) {
+            }
+            try {
+                if (out != null) {
+                    out.close();
+                }
+            } catch (Exception ignore) {
+            }
         }
         LOG.d("Fb2Context convert false");
         return false;
@@ -1148,8 +1468,14 @@ public class Fb2Extractor extends BaseExtractor {
                     }
                 }
                 firstLine = false;
-                writer.println(line);
-                continue;
+                // 声明独占一行（常规多行 fb2）：本行无需清洗，直接放行。
+                // 单行巨 XML（整书挤在第一行，如 Bench25 基准书）不能在这里
+                // 直通——否则整书原样拷贝：无目录锚点注入、切章部件 3 倍胖
+                // （实测 781KB×29）。落入下方常规清洗流程。
+                if (line.trim().endsWith("?>")) {
+                    writer.println(line);
+                    continue;
+                }
             }
 
             if (fixXML) {
@@ -1180,7 +1506,9 @@ public class Fb2Extractor extends BaseExtractor {
                     if (indexOf >= 0) {
                         ready = true;
                         count++;
-                        line = line.substring(0, indexOf) + "<a id=\"" + count + "\"></a>" + line.substring(indexOf);
+                        // 锚点必须带内容:空 <a id=N></a> 不生成排版盒,目录/跳转找不到目标
+                        // (实测 find_html_target 返回 -1)。NBSP 渲染不可见且保证流盒存在。
+                        line = line.substring(0, indexOf) + "<a id=\"" + count + "\">" + Fb2Extractor.NBSP_CHAR + "</a>" + line.substring(indexOf);
                     }
 
                     if (BookCSS.get().isCapitalLetter && ready) {

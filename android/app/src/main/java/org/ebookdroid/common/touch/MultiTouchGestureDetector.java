@@ -25,6 +25,10 @@ public class MultiTouchGestureDetector implements IGestureDetector {
 
     @Override
     public boolean onTouchEvent(final MotionEvent ev) {
+        final int a0 = ev.getAction();
+        if (a0 == android.view.MotionEvent.ACTION_DOWN || a0 == android.view.MotionEvent.ACTION_UP || a0 == android.view.MotionEvent.ACTION_CANCEL) {
+            com.foobnix.android.utils.LOG.bench("TouchMT a=" + a0);
+        }
         if ((ev.getAction() & MotionEvent.ACTION_POINTER_DOWN) == MotionEvent.ACTION_POINTER_DOWN) {
 
             if (ev.getPointerCount() >= 2) {

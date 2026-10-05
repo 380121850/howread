@@ -16,6 +16,7 @@ import com.foobnix.model.AppState;
 import com.foobnix.pdf.info.ExtUtils;
 import com.foobnix.pdf.info.R;
 import com.foobnix.pdf.info.model.AnnotationType;
+import com.foobnix.pdf.info.widget.SelectionMagnifier;
 import com.foobnix.pdf.info.view.BrightnessHelper;
 import com.foobnix.pdf.info.wrapper.DocumentController;
 import com.foobnix.pdf.search.activity.msg.MessagePageXY;
@@ -40,6 +41,7 @@ public class AdvGuestureDetector extends SimpleOnGestureListener implements IMul
 
     ClickUtils clickUtils;
     BrightnessHelper brightnessHelper;
+    private SelectionMagnifier selectMagnifier;
 
     public AdvGuestureDetector(final AbstractViewController avc, final DocumentController listener) {
         this.avc = avc;
@@ -68,6 +70,9 @@ public class AdvGuestureDetector extends SimpleOnGestureListener implements IMul
      * events for a destroyed reader.
      */
     public void destroy() {
+        if (selectMagnifier != null) {
+            selectMagnifier.hide();
+        }
         try {
             EventBus.getDefault().unregister(this);
         } catch (Exception e) {
@@ -88,7 +93,11 @@ public class AdvGuestureDetector extends SimpleOnGestureListener implements IMul
 
         @Override
         public boolean onTouchEvent(MotionEvent ev) {
-
+            final int a = ev.getAction();
+            if (a == MotionEvent.ACTION_DOWN || a == MotionEvent.ACTION_UP
+                    || a == MotionEvent.ACTION_CANCEL) {
+                LOG.bench("TouchGD a=" + a);
+            }
 
             if (ev.getAction() == MotionEvent.ACTION_DOWN) {
                 x = ev.getX();
@@ -97,9 +106,19 @@ public class AdvGuestureDetector extends SimpleOnGestureListener implements IMul
                 yInit = ev.getY();
             }
             if (ev.getAction() == MotionEvent.ACTION_UP) {
+                if (selectMagnifier != null) {
+                    selectMagnifier.hide();
+                }
                 if (isLongMovement) {
                     if (TxtUtils.isNotEmpty(AppState.get().selectedText)) {
                         docCtrl.onLongPress(ev);
+                        // 静止长按选中后立即显示选中手柄（起点=终点=长按点），
+                        // 选择完成后可直接左右拖动手柄微调选区，放大镜跟随手柄；
+                        // 字典/脚注路径会清空 selectedText，此时不显示手柄
+                        if (TxtUtils.isNotEmpty(AppState.get().selectedText)) {
+                            EventBus.getDefault().post(new MessagePageXY(
+                                    MessagePageXY.TYPE_SHOW, -1, ev.getX(), ev.getY(), ev.getX(), ev.getY()));
+                        }
                     }
                 }
                 isLongMovement = false;
@@ -117,6 +136,16 @@ public class AdvGuestureDetector extends SimpleOnGestureListener implements IMul
 
                 if (TxtUtils.isNotEmpty(AppState.get().selectedText)) {
                     EventBus.getDefault().post(new MessagePageXY(MessagePageXY.TYPE_SHOW, -1, xInit, yInit, x, y));
+                    // 拖动扩展选择：手指处显示放大镜（API 28+，低版本自动降级），
+                    // 事件坐标即页面绘制视图(PdfSurfaceView)坐标系，可直接作为放大源
+                    try {
+                        if (selectMagnifier == null) {
+                            selectMagnifier = new SelectionMagnifier(avc.getView().getView());
+                        }
+                        selectMagnifier.showAt(ev.getX(), ev.getY());
+                    } catch (Exception e) {
+                        LOG.e(e);
+                    }
                 }
 
             }
@@ -355,7 +384,9 @@ public class AdvGuestureDetector extends SimpleOnGestureListener implements IMul
     @Override
     public void onLongPress(final MotionEvent e) {
         LOG.d("ADV-onLongPress");
+        LOG.bench("LongTap gesture fired");
         if (!AppState.get().isAllowTextSelection) {
+            LOG.bench("LongTap blocked: text-selection toggle is OFF");
             Toast.makeText(LibreraApp.context, R.string.text_highlight_mode_is_disable, Toast.LENGTH_LONG).show();
             return;
         }
@@ -363,6 +394,7 @@ public class AdvGuestureDetector extends SimpleOnGestureListener implements IMul
             Vibro.vibrate();
         }
         if (AppSP.get().isCut || AppSP.get().isCrop) {
+            LOG.bench("LongTap blocked: cut/crop mode isCut=" + AppSP.get().isCut + " isCrop=" + AppSP.get().isCrop);
             if(AppState.get().isCropNotification) {
                 Toast.makeText(LibreraApp.context, R.string.the_page_is_clipped_the_text_selection_does_not_work,
                              Toast.LENGTH_LONG)

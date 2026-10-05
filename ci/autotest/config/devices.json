@@ -76,6 +76,14 @@
     "epub": "Z:/opt/librera/LibreraReader/ci/autotest/teskbook/alicesadventures.epub",
     "device_pdf_path": "/sdcard/Download/big25.pdf",
     "device_epub_path": "/sdcard/Download/alicesadventures.epub",
-    "note": "测试书必须放在书库扫描根目录（Download），Browse 才能看到；大文件 big25.pdf(28MB) 用于内存/翻页专项"
+    "note": "测试书必须放在书库扫描根目录（Download），Browse 才能看到；大文件 big25.pdf(28MB) 用于内存/翻页专项",
+    "txtbig": "Z:/opt/librera/LibreraReader/ci/autotest/teskbook/txt_big_utf8.txt",
+    "device_txtbig_path": "/sdcard/Download/txt_big_utf8.txt",
+    "txtgbk": "Z:/opt/librera/LibreraReader/ci/autotest/teskbook/txt_gbk_cn.txt",
+    "device_txtgbk_path": "/sdcard/Download/txt_gbk_cn.txt",
+    "fb2sec": "Z:/opt/librera/LibreraReader/ci/autotest/teskbook/fb2_sections.fb2",
+    "device_fb2sec_path": "/sdcard/Download/fb2_sections.fb2",
+    "fb2img": "Z:/opt/librera/LibreraReader/ci/autotest/teskbook/fb2_images.fb2",
+    "device_fb2img_path": "/sdcard/Download/fb2_images.fb2"
   }
 }

@@ -131,7 +131,7 @@ public class BilingualSession {
             if (!st.aiBilingual) {
                 return;
             }
-            android.util.Log.i("BENCH", "BilingualSession reader exited -> mode off book=" + st.aiBilingualBook);
+            LOG.bench("BilingualSession reader exited -> mode off book=" + st.aiBilingualBook);
             stop(st.aiBilingualBook);
             st.aiBilingual = false;
             st.aiBilingualBook = "";
@@ -264,12 +264,14 @@ public class BilingualSession {
                 return;
             }
             // remote bilingual: the session's book (and cache key) must be the
-            // local offline base the open path rewrote — resolved cheaply here
-            // because the open already assembled it
+            // local offline base the open path rewrote — only the ALREADY
+            // assembled file is taken here: this runs from the reader onResume
+            // (possibly the UI thread) and assembling the whole book must stay
+            // on the background open thread
             File bookFile = dc.getCurrentBook();
             if (com.foobnix.remote.RemoteBook.isRemotePath(path)) {
                 File local = com.foobnix.remote.RemoteBilingualBase
-                        .resolveLocalBaseForBilingual(path);
+                        .findLocalBaseForBilingual(path);
                 if (local != null) {
                     bookFile = local;
                 }
@@ -482,7 +484,7 @@ public class BilingualSession {
                 placedOnCurrentPage = 0;
             }
             if (placed == 0 && !needsRefreshForCurrentPage()) {
-                android.util.Log.i("BENCH", "BilingualSession rebuild skipped: current page has no new translations");
+                LOG.bench("BilingualSession rebuild skipped: current page has no new translations");
                 return;
             }
             lastRebuildAt = System.currentTimeMillis();
@@ -587,7 +589,7 @@ public class BilingualSession {
         ui.removeCallbacks(hintRecheckRunnable);
         ui.postDelayed(hintRecheckRunnable, 500);
         if (jumped && page0 >= 0) {
-            android.util.Log.i("BENCH", "BilingualSession jump to page=" + page0
+            LOG.bench("BilingualSession jump to page=" + page0
                     + " -> queues rebuilt for the new position");
         }
         if (paras == null) {
@@ -664,7 +666,7 @@ public class BilingualSession {
             // the cache holds empty placeholder epubs (22-byte zips) for some
             // books — enumerating them once must not poison the session with
             // an empty list forever: leave paras null and retry next time
-            android.util.Log.i("BENCH", "BilingualSession paras EMPTY (bad base?) base="
+            LOG.bench("BilingualSession paras EMPTY (bad base?) base="
                     + (base == null ? book : base).getPath());
             return;
         }
@@ -677,7 +679,7 @@ public class BilingualSession {
                 paraByMd5.put(p.md5, p);
             }
         }
-        android.util.Log.i("BENCH", "BilingualSession paras total=" + paras.size() + " base="
+        LOG.bench("BilingualSession paras total=" + paras.size() + " base="
                 + base.getPath());
     }
 
@@ -751,7 +753,7 @@ public class BilingualSession {
                     }
                 }
             }
-            android.util.Log.i("BENCH", "BilingualSession onView page=" + lastPage0 + "/" + lastPageCount
+            LOG.bench("BilingualSession onView page=" + lastPage0 + "/" + lastPageCount
                     + " winPages=[" + (lastPage0 - BACK_PAGES) + "," + (lastPage0 + AHEAD_PAGES) + "]"
                     + " winParas=[" + from + "," + to + "] queued=" + added
                     + " done=" + done.size() + " pending=" + pending.size() + " queuedSet=" + queued.size()
@@ -910,7 +912,7 @@ public class BilingualSession {
         Map<String, String> done = cache.doneByTextHash(src, tgt);
         for (int i = ps.size() - 1; i >= 0; i--) {
             if (done.containsKey(ps.get(i).md5)) {
-                android.util.Log.i("BENCH", "BilingualSession " + ps.get(i).md5 + " cache HIT");
+                LOG.bench("BilingualSession " + ps.get(i).md5 + " cache HIT");
                 onParagraphDone(ps.get(i).md5, false);
                 ps.remove(i);
             }
@@ -937,7 +939,7 @@ public class BilingualSession {
                 }
                 ordLog.append(p.ordinal);
             }
-            android.util.Log.i("BENCH", "BilingualBatch ask n=" + ps.size() + " ords=[" + ordLog + "] len="
+            LOG.bench("BilingualBatch ask n=" + ps.size() + " ords=[" + ordLog + "] len="
                     + prompt.length());
             long t0 = System.currentTimeMillis();
             // STREAMING batch: the numbered reply is parsed while it grows and
@@ -953,7 +955,7 @@ public class BilingualSession {
                             placeCompleted(ps, placed, fullTextSoFar);
                         }
                     });
-            android.util.Log.i("BENCH", "BilingualBatch res ok=" + res.ok + " ms="
+            LOG.bench("BilingualBatch res ok=" + res.ok + " ms="
                     + (System.currentTimeMillis() - t0) + " err=" + res.error + " detail=" + head(res.detail, 200)
                     + " reply=" + (res.reply == null ? -1 : res.reply.length()) + " truncated=" + res.truncated
                     + " placed=" + countPlaced(placed));
@@ -988,7 +990,7 @@ public class BilingualSession {
                         return;
                     }
                 }
-                android.util.Log.i("BENCH", "BilingualBatch parse mismatch n=" + ps.size()
+                LOG.bench("BilingualBatch parse mismatch n=" + ps.size()
                         + " placed=" + countPlaced(placed) + " head=" + head(res.reply, 600));
             }
             // request failed / truncated / reply did not split cleanly:
@@ -996,6 +998,9 @@ public class BilingualSession {
             // bounded retry) so no paragraph is lost; incrementally placed
             // ones are already on the page and stay
             for (int i = 0; i < ps.size(); i++) {
+                if (stopped.get()) {
+                    return; // 模式已关闭/退出阅读器：不再为剩余段落发孤儿请求
+                }
                 if (!placed[i]) {
                     BilingualBuilder.Para p = ps.get(i);
                     translateOne(p.md5, p, res.ok ? "parse" : res.error);
@@ -1175,18 +1180,18 @@ public class BilingualSession {
         inFlight.add(md5);
         try {
             if (cache.doneByTextHash(src, tgt).containsKey(md5)) {
-                android.util.Log.i("BENCH", "BilingualSession " + md5 + " cache HIT");
+                LOG.bench("BilingualSession " + md5 + " cache HIT");
                 onParagraphDone(md5, false);
                 return;
             }
             String suffix = "请把这段文字翻译成" + AiTranslator.targetLangName(tgt)
                     + "，不要思考、不要分析、不要解释，直接回复翻译内容";
             String prompt = p.text + "\n\n" + suffix;
-            android.util.Log.i("BENCH", "BilingualSession " + md5 + " AI ask ord=" + p.ordinal
+            LOG.bench("BilingualSession " + md5 + " AI ask ord=" + p.ordinal
                     + " len=" + p.text.length());
             long t0 = System.currentTimeMillis();
             AiClient.TestResult res = AiClient.ask(host == null ? null : host.getAppContext(), prompt);
-            android.util.Log.i("BENCH", "BilingualSession " + md5 + " AI res ok=" + res.ok + " ms="
+            LOG.bench("BilingualSession " + md5 + " AI res ok=" + res.ok + " ms="
                     + (System.currentTimeMillis() - t0) + " err=" + res.error + " detail=" + head(res.detail, 200)
                     + " reply=" + (res.reply == null ? -1 : res.reply.length()));
             if (res.ok && TxtUtils.isNotEmpty(res.reply)) {
@@ -1218,18 +1223,18 @@ public class BilingualSession {
                     lanes[2].addLast(md5);
                 }
             }
-            android.util.Log.i("BENCH", "BilingualSession " + md5 + " retry attempt=" + attempt);
+            LOG.bench("BilingualSession " + md5 + " retry attempt=" + attempt);
         } else {
             synchronized (queueLock) {
                 failed.add(md5);
             }
-            android.util.Log.i("BENCH", "BilingualSession " + md5 + " FAILED err=" + err);
+            LOG.bench("BilingualSession " + md5 + " FAILED err=" + err);
         }
     }
 
     /** A paragraph finished: schedule one merged rebuild (on the UI thread). */
     private void onParagraphDone(String md5, boolean newly) {
-        android.util.Log.i("BENCH", "BilingualSession paragraph done=" + md5 + " new=" + newly);
+        LOG.bench("BilingualSession paragraph done=" + md5 + " new=" + newly);
         if (!newly) {
             return; // nothing changed, nothing to rebuild
         }
@@ -1280,7 +1285,7 @@ public class BilingualSession {
                     }
                     long t0 = System.currentTimeMillis();
                     final File target = BilingualBuilder.ensure(book, base, cache, src, tgt);
-                    android.util.Log.i("BENCH", "BilingualSession rebuild ensure ms="
+                    LOG.bench("BilingualSession rebuild ensure ms="
                             + (System.currentTimeMillis() - t0) + " target=" + (target == null ? "null" : target.getName()));
                     if (target != null) {
                         try {
@@ -1390,7 +1395,7 @@ public class BilingualSession {
                         ordOffset = maxOff;
                     }
                 }
-                android.util.Log.i("BENCH", "BilingualSession anchor p=" + p + " md5=" + anchor
+                LOG.bench("BilingualSession anchor p=" + p + " md5=" + anchor
                         + " pageParas=" + (currentPageMd5s == null ? -1 : currentPageMd5s.size())
                         + " ord=" + (ap == null ? -1 : ap.ordinal) + " ordOffset=" + ordOffset);
             }
@@ -1398,7 +1403,7 @@ public class BilingualSession {
             if (now - lastPageLogMs >= 15000) {
                 lastPageLogMs = now;
                 if (frags == null) {
-                    android.util.Log.i("BENCH", "BilingualPageText p=" + p + " paras=null");
+                    LOG.bench("BilingualPageText p=" + p + " paras=null");
                 } else {
                     StringBuilder sb = new StringBuilder();
                     int n = Math.min(frags.length, 6);
@@ -1409,7 +1414,7 @@ public class BilingualSession {
                         }
                         sb.append('[').append(i).append("]").append(t).append(" || ");
                     }
-                    android.util.Log.i("BENCH", "BilingualPageText p=" + p + " count=" + frags.length
+                    LOG.bench("BilingualPageText p=" + p + " count=" + frags.length
                             + " anchor=" + anchor + " " + sb.toString());
                 }
             }
@@ -1637,7 +1642,7 @@ public class BilingualSession {
             if (!needsRefreshForCurrentPage()) {
                 return;
             }
-            android.util.Log.i("BENCH", "BilingualSession current page stale -> refresh");
+            LOG.bench("BilingualSession current page stale -> refresh");
             ui.post(new Runnable() {
                 @Override public void run() {
                     if (!stopped.get() && host != null) {

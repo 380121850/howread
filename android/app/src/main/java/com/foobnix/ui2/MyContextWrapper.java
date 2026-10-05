@@ -8,6 +8,7 @@ import android.content.res.Resources;
 import android.os.Build;
 import android.os.LocaleList;
 import com.foobnix.android.utils.LOG;
+import com.foobnix.android.utils.DebugLog;
 import com.foobnix.model.AppProfile;
 import com.foobnix.model.AppState;
 import com.foobnix.pdf.info.AppsConfig;
@@ -26,6 +27,7 @@ public class MyContextWrapper {
     public static ContextWrapper wrap(Context context) {
 
         AppProfile.init(context);
+        DebugLog.syncFromState();
 
         // Exact float equality is fragile: treat any value essentially equal to
         // 1.0f (the only legitimate font scale in (1-1e-3, 1+1e-3)) as "normal"

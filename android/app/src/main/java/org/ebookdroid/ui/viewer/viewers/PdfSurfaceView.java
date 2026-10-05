@@ -164,7 +164,12 @@ public final class PdfSurfaceView extends android.view.View implements IView{
      */
     @Override
     public boolean onTouchEvent(final MotionEvent ev) {
-
+        final int a = ev.getAction();
+        if (a == MotionEvent.ACTION_DOWN || a == MotionEvent.ACTION_UP
+                || a == MotionEvent.ACTION_CANCEL) {
+            com.foobnix.android.utils.LOG.bench("TouchView a=" + a
+                    + " " + (int) ev.getX() + "," + (int) ev.getY());
+        }
         if (base.getDocumentController().onTouchEvent(ev)) {
             return true;
         }

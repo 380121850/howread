@@ -59,6 +59,10 @@ public class AppSP {
     public String currentProfile = "";
     public String rootPath1 = getRootDir();
 
+    /** Last chosen batch-download target dir (remote multi-select); the
+     *  folder chooser starts here next time. */
+    public String lastRemoteDownloadDir = "";
+
     transient SharedPreferences sp;
 
     public long interstitialLoadAdTime = 0;

@@ -3284,7 +3284,7 @@ def fn27_webdav_sync(dev, case_id, cfg=None, fixtures=None):
             import subprocess
             out = subprocess.check_output(
                 ["ssh", "-i", r"C:\Users\lee\.ssh\id_ed25519", "-o", "StrictHostKeyChecking=no",
-                 "-o", "ConnectTimeout=8", "lee@192.168.50.23",
+                 "-o", "ConnectTimeout=8", "lee@%s" % ts.get("host", "192.168.50.104"),
                  "ls /srv/webdav/HowRead/global/ 2>/dev/null | head -20"],
                 timeout=30, stderr=subprocess.STDOUT)
             remote = out.decode("utf-8", "replace")
@@ -5600,6 +5600,254 @@ def fn60_remote_lazy_layout_pages(dev, case_id, cfg=None, fixtures=None):
                 _click_row_delete(dev, title)
 
 
+# ==================== 2026-09-30 打开链路优化专项:FN-61 ~ FN-65 ====================
+# 覆盖:本地TXT分块直读 / GBK编码兜底 / FB2产物切章+重开快开 / 切章目录锚点 / 带图切章。
+# 判定以 BENCH 日志为主(txt-local-chunked / fb2-split parts / codec-convert / codec-cache
+# hit / first-node-decoded),UI 仅作开书通道(intent 直开,fn09 同款)。
+# fixture 书(txt_big_utf8/txt_gbk_cn/fb2_sections/fb2_images)由 run_all push_fixtures 统一投放。
+# ==================================================================================
+
+def _bench_decode_before_release(log):
+    """首屏真实解码(first-node-decoded)是否先于加载框放行(FirstPaintGate release)。"""
+    a = log.find("first-node-decoded")
+    b = log.find("FirstPaintGate release")
+    return a >= 0 and b >= 0 and a < b
+
+
+def fn61_local_txt_chunked(dev, case_id, cfg=None, fixtures=None):
+    """本地大 TXT 分块直读:UTF-8 文本不再整本转 EPUB(内存放大引发换页风暴),
+    引擎按需分块排版。断言:chunked 路径打点 / 打开与 load-end 阈值 / 首屏真实
+    解码 / 全程无 codec-convert;重开同路径(chunked 无转换缓存,重开同样直读)。"""
+    with dev.step(case_id, "clear_convert_cache"):
+        dev.shell("rm -rf /sdcard/Android/data/%s/cache/Book" % dev.pkg)
+        time.sleep(0.8)
+    with dev.step(case_id, "cold_open"):
+        _ensure_home(dev)
+        dev.log_clear()
+        if not dev.open_book_via_intent(fixtures["device_txtbig_path"]):
+            dev.save_dump(case_id, "open_fail")
+            raise AssertionError("TXT intent 打开未进入阅读器")
+        time.sleep(2)
+    with dev.step(case_id, "chunked_chain"):
+        log = dev.remote_log()
+        _snap(dev, case_id, "cold_logs")
+        if "txt-local-chunked" not in log:
+            raise AssertionError("未走本地 TXT 分块直读路径(无 txt-local-chunked)")
+        ms = dev.bench_ms(log, "native-open txt-chunked")
+        if ms is None:
+            raise AssertionError("无 native-open txt-chunked 打点")
+        print("  [%s] chunked native-open=%dms" % (dev.serial, ms))
+        if ms > 800:
+            raise AssertionError("chunked 引擎打开 %dms > 800ms" % ms)
+        le = dev.bench_ms(log, "load-end")
+        if le is None or le > 1500:
+            raise AssertionError("load-end %s > 1500ms" % le)
+        cvt = re.search(r"codec-convert (\d+)ms \S*txt_big_utf8", log)
+        if cvt and int(cvt.group(1)) > 800:
+            raise AssertionError("chunked 打开计时 %sms > 800ms(疑似整本转换回归)" % cvt.group(1))
+        if "screen decoded" not in log:
+            raise AssertionError("首屏未真实解码(FirstPaintGate screen decoded 缺失)")
+        c = dev.scan_crash()
+        if c:
+            raise AssertionError("crash: %s" % c)
+    with dev.step(case_id, "reopen_same_path"):
+        _exit_reader(dev, case_id)
+        dev.log_clear()
+        if not dev.open_book_via_intent(fixtures["device_txtbig_path"]):
+            raise AssertionError("重开未进入阅读器")
+        time.sleep(2)
+        log2 = dev.remote_log()
+        if "txt-local-chunked" not in log2:
+            raise AssertionError("重开未走分块直读路径")
+        cvt2 = re.search(r"codec-convert (\d+)ms \S*txt_big_utf8", log2)
+        if cvt2 and int(cvt2.group(1)) > 800:
+            raise AssertionError("重开 chunked 计时 %sms > 800ms" % cvt2.group(1))
+        _exit_reader(dev, case_id)
+        _back_to_main(dev)
+
+
+def fn62_local_txt_gbk_fallback(dev, case_id, cfg=None, fixtures=None):
+    """GBK TXT 编码兜底:非 UTF 编码不走分块直读,回退旧转码链路(extractEpub)。
+    断言:txt-local-chunked 缺席 / codec-convert 存在(转换缓存已清,必为转换路径)。"""
+    with dev.step(case_id, "clear_convert_cache"):
+        dev.shell("rm -rf /sdcard/Android/data/%s/cache/Book" % dev.pkg)
+        time.sleep(0.8)
+    with dev.step(case_id, "open_gbk"):
+        _ensure_home(dev)
+        dev.log_clear()
+        if not dev.open_book_via_intent(fixtures["device_txtgbk_path"]):
+            dev.save_dump(case_id, "open_fail")
+            raise AssertionError("GBK TXT intent 打开未进入阅读器")
+        time.sleep(2)
+    with dev.step(case_id, "legacy_chain"):
+        log = dev.remote_log()
+        _snap(dev, case_id, "gbk_logs")
+        if "txt-local-chunked" in log:
+            raise AssertionError("GBK 文件不应走分块直读(编码判定失效)")
+        if not re.search(r"codec-convert \d+ms \S*txt_gbk_cn", log):
+            raise AssertionError("GBK 兜底链路无本书 codec-convert")
+        le = dev.bench_ms(log, "codec-convert")
+        print("  [%s] gbk codec-convert=%sms" % (dev.serial, le))
+        c = dev.scan_crash()
+        if c:
+            raise AssertionError("crash: %s" % c)
+        _exit_reader(dev, case_id)
+        _back_to_main(dev)
+
+
+def fn63_fb2_split_reopen(dev, case_id, cfg=None, fixtures=None):
+    """FB2 产物切章:转换产物按 256KB 切多 part,重开首屏只排一章。
+    断言:fb2-split parts≥2 / 首开转换与 load-end 阈值 / 重开 codec-cache hit +
+    load-end≤500ms + 真实解码先于加载框放行(诚实加载)。"""
+    with dev.step(case_id, "clear_convert_cache"):
+        dev.shell("rm -rf /sdcard/Android/data/%s/cache/Book" % dev.pkg)
+        time.sleep(0.8)
+    with dev.step(case_id, "cold_open"):
+        _ensure_home(dev)
+        dev.log_clear()
+        if not dev.open_book_via_intent(fixtures["device_fb2sec_path"]):
+            dev.save_dump(case_id, "open_fail")
+            raise AssertionError("FB2 intent 打开未进入阅读器")
+        time.sleep(3)
+    with dev.step(case_id, "split_chain"):
+        log = dev.remote_log()
+        _snap(dev, case_id, "cold_logs")
+        m = re.search(r"fb2-split parts=(\d+)", log)
+        if not m:
+            raise AssertionError("无 fb2-split 打点(切分器未运行)")
+        parts = int(m.group(1))
+        print("  [%s] fb2-split parts=%d" % (dev.serial, parts))
+        if parts < 2:
+            raise AssertionError("切分 parts=%d < 2(单条目回退)" % parts)
+        cv = dev.bench_ms(log, "codec-convert")
+        if cv is None or cv > 8000:
+            raise AssertionError("首开转换 %s > 8000ms" % cv)
+        le = dev.bench_ms(log, "load-end")
+        if le is None or le > 8000:
+            # 8000: 低端机(KSA 32位)切章转换+首章排版实测 ~3.4s,留一倍余量
+            raise AssertionError("首开 load-end %s > 8000ms" % le)
+        c = dev.scan_crash()
+        if c:
+            raise AssertionError("crash: %s" % c)
+    with dev.step(case_id, "reopen_fast"):
+        _exit_reader(dev, case_id)
+        dev.log_clear()
+        if not dev.open_book_via_intent(fixtures["device_fb2sec_path"]):
+            raise AssertionError("重开未进入阅读器")
+        time.sleep(2)
+        log2 = dev.remote_log()
+        if "codec-cache hit" not in log2:
+            raise AssertionError("重开未命中转换缓存(codec-cache hit 缺失)")
+        if "codec-convert" in log2 or "fb2-split" in log2:
+            raise AssertionError("重开发生了二次转换")
+        le2 = dev.bench_ms(log2, "load-end")
+        if le2 is None or le2 > 500:
+            raise AssertionError("重开 load-end %s > 500ms" % le2)
+        if not _bench_decode_before_release(log2):
+            raise AssertionError("首屏真实解码未先于加载框放行(诚实加载回归)")
+        print("  [%s] reopen load-end=%dms decode-before-release=True" % (dev.serial, le2))
+        _exit_reader(dev, case_id)
+        _back_to_main(dev)
+
+
+def fn64_fb2_split_toc(dev, case_id, cfg=None, fixtures=None):
+    """切章产物目录完整性:NCX 锚点映射后目录面板列出全部章节,且首/尾章均可达
+    (滚动前后各验一次)。注:目录点击跳页依赖引擎 resolve(对转换型 fb2 恒 -1,
+    存量缺陷与切章无关,见 COVERAGE),本用例只验目录产物与列表完整性。"""
+    with dev.step(case_id, "open_book"):
+        _ensure_home(dev)
+        if not dev.open_book_via_intent(fixtures["device_fb2sec_path"]):
+            dev.save_dump(case_id, "open_fail")
+            raise AssertionError("FB2 intent 打开未进入阅读器")
+        time.sleep(2)
+    with dev.step(case_id, "open_outline"):
+        _reader_show_toolbar(dev)
+        btn = dev.d(resourceId=_rid(dev, "onDocDontext"))
+        if not btn.exists:
+            dev.save_dump(case_id, "no_outline_btn")
+            raise TestSkip("目录入口(onDocDontext)不可见(工具条未显示)")
+        btn.click()
+        time.sleep(3)
+        xml = dev.d.dump_hierarchy()
+        if not any(k in xml for k in ("目录", "Contents", "contentList", "content_of_book")):
+            dev.save_dump(case_id, "no_outline_dialog")
+            raise TestSkip("目录面板未出现")
+        _snap(dev, case_id, "outline_panel")
+    with dev.step(case_id, "chapters_listed"):
+        sel = dev.d(textContains="测试章节标题")
+        titles = set()
+        first = None
+        for i in range(sel.count):
+            t = sel[i].get_text() or ""
+            mm = re.search(r"第(\d+)章", t)
+            if mm:
+                titles.add(int(mm.group(1)))
+                if first is None:
+                    first = t
+        print("  [%s] visible chapters: %d distinct" % (dev.serial, len(titles)))
+        if len(titles) < 3:
+            dev.save_dump(case_id, "toc_rows_missing")
+            raise AssertionError("目录可见章节行不足(切章 NCX 疑似回归)")
+    with dev.step(case_id, "late_chapter_reachable"):
+        sc = dev.d(scrollable=True)
+        if sc.exists:
+            sc.fling.toEnd()
+        time.sleep(2)
+        sel = dev.d(textContains="测试章节标题")
+        late = None
+        for i in range(sel.count):
+            t = sel[i].get_text() or ""
+            mm = re.search(r"第(\d+)章", t)
+            if mm and int(mm.group(1)) >= 50:
+                late = t
+                break
+        _snap(dev, case_id, "outline_end")
+        if late is None:
+            dev.save_dump(case_id, "late_chapter_missing")
+            raise AssertionError("滚动到底仍未见尾部章节(目录条目不完整)")
+        print("  [%s] late chapter visible: %s" % (dev.serial, late))
+        c = dev.scan_crash()
+        if c:
+            raise AssertionError("crash: %s" % c)
+        _exit_reader(dev, case_id)
+        _back_to_main(dev)
+
+
+def fn65_fb2_split_images(dev, case_id, cfg=None, fixtures=None):
+    """FB2 带图切章冒烟:binary 图片按引用归属 part,带图产物切分与打开渲染
+    正常。断言:parts≥2 / 无切分校验失败 / 首屏真实解码 / 无崩溃。"""
+    with dev.step(case_id, "clear_convert_cache"):
+        dev.shell("rm -rf /sdcard/Android/data/%s/cache/Book" % dev.pkg)
+        time.sleep(0.8)
+    with dev.step(case_id, "open_images_fb2"):
+        _ensure_home(dev)
+        dev.log_clear()
+        if not dev.open_book_via_intent(fixtures["device_fb2img_path"]):
+            dev.save_dump(case_id, "open_fail")
+            raise AssertionError("带图 FB2 intent 打开未进入阅读器")
+        time.sleep(3)
+    with dev.step(case_id, "split_and_paint"):
+        log = dev.remote_log()
+        _snap(dev, case_id, "images_logs")
+        m = re.search(r"fb2-split parts=(\d+)", log)
+        if not m:
+            raise AssertionError("无 fb2-split 打点")
+        parts = int(m.group(1))
+        print("  [%s] fb2-images split parts=%d" % (dev.serial, parts))
+        if parts < 2:
+            raise AssertionError("带图书切分 parts=%d < 2" % parts)
+        if "fb2-split validate FAIL" in log:
+            raise AssertionError("切分校验失败(part XML 非法)")
+        if "screen decoded" not in log and "FirstPaintGate release" not in log:
+            raise AssertionError("首屏未绘制")
+        c = dev.scan_crash()
+        if c:
+            raise AssertionError("crash: %s" % c)
+        _exit_reader(dev, case_id)
+        _back_to_main(dev)
+
+
+
 ALL = [
     ("FN-08", "intent 打开", fn08_intent_open, None),
     ("FN-09", "多格式开书", fn09_multi_format, None),
@@ -5665,4 +5913,10 @@ ALL = [
     ("FN-58", "打开取消秒退", fn58_remote_open_cancel, None),
     ("FN-59", "远程封面持久化", fn59_remote_cover_persist, None),
     ("FN-60", "惰性布局页码正确性", fn60_remote_lazy_layout_pages, None),
+    # ---- 2026-09-30 打开链路优化专项(本地TXT分块直读/FB2产物切章)----
+    ("FN-61", "本地TXT分块直读", fn61_local_txt_chunked, None),
+    ("FN-62", "GBK TXT编码兜底", fn62_local_txt_gbk_fallback, None),
+    ("FN-63", "FB2切章与重开快开", fn63_fb2_split_reopen, None),
+    ("FN-64", "FB2切章目录完整性", fn64_fb2_split_toc, None),
+    ("FN-65", "FB2带图切章冒烟", fn65_fb2_split_images, None),
 ]

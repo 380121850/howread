@@ -872,6 +872,15 @@ public abstract class DocumentController {
     }
 
     /**
+     * 每个段落在页面上的归一化包围盒 {l, t, r, b}（页宽/页高分数）；数组元素可为
+     * null（未定位）。默认全部 null；分页控制器按页面文本层实现。供 AI 页内双语
+     * （段落上下对照）与原位替换定位段落区域。
+     */
+    public float[][] getParagraphRects(int page, String[] paragraphs) {
+        return new float[paragraphs == null ? 0 : paragraphs.length][];
+    }
+
+    /**
      * The top of each paragraph's first line as a fraction of the page height
      * (0 = top of the page, 1 = bottom); -1 when a paragraph could not be
      * located. Best effort — backs the AI translation card alignment. The

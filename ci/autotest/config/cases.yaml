@@ -45,8 +45,10 @@ ai_mock:
 # 50.23 协议测试服务器（AGENTS.md「网络协议测试服务器」，三协议统一账号 howread/howread123）
 # FN-26/27/28/29/30 网络用例使用；WebDAV 根 /srv/webdav/、SMB share testbooks、SFTP /home/howread/books/
 test_server:
-  host: 192.168.50.23
-  webdav_url: http://192.168.50.23:8765/
+  # 2026-10-03: 50.23 整机离线(ping 不通),按预案切备用测试服务器 50.104
+  # (三协议端口/账号/书集与 50.23 一致);50.23 恢复后改回。
+  host: 192.168.50.104
+  webdav_url: http://192.168.50.104:8765/
   webdav_user: howread
   webdav_password: howread123
   smb_share: testbooks
@@ -145,3 +147,9 @@ case_meta:
   FN-59: { layer: ui, priority: P2, timeout: 420, retries: 1 }   # 封面占位持久化
   FN-60: { layer: ui, priority: P1, timeout: 1500, retries: 1 }   # 惰性布局页码正确性(900s:慢环境拖底+回顶滑动上限240,2026-09-23)
   PF-04: { layer: ui, priority: P1, timeout: 900, retries: 1 }   # 远程首屏性能基线
+  # --- 2026-09-30 打开链路优化专项(本地TXT分块/FB2切章) ---
+  FN-61: { layer: ui, priority: P1, timeout: 420, retries: 1 }   # 本地TXT分块直读
+  FN-62: { layer: ui, priority: P2, timeout: 300, retries: 1 }   # GBK TXT 编码兜底
+  FN-63: { layer: ui, priority: P1, timeout: 420, retries: 1 }   # FB2 切章+重开快开
+  FN-64: { layer: ui, priority: P2, timeout: 420, retries: 1 }   # FB2 切章目录完整性
+  FN-65: { layer: ui, priority: P2, timeout: 300, retries: 1 }   # FB2 带图切章冒烟

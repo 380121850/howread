@@ -60,6 +60,13 @@ public class BookmarkPanel {
         pagesBookmark.setPadding(Dips.DP_10, Dips.DP_10, Dips.DP_10, Dips.DP_10);
 
         List<AppBookmark> all = BookmarksData.get().getBookmarksByBook(dc.getCurrentBook());
+        // 快速导航条是按页定位用的：保持页码顺序（数据层现在默认时间倒序返回）
+        java.util.Collections.sort(all, new java.util.Comparator<AppBookmark>() {
+            @Override
+            public int compare(AppBookmark o1, AppBookmark o2) {
+                return Float.compare(o1.getPercent(), o2.getPercent());
+            }
+        });
         for (final AppBookmark appBookmark : all) {
 
             final int num = appBookmark.getPage(dc.getPageCount());

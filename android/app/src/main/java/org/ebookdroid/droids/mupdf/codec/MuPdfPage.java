@@ -318,7 +318,7 @@ public class MuPdfPage extends AbstractCodecPage {
             if (renderMs > 2000) {
                 // remote books render over the network: this is the per-page
                 // cost signal on a real device (logcat -s BENCH)
-                android.util.Log.i("BENCH", "page render " + renderMs + "ms");
+                LOG.bench("page render " + renderMs + "ms");
             }
             return b;
         } finally {
@@ -504,6 +504,7 @@ public class MuPdfPage extends AbstractCodecPage {
             try {
                 return getText_116();
             } catch (OutOfMemoryError e) {
+                LOG.bench("getText OOM pg=" + pageNumber);
                 LOG.e(e);
                 System.gc();
             }
@@ -525,8 +526,12 @@ public class MuPdfPage extends AbstractCodecPage {
         LOG.d("text116 size", chars.size());
 
         if (TxtUtils.isListEmpty(chars)) {
+            LOG.bench("text116 EMPTY pg=" + pageNumber);
             return new TextWord[0][0];
         }
+        // 归一化基准必须与字符同瞬间：取词后现场重取 bound（pageBounds 是页
+        // 加载时刻的快照，排版若变过两者不一致）。
+        final RectF textBounds = getBounds();
 
         ArrayList<TextWord[]> lns = new ArrayList<TextWord[]>();
 
@@ -561,11 +566,15 @@ public class MuPdfPage extends AbstractCodecPage {
 
         TextWord[][] res = lns.toArray(new TextWord[lns.size()][]);
 
+        float ny0 = Float.MAX_VALUE, ny1 = -Float.MAX_VALUE;
         for (TextWord[] lines : res) {
             for (TextWord word : lines) {
-                update(word);
+                update(word, textBounds);
+                ny0 = Math.min(ny0, word.top);
+                ny1 = Math.max(ny1, word.bottom);
             }
         }
+        LOG.bench("text116 norms=[" + ny0 + "," + ny1 + "] pg=" + pageNumber);
 
         return res;
     }
@@ -629,6 +638,14 @@ public class MuPdfPage extends AbstractCodecPage {
     public void update(TextWord wd) {
         wd.setOriginal(wd);
         update((RectF) wd);
+    }
+
+    public void update(TextWord wd, RectF base) {
+        wd.setOriginal(wd);
+        wd.left = (wd.left - base.left) / base.width();
+        wd.top = (wd.top - base.top) / base.height();
+        wd.right = (wd.right - base.left) / base.width();
+        wd.bottom = (wd.bottom - base.top) / base.height();
     }
 
     public void update(RectF wd) {

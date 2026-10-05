@@ -851,7 +851,7 @@ public class WebDavSyncer {
                     + (res.booksDeleted > 0 ? " \u00b7 \u5220" + res.booksDeleted : "")
                     + (roundNetFails > 0 ? " \u00b7 \u90e8\u5206\u672a\u540c\u6b65" : "")
                     + " \u00b7 " + res.durationMs + "ms";
-            android.util.Log.i("BENCH", "sync books: synced=" + res.booksSynced + " associated=" + associated
+            LOG.bench("sync books: synced=" + res.booksSynced + " associated=" + associated
                     + " deleted=" + res.booksDeleted);
             AppState.get().save(c);
             SyncChangeLog.commit(AppState.get().webdavLastSyncInfo);
@@ -1224,7 +1224,7 @@ public class WebDavSyncer {
             boolean localChanged = !normalize(mergedFull.toString()).equals(normalize(localFull));
             if (localChanged) {
                 IO.writeObjSync(local, mergedFull);
-                android.util.Log.i("BENCH", "sync " + name + ": three-way merged (local updated)");
+                LOG.bench("sync " + name + ": three-way merged (local updated)");
             }
             if (!normalize(mergedCmp.toString()).equals(normalize(remoteCmp.toString()))) {
                 s.put(url, mergedCmp.toString().getBytes("UTF-8"));
@@ -1384,17 +1384,43 @@ public class WebDavSyncer {
                     updated++;
                 }
             }
-            final JSONArray outArr = new JSONArray();
-            for (LinkedJSONObject e : merged.values()) {
-                outArr.put(e);
+            // AppData 实例锁：本地读与本写回之间 UI 线程新增的最近/收藏条目
+            // 要并入本次结果，否则会被陈旧快照覆盖（新增没有删除墓碑，丢了
+            // 不回来；删除侧有墓碑可在下一轮自愈）
+            boolean localChanged;
+            String outText;
+            int outCount;
+            synchronized (com.foobnix.model.AppData.get()) {
+                final String freshText = readText(local);
+                if (!normalize(freshText).equals(normalize(localText))) {
+                    try {
+                        final JSONArray freshArr = freshText.trim().isEmpty()
+                                ? new JSONArray() : new JSONArray(freshText);
+                        for (int i = 0; i < freshArr.length(); i++) {
+                            final LinkedJSONObject e = freshArr.optJSONObject(i);
+                            final String k = e == null ? "" : e.optString(SimpleMeta.JSON_PATH, "");
+                            if (e != null && k.length() > 0 && !merged.containsKey(k)) {
+                                merged.put(k, e);
+                            }
+                        }
+                    } catch (Exception ignore) {
+                    }
+                }
+                final JSONArray outArr = new JSONArray();
+                for (LinkedJSONObject e : merged.values()) {
+                    outArr.put(e);
+                }
+                outText = outArr.toString();
+                outCount = outArr.length();
+                localChanged = !normalize(outText).equals(normalize(localText));
+                if (localChanged) {
+                    IO.writeString(local, outText);
+                }
             }
-            final String outText = outArr.toString();
-            boolean localChanged = !normalize(outText).equals(normalize(localText));
             if (localChanged) {
-                IO.writeString(local, outText);
                 SyncChangeLog.add(name, "(条目)", "down", "共" + localArr.length() + "条",
-                        "共" + outArr.length() + "条（新" + added + " 更新" + updated + "）");
-                android.util.Log.i("BENCH", "sync " + name + ": meta union local updated (+" + added + ")");
+                        "共" + outCount + "条（新" + added + " 更新" + updated + "）");
+                LOG.bench("sync " + name + ": meta union local updated (+" + added + ")");
             }
             if (!normalize(outText).equals(normalize(remoteText))) {
                 s.put(url, outText.getBytes("UTF-8"));
@@ -1427,7 +1453,7 @@ public class WebDavSyncer {
             if (remoteText == null) {
                 // transient GET failure: touch neither the server nor the local file
                 roundNetFails++;
-                android.util.Log.i("BENCH", "sync " + local.getName() + ": remote error, skipped");
+                LOG.bench("sync " + local.getName() + ": remote error, skipped");
                 return;
             }
             roundNetGets++;
@@ -1488,7 +1514,7 @@ public class WebDavSyncer {
             if (remoteText == null) {
                 // transient GET failure: touch neither the server nor the local file
                 roundNetFails++;
-                android.util.Log.i("BENCH", "sync " + local.getName() + ": remote error, skipped");
+                LOG.bench("sync " + local.getName() + ": remote error, skipped");
                 return;
             }
             roundNetGets++;
@@ -1964,28 +1990,32 @@ public class WebDavSyncer {
             }
             IO.writeObjSync(AppProfile.syncProgress, freshP);
 
-            final LinkedJSONObject freshB = IO.readJsonObject(AppProfile.syncBookmarks);
-            for (Iterator<String> it = snapB.keys(); it.hasNext();) {
-                final String k = it.next();
-                if (!freshB.has(k)) {
-                    final Object v = snapB.opt(k);
-                    if (v != null) {
-                        freshB.put(k, v);
+            // 与 UI 线程的添加/删除（BookmarksData 的实例锁）互斥：读-改-写
+            // 窗口里刚落盘的新书签会被这次回写覆盖（新增没有墓碑，丢了不回来）
+            synchronized (com.foobnix.pdf.info.BookmarksData.get()) {
+                final LinkedJSONObject freshB = IO.readJsonObject(AppProfile.syncBookmarks);
+                for (Iterator<String> it = snapB.keys(); it.hasNext();) {
+                    final String k = it.next();
+                    if (!freshB.has(k)) {
+                        final Object v = snapB.opt(k);
+                        if (v != null) {
+                            freshB.put(k, v);
+                        }
                     }
                 }
-            }
-            try {
-                final LinkedJSONObject freshDel = SharedBooks.DeletedBooks.all();
-                for (Iterator<String> it = freshDel.keys(); it.hasNext();) {
-                    final String name = it.next();
-                    for (String dkKey : SharedBooks.DeletedBooks.keysOf(freshDel, name)) {
-                        freshB.remove(dkKey);
+                try {
+                    final LinkedJSONObject freshDel = SharedBooks.DeletedBooks.all();
+                    for (Iterator<String> it = freshDel.keys(); it.hasNext();) {
+                        final String name = it.next();
+                        for (String dkKey : SharedBooks.DeletedBooks.keysOf(freshDel, name)) {
+                            freshB.remove(dkKey);
+                        }
                     }
+                } catch (Exception delError) {
+                    LOG.e(delError);
                 }
-            } catch (Exception delError) {
-                LOG.e(delError);
+                IO.writeObjSync(AppProfile.syncBookmarks, freshB);
             }
-            IO.writeObjSync(AppProfile.syncBookmarks, freshB);
         } catch (Exception e) {
             LOG.e(e);
         }

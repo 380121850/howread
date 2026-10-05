@@ -50,7 +50,7 @@ public class SftpClient {
             RemoteServer s = RemoteStore.find(RemoteBook.TYPE_SFTP, id);
             if (s == null) {
                 lastError = "other";
-                android.util.Log.i("REMOTE", "sftp list: server not found for " + browseUrl);
+                LOG.remote("sftp list: server not found for " + browseUrl);
                 return null;
             }
             List<WebDavItem> res = list(s, RemoteBook.getRemotePath(browseUrl), null, null);
@@ -61,7 +61,7 @@ public class SftpClient {
             }
             return res;
         } catch (Exception e) {
-            android.util.Log.i("REMOTE", "sftp list failed: " + e, e);
+            LOG.remote("sftp list failed: " + e, e);
             LOG.e(e);
             classify(e);
             return null;
@@ -92,13 +92,13 @@ public class SftpClient {
                     items.add(it);
                 }
                 SmbClient.sort(items);
-                android.util.Log.i("REMOTE", "sftp list ok dir=" + dir + " count=" + items.size());
+                LOG.remote("sftp list ok dir=" + dir + " count=" + items.size());
                 return items;
             } finally {
                 disconnect(ssh);
             }
         } catch (Exception e) {
-            android.util.Log.i("REMOTE", "sftp list failed: " + e, e);
+            LOG.remote("sftp list failed: " + e, e);
             LOG.e(e);
             classify(e);
             return null;
@@ -175,7 +175,7 @@ public class SftpClient {
                 }
             });
         }
-        android.util.Log.i("REMOTE", "sftp connect host=" + s.host + ":" + s.port
+        LOG.remote("sftp connect host=" + s.host + ":" + s.port
                 + " user=" + s.user + " keyPath=" + s.keyPath);
         ssh.connect(s.host, s.port > 0 ? s.port : 22);
         try {
@@ -197,7 +197,7 @@ public class SftpClient {
             net.schmizz.sshj.userauth.keyprovider.KeyProvider kf;
             try {
                 String head = firstLine(s.keyPath);
-                android.util.Log.i("REMOTE", "key provider: head=" + head);
+                LOG.remote("key provider: head=" + head);
                 if (head != null && head.contains("OPENSSH PRIVATE KEY")) {
                     net.schmizz.sshj.userauth.keyprovider.OpenSSHKeyFile okf =
                             new net.schmizz.sshj.userauth.keyprovider.OpenSSHKeyFile();
@@ -216,15 +216,15 @@ public class SftpClient {
                     }
                     kf = p8;
                 }
-                android.util.Log.i("REMOTE", "key loaded: " + kf.getPublic().getAlgorithm());
+                LOG.remote("key loaded: " + kf.getPublic().getAlgorithm());
             } catch (Throwable t) {
-                android.util.Log.i("REMOTE", "key load failed: " + t, t);
+                LOG.remote("key load failed: " + t, t);
                 throw t;
             }
             try {
                 ssh.authPublickey(s.user, kf);
             } catch (Throwable t) {
-                android.util.Log.i("REMOTE", "pubkey auth failed: " + t, t);
+                LOG.remote("pubkey auth failed: " + t, t);
                 throw t;
             }
             }

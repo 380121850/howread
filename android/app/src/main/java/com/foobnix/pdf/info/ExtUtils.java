@@ -999,10 +999,10 @@ public class ExtUtils {
         }
         intent.setData(checkPlaylisturi(uri, intent, playlist));
 
-        android.util.Log.i("BENCH", "open-intent " + uri);
-        android.util.Log.i("REMOTE", "showDocumentInner startActivity " + uri);
+        LOG.bench("open-intent " + uri);
+        LOG.remote("showDocumentInner startActivity " + uri);
         c.startActivity(intent);
-        android.util.Log.i("REMOTE", "showDocumentInner startActivity returned");
+        LOG.remote("showDocumentInner startActivity returned");
     }
 
     public static Uri checkPlaylisturi(Uri uri, Intent intent, String playlist) {
@@ -1026,7 +1026,7 @@ public class ExtUtils {
             return;
         }
         if (!isValidFile(uri) && !com.foobnix.remote.RemoteBook.isRemotePath(String.valueOf(uri))) {
-            android.util.Log.i("REMOTE", "openHorizontalView rejected: " + uri);
+            LOG.remote("openHorizontalView rejected: " + uri);
             Toast.makeText(c, R.string.file_not_found, Toast.LENGTH_LONG).show();
             return;
         }
@@ -1046,7 +1046,7 @@ public class ExtUtils {
         if (percent > 0f) {
             Intents.putFloat(intent, DocumentController.EXTRA_PERCENT, percent);
         }
-        android.util.Log.i("REMOTE", "openHorizontalView startActivity " + uri);
+        LOG.remote("openHorizontalView startActivity " + uri);
         c.startActivity(intent);
 
         // FileMetaDB.get().addRecent(file.getPath());
@@ -1875,6 +1875,43 @@ public class ExtUtils {
         LOG.d("determineHtmlEncoding auto", encdogin);
 
         return encdogin;
+    }
+
+    /**
+     * 引擎分块 TXT 直读候选：扩展名 txt/text/md/markdown，且文件编码是
+     * MuPDF txt 引擎原生支持的（UTF-8/US-ASCII/UTF-16）——GBK 等编码保持
+     * 旧转码链路（extractEpub 会按检测编码重写为 UTF-8）。远程路径不参与
+     * （远程 txt 本来就走引擎分块流入口）。
+     */
+    public static boolean isLocalChunkedTxtCandidate(String path) {
+        if (path == null) {
+            return false;
+        }
+        if (com.foobnix.remote.RemoteBook.isRemotePath(path)) {
+            return false;
+        }
+        String lower = path.toLowerCase(java.util.Locale.US);
+        if (!(lower.endsWith(".txt") || lower.endsWith(".text")
+                || lower.endsWith(".md") || lower.endsWith(".markdown"))) {
+            return false;
+        }
+        java.io.InputStream is = null;
+        String enc;
+        try {
+            is = new java.io.FileInputStream(path);
+            enc = determineTxtEncoding(is);
+        } catch (Throwable t) {
+            return false;
+        } finally {
+            try {
+                if (is != null) {
+                    is.close();
+                }
+            } catch (Throwable ignore) {
+            }
+        }
+        return "UTF-8".equalsIgnoreCase(enc) || "US-ASCII".equalsIgnoreCase(enc)
+                || "UTF-16LE".equalsIgnoreCase(enc) || "UTF-16BE".equalsIgnoreCase(enc);
     }
 
     public static String determineTxtEncoding(InputStream fis) {

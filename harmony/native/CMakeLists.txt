@@ -201,6 +201,7 @@ set(CORE_SRC
         "${MUPDF_ROOT}/source/html/css-apply.c"
         "${MUPDF_ROOT}/source/html/css-parse.c"
         "${MUPDF_ROOT}/source/html/epub-doc.c"
+        "${MUPDF_ROOT}/source/html/fb2-chunk-doc.c"
         "${MUPDF_ROOT}/source/html/html-doc.c"
         "${MUPDF_ROOT}/source/html/html-font.c"
         "${MUPDF_ROOT}/source/html/html-layout.c"

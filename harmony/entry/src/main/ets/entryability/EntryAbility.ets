@@ -2,6 +2,8 @@ import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { tlog } from '../model/TestLog';
+import hiAppEvent from '@ohos.hiviewdfx.hiAppEvent';
+import { writeCrashLog } from '../model/CrashLog';
 
 const TAG: string = 'Librera';
 export const KEY_PENDING_URI: string = 'pendingOpenUri';
@@ -48,7 +50,36 @@ export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(0x0000, TAG, '%{public}s', 'Ability onCreate');
     tlog('ability_onCreate');
+    this.registerCrashHooks();
     stashWantUri(want);
+  }
+
+  /* 0.9.20: local crash trace file (Android crash.txt parity). Native and JS
+   * hard crashes are captured by the system faultlogger and flushed to
+   * crash.txt on the next launch, surviving system log rotation. */
+  private registerCrashHooks(): void {
+    try {
+      hiAppEvent.addWatcher({
+        name: 'howread_crash_watcher',
+        appEventFilters: [{ domain: hiAppEvent.domain.OS, names: [hiAppEvent.event.APP_CRASH] }],
+        onReceive: (domain: string, groups: hiAppEvent.AppEventGroup[]): void => {
+          for (let g: number = 0; g < groups.length; g++) {
+            const infos: hiAppEvent.AppEventInfo[] = groups[g].appEventInfos;
+            for (let i: number = 0; i < infos.length; i++) {
+              const ev: hiAppEvent.AppEventInfo = infos[i];
+              let detail: string = 'domain=' + domain + ' name=' + ev.name + '\n';
+              try {
+                detail += JSON.stringify(ev.params);
+              } catch (e) { /* keep the basic fields */ }
+              writeCrashLog(this.context.filesDir, 'CRASH', detail);
+            }
+          }
+        }
+      });
+      hilog.info(0x0000, TAG, 'crash watcher registered');
+    } catch (e) {
+      hilog.warn(0x0000, TAG, 'hiAppEvent watcher failed: %{public}s', String(e));
+    }
   }
 
   onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {

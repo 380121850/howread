@@ -91,7 +91,7 @@ public class SmbDataSource implements RemoteDataSource {
 
     /** Closes and re-opens the SMB handle after a read failure. */
     private boolean reopenQuiet() {
-        android.util.Log.i("REMOTE", "smb reopen attempt after read failure");
+        LOG.remote("smb reopen attempt after read failure");
         try {
             close();
             open();

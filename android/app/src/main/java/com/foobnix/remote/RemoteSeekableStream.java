@@ -1,5 +1,7 @@
 package com.foobnix.remote;
 
+import com.foobnix.android.utils.LOG;
+
 import com.artifex.mupdf.fitz.SeekableStream;
 import com.artifex.mupdf.fitz.SeekableInputStream;
 
@@ -36,11 +38,11 @@ public class RemoteSeekableStream implements SeekableInputStream {
                 sb.append(String.format("%02x", b[i]));
             }
             if (android.util.Log.isLoggable("REMOTE", android.util.Log.VERBOSE)) {
-                android.util.Log.i("REMOTE", sb.toString());
+                LOG.remote(sb.toString());
             }
         }
         if (n <= 0) {
-            android.util.Log.i("REMOTE", "stream read EOF at pos=" + pos + " size=" + session.size);
+            LOG.remote("stream read EOF at pos=" + pos + " size=" + session.size);
             return -1;
         }
         pos += n;
@@ -69,7 +71,7 @@ public class RemoteSeekableStream implements SeekableInputStream {
             pos = 0;
         }
                 if (android.util.Log.isLoggable("REMOTE", android.util.Log.VERBOSE)) {
-            android.util.Log.i("REMOTE", "stream seek whence=" + whence + " off=" + offset + " -> " + pos);
+            LOG.remote("stream seek whence=" + whence + " off=" + offset + " -> " + pos);
         }
         return pos;
     }

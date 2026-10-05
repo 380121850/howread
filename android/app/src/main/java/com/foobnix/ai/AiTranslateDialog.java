@@ -1,5 +1,7 @@
 package com.foobnix.ai;
 
+import com.foobnix.android.utils.LOG;
+
 import android.app.Activity;
 import android.app.Dialog;
 import android.view.LayoutInflater;
@@ -61,7 +63,8 @@ public class AiTranslateDialog {
                     com.foobnix.remote.RemoteBook.fixCollapsed(path));
         }
         String p = path.toLowerCase(Locale.US);
-        return !p.endsWith(".azw4");
+        // PDF 为固定版式：页内双语（重建文档）不适用，只提供对照翻译面板
+        return !p.endsWith(".azw4") && !p.endsWith(".pdf");
     }
 
     public static void show(final Activity a, final DocumentController dc) {
@@ -166,6 +169,48 @@ public class AiTranslateDialog {
                 modeBox.setChecked(false);
             }
         }
+        final android.widget.RadioGroup pdfModeGroup =
+                (android.widget.RadioGroup) view.findViewById(R.id.aiPdfModeGroup);
+        final String pdfPathLc = book == null ? "" : book.getPath().toLowerCase(Locale.US);
+        final boolean pdfBook = pdfPathLc.endsWith(".pdf");
+        final int pdfMode = pdfBook ? AppState.get().aiPdfTranslateMode : -1;
+        // 原位浮层/原位替换/段落双语三种模式把译文画进页面渲染本体，只由
+        // 竖屏（上下滚动）阅读器的绘制管线承载：横屏分页阅读器没有该钩子与
+        // 页面定位，选中后无呈现也退不出。横屏因此只提供列表面板模式。
+        final boolean verticalReader = a instanceof org.ebookdroid.ui.viewer.VerticalViewActivity;
+        if (pdfModeGroup != null) {
+            if (pdfBook && verticalReader && !isBilingualActive
+                    && com.foobnix.pdf.info.AppsConfig.isProFeaturesEnabled()) {
+                pdfModeGroup.setVisibility(View.VISIBLE);
+                int m = AppState.get().aiPdfTranslateMode;
+                if (m < 0 || m > 3) {
+                    m = 0;
+                }
+                // 按 id 定位单选钮：RadioGroup 首子是标题 TextView，不能用 getChildAt
+                int rbId = m == 1 ? R.id.aiPdfModeOverlay
+                        : m == 2 ? R.id.aiPdfModeReplace
+                        : m == 3 ? R.id.aiPdfModeReflow : R.id.aiPdfModePanel;
+                android.widget.RadioButton rb = (android.widget.RadioButton) view.findViewById(rbId);
+                if (rb != null) {
+                    rb.setChecked(true);
+                }
+                pdfModeGroup.setOnCheckedChangeListener(new android.widget.RadioGroup.OnCheckedChangeListener() {
+                    @Override public void onCheckedChanged(android.widget.RadioGroup group, int checkedId) {
+                        int nm = 0;
+                        if (checkedId == R.id.aiPdfModeOverlay) {
+                            nm = 1;
+                        } else if (checkedId == R.id.aiPdfModeReplace) {
+                            nm = 2;
+                        } else if (checkedId == R.id.aiPdfModeReflow) {
+                            nm = 3;
+                        }
+                        AppState.get().aiPdfTranslateMode = nm;
+                    }
+                });
+            } else {
+                pdfModeGroup.setVisibility(View.GONE);
+            }
+        }
         if (offView != null) {
             offView.setVisibility(isBilingualActive ? View.VISIBLE : View.GONE);
             offView.setOnClickListener(new View.OnClickListener() {
@@ -243,8 +288,21 @@ public class AiTranslateDialog {
                 AppState.get().aiBilingualSrc = src;
                 AppState.get().aiBilingualTgt = tgt;
                 dialog.dismiss();
+                PdfBilingualOverlay.dismissCurrent();
+                // 单选可能在此期间被用户改过：以单选组当前选中项为准；单选组
+                // 不可见（非竖屏/非 PDF）时绝不能沿用上次存下的 PDF 模式
+                int curMode = 0;
+                if (pdfModeGroup != null && pdfModeGroup.getVisibility() == View.VISIBLE) {
+                    int checked = pdfModeGroup.getCheckedRadioButtonId();
+                    curMode = checked == R.id.aiPdfModeOverlay ? 1
+                            : checked == R.id.aiPdfModeReplace ? 2
+                            : checked == R.id.aiPdfModeReflow ? 3 : 0;
+                }
                 if (bilingual) {
                     startBilingual(a, dc, src, tgt);
+                } else if (curMode >= 1 && curMode <= 3) {
+                    AppProfile.save(a);
+                    startPdfOverlay(a, dc, src, tgt, curMode);
                 } else {
                     AppProfile.save(a);
                     startTranslation(a, dc, src, tgt);
@@ -272,7 +330,7 @@ public class AiTranslateDialog {
         st.aiBilingualSrc = src;
         st.aiBilingualTgt = tgt;
         AppProfile.save(a);
-        android.util.Log.i("BENCH", "AiTranslateDialog enable bilingual book=" + path
+        LOG.bench("AiTranslateDialog enable bilingual book=" + path
                 + " src=" + src + " tgt=" + tgt);
         // programmatic restart: keep the mode on across the activity re-create
         BilingualSession.suppressExitOnDestroy = true;
@@ -314,6 +372,20 @@ public class AiTranslateDialog {
         return out;
     }
 
+    /** PDF 模式一/二/三：原位浮层 / 原位替换 / 双语重排（当前页）——复用滚动窗口翻译会话，页面浮层渲染。 */
+    private static void startPdfOverlay(final Activity a, final DocumentController dc,
+            final String src, final String tgt, final int kind) {
+        TranslateSession.cancelCurrent();
+        final TranslateSession session = new TranslateSession(a.getApplicationContext(), dc, src, tgt);
+        // 浮层只挂得上竖屏阅读器（页面视图 documentView 只存在于竖屏布局）；
+        // 挂不上时退回列表面板模式，绝不留下"翻译在后台跑但没有任何界面"的死状态
+        if (PdfBilingualOverlay.show(a, session, kind, AiTranslator.targetLangName(tgt))) {
+            session.start();
+        } else {
+            startTranslation(a, dc, src, tgt);
+        }
+    }
+
     private static void startTranslation(final Activity a, final DocumentController dc,
             final String src, final String tgt) {
         // page-aware session: the panel follows the reader position, later
@@ -323,6 +395,12 @@ public class AiTranslateDialog {
         panel.setTitle(a.getString(R.string.ai_translate) + " → "
                 + AiTranslator.targetLangName(tgt));
         panel.bind(session);
+        // 点面板行 → 在页面上闪现对应原文段的高亮带（对照定位）
+        panel.setOnLocateListener(new TranslatePanel.OnLocateListener() {
+            @Override public void onLocate(float topFrac) {
+                AiPanelFlash.flashPageBand(a, topFrac);
+            }
+        });
         session.setListener(new TranslateSession.Listener() {
             @Override public void onSessionChanged() {
                 panel.onSessionChanged();

@@ -53,6 +53,7 @@ import com.buzzingandroid.ui.HSVColorPickerDialog.OnColorSelectedListener;
 import com.foobnix.LibreraBuildConfig;
 import com.foobnix.StringResponse;
 import com.foobnix.android.utils.Apps;
+import com.foobnix.android.utils.DebugLog;
 import com.foobnix.android.utils.Dips;
 import com.foobnix.android.utils.IO;
 import com.foobnix.android.utils.IntegerResponse;
@@ -1220,6 +1221,60 @@ public class PrefFragment2 extends UIFragment {
                                                                   AppState.get().isOpenLastBook = isChecked;
                                                               }
                                                           });
+
+        // ---- 调试日志：开关 + 导出（常规设置） ----
+        CheckBox isDebugLog = inflate.findViewById(R.id.isDebugLog);
+        isDebugLog.setChecked(AppState.get().isDebugLogEnabled);
+        isDebugLog.setOnCheckedChangeListener(new OnCheckedChangeListener() {
+            @Override public void onCheckedChanged(final CompoundButton buttonView, final boolean isChecked) {
+                AppState.get().isDebugLogEnabled = isChecked;
+                AppState.get().isDebugLogEnabledUserSet = true;
+                DebugLog.setEnabled(isChecked);
+            }
+        });
+        View debugLogExport = inflate.findViewById(R.id.debugLogExport);
+        // 导出：直接写入用户选择的目录（SAF），不再拉起分享面板（转发文件时
+        // 容易被二次截断）；长按该行可重新选择导出目录
+        debugLogExport.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(final View v) {
+                final File lf = DebugLog.logFile(getActivity());
+                if (lf == null || !lf.isFile() || lf.length() == 0) {
+                    Toast.makeText(getActivity(), R.string.debug_log_empty, Toast.LENGTH_LONG).show();
+                    return;
+                }
+                final String saved = getDebugLogDir();
+                if (saved == null) {
+                    pickDebugLogDir(4101);
+                } else {
+                    exportDebugLogTo(saved);
+                }
+            }
+        });
+        debugLogExport.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override public boolean onLongClick(final View v) {
+                pickDebugLogDir(4102);
+                return true;
+            }
+        });
+        refreshDebugLogExportPath(inflate);
+        View debugLogClear = inflate.findViewById(R.id.debugLogClear);
+        debugLogClear.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(final View v) {
+                DebugLog.clear();
+                Toast.makeText(getActivity(), R.string.debug_log_cleared, Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        // 缓存管理（常规设置·在线阅读项下）：在线阅读缓存 + 转换缓存 + 临时
+        // 文件 + 应用运行缓存合并为一个入口，查看占用、配置在线缓存上限、一键清理
+        appCacheManageValue = (TextView) inflate.findViewById(R.id.appCacheManageValue);
+        refreshAppCacheRow(appCacheManageValue);
+        View appCacheManage = inflate.findViewById(R.id.appCacheManageRow);
+        appCacheManage.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(final View v) {
+                showAppCacheDialog();
+            }
+        });
 
         CheckBox isRestoreSearchQuery = inflate.findViewById(R.id.isRestoreSearchQuery);
         isRestoreSearchQuery.setChecked(AppState.get().isRestoreSearchQuery);
@@ -2600,16 +2655,315 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
         applyProLock(aiConfigValue);
     }
 
+
+    // ---- 缓存管理（常规设置）：在线阅读 + 转换 + 临时 + 运行缓存 ----
+
+    private TextView appCacheManageValue;
+
+    /** 缓存管理 行的值：当前总占用（后台统计） */
+    private void refreshAppCacheRow(final TextView v) {
+        if (v == null) {
+            return;
+        }
+        final android.app.Activity act = getActivity();
+        if (act == null) {
+            return;
+        }
+        AppsConfig.executorService.execute(new Runnable() {
+            @Override public void run() {
+                try {
+                    final long total = com.foobnix.remote.BlockCacheStore.totalBytes()
+                            + dirSize(com.foobnix.ext.CacheZipUtils.CACHE_BOOK_DIR)
+                            + dirSize(com.foobnix.ext.CacheZipUtils.CACHE_TEMP)
+                            + dirSize(com.foobnix.ext.CacheZipUtils.CACHE_RECENT)
+                            + dirSize(act.getCacheDir());
+                    act.runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            v.setText(com.foobnix.pdf.info.ExtUtils.readableFileSize(total));
+                        }
+                    });
+                } catch (final Throwable t) {
+                    LOG.e(t);
+                }
+            }
+        });
+    }
+
+    /** 保存在线阅读缓存上限（MB，50..65536；无效输入保持原值） */
+    private void saveCacheCap(final android.app.Activity act, final android.widget.EditText cap) {
+        try {
+            AppState.get().remoteCacheMaxMB = Math.max(50, Math.min(65536,
+                    Integer.parseInt(cap.getText().toString().trim())));
+        } catch (final Exception e) {
+            // 无效输入保持原值
+        }
+        com.foobnix.model.AppProfile.save(act);
+    }
+
+    private static String cacheDirSize(final java.io.File dir) {
+        return com.foobnix.pdf.info.ExtUtils.readableFileSize(dirSize(dir));
+    }
+
+    private static long dirSize(final java.io.File dir) {
+        if (dir == null || !dir.exists()) {
+            return 0;
+        }
+        final java.io.File[] files = dir.listFiles();
+        if (files == null) {
+            return 0;
+        }
+        long total = 0;
+        for (final java.io.File f : files) {
+            if (f.isDirectory()) {
+                total += dirSize(f);
+            } else {
+                total += f.length();
+            }
+        }
+        return total;
+    }
+
+    private static void deleteDirContents(final java.io.File dir) {
+        if (dir == null || !dir.exists()) {
+            return;
+        }
+        final java.io.File[] files = dir.listFiles();
+        if (files == null) {
+            return;
+        }
+        for (final java.io.File f : files) {
+            deleteRecursive(f);
+        }
+    }
+
+    private static void deleteRecursive(final java.io.File f) {
+        if (f == null || !f.exists()) {
+            return;
+        }
+        if (f.isDirectory()) {
+            final java.io.File[] children = f.listFiles();
+            if (children != null) {
+                for (final java.io.File c : children) {
+                    deleteRecursive(c);
+                }
+            }
+        }
+        //noinspection ResultOfMethodCallIgnored
+        f.delete();
+    }
+
+    /** 缓存管理对话框：后台统计四类占用，展示 + 一键清理 */
+    private void showAppCacheDialog() {
+        final android.app.Activity act = getActivity();
+        if (act == null) {
+            return;
+        }
+        Toast.makeText(act, R.string.cache_calculating, Toast.LENGTH_SHORT).show();
+        AppsConfig.executorService.execute(new Runnable() {
+            @Override public void run() {
+                try {
+                    final long online = com.foobnix.remote.BlockCacheStore.totalBytes();
+                    final long convert = dirSize(com.foobnix.ext.CacheZipUtils.CACHE_BOOK_DIR);
+                    final long temp = dirSize(com.foobnix.ext.CacheZipUtils.CACHE_TEMP)
+                            + dirSize(com.foobnix.ext.CacheZipUtils.CACHE_RECENT);
+                    final long runtime = dirSize(act.getCacheDir());
+                    final long total = online + convert + temp + runtime;
+                    final String msg = getString(R.string.cache_usage_online)
+                            + com.foobnix.pdf.info.ExtUtils.readableFileSize(online) + "\n"
+                            + getString(R.string.cache_usage_convert)
+                            + cacheDirSize(com.foobnix.ext.CacheZipUtils.CACHE_BOOK_DIR) + "\n"
+                            + getString(R.string.cache_usage_temp)
+                            + cacheDirSize(com.foobnix.ext.CacheZipUtils.CACHE_TEMP) + "\n"
+                            + getString(R.string.cache_usage_runtime)
+                            + cacheDirSize(act.getCacheDir()) + "\n"
+                            + getString(R.string.cache_usage_total)
+                            + com.foobnix.pdf.info.ExtUtils.readableFileSize(total);
+                    act.runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            if (act.isFinishing() || act.isDestroyed()) {
+                                return;
+                            }
+                            final android.widget.LinearLayout body = new android.widget.LinearLayout(act);
+                            body.setOrientation(android.widget.LinearLayout.VERTICAL);
+                            final int padDp = com.foobnix.android.utils.Dips.dpToPx(16);
+                            body.setPadding(padDp, 0, padDp, 0);
+                            final android.widget.TextView msgView = new android.widget.TextView(act);
+                            msgView.setText(msg);
+                            body.addView(msgView);
+                            final android.widget.TextView capLabel = new android.widget.TextView(act);
+                            capLabel.setText(R.string.remote_cache_size);
+                            capLabel.setPadding(0, com.foobnix.android.utils.Dips.dpToPx(12), 0, 0);
+                            body.addView(capLabel);
+                            final android.widget.EditText cap = new android.widget.EditText(act);
+                            cap.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+                            cap.setText(String.valueOf(AppState.get().remoteCacheMaxMB));
+                            cap.setSelection(cap.getText().length());
+                            body.addView(cap);
+
+                            new androidx.appcompat.app.AlertDialog.Builder(act)
+                                    .setTitle(R.string.cache_usage_title)
+                                    .setView(body)
+                                    .setPositiveButton(R.string.cache_save_limit, new android.content.DialogInterface.OnClickListener() {
+                                        @Override public void onClick(final android.content.DialogInterface dialog, final int which) {
+                                            saveCacheCap(act, cap);
+                                            refreshAppCacheRow(appCacheManageValue);
+                                        }
+                                    })
+                                    .setNeutralButton(R.string.cache_clear_all, new android.content.DialogInterface.OnClickListener() {
+                                        @Override public void onClick(final android.content.DialogInterface dialog, final int which) {
+                                            saveCacheCap(act, cap);
+                                            AppsConfig.executorService.execute(new Runnable() {
+                                                @Override public void run() {
+                                                    try {
+                                                        com.foobnix.remote.BlockCacheStore.clearAll();
+                                                    } catch (final Throwable t) {
+                                                        LOG.e(t);
+                                                    }
+                                                    deleteDirContents(com.foobnix.ext.CacheZipUtils.CACHE_BOOK_DIR);
+                                                    deleteDirContents(com.foobnix.ext.CacheZipUtils.CACHE_TEMP);
+                                                    deleteDirContents(com.foobnix.ext.CacheZipUtils.CACHE_RECENT);
+                                                    deleteDirContents(act.getCacheDir());
+                                                    act.runOnUiThread(new Runnable() {
+                                                        @Override public void run() {
+                                                            Toast.makeText(act, R.string.cache_cleared, Toast.LENGTH_SHORT).show();
+                                                            refreshAppCacheRow(appCacheManageValue);
+                                                        }
+                                                    });
+                                                }
+                                            });
+                                        }
+                                    })
+                                    .setNegativeButton(android.R.string.cancel, null)
+                                    .show();
+                        }
+                    });
+                } catch (final Throwable t) {
+                    LOG.e(t);
+                }
+            }
+        });
+    }
+
+    // ---- 调试日志导出目录（SAF）：记忆目录，长按导出行可重选 ----
+
+    private static final String DEBUG_LOG_DIR_PREF = "debug_log_dir";
+
+    private String getDebugLogDir() {
+        final android.app.Activity act = getActivity();
+        return act == null ? null
+                : act.getSharedPreferences("debug_log", 0).getString(DEBUG_LOG_DIR_PREF, null);
+    }
+
+    /** 导出行右侧：已配置的导出目录与文件名（未配置时提示） */
+    private void refreshDebugLogExportPath(final View root) {
+        final String dbgSaved = getDebugLogDir();
+        LOG.bench("DebugLogPath refresh root=" + (root != null)
+                + " saved=" + (dbgSaved == null ? "null" : dbgSaved));
+        if (root == null) {
+            return;
+        }
+        final android.widget.TextView pathView =
+                (android.widget.TextView) root.findViewById(R.id.debugLogExportPath);
+        if (pathView == null) {
+            return;
+        }
+        final String saved = getDebugLogDir();
+        if (saved == null) {
+            pathView.setText(R.string.debug_log_path_unset);
+            return;
+        }
+        final String dir = debugLogDirName(android.net.Uri.parse(saved));
+        pathView.setText(dir + "/HowRead-debug-*.log");
+    }
+
+    private void pickDebugLogDir(final int code) {
+        try {
+            final android.content.Intent i = new android.content.Intent(
+                    android.content.Intent.ACTION_OPEN_DOCUMENT_TREE);
+            // 必须用 Fragment 自己的 startActivityForResult：经 Activity 发起时
+            // 结果派发给 Activity.onActivityResult，Fragment 收不到（现场实测：
+            // 选择器正常走完、授权记忆与导出都不发生）
+            startActivityForResult(i, code);
+        } catch (final Throwable t) {
+            LOG.e(t);
+            Toast.makeText(getActivity(), R.string.debug_log_dir_unavailable, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private String debugLogDirName(final android.net.Uri tree) {
+        try {
+            final android.net.Uri doc = android.provider.DocumentsContract.buildDocumentUriUsingTree(
+                    tree, android.provider.DocumentsContract.getTreeDocumentId(tree));
+            final android.database.Cursor c = getActivity().getContentResolver().query(
+                    doc,
+                    new String[]{android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME},
+                    null, null, null);
+            if (c != null) {
+                try {
+                    if (c.moveToFirst() && c.getString(0) != null) {
+                        return c.getString(0);
+                    }
+                } finally {
+                    c.close();
+                }
+            }
+        } catch (final Throwable t) {
+            LOG.e(t);
+        }
+        return String.valueOf(tree.getLastPathSegment());
+    }
+
+    /** 把当前日志复制到 SAF 目录（避免分享面板再次转发时截断） */
+    private void exportDebugLogTo(final String treeUriString) {
+        final android.app.Activity act = getActivity();
+        if (act == null) {
+            return;
+        }
+        try {
+            final File lf = DebugLog.logFile(act);
+            if (lf == null || !lf.isFile() || lf.length() == 0) {
+                Toast.makeText(act, R.string.debug_log_empty, Toast.LENGTH_LONG).show();
+                return;
+            }
+            final android.net.Uri tree = android.net.Uri.parse(treeUriString);
+            final android.net.Uri dirDoc = android.provider.DocumentsContract.buildDocumentUriUsingTree(
+                    tree, android.provider.DocumentsContract.getTreeDocumentId(tree));
+            final String name = "HowRead-debug-"
+                    + new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+                            .format(new java.util.Date()) + ".log";
+            final android.net.Uri out = android.provider.DocumentsContract.createDocument(
+                    act.getContentResolver(), dirDoc, "application/octet-stream", name);
+            final java.io.InputStream in = new java.io.FileInputStream(lf);
+            final java.io.OutputStream os = act.getContentResolver().openOutputStream(out);
+            try {
+                final byte[] buf = new byte[16384];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    os.write(buf, 0, n);
+                }
+            } finally {
+                in.close();
+                os.close();
+            }
+            Toast.makeText(act, getString(R.string.debug_log_exported,
+                    debugLogDirName(tree) + "/" + name), Toast.LENGTH_LONG).show();
+        } catch (final Throwable t) {
+            LOG.e(t);
+            // 目录授权可能已被系统回收：清掉记录，下次导出重新选择
+            act.getSharedPreferences("debug_log", 0).edit().remove(DEBUG_LOG_DIR_PREF).apply();
+            Toast.makeText(act, R.string.debug_log_dir_unavailable, Toast.LENGTH_LONG).show();
+        }
+    }
+
     /** 常规设置 在线阅读 行的值：开关状态 + 已缓存占用 */
     private void refreshRemoteRow(TextView v) {
         if (v == null) {
             return;
         }
-        // merged 在线阅读 row: switch state + current remote-cache footprint
+        // 在线阅读行只显示开关状态；缓存占用与清理移至"缓存管理"行
         String state = getString(AppState.get().remoteOnlineFirst
                 ? R.string.remote_state_on : R.string.remote_state_off);
-        v.setText(state + " · " + com.foobnix.pdf.info.ExtUtils.readableFileSize(
-                com.foobnix.remote.BlockCacheStore.totalBytes()));
+        v.setText(state);
         applyProLock(v);
     }
 
@@ -2622,6 +2976,31 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
     /** Pro 功能未解锁时的统一提示（View 重载） */
     public static void proLockedToast(View v) {
         proLockedToast(v.getContext());
+    }
+
+    @Override
+    public void onActivityResult(final int requestCode, final int resultCode, final Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (data == null || data.getData() == null) {
+            return;
+        }
+        final android.net.Uri tree = data.getData();
+        try {
+            getActivity().getContentResolver().takePersistableUriPermission(tree,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            | android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        } catch (final Throwable t) {
+            LOG.e(t);
+        }
+        getActivity().getSharedPreferences("debug_log", 0).edit()
+                .putString(DEBUG_LOG_DIR_PREF, tree.toString()).apply();
+        Toast.makeText(getActivity(), getString(R.string.debug_log_dir_chosen,
+                debugLogDirName(tree)), Toast.LENGTH_LONG).show();
+        refreshDebugLogExportPath(getView());
+        if (requestCode == 4101) {
+            // 首次选择（由导出动作触发）：选完直接导出
+            exportDebugLogTo(tree.toString());
+        }
     }
 
     /** Pro 功能置灰（仅调 alpha 0.3；点击仍可触发 → proLockedToast 提示） */

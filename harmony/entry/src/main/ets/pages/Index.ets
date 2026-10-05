@@ -141,6 +141,11 @@ struct Index {
   /* Sprint J6: WebDAV cloud drive */
   @State webdavUrl: string = '';
   @State webdavFiles: string[] = [];
+  /* 0.9.19: remote multi-select batch download (Android 10-01 parity) */
+  @State remoteSelMode: boolean = false;
+  @State remoteSelPanel: string = '';   /* webdav | smb | sftp */
+  @State remoteSelKeys: string[] = [];  /* selected file names */
+  @State remoteBatchBusy: boolean = false;
   @State webdavStatus: string = 'Enter server URL and tap Connect';
   @State webdavConnecting: boolean = false;
   /* Round 5: WebDAV directory browsing + download progress */
@@ -2113,7 +2118,7 @@ struct Index {
       tlog('dav_panel_loaded', 'dirs=' + dirs.length + ' files=' + files.length);
       this.webdavStatus = `Connected! ${dirs.length} dirs, ${files.length} files`;
     } catch (e) {
-      this.webdavStatus = 'Connection failed: ' + String(e);
+      this.webdavStatus = 'Connection failed [' + this.webdavUrl + ']: ' + JSON.stringify(e);
     }
     this.webdavConnecting = false;
   }
@@ -3275,6 +3280,9 @@ tlog('download_start', 'name=' + fileName);    try {
       }
 
       if (this.webdavDirs.length > 0 || this.webdavFiles.length > 0) {
+        if (this.remoteSelMode && this.remoteSelPanel === 'webdav') {
+          this.remoteSelToolbar()
+        }
         List() {
           ForEach(this.webdavDirs, (dir: string) => {
             ListItem() {
@@ -3289,17 +3297,30 @@ tlog('download_start', 'name=' + fileName);    try {
           ForEach(this.webdavFiles, (file: string) => {
             ListItem() {
               Row() {
+                if (this.remoteSelMode && this.remoteSelPanel === 'webdav') {
+                  Text(this.remoteSelKeys.includes(file) ? '☑' : '☐')
+                    .fontSize(15).fontColor(this.thm()).margin({ right: 8 })
+                }
                 Text('📄').fontSize(14).margin({ right: 8 })
-                Text(file).fontSize(13).layoutWeight(1)
-                Button('⬇')
-                  .width(32).height(28).fontSize(12)
-                  .onClick(() => { this.webdavDownload(file); })
+                Text(file).fontSize(13).layoutWeight(1).maxLines(1)
+                if (!(this.remoteSelMode && this.remoteSelPanel === 'webdav')) {
+                  Button('⬇')
+                    .width(32).height(28).fontSize(12)
+                    .onClick(() => { this.webdavDownload(file); })
+                }
               }
               .width('90%').padding({ top: 6, bottom: 6 })
               .onClick(() => {
+                if (this.remoteSelMode && this.remoteSelPanel === 'webdav') {
+                  this.remoteSelToggle(file);
+                  return;
+                }
                 /* Round 8: online-open first (streaming), download fallback by tier */
                 this.remoteOpenOrDownload(file);
               })
+              .gesture(LongPressGesture({ repeat: false, duration: 500 }).onAction(() => {
+                this.remoteSelEnter('webdav', file);
+              }))
             }
           }, (file: string) => file)
         }
@@ -6643,6 +6664,9 @@ tlog('download_start', 'name=' + fileName);    try {
       }
 
       if (this.webdavDirs.length > 0 || this.webdavFiles.length > 0) {
+        if (this.remoteSelMode && this.remoteSelPanel === 'webdav') {
+          this.remoteSelToolbar()
+        }
         List() {
           ForEach(this.webdavDirs, (dir: string) => {
             ListItem() {
@@ -6659,19 +6683,32 @@ tlog('download_start', 'name=' + fileName);    try {
           ForEach(this.webdavFiles, (file: string) => {
             ListItem() {
               Row() {
+                if (this.remoteSelMode && this.remoteSelPanel === 'webdav') {
+                  Text(this.remoteSelKeys.includes(file) ? '☑' : '☐')
+                    .fontSize(15).fontColor(this.thm()).margin({ right: 8 })
+                }
                 Text('\u{1F4C4}').fontSize(14).margin({ right: 8 })
-                Text(file).fontSize(13).layoutWeight(1)
-                Button('\u2B07')
-                  .width(32).height(28).fontSize(12)
-                  .onClick(() => {
-                    this.webdavDownload(file);
-                  })
+                Text(file).fontSize(13).layoutWeight(1).maxLines(1)
+                if (!(this.remoteSelMode && this.remoteSelPanel === 'webdav')) {
+                  Button('\u2B07')
+                    .width(32).height(28).fontSize(12)
+                    .onClick(() => {
+                      this.webdavDownload(file);
+                    })
+                }
               }
               .width('90%').padding({ top: 6, bottom: 6 })
               .onClick(() => {
+                if (this.remoteSelMode && this.remoteSelPanel === 'webdav') {
+                  this.remoteSelToggle(file);
+                  return;
+                }
                 /* Round 8: online-open first (streaming), download fallback by tier */
                 this.remoteOpenOrDownload(file);
               })
+              .gesture(LongPressGesture({ repeat: false, duration: 500 }).onAction(() => {
+                this.remoteSelEnter('webdav', file);
+              }))
             }
           }, (file: string) => file)
         }
@@ -7897,13 +7934,189 @@ tlog('download_start', 'name=' + fileName);    try {
     .width('100%').height('100%')
   }
 
+  /* ---- 0.9.19: remote multi-select batch download (Android 10-01 parity) ---- */
+  @Builder
+  remoteSelToolbar() {
+    Row({ space: 12 }) {
+      Text(`已选 ${this.remoteSelKeys.length}`)
+        .fontSize(12).fontColor(this.txtFaint()).layoutWeight(1)
+      Text('全选')
+        .fontSize(13).fontColor(this.thm())
+        .onClick(() => { this.remoteSelAll(); })
+      Text('下载')
+        .fontSize(13).fontColor('#2a7')
+        .onClick(() => { this.remoteBatchStart(); })
+      Text('取消')
+        .fontSize(13).fontColor('#e57373')
+        .onClick(() => { this.remoteSelCancel(); })
+    }
+    .width('90%')
+    .padding({ top: 6, bottom: 6 })
+  }
+
+  private remoteSelEnter(panel: string, name: string): void {
+    this.remoteSelPanel = panel;
+    this.remoteSelKeys = [name];
+    this.remoteSelMode = true;
+  }
+
+  private remoteSelToggle(name: string): void {
+    const keys: string[] = this.remoteSelKeys.slice();
+    const i: number = keys.indexOf(name);
+    if (i >= 0) {
+      keys.splice(i, 1);
+    } else {
+      keys.push(name);
+    }
+    this.remoteSelKeys = keys;
+  }
+
+  private remoteSelAll(): void {
+    const keys: string[] = [];
+    if (this.remoteSelPanel === 'webdav') {
+      for (let i = 0; i < this.webdavFiles.length; i++) {
+        keys.push(this.webdavFiles[i]);
+      }
+    } else if (this.remoteSelPanel === 'smb') {
+      for (let i = 0; i < this.smbEntries.length; i++) {
+        if (!this.smbEntries[i].isDir) {
+          keys.push(this.smbEntries[i].name);
+        }
+      }
+    } else {
+      for (let i = 0; i < this.sftpEntries.length; i++) {
+        if (!this.sftpEntries[i].isDir) {
+          keys.push(this.sftpEntries[i].name);
+        }
+      }
+    }
+    this.remoteSelKeys = keys;
+  }
+
+  private remoteSelCancel(): void {
+    this.remoteSelMode = false;
+    this.remoteSelKeys = [];
+    this.remoteSelPanel = '';
+  }
+
+  private remoteBatchStart(): void {
+    if (this.remoteSelKeys.length === 0) {
+      promptAction.showToast({ message: '请先勾选要下载的文件' });
+      return;
+    }
+    this.openDirPick('remoteBatch');
+  }
+
+  /* Fetch every selected file through the whole-book pipeline (block cache is
+   * reused by later opens) and copy the result into the chosen directory. */
+  private async remoteBatchDownload(targetDir: string): Promise<void> {
+    if (this.remoteBatchBusy) {
+      return;
+    }
+    const names: string[] = this.remoteSelKeys.slice();
+    const panel: string = this.remoteSelPanel;
+    this.remoteSelCancel();
+    if (names.length === 0) {
+      return;
+    }
+    this.remoteBatchBusy = true;
+    const ctx = getContext(this);
+    const settings = await loadRemoteCacheSettings(ctx);
+    let ok = 0;
+    for (let i = 0; i < names.length; i++) {
+      const name: string = names[i];
+      try {
+        let source: RemoteFileSource;
+        let uri: string;
+        if (panel === 'webdav') {
+          const server: DavServer | undefined = this.davServers[this.davSelected];
+          if (server === undefined) {
+            throw new Error('no server selected');
+          }
+          const fileUrl: string = this.webdavDirUrl() + encodeURIComponent(name);
+          uri = buildRemoteUri('webdav', await serverIdOf(this.webdavUrl), fileUrl);
+          source = new WebDavFileSource(fileUrl, server.user, server.password,
+            settings.retryCount, settings.retryIntervalMs);
+        } else if (panel === 'smb') {
+          const srv = this.smbServers[this.smbSelected];
+          if (srv === undefined) {
+            throw new Error('no server selected');
+          }
+          const relPath: string = (this.smbPath.length > 0 ? this.smbPath + '/' : '') + name;
+          const fileUrl: string = `${smbHostPort(srv.host, srv.port)}|${srv.share}|${relPath}`;
+          uri = buildRemoteUri('smb', await serverIdOf(smbHostPort(srv.host, srv.port)), fileUrl);
+          source = new SmbFileSource(smbHostPort(srv.host, srv.port), srv.share, relPath,
+            srv.user, srv.domain, srv.password);
+        } else {
+          const srv2 = this.sftpServers[this.sftpSelected];
+          if (srv2 === undefined) {
+            throw new Error('no server selected');
+          }
+          const path: string = (this.sftpPath === '/' ? '' : this.sftpPath) + '/' + name;
+          const fileUrl: string = `${sftpHostPort(srv2.host, srv2.port)}|${path}`;
+          uri = buildRemoteUri('sftp', await serverIdOf(sftpHostPort(srv2.host, srv2.port)), fileUrl);
+          source = new SftpFileSource(srv2.host, srv2.port, srv2.user, srv2.password, srv2.keyPath,
+            srv2.keyPass, srv2.trustAll, srv2.fingerprint);
+          (source as SftpFileSource).openPath = path;
+        }
+        this.webdavDownloading = `(${i + 1}/${names.length}) ${name}`;
+        this.webdavProgress = 0;
+        const ext: string = fileExtOf(name);
+        const session = new RemoteSession(ctx, uri, await sha256Hex(uri), source, settings);
+        const probe = await source.probe();
+        if (probe === null) {
+          throw new Error('probe failed');
+        }
+        await session.store.loadOrCreate(probe.size, probe.versionTag,
+          isDirectOpenExt(ext) ? 1024 * 1024 : 256 * 1024);
+        const localPath: string = await fetchWholeBookToCache(session, ext, (p: number) => {
+          this.webdavProgress = p;
+          this.webdavDownloading = `(${i + 1}/${names.length}) ${name}`;
+        });
+        const dest: string = targetDir + '/' + name;
+        fs.copyFileSync(localPath, dest);
+        const book: RecentBook = {
+          path: dest,
+          title: name,
+          page: 0,
+          totalPages: 0,
+          lastRead: new Date().toISOString(),
+          star: false,
+          coverPath: '',
+          author: '',
+          tags: [],
+          series: '',
+          genre: '',
+          status: 0
+        };
+        await saveRecentBook(ctx, book);
+        ok++;
+        this.webdavStatus = `已下载 ${i + 1}/${names.length}，成功 ${ok}`;
+      } catch (_e) {
+        this.webdavStatus = `下载失败: ${name}`;
+      }
+    }
+    this.webdavProgress = -1;
+    this.webdavDownloading = '';
+    this.remoteBatchBusy = false;
+    await this.loadLibrary();
+    promptAction.showToast({ message: `已下载 ${names.length} 本，成功 ${ok}，保存于 ${targetDir}` });
+  }
+
   /** Shared remote directory/file listing (SMB netSection 2 / SFTP netSection 3). */
   @Builder
   remoteEntriesList(isSmb: boolean) {
+    if (this.remoteSelMode && this.remoteSelPanel === (isSmb ? 'smb' : 'sftp')) {
+      this.remoteSelToolbar()
+    }
     List() {
       ForEach(isSmb ? this.smbEntries : this.sftpEntries, (e: DavListEntry) => {
         ListItem() {
           Row({ space: 8 }) {
+            if (this.remoteSelMode && !e.isDir && this.remoteSelPanel === (isSmb ? 'smb' : 'sftp')) {
+              Text(this.remoteSelKeys.includes(e.name) ? '☑' : '☐')
+                .fontSize(15).fontColor(this.thm())
+            }
             Text(e.isDir ? '\u{1F4C1}' : '\u{1F4C4}')
               .fontSize(14)
             Text(e.name)
@@ -7918,6 +8131,10 @@ tlog('download_start', 'name=' + fileName);    try {
           }
           .width('90%').padding({ top: 6, bottom: 6 })
           .onClick(() => {
+            if (this.remoteSelMode && !e.isDir && this.remoteSelPanel === (isSmb ? 'smb' : 'sftp')) {
+              this.remoteSelToggle(e.name);
+              return;
+            }
             if (e.isDir) {
               if (isSmb) {
                 this.smbBrowse(e.name.includes('/') ? e.name :
@@ -7931,6 +8148,11 @@ tlog('download_start', 'name=' + fileName);    try {
               this.remoteOpenOrDownloadSftp(e.name);
             }
           })
+          .gesture(LongPressGesture({ repeat: false, duration: 500 }).onAction(() => {
+            if (!e.isDir) {
+              this.remoteSelEnter(isSmb ? 'smb' : 'sftp', e.name);
+            }
+          }))
         }
       }, (e: DavListEntry) => (isSmb ? 'smb_' + this.smbPath : 'sftp_' + this.sftpPath) + '_' + e.name)
     }
@@ -8166,6 +8388,9 @@ tlog('download_start', 'name=' + fileName);    try {
     if (target === 'libFolderEdit' && this.dirPickEditOld.length > 0) {
       start = this.dirPickEditOld;
     }
+    if (target === 'remoteBatch' && this.settings.remoteBatchDir.length > 0) {
+      start = this.settings.remoteBatchDir;
+    }
     if (target === 'fonts' || target === 'downloads') {
       const cur: string = this.resolveFolderPath(target === 'fonts' ? this.settings.fontsFolder : this.settings.downloadsFolder);
       if (cur.length > 0) {
@@ -8224,6 +8449,11 @@ tlog('download_start', 'name=' + fileName);    try {
       this.addLibFolder(this.dirPickPath);
     } else if (this.dirPickTarget === 'libFolderEdit') {
       this.editLibFolder(this.dirPickEditOld, this.dirPickPath);
+    } else if (this.dirPickTarget === 'remoteBatch') {
+      /* 0.9.19: remember the batch-download target (not synced), then fetch */
+      this.settings.remoteBatchDir = this.dirPickPath;
+      this.saveNow();
+      this.remoteBatchDownload(this.dirPickPath);
     }
     this.showDirPick = false;
   }
@@ -8676,12 +8906,48 @@ tlog('download_start', 'name=' + fileName);    try {
     .width('100%')
     .padding({ left: 12, right: 12, top: 9, bottom: 9 })
     .onClick(() => {
-      this.remoteNumKey = key;
-      this.remoteNumMin = minV;
-      this.remoteNumMax = maxV;
-      this.remoteNumValue = `${this.numPref(key)}`;
-      this.showRemoteNum = true;
+      this.openRemoteNum(key, minV, maxV);
     })
+  }
+
+  private openRemoteNum(key: string, minV: number, maxV: number): void {
+    this.remoteNumKey = key;
+    this.remoteNumMin = minV;
+    this.remoteNumMax = maxV;
+    this.remoteNumValue = `${this.numPref(key)}`;
+    this.showRemoteNum = true;
+  }
+
+  /** 0.9.19: two numeric pref rows side by side (Android RemoteCacheDialog paired). */
+  @Builder
+  settingsNumRowPair(label1: string, key1: string, min1: number, max1: number,
+    label2: string, key2: string, min2: number, max2: number) {
+    Row() {
+      Row() {
+        Text(label1)
+          .fontSize(13).fontColor(this.accentTextColor() ? this.acc() : this.txtPri())
+          .maxLines(2)
+        Text(`${this.numPref(key1)}`)
+          .fontSize(13).fontColor(this.thm())
+          .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+          .margin({ left: 6 })
+      }
+      .layoutWeight(1)
+      .onClick(() => { this.openRemoteNum(key1, min1, max1); })
+      Row() {
+        Text(label2)
+          .fontSize(13).fontColor(this.accentTextColor() ? this.acc() : this.txtPri())
+          .maxLines(2)
+        Text(`${this.numPref(key2)}`)
+          .fontSize(13).fontColor(this.thm())
+          .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+          .margin({ left: 6 })
+      }
+      .layoutWeight(1)
+      .onClick(() => { this.openRemoteNum(key2, min2, max2); })
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 9, bottom: 9 })
   }
 
   /** Round 7: color palette row (Android colorsLine + custom picker).
@@ -9257,10 +9523,10 @@ tlog('download_start', 'name=' + fileName);    try {
           if (this.groupExp['remote'] === true) {
             this.settingsToggleRow('在线优先阅读', 'remoteOnlineFirst', '直开格式直接流式打开')
             this.settingsToggleRow('仅 WiFi 下预取与整本缓存', 'remotePrefetchWifiOnly', '开：流量下只随读随取；关：流量与 WiFi 同等对待')
-            this.settingsNumRow('缓存上限 (MB)', 'remoteCacheMaxMB', 50, 4096)
-            this.settingsNumRow('整本缓存阈值 (MB)', 'remoteWholeBookThresholdMB', 0, 200)
-            this.settingsNumRow('重试次数', 'remoteRetryCount', 0, 10)
-            this.settingsNumRow('重试间隔 (ms)', 'remoteRetryIntervalMs', 0, 30000)
+            this.settingsNumRowPair('缓存上限 (MB)', 'remoteCacheMaxMB', 50, 4096,
+              '整本缓存阈值 (MB)', 'remoteWholeBookThresholdMB', 0, 200)
+            this.settingsNumRowPair('重试次数', 'remoteRetryCount', 0, 10,
+              '重试间隔 (ms)', 'remoteRetryIntervalMs', 0, 30000)
             Row() {
               Text(`缓存用量：${this.remoteCacheUsage}`)
                 .fontSize(14).fontColor(this.txtSec()).layoutWeight(1)

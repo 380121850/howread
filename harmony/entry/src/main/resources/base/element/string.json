@@ -2251,6 +2251,26 @@
     {
       "name": "ai_proto_google",
       "value": "Gemini"
+    },
+    {
+      "name": "trans_mode",
+      "value": "Mode"
+    },
+    {
+      "name": "trans_mode_panel",
+      "value": "Panel"
+    },
+    {
+      "name": "trans_mode_float",
+      "value": "Badges"
+    },
+    {
+      "name": "trans_mode_reflow",
+      "value": "Bilingual"
+    },
+    {
+      "name": "trans_mode_replace",
+      "value": "Replace"
     }
   ]
 }

@@ -379,9 +379,11 @@ public class AdMobAdsProvider implements AdsProvider {
             AppSP.get().rewardShowTime = System.currentTimeMillis();
         } else {
             // no ad loaded (load failed / consumed / no unit id): RewardListener
-            // has no failure channel, so at least make the dropped callback
-            // visible in the log instead of silently swallowing it
+            // has no failure channel, so make the drop visible in the log AND
+            // kick a fresh load so the next tap finds an ad instead of hitting
+            // the same empty state forever
             LOG.d("ADS1", "showRewardedAd: no loaded ad, reward listener not called");
+            loadRewardedAd(a, null);
         }
     }
 

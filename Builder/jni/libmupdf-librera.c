@@ -1505,7 +1505,22 @@ JNIEXPORT jstring
     }
 
     char linkbuf[4048];
-    int pageNo = -1; // outline->page;
+    // Resolve the real destination: PDF fills outline->page at load time;
+    // reflow formats (epub/fb2) leave it at -1, so fall back to resolving
+    // the outline uri (chapter + anchor). Returning a real "#N" lets the
+    // app-side TOC jump work for converted fb2 chapter files too.
+    int pageNo = -1;
+    fz_location ploc = outline->page;
+    if (ploc.chapter >= 0 && ploc.page >= 0) {
+        pageNo = fz_page_number_from_location(doc->ctx, doc->document, ploc);
+    }
+    if (pageNo < 0 && outline->uri != NULL && outline->uri[0] != '\0') {
+        pageNo = fz_page_number_from_location(
+          doc->ctx, doc->document, fz_resolve_link(doc->ctx, doc->document, outline->uri, NULL, NULL));
+    }
+    if (pageNo < 0) {
+        pageNo = -1; // unresolvable: keep the legacy "#0" marker
+    }
 
     snprintf(linkbuf, sizeof(linkbuf), "#%d", pageNo + 1);
 

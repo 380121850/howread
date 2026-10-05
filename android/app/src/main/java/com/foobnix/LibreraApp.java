@@ -13,6 +13,7 @@ import androidx.multidex.MultiDexApplication;
 import androidx.work.Configuration;
 import androidx.work.WorkManager;
 
+import com.foobnix.android.utils.DebugLog;
 import com.foobnix.android.utils.Dips;
 import com.foobnix.android.utils.LOG;
 import com.foobnix.android.utils.TxtUtils;
@@ -71,6 +72,7 @@ public class LibreraApp extends MultiDexApplication {
         AppsConfig.executorService.execute(AppsConfig::ensureMuPdfLoaded);
         Dips.init(this);
         Prefs.get().init(this);
+        DebugLog.init(this);
 
         try {
             if (AppsConfig.isShowAdsInApp(this)) {
@@ -117,17 +119,38 @@ public class LibreraApp extends MultiDexApplication {
 
         if (AppsConfig.IS_WRITE_LOGS) {
             LOG.writeCrashTofile = true;
+            final Thread.UncaughtExceptionHandler systemHandler =
+                    Thread.getDefaultUncaughtExceptionHandler();
             Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
                 @Override
                 public void uncaughtException(Thread thread, final Throwable e) {
-                    LOG.uncaughtException(e);
+                    // 全渠道本地留痕（<存储根>/crash.txt）：pro 包此前只进
+                    // 系统 dropbox，偶发闪退一旦被日志轮转便无法取证
+                    try {
+                        LOG.uncaughtException(e);
+                    } catch (Throwable ignored) {
+                    }
+                    // 调试日志开启时崩溃堆栈同步写入 debug-log.txt：现场导出
+                    // 一个文件即可同时拿到定位日志与崩溃现场
+                    try {
+                        if (DebugLog.enabled) {
+                            DebugLog.write("FATAL", "thread=" + thread.getName()
+                                    + "\n" + LOG.toString(e));
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                    if (AppsConfig.IS_FDROID) {
+                        Intent intent = new Intent(Intent.ACTION_MAIN);
+                        intent.addCategory(Intent.CATEGORY_HOME);
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                        startActivity(intent);
 
-                    Intent intent = new Intent(Intent.ACTION_MAIN);
-                    intent.addCategory(Intent.CATEGORY_HOME);
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                    startActivity(intent);
-
-                    System.exit(0);
+                        System.exit(0);
+                    } else if (systemHandler != null) {
+                        // 非 fdroid：写完文件交回系统默认处理，保留崩溃
+                        // 对话框与 dropbox 记录
+                        systemHandler.uncaughtException(thread, e);
+                    }
                 }
             });
         }

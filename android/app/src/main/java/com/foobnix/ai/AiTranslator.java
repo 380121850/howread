@@ -24,7 +24,8 @@ public class AiTranslator {
                 || p.endsWith(".prc") || p.endsWith(".pdb")
                 || p.endsWith(".html") || p.endsWith(".htm")
                 || p.endsWith(".doc") || p.endsWith(".docx")
-                || p.endsWith(".odt") || p.endsWith(".rtf");
+                || p.endsWith(".odt") || p.endsWith(".rtf")
+                || p.endsWith(".pdf");
     }
 
     /** Human name of the target language for the prompt (英文/中文/日文). */

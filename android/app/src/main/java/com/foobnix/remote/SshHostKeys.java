@@ -1,5 +1,7 @@
 package com.foobnix.remote;
 
+import com.foobnix.android.utils.LOG;
+
 import android.content.SharedPreferences;
 
 import com.foobnix.LibreraApp;
@@ -38,12 +40,12 @@ public class SshHostKeys {
         String stored = p.getString(keyOf(host, port), null);
         if (stored == null) {
             p.edit().putString(keyOf(host, port), fp).apply();
-            android.util.Log.i("REMOTE", "ssh host key recorded (TOFU) " + keyOf(host, port) + " " + fp);
+            LOG.remote("ssh host key recorded (TOFU) " + keyOf(host, port) + " " + fp);
             return true;
         }
         boolean ok = stored.equals(fp);
         if (!ok) {
-            android.util.Log.i("REMOTE", "ssh host key MISMATCH for " + keyOf(host, port)
+            LOG.remote("ssh host key MISMATCH for " + keyOf(host, port)
                     + ": stored=" + stored + " got=" + fp);
         }
         return ok;

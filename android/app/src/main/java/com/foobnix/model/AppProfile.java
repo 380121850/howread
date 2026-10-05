@@ -212,6 +212,10 @@ public class AppProfile {
         BookCSS.get()
                .load1(c);
 
+        // load1 刚用磁盘 app-CSS.json 覆盖了 searchPathsJson：启动回灌的书库
+        // 文件夹（loadInit 内写入内存）在这里补一次，并重剥本机已删除的
+        ProfileStateIO.importFoldersAfterCssLoad(c);
+
         PasswordState.get()
                      .load(c);
         DragingPopup.loadCache(c);

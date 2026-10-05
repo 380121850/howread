@@ -348,3 +348,40 @@ FN-30/46 已改为调用,行为不变)。
   偏重，建议后续改为断言应用内日志对话框而非外跳浏览器。
 - **AVD 环境坑**：模拟器壳进程作业级联导致整组静默消失（三连杀），WMI 拉起规避后一次跑通
   全量——详见 PITFALLS #48；#47 的输入注入怪癖本轮未复现（FN-49/50/51/52 全 PASS）。
+
+### 2026-09-30/10-01 打开链路优化专项用例：FN-61 ~ FN-65
+
+| 用例 | 覆盖 | 关键断言（BENCH 为主） |
+|---|---|---|
+| FN-61 本地TXT分块直读 | 本地 TXT 引擎分块（txt-chunk-doc） | `txt-local-chunked` + `native-open txt-chunked`≤800ms + load-end≤1500ms + 无本书 codec-convert + 首屏真实解码；重开同路径 |
+| FN-62 GBK TXT编码兜底 | 非 UTF 编码回退 extractEpub 旧链路 | `txt-local-chunked` 缺席 + 本书 `codec-convert` 存在 |
+| FN-63 FB2切章与重开快开 | fb2 产物 256KB 切章 + 重开零转换 | `fb2-split parts≥2` + 首开转换≤8s + 重开 cache-hit load-end≤500ms + 真实解码先于放行 |
+| FN-64 FB2切章目录完整性 | NCX 锚点映射 + 目录条目 | 目录面板章节行≥3 且滚动到底可见 ≥第50章 |
+| FN-65 FB2带图切章冒烟 | binary 按引用归属 part | parts≥2 + 无校验失败 + 首屏绘制 + 无崩溃 |
+
+- fixture（teskbook/，run_all push_fixtures 统一投放）：txt_big_utf8.txt(16MB)、
+  txt_gbk_cn.txt(468KB)、fb2_sections.fb2(1.6MB/60章)、fb2_images.fb2(877KB/5图)。
+- **已知存量缺陷（非本轮回归，FN-64 首次曝光）**：转换型 fb2 的目录"点击跳页"自历史版本起
+  不可用——JNI `MuPdfOutline_getLink` 恒返 "#0"，回退的 `getLinkPage`(引擎 resolve)对转换型
+  fb2 恒 -1（三种 uri 形态实测一致；锚点空 `<a id>`/`<p id>` 形态均不进排版树）。FN-64 现口径
+  只验目录产物完整性；点击跳页修复需 native 层排查（fz_find_html_target 对该产物的盒 id 链路），
+  已列专项。app 侧 `fb2SplitBaseOffset`（目录页码全局化）已就位，待引擎 resolve 修复后即生效。
+- MI9 单机验证 5/5 PASS（2026-10-01）。
+
+### 全量#7（2026-10-01 凌晨，v1.3.11/7314 含 TXT分块+fb2切章优化，四台 --reset 全量 L1+FN-61~65）
+
+- 结果目录：`results/20261001-022623_L1_ui-device/`。
+- **P20（3JJ4C18904004595）跑到 25/64 再次 USB 掉线**（与全量#5 同款硬件问题）：
+  前 24 例有效全 PASS，FN-25 起级联假失败 39 例无效。三台主机有效：
+
+| 设备 | 结果（P/F/S，含 ENV） | 失败 |
+|---|---|---|
+| MI9 | 63 / 0 / 2 | **零失败**（含 FN-61~65 全过、09-19 的 P0 FN-03 过） |
+| P30 | 60 / 3 / 2 | FN-26/29（凭据入库存量）、FN-41（进度条存量） |
+| KSA | 60 / 1 / 3 | FN-41（存量；FN-63 阈值已放宽至 8s 复验 PASS） |
+
+- **FN-61~65 首战四机表现**：MI9/P30 5/5 全过；KSA FN-63 阈值边缘（3.4s>3s，已调 8s）
+  复验过，其余全过；P20 掉线未跑到（单机冒烟已过）。
+- **新发现存量缺陷**：转换型 fb2 目录"点击跳页"自历史版本不可用（JNI getLink 恒 "#0" +
+  引擎 find_html_target 对该产物恒 -1，三种 uri 形态实测一致）——FN-64 已改口径验目录
+  完整性，跳页修复列 native 专项；app 侧目录页码全局化(fb2SplitBaseOffset)已预置。

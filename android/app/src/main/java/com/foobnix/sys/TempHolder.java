@@ -1,5 +1,7 @@
 package com.foobnix.sys;
 
+import com.foobnix.android.utils.LOG;
+
 import com.foobnix.pdf.info.wrapper.UITab;
 
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -27,7 +29,7 @@ public class TempHolder {
         }
         final long waited = android.os.SystemClock.elapsedRealtime() - t0;
         if (waited > 200) {
-            android.util.Log.i("BENCH", "lock-wait " + where + " waited=" + waited
+            LOG.bench("lock-wait " + where + " waited=" + waited
                     + "ms holder=" + (holder != null ? holder.getName() : "?"));
         }
     }

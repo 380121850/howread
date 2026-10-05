@@ -157,7 +157,7 @@ public class BilingualBuilder {
             return out;
         } catch (Throwable t) {
             LOG.e(t);
-            android.util.Log.i("BENCH", "BilingualBuilder FAIL " + t.getClass().getName() + " " + t.getMessage());
+            LOG.bench("BilingualBuilder FAIL " + t.getClass().getName() + " " + t.getMessage());
             new File(out.getParentFile(), out.getName() + ".tmp").delete();
             return null;
         }
@@ -313,12 +313,12 @@ public class BilingualBuilder {
                 }
             }
             cleanOldVersionsHtml(originalBook, out);
-            android.util.Log.i("BENCH", "BilingualBuilder buildHtml base=" + base.getName()
+            LOG.bench("BilingualBuilder buildHtml base=" + base.getName()
                     + " out=" + out.getName() + " injected=" + injected + " done=" + done.size());
             return out;
         } catch (Throwable t) {
             LOG.e(t);
-            android.util.Log.i("BENCH", "BilingualBuilder buildHtml FAIL "
+            LOG.bench("BilingualBuilder buildHtml FAIL "
                     + t.getClass().getName() + " " + t.getMessage());
             new File(out.getParentFile(), out.getName() + ".tmp").delete();
             return null;
@@ -546,7 +546,7 @@ public class BilingualBuilder {
                 zos.close();
             }
         } finally {
-            android.util.Log.i("BENCH", "BilingualBuilder build base=" + base.getPath() + " out=" + out.getName()
+            LOG.bench("BilingualBuilder build base=" + base.getPath() + " out=" + out.getName()
                     + " files=" + files + " paras=" + paras + " injected=" + injected + " done=" + done.size()
                     + " ms=" + (System.currentTimeMillis() - t0));
         }

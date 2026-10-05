@@ -43,6 +43,8 @@ import { recordReadTime, recordPagesRead } from '../model/ReadingStats';
 import { getBookmarks, addBookmark, removeBookmark, Bookmark } from '../model/Bookmarks';
 import { AiConfig, loadAiConfig, chatCompletion, chatCompletionStream, aiConfigReady, AiMessage, lastTruncated} from '../model/AiClient';
 import { getNotes, addNote, removeNote, AiNote } from '../model/Notes';
+import { PdfPara, PdfTransSession, BiOverlay, buildPdfParagraphs,
+  PDF_TRANS_PANEL, PDF_TRANS_FLOAT, PDF_TRANS_REFLOW, PDF_TRANS_REPLACE } from '../model/PdfTranslate';
 import { exportNotesFile, ExportData } from '../model/Export';
 import { isBilingualDoc, buildBilingual } from '../model/Bilingual';
 import { convertToHtml, isConvertibleExt } from '../model/DocConvert';
@@ -129,24 +131,31 @@ class PageDataSource implements IDataSource {
     return this.docHandle;
   }
 
-  openDoc(path: string): void {
+  openDoc(path: string, lazyCount: boolean = false): void {
     try {
       this.docPath = path;
       if (this.docHandle !== undefined) {
         try { closeDocument(this.docHandle); } catch (_e) {}
       }
       this.docHandle = openDocument(path);
-      const total: number = pageCount(this.docHandle);
-      this.pageIndices = [];
-      for (let i = 0; i < total; i++) {
-        this.pageIndices.push(i);
-      }
-      for (let j = 0; j < this.listeners.length; j++) {
-        this.listeners[j].onDataReloaded();
-      }
+      /* 0.9.16 staged open: lazyCount skips the (possibly huge) full page
+       * count here; the caller grows the page list progressively instead. */
+      const total: number = lazyCount ? 0 : pageCount(this.docHandle);
+      this.setPageCount(total);
     } catch (e) {
       console.error('[Reader] Failed to open document');
       throw e as Error;
+    }
+  }
+
+  /** Replace the page index array and notify the views (0.9.16). */
+  setPageCount(total: number): void {
+    this.pageIndices = [];
+    for (let i = 0; i < total; i++) {
+      this.pageIndices.push(i);
+    }
+    for (let j = 0; j < this.listeners.length; j++) {
+      this.listeners[j].onDataReloaded();
     }
   }
 
@@ -216,6 +225,15 @@ struct PageRenderer {
   searchHits: TextRect[] = [];
   annotations: AnnotationInfo[] = [];
   selPreview: TextRect[] = [];
+  /* 0.9.20: PDF bilingual overlays (Android PdfBilingualPageDraw parity).
+   * rects are normalized to the full page; text blocks are laid over the page
+   * image so they move and zoom with the page naturally. */
+  @Prop biOverlays: BiOverlay[] = [];
+  @Prop biMode: number = PDF_TRANS_REFLOW;
+  @Prop biFlash: TextRect[] = [];
+  onBiBadge: (idx: number) => void = (idx: number): void => {};
+  onPageArea: (x: number, y: number, w: number, h: number) => void =
+    (x: number, y: number, w: number, h: number): void => {};
   @State pixelMap: image.PixelMap | undefined = undefined;
   @State isLoading: boolean = true;
   @State errorText: string = '';
@@ -240,12 +258,16 @@ struct PageRenderer {
     if (this.dataSource === undefined) {
       return;
     }
+    const benchD0: number = Date.now();
     try {
       this.isLoading = true;
       this.errorText = '';
       let renderResult: RenderResult;
       try {
         renderResult = await this.dataSource.renderPage(this.pageIndex, this.cropRect);
+        if (this.pageIndex === 0) {
+          tlog('bench_decode', 'ms=' + (Date.now() - benchD0));
+        }
       } catch (rendErr) {
         const rendMsg: string = rendErr instanceof Error ? rendErr.message : String(rendErr);
         if (rendMsg.indexOf('CANCELLED') >= 0 && retryDepth < 2) {
@@ -264,6 +286,9 @@ struct PageRenderer {
         pixelFormat: image.PixelMapFormat.RGBA_8888
       };
       this.pixelMap = await image.createPixelMap(renderResult.data, opts);
+      if (this.pageIndex === 0) {
+        tlog('bench_first_frame', 'ms=' + (Date.now() - benchD0));
+      }
       this.renderW = renderResult.width;
       this.renderH = renderResult.height;
       console.info(`[Reader] Page ${this.pageIndex} rendered OK: ${renderResult.width}x${renderResult.height}`);
@@ -358,6 +383,53 @@ struct PageRenderer {
               .position({ x: `${rect.x0 * 100}%`, y: `${rect.y0 * 100}%` })
               .backgroundColor('#3342A5F5')
           }, (rect: TextRect, idx: number) => `sel_${idx}_${rect.x0}_${rect.y0}`)
+
+          /* 0.9.20: tap-to-locate flash (panel mode) */
+          ForEach(this.biFlash, (fr: TextRect, idx: number) => {
+            Column()
+              .width(`${(fr.x1 - fr.x0) * 100}%`)
+              .height(`${(fr.y1 - fr.y0) * 100}%`)
+              .position({ x: `${fr.x0 * 100}%`, y: `${fr.y0 * 100}%` })
+              .backgroundColor('#662196F3')
+              .border({ width: 1, color: '#2196F3' })
+              .hitTestBehavior(HitTestMode.None)
+          }, (fr: TextRect, idx: number) => `biflash_${idx}_${fr.x0}`)
+
+          /* 0.9.20: bilingual reflow / in-place replace — text laid over the
+           * page image; it moves and zooms with the page naturally */
+          if (this.biMode === PDF_TRANS_REFLOW || this.biMode === PDF_TRANS_REPLACE) {
+            ForEach(this.biOverlays, (ov: BiOverlay) => {
+              Column({ space: 2 }) {
+                if (this.biMode === PDF_TRANS_REFLOW) {
+                  Text(ov.src)
+                    .fontSize(9)
+                    .fontColor(this.nightInvert ? '#8a8a8a' : '#9e9e9e')
+                    .maxLines(2)
+                    .lineHeight(11)
+                    .width('100%')
+                }
+                Text(ov.dst)
+                  .fontSize(13)
+                  .fontColor(this.nightInvert ? '#e0e0e0'
+                    : (this.biMode === PDF_TRANS_REPLACE ? '#222222' : '#1565C0'))
+                  .fontWeight(FontWeight.Medium)
+                  .maxLines(8)
+                  .width('100%')
+              }
+              .width(`${(ov.x1 - ov.x0) * 100}%`)
+              .height(`${(ov.y1 - ov.y0) * 100}%`)
+              .position({ x: `${ov.x0 * 100}%`, y: `${ov.y0 * 100}%` })
+              .padding(2)
+              .alignItems(HorizontalAlign.Start)
+              .backgroundColor(this.nightInvert ? '#121212' : '#ffffff')
+              .borderRadius(2)
+              .border(this.biMode === PDF_TRANS_REFLOW
+                ? { width: { left: 2 }, color: { left: '#1565C0' } }
+                : { width: 0, color: '#00000000' })
+              .hitTestBehavior(HitTestMode.None)
+            }, (ov: BiOverlay) => `bio_${ov.idx}_${ov.dst.length}`)
+          }
+
         }
         .width('100%')
       } else {
@@ -372,6 +444,16 @@ struct PageRenderer {
     }
     .width('100%')
     .height('100%')
+    .onAreaChange((_o: Area, n: Area) => {
+      try {
+        const gp = n.globalPosition;
+        const px: number = typeof gp.x === 'number' ? gp.x : 0;
+        const py: number = typeof gp.y === 'number' ? gp.y : 0;
+        const pw: number = typeof n.width === 'number' ? n.width : 0;
+        const ph: number = typeof n.height === 'number' ? n.height : 0;
+        this.onPageArea(px, py, pw, ph);
+      } catch (e) { /* geometry report is best-effort */ }
+    })
   }
 }
 
@@ -568,6 +650,18 @@ struct Reader {
   @State transInPage: boolean = false;      /* in-page bilingual toggle (D, EPUB/TXT only) */
   private biOriginalPath: string = '';      /* set while reading the rebuilt bilingual file */
   private transToken: number = 0;           /* dialog generation: stale stream results are dropped */
+  /* 0.9.20: PDF AI translation — four modes (Android 10-01/10-02 parity) */
+  @State pdfBiActive: boolean = false;
+  @State pdfBiMode: number = 0;             /* 0 panel 1 float 2 reflow 3 replace */
+  @State pdfBiParas: BiOverlay[] = [];      /* translated overlays for the current page */
+  @State pdfBiFlash: TextRect[] = [];       /* tap-to-locate highlight */
+  @State showPdfBiPanel: boolean = false;   /* comparison panel bottom sheet */
+  @State pdfBiCard: BiOverlay | undefined = undefined; /* float badge card */
+  @State pdfBiTick: number = 0;             /* bumps panel/overlay re-render */
+  private pdfSession: PdfTransSession | undefined = undefined;
+  private pdfParasByPage: Map<number, PdfPara[]> = new Map();
+  @State pdfBadgeMarks: BiOverlay[] = [];   /* root-level float badges */
+  @State pdfPageArea: number[] = [0, 457, 1320, 2492]; /* x0,y0,x1,y1 px */
   /* Round 5: top bar clock + battery (Android document_title_bar parity) */
   @State topClock: string = '';
   @State topBattery: string = '';
@@ -722,6 +816,8 @@ struct Reader {
   private remoteUri: string = '';
   private remoteReaderId: number = -1;
   private remoteSession: RemoteSession | undefined = undefined;
+  /* 0.9.16 staged open: bump to cancel the running phase2 layout loop */
+  private stageGen: number = 0;
 
   /** Generic async document op for remote-streamed documents. */
   private async docOp(op: number, a?: number | string, b?: number, c?: number, s?: string): Promise<string | undefined> {
@@ -953,6 +1049,7 @@ struct Reader {
     const s: ReaderSettings = await loadSettings(ctx);
     this.applySettings(s);
     this.settingsLoaded = true;
+    this.pdfBiMode = s.pdfTransMode >= 0 && s.pdfTransMode <= 3 ? s.pdfTransMode : 0;
     /* I8: E-ink device auto-detection (heuristic: theme=3 means ink/OLED) */
       this.einkDetected = (this.theme === 3);
       if (this.einkDetected) {
@@ -1082,6 +1179,8 @@ struct Reader {
       cardCount: cur.cardCount,
       appLang: cur.appLang,
       scanFormats: cur.scanFormats,
+      remoteBatchDir: cur.remoteBatchDir,
+      pdfTransMode: this.pdfBiMode,
       coverListSize: cur.coverListSize,
       coverGridSize: cur.coverGridSize,
       showBookCovers: cur.showBookCovers,
@@ -1260,9 +1359,16 @@ struct Reader {
     }
   }
 
-  private initReader(): void {
+  /* 0.9.17: staged (chunked fb2) opens build the TOC off the main thread */
+  private stagedOpen: boolean = false;
+
+  private async initReader(): Promise<void> {
+    /* 0.9.15: open-pipeline stage timing (Android BENCH 09-30 parity) */
+    const benchT0: number = Date.now();
+    const gen: number = ++this.stageGen;
     try {
-      this.dataSource.openDoc(this.documentPath);
+      this.dataSource.openDoc(this.documentPath, true);
+      tlog('bench_open_doc', 'ms=' + (Date.now() - benchT0));
       const handle: ESObject | undefined = this.dataSource.getDocHandle();
       /* Round 6: encrypted document? ask for the password before rendering */
       if (handle !== undefined) {
@@ -1282,37 +1388,123 @@ struct Reader {
         } catch (e) {
           this.isReflow = false;
         }
-        if (this.isReflow) {
+        tlog('bench_reflow_probe', 'ms=' + (Date.now() - benchT0) + ' reflow=' + this.isReflow);
+      }
+      if (!this.isReflow) {
+        /* pdf and friends: chapter-lazy counting does not apply; the plain
+         * count is cheap - finish the page list the old way. NOTE: the
+         * dataSource opened lazily, so its pageIndices are empty - count
+         * via the native handle (sm-04 cbz pages=0 regression, 0.9.16). */
+        const handleP: ESObject | undefined = this.dataSource.getDocHandle();
+        this.totalPages = handleP !== undefined ? pageCount(handleP) : 0;
+        this.dataSource.setPageCount(this.totalPages);
+        tlog('bench_pagelist', 'ms=' + (Date.now() - benchT0) + ' total=' + this.totalPages);
+        this.rebuildPageList();
+        this.finishReaderOpen();
+        return;
+      }
+      /* 0.9.16 staged open (Android progressive layout parity): count the
+       * first chapter batch only, show the first screen, then grow the page
+       * canvas in the background. -1 = no chapter support -> old full path.
+       * The old synchronous full layoutDocument is GONE from this path -
+       * op15's fz_layout_document already fixed the geometry for the pages
+       * it counted. */
+      const prog = await this.docOp(15, REFLOW_W, REFLOW_H, this.fontSize, '400');
+      const n1: number = parseInt(prog === undefined ? '-1' : prog);
+      tlog('bench_stage1', 'ms=' + (Date.now() - benchT0) + ' n1=' + n1);
+      if (isNaN(n1) || n1 < 0) {
+        /* fallback: one full layout + count (previous behaviour) */
+        const handle2: ESObject | undefined = this.dataSource.getDocHandle();
+        if (handle2 !== undefined) {
           try {
             const css = `body{margin:${this.pageMargin}pt;line-height:${this.lineHeight.toFixed(2)}}`;
-            layoutDocument(handle, REFLOW_W, REFLOW_H, this.fontSize, css);
-            console.info(`[Reader] Reflow layout: em=${this.fontSize} lh=${this.lineHeight.toFixed(1)} m=${this.pageMargin}`);
+            layoutDocument(handle2, REFLOW_W, REFLOW_H, this.fontSize, css);
           } catch (e) {
             console.error('[Reader] Reflow layout failed');
           }
         }
+        this.totalPages = this.dataSource.getPageCount();
+        this.dataSource.setPageCount(this.totalPages);
+        tlog('bench_pagelist', 'ms=' + (Date.now() - benchT0) + ' total=' + this.totalPages);
+        this.rebuildPageList();
+        this.finishReaderOpen();
+        return;
       }
-      this.totalPages = this.dataSource.getPageCount();
-      for (let i = 0; i < this.totalPages; i++) {
-        this.pageList.push(i);
-      }
-      /* Load TOC, bookmarks and page annotations in background */
-      this.loadToc();
-      this.loadBookmarks();
-      this.refreshAnnotations();
-      console.info(`[Reader] Document opened: ${this.totalPages} pages, starting at page ${this.currentPage + 1}`);
-      tlog('book_open_done', 'pages=' + this.totalPages);
+      this.totalPages = n1;
+      this.dataSource.setPageCount(n1);
+      tlog('bench_pagelist', 'ms=' + (Date.now() - benchT0) + ' total=' + this.totalPages);
+      this.rebuildPageList();
+      this.currentPage = Math.min(this.currentPage, Math.max(0, this.totalPages - 1));
+      console.info(`[Reader] Document opened (staged): ${this.totalPages} pages, starting at page ${this.currentPage + 1}`);
+      tlog('book_open_done', 'pages=' + this.totalPages + ' staged=1');
+      this.stagedOpen = true;
+      this.startPhaseTwo(gen);
     } catch (e) {
       console.error('[Reader] Failed to open document: ' + JSON.stringify(e));
       tlog('book_open_fail', 'err=1');
     }
   }
 
+  /** (Re)build the Swiper page list from totalPages. */
+  private rebuildPageList(): void {
+    this.pageList = [];
+    for (let i = 0; i < this.totalPages; i++) {
+      this.pageList.push(i);
+    }
+    this.reflowVersion++;
+  }
+
+  /** Common tail of the open flow (0.9.15 first-frame priority kept). */
+  private finishReaderOpen(): void {
+    this.rebuildPageList();
+    this.loadToc();
+    this.loadBookmarks();
+    this.refreshAnnotations();
+    tlog('book_open_done', 'pages=' + this.totalPages);
+  }
+
+  /**
+   * 0.9.16 phase two (Android startPhaseTwoLayout parity): grow the page
+   * canvas in ~400-page steps with the native lock released between steps.
+   * The page list only grows at the tail, so the reading position stays
+   * visually stable; the TOC loads after the full count (Android order).
+   * Bumping stageGen (re-open / teardown) cancels the loop.
+   */
+  private async startPhaseTwo(gen: number): Promise<void> {
+    const t0: number = Date.now();
+    let total: number = this.totalPages;
+    let requested: number = total + 400;
+    while (gen === this.stageGen) {
+      const ns = await this.docOp(15, REFLOW_W, REFLOW_H, this.fontSize, String(requested));
+      const n: number = parseInt(ns === undefined ? '-1' : ns);
+      if (gen !== this.stageGen || isNaN(n) || n < 0 || n <= total) {
+        break;
+      }
+      total = n;
+      this.totalPages = total;
+      this.dataSource.setPageCount(total);
+      this.rebuildPageList();
+      if (n < requested) {
+        break; /* document end reached */
+      }
+      requested = total + 400;
+    }
+    if (gen !== this.stageGen) {
+      console.info('[Reader] phase2 cancelled at ' + total);
+      return;
+    }
+    tlog('bench_phase2_end', 'total=' + total + ' ms=' + (Date.now() - t0));
+    console.info(`[Reader] phase2 done: ${total} pages in ${Date.now() - t0}ms`);
+    this.loadToc();
+  }
+
   private async loadToc(): Promise<void> {
     try {
       const handle: ESObject | undefined = this.dataSource.getDocHandle();
       if (handle !== undefined) {
-        if (this.isRemote) {
+        if (this.isRemote || this.stagedOpen) {
+          /* async docOp: the chunked-fb2 outline lays out chunks in the
+           * engine - keep that off the JS/main thread (appfreeze fix) */
           const j = await this.docOp(1);
           this.tocEntries = j !== undefined ? JSON.parse(j) as TocEntry[] : [];
         } else {
@@ -1339,6 +1531,7 @@ struct Reader {
   }
 
   aboutToDisappear(): void {
+    this.stageGen++; /* cancel a running staged-layout loop (0.9.16) */
     this.unregisterVolumeKeys();
     if (this.readTimerId >= 0) {
       clearInterval(this.readTimerId);
@@ -1380,6 +1573,9 @@ struct Reader {
       };
       saveRecentBook(ctx, book);
     }
+    /* 0.9.20: tear down the PDF translation session + drop stale streams */
+    this.stopPdfBi('destroy');
+    this.transToken++;
     this.dataSource.closeDoc();
     /* Round 8: tear down the remote stream session after the document */
     if (this.remoteSession !== undefined) {
@@ -1409,6 +1605,10 @@ struct Reader {
     this.currentPage = index;
     if (this.selMode) {
       this.exitSelMode();
+    }
+    if (this.pdfBiActive) {
+      this.pdfWindow(index);
+      this.refreshPdfOverlay();
     }
     console.info(`[Reader] Page changed to ${index + 1}/${this.totalPages}`);
     tlog('page_change_done', 'page=' + (index + 1) + ' of=' + this.totalPages);
@@ -3231,6 +3431,321 @@ struct Reader {
     return t.trim();
   }
 
+  /* ==== 0.9.20: PDF AI translation — four modes (Android 10-01/10-02) ==== */
+
+  private isPdfDoc(): boolean {
+    const low: string = (this.isRemote ? this.remoteUri : this.documentPath).toLowerCase();
+    return low.endsWith('.pdf');
+  }
+
+  private transModeNames(): string[] {
+    return [
+      this.L($r('app.string.trans_mode_panel')),
+      this.L($r('app.string.trans_mode_float')),
+      this.L($r('app.string.trans_mode_reflow')),
+      this.L($r('app.string.trans_mode_replace'))
+    ];
+  }
+
+  private startPdfBi(): void {
+    tlog('pdfbi_start', 'mode=' + this.pdfBiMode + ' page=' + this.currentPage);
+    this.showTrans = false;
+    if (this.pdfBiActive) {
+      this.stopPdfBi('restart');
+    }
+    const handle: ESObject | undefined = this.dataSource.getDocHandle();
+    if (!this.isRemote && handle === undefined) {
+      return;
+    }
+    this.pdfBiActive = true;
+    this.pdfBiTick++;
+    this.persistSettings();
+    this.pdfSession = new PdfTransSession(this.aiCfg, TRANS_SRC[this.transSrcIdx],
+      TRANS_DST[this.transDstIdx], getContext(this), this.documentPath, {
+        onPara: (page: number, idx: number, dst: string): void => {
+          if (!this.pdfBiActive) {
+            return;
+          }
+          this.pdfBiTick++;
+          if (idx < 0 || page === this.currentPage) {
+            this.refreshPdfOverlay();
+          }
+        },
+        onFail: (page: number, idx: number, msg: string): void => {
+          console.error('[Reader] pdf trans p' + page + '#' + idx + ' failed: ' + msg);
+        }
+      });
+    if (this.pdfBiMode === PDF_TRANS_PANEL) {
+      this.showPdfBiPanel = true;
+    }
+    this.pdfWindow(this.currentPage);
+  }
+
+  /** Rolling window: current page first, then +1..+3, then -1 (Android parity). */
+  private async pdfWindow(page: number): Promise<void> {
+    const hi: number = Math.min(this.totalPages - 1, page + 3);
+    const lo: number = Math.max(0, page - 1);
+    await this.enqueuePdfPage(page);
+    for (let p: number = page + 1; p <= hi; p++) {
+      await this.enqueuePdfPage(p);
+    }
+    if (lo < page) {
+      await this.enqueuePdfPage(lo);
+    }
+  }
+
+  private async enqueuePdfPage(page: number): Promise<void> {
+    const s: PdfTransSession | undefined = this.pdfSession;
+    if (s === undefined) {
+      return;
+    }
+    let paras: PdfPara[] | undefined = this.pdfParasByPage.get(page);
+    if (paras === undefined) {
+      let lines: TextLine[] = [];
+      try {
+        if (this.isRemote) {
+          const j = await this.docOp(7, page);
+          lines = j !== undefined && j !== null ? JSON.parse(j) as TextLine[] : [];
+        } else {
+          const h: ESObject | undefined = this.dataSource.getDocHandle();
+          if (h === undefined) {
+            return;
+          }
+          lines = JSON.parse(getTextRects(h, page)) as TextLine[];
+        }
+      } catch (e) {
+        lines = [];
+      }
+      paras = buildPdfParagraphs(page, lines);
+      this.pdfParasByPage.set(page, paras);
+      tlog('pdfbi_paras', 'page=' + page + ' lines=' + lines.length + ' paras=' + paras.length);
+    }
+    tlog('pdfbi_enqueue', 'page=' + page);
+    s.enqueuePage(page, paras);
+  }
+
+  /** Rebuild the overlay list for the current page from finished translations. */
+  private refreshPdfOverlay(): void {
+    const s: PdfTransSession | undefined = this.pdfSession;
+    if (!this.pdfBiActive || s === undefined || this.pdfBiMode === PDF_TRANS_PANEL) {
+      this.pdfBiParas = [];
+      return;
+    }
+    const page: number = this.currentPage;
+    const paras: PdfPara[] | undefined = this.pdfParasByPage.get(page);
+    if (paras === undefined) {
+      this.pdfBiParas = [];
+      this.enqueuePdfPage(page);
+      return;
+    }
+    s.loadCache(page);
+    const out: BiOverlay[] = [];
+    for (let i: number = 0; i < paras.length; i++) {
+      const p: PdfPara = paras[i];
+      const dst: string = s.cached(page, p.idx);
+      if (dst.length > 0) {
+        out.push({ idx: p.idx, x0: p.rect.x0, y0: p.rect.y0, x1: p.rect.x1, y1: p.rect.y1, src: p.text, dst: dst });
+      }
+    }
+    this.pdfBiParas = out;
+    this.pdfBadgeMarks = this.pdfBiMode === PDF_TRANS_FLOAT ? out : [];
+    this.pdfBiTick++;
+  }
+
+  private stopPdfBi(why: string): void {
+    tlog('pdfbi_stop', why);
+    if (this.pdfSession !== undefined) {
+      this.pdfSession.cancel();
+      this.pdfSession = undefined;
+    }
+    this.pdfBiActive = false;
+    this.pdfBiParas = [];
+    this.pdfBadgeMarks = [];
+    this.pdfBiFlash = [];
+    this.showPdfBiPanel = false;
+    this.pdfBiCard = undefined;
+    this.pdfBiTick++;
+  }
+
+  private pdfPanelParas(): PdfPara[] {
+    const v: PdfPara[] | undefined = this.pdfParasByPage.get(this.currentPage);
+    return v !== undefined ? v : [];
+  }
+
+  private pdfPanelDst(p: PdfPara): string {
+    const s: PdfTransSession | undefined = this.pdfSession;
+    if (s === undefined) {
+      return '';
+    }
+    s.loadCache(this.currentPage);
+    return s.cached(this.currentPage, p.idx);
+  }
+
+  private flashPdfPara(p: PdfPara): void {
+    this.pdfBiFlash = [{ x0: p.rect.x0, y0: p.rect.y0, x1: p.rect.x1, y1: p.rect.y1 }];
+    setTimeout(() => {
+      this.pdfBiFlash = [];
+    }, 1200);
+  }
+
+  private showPdfBadgeCard(idx: number): void {
+    for (let i: number = 0; i < this.pdfBiParas.length; i++) {
+      if (this.pdfBiParas[i].idx === idx) {
+        this.pdfBiCard = this.pdfBiParas[i];
+        return;
+      }
+    }
+  }
+
+  /** Comparison panel bottom sheet: per-paragraph source/translation of the page. */
+  @Builder
+  buildPdfBiPanel() {
+    Stack({ alignContent: Alignment.Bottom }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showPdfBiPanel = false;
+        })
+      Column({ space: 8 }) {
+        Row({ space: 8 }) {
+          Text($r('app.string.trans_result'))
+            .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333')
+            .layoutWeight(1)
+          Text((this.currentPage + 1) + '/' + this.totalPages)
+            .fontSize(12).fontColor('#888')
+          Text('\u2715')
+            .fontSize(14).fontColor('#888')
+            .onClick(() => {
+              this.showPdfBiPanel = false;
+            })
+        }
+        .width('100%')
+
+        List({ space: 6 }) {
+          ForEach(this.pdfPanelParas(), (p: PdfPara) => {
+            ListItem() {
+            Column({ space: 4 }) {
+              Text(p.text)
+                .fontSize(12).fontColor('#888').maxLines(3)
+                .width('100%')
+              Text(this.pdfPanelDst(p))
+                .fontSize(14).fontColor(this.pdfPanelDst(p).length > 0 ? '#222222' : '#bbbbbb')
+                .width('100%')
+            }
+            .width('100%')
+            .padding(8)
+            .borderRadius(6)
+            .backgroundColor('#f5f5f5')
+            .onClick(() => {
+              this.flashPdfPara(p);
+            })
+            }
+          }, (p: PdfPara) => 'pp_' + p.idx + '_' + this.pdfBiTick)
+        }
+        .width('100%')
+        .layoutWeight(1)
+      }
+      .width('100%')
+      .height('55%')
+      .padding(12)
+      .backgroundColor(Color.White)
+      .borderRadius({ topLeft: 12, topRight: 12 })
+    }
+    .width('100%').height('100%')
+  }
+
+  /** Float-mode badge card (opened by tapping a badge on the page). */
+  @Builder
+  buildPdfBadgeCard() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#33000000')
+        .onClick(() => {
+          this.pdfBiCard = undefined;
+        })
+      Column({ space: 10 }) {
+        Row() {
+          Text($r('app.string.trans_result'))
+            .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#333')
+            .layoutWeight(1)
+          Text('\u2715')
+            .fontSize(14).fontColor('#888')
+            .onClick(() => {
+              this.pdfBiCard = undefined;
+            })
+        }
+        .width('100%')
+        Scroll() {
+          Column({ space: 8 }) {
+            if (this.pdfBiCard !== undefined) {
+              Text(this.pdfBiCard.src)
+                .fontSize(12).fontColor('#888888')
+                .width('100%')
+              Text(this.pdfBiCard.dst)
+                .fontSize(15).fontColor('#222222')
+                .width('100%')
+            }
+          }
+          .width('100%')
+        }
+        .constraintSize({ maxHeight: 320 })
+      }
+      .width('82%')
+      .padding(14)
+      .backgroundColor(Color.White)
+      .borderRadius(8)
+    }
+    .width('100%').height('100%')
+  }
+
+  /** Float-mode badges at root level (tap zones would shadow in-page clicks). */
+  @Builder
+  buildPdfBadgeMarks() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      ForEach(this.pdfBadgeMarks, (ov: BiOverlay) => {
+        Text('\u8BD1')
+          .fontSize(10).fontColor(Color.White)
+          .width(16).height(16)
+          .textAlign(TextAlign.Center)
+          .borderRadius(8)
+          .backgroundColor('#CC1565C0')
+          .position({
+            x: this.pdfPageArea[0] + ov.x1 * (this.pdfPageArea[2] - this.pdfPageArea[0]) - 16,
+            y: this.pdfPageArea[1] + ov.y0 * (this.pdfPageArea[3] - this.pdfPageArea[1])
+          })
+          .onClick(() => {
+            this.showPdfBadgeCard(ov.idx);
+          })
+      }, (ov: BiOverlay) => 'bm_' + ov.idx + '_' + ov.dst.length)
+    }
+    .width('100%').height('100%')
+    .hitTestBehavior(HitTestMode.None)
+  }
+
+  /** Active-translation chip with exit (top-right; touches pass through). */
+  @Builder
+  buildPdfBiChip() {
+    Stack({ alignContent: Alignment.TopEnd }) {
+      Row({ space: 6 }) {
+        Text(this.transModeNames()[this.pdfBiMode])
+          .fontSize(11).fontColor(Color.White)
+        Text('\u2715')
+          .fontSize(12).fontColor(Color.White)
+      }
+      .padding({ left: 10, right: 8, top: 5, bottom: 5 })
+      .borderRadius(14)
+      .backgroundColor('#99000000')
+      .margin({ top: 100, right: 12 })
+      .onClick(() => {
+        this.stopPdfBi('chip');
+      })
+    }
+    .width('100%').height('100%')
+    .hitTestBehavior(HitTestMode.None)
+  }
+
   private startTranslate(): void {
     if (this.transBusy) {
       return;
@@ -3240,6 +3755,11 @@ struct Reader {
       return;
     }
     const dst: string = TRANS_DST[this.transDstIdx];
+    /* 0.9.20: PDF keeps its fixed layout → dedicated four-mode session */
+    if (this.isPdfDoc()) {
+      this.startPdfBi();
+      return;
+    }
     /* D: in-page bilingual mode (EPUB/TXT rebuild pipeline) */
     if (this.transInPage && this.biSupported()) {
       if (this.biOriginalPath.length > 0) {
@@ -3504,32 +4024,47 @@ struct Reader {
         }
         .width('100%')
 
-        Row({ space: 6 }) {
-          Checkbox({ name: 'transBilingual' })
-            .width(18).height(18)
-            .selectedColor(this.thm())
-            .select(this.transInPage && this.biSupported())
-            .enabled(this.biSupported())
-            .onChange((v: boolean) => {
-              this.transInPage = v;
-            })
-          Text($r('app.string.trans_bilingual'))
-            .fontSize(13).fontColor(this.biSupported() ? '#333' : '#999')
-          if (this.biSupported()) {
-            Text($r('app.string.trans_bi_ok'))
-              .fontSize(11).fontColor('#00897B')
-              .border({ width: 1, color: '#00897B' })
-              .borderRadius(8)
-              .padding({ left: 6, right: 6, top: 1, bottom: 1 })
-          } else {
-            Text($r('app.string.trans_panel_mode'))
-              .fontSize(11).fontColor(this.thm())
-              .border({ width: 1, color: this.thm() })
-              .borderRadius(8)
-              .padding({ left: 6, right: 6, top: 1, bottom: 1 })
+        if (!this.isPdfDoc()) {
+          Row({ space: 6 }) {
+            Checkbox({ name: 'transBilingual' })
+              .width(18).height(18)
+              .selectedColor(this.thm())
+              .select(this.transInPage && this.biSupported())
+              .enabled(this.biSupported())
+              .onChange((v: boolean) => {
+                this.transInPage = v;
+              })
+            Text($r('app.string.trans_bilingual'))
+              .fontSize(13).fontColor(this.biSupported() ? '#333' : '#999')
+            if (this.biSupported()) {
+              Text($r('app.string.trans_bi_ok'))
+                .fontSize(11).fontColor('#00897B')
+                .border({ width: 1, color: '#00897B' })
+                .borderRadius(8)
+                .padding({ left: 6, right: 6, top: 1, bottom: 1 })
+            } else {
+              Text($r('app.string.trans_panel_mode'))
+                .fontSize(11).fontColor(this.thm())
+                .border({ width: 1, color: this.thm() })
+                .borderRadius(8)
+                .padding({ left: 6, right: 6, top: 1, bottom: 1 })
+            }
           }
+          .width('100%')
+        } else {
+          Row({ space: 8 }) {
+            Text($r('app.string.trans_mode')).fontSize(14).fontColor('#333').width(70)
+            Select(this.toSelectOptions(this.transModeNames()))
+              .selected(this.pdfBiMode)
+              .value(this.transModeNames()[this.pdfBiMode])
+              .font({ size: 14 })
+              .width(160)
+              .onSelect((idx: number) => {
+                this.pdfBiMode = idx;
+              })
+          }
+          .width('100%')
         }
-        .width('100%')
 
         Row({ space: 6 }) {
           Checkbox({ name: 'transSave' })
@@ -3805,6 +4340,7 @@ struct Reader {
             })
           Image($r('app.media.ic_ai'))
             .width(22).height(22).fillColor(Color.White).margin({ right: 14 })
+            .id('reader_btn_ai')
             .onClick(() => {
               this.openTransDialog();
             })
@@ -3825,12 +4361,25 @@ struct Reader {
         .padding({ left: 12, right: 12 })
         .backgroundColor(this.barBg())
 
-        /* Round 6: thin reading-progress line under the title bar (Android ProgressDraw) */
-        Progress({ value: this.totalPages > 0 ? this.currentPage + 1 : 0, total: this.totalPages > 0 ? this.totalPages : 1, type: ProgressType.Linear })
-          .width('100%').height(2)
-          .style({ strokeWidth: 2 })
-          .color(Color.White)
-          .backgroundColor('#5c6bc0')
+        /* Round 6: thin reading-progress line under the title bar (Android
+         * ProgressDraw). 0.9.19: the track now always shows plus chapter
+         * ticks at TOC page positions (Android ProgressDraw parity). */
+        Stack({ alignContent: Alignment.Start }) {
+          Progress({ value: this.totalPages > 0 ? this.currentPage + 1 : 0, total: this.totalPages > 0 ? this.totalPages : 1, type: ProgressType.Linear })
+            .width('100%').height(6)
+            .style({ strokeWidth: 2 })
+            .color(Color.White)
+            .backgroundColor('#5c6bc0')
+          if (this.totalPages > 0 && this.tocEntries.length > 1 && this.tocEntries.length <= 120) {
+            ForEach(this.tocEntries, (t: TocEntry) => {
+              Row()
+                .width(1).height(6)
+                .backgroundColor('#59FFFFFF')
+                .position({ x: `${Math.min(100, Math.round(t.page * 100 / this.totalPages))}%`, y: 0 })
+            }, (t: TocEntry) => `tick_${t.page}_${t.title}`)
+          }
+        }
+        .width('100%').height(6)
 
         /* Round 6: secondary quick-buttons row (Android document_title_buttons) */
         if (this.showToolRow) {
@@ -3945,6 +4494,15 @@ struct Reader {
                     pageIndex: pageIdx,
                     dataSource: this.dataSource,
                     searchHits: pageIdx === this.searchHitPage ? this.searchHits : [],
+                    biOverlays: pageIdx === this.currentPage ? this.pdfBiParas : [],
+                    biMode: this.pdfBiMode,
+                    biFlash: pageIdx === this.currentPage ? this.pdfBiFlash : [],
+                    onBiBadge: (bidx: number): void => {
+                      this.showPdfBadgeCard(bidx);
+                    },
+                    onPageArea: (x: number, y: number, w: number, h: number): void => {
+                      this.pdfPageArea = [x, y, x + w, y + h];
+                    },
                     annotations: pageIdx === this.currentPage ? this.annotations : [],
                     selPreview: pageIdx === this.currentPage ? this.selPreview : [],
                     contrastLevel: this.contrastLevel,
@@ -4108,7 +4666,21 @@ struct Reader {
             List({ scroller: this.vScroller }) {
               ForEach(this.pageList, (pageIdx: number) => {
                 ListItem() {
-                  PageRenderer({ pageIndex: pageIdx, dataSource: this.dataSource, contrastLevel: this.contrastLevel, nightInvert: this.nightMode })
+                  PageRenderer({
+                    pageIndex: pageIdx,
+                    dataSource: this.dataSource,
+                    contrastLevel: this.contrastLevel,
+                    nightInvert: this.nightMode,
+                    biOverlays: pageIdx === this.currentPage ? this.pdfBiParas : [],
+                    biMode: this.pdfBiMode,
+                    biFlash: pageIdx === this.currentPage ? this.pdfBiFlash : [],
+                    onBiBadge: (bidx: number): void => {
+                      this.showPdfBadgeCard(bidx);
+                    },
+                    onPageArea: (x: number, y: number, w: number, h: number): void => {
+                      this.pdfPageArea = [x, y, x + w, y + h];
+                    }
+                  })
                 }
                 .width('100%')
                 .height('100vh')
@@ -5467,6 +6039,20 @@ struct Reader {
       /* AI 翻译结果 bottom sheet */
       if (this.showTransPanel) {
         this.buildTransPanel()
+      }
+
+      /* 0.9.20: PDF bilingual panel / badge card / active chip */
+      if (this.showPdfBiPanel) {
+        this.buildPdfBiPanel()
+      }
+      if (this.pdfBiCard !== undefined) {
+        this.buildPdfBadgeCard()
+      }
+      if (this.pdfBiActive) {
+        this.buildPdfBiChip()
+      }
+      if (this.pdfBiActive && this.pdfBiMode === PDF_TRANS_FLOAT) {
+        this.buildPdfBadgeMarks()
       }
 
       /* Notes/bookmarks export dialog (A: TXT / Markdown) */

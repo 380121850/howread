@@ -158,7 +158,7 @@ public class WebDavRangeDataSource implements RemoteDataSource {
                 try {
                     fb = probe(fallbackUrl);
                     if (fb.code() == 206 || fb.code() == 200) {
-                        android.util.Log.i("REMOTE", "webdav 404 on " + url
+                        LOG.remote("webdav 404 on " + url
                                 + ", retry under startDir ok: " + fallbackUrl);
                         resp.close();
                         resp = fb;
@@ -187,7 +187,7 @@ public class WebDavRangeDataSource implements RemoteDataSource {
                 if (size <= 0) {
                     throw new IOException("WebDAV: no size, code " + resp.code());
                 }
-                android.util.Log.i("REMOTE", "webdav: server ignores Range, degrading to full fetch: " + url);
+                LOG.remote("webdav: server ignores Range, degrading to full fetch: " + url);
             } else {
                 throw new IOException("WebDAV open failed: HTTP " + resp.code() + " " + url);
             }
@@ -309,7 +309,7 @@ public class WebDavRangeDataSource implements RemoteDataSource {
             }
             final long readMs = android.os.SystemClock.elapsedRealtime() - readT0;
             if (readMs > 3000) {
-                android.util.Log.i("REMOTE", "slow range read off=" + offset
+                LOG.remote("slow range read off=" + offset
                         + " len=" + len + " " + readMs + "ms");
             }
             return total;

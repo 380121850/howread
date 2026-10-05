@@ -21,16 +21,14 @@ import com.foobnix.pdf.info.R;
 /**
  * Online-reading settings: the "online first" click switch, the cache size
  * cap, the WiFi-only rule (single gate for prefetch AND whole-book fill on
- * metered networks) and the whole-book threshold, plus the current cache
- * usage with a clear-all action. The switches are a Pro feature: locked
- * builds (fdroid / pro without IAP) only see the usage.
+ * metered networks) and the whole-book threshold. Cache usage display and
+ * the clear-all action moved to the 常规设置 缓存管理 entry (2026-10-05).
  */
 public class RemoteCacheDialog {
 
     public static void showDialog(final Activity a, final Runnable onRefresh) {
         final AppState st = AppState.get();
         final boolean pro = AppsConfig.isProFeaturesEnabled();
-        final EditText cacheSize;
         final EditText threshold;
         final EditText retryCount;
         final EditText retryInterval;
@@ -53,10 +51,6 @@ public class RemoteCacheDialog {
             body.addView(onlineFirst, row());
             onlineFirst.setPadding(0, Dips.dpToPx(8), 0, Dips.dpToPx(8));
 
-            body.addView(label(a, R.string.remote_cache_size));
-            cacheSize = numberField(a, st.remoteCacheMaxMB);
-            body.addView(cacheSize, row());
-
             Switch wifiOnly = new Switch(a);
             wifiOnly.setText(R.string.remote_wifi_only);
             wifiOnly.setChecked(st.remotePrefetchWifiOnly);
@@ -72,22 +66,18 @@ public class RemoteCacheDialog {
             body.addView(threshold, row());
 
             // windowed caching of big books (percent around the position)
-            body.addView(label(a, R.string.remote_window_before));
+            // and the retry policy: two settings per row keeps the dialog
+            // short (each half is a compact label-over-field column)
             windowBefore = numberField(a, st.remoteWindowBeforePct);
-            body.addView(windowBefore, row());
-            body.addView(label(a, R.string.remote_window_after));
             windowAfter = numberField(a, st.remoteWindowAfterPct);
-            body.addView(windowAfter, row());
+            body.addView(paired(a, label(a, R.string.remote_window_before), windowBefore,
+                    label(a, R.string.remote_window_after), windowAfter));
 
-            body.addView(label(a, R.string.remote_retry_count));
             retryCount = numberField(a, st.remoteRetryCount);
-            body.addView(retryCount, row());
-
-            body.addView(label(a, R.string.remote_retry_interval));
             retryInterval = numberField(a, st.remoteRetryIntervalMs);
-            body.addView(retryInterval, row());
+            body.addView(paired(a, label(a, R.string.remote_retry_count), retryCount,
+                    label(a, R.string.remote_retry_interval), retryInterval));
         } else {
-            cacheSize = null;
             threshold = null;
             retryCount = null;
             retryInterval = null;
@@ -95,35 +85,16 @@ public class RemoteCacheDialog {
             windowAfter = null;
         }
 
-        body.addView(label(a, R.string.remote_cache_usage));
-        TextView usage = new TextView(a);
-        usage.setText(com.foobnix.pdf.info.ExtUtils.readableFileSize(BlockCacheStore.totalBytes()));
-        body.addView(usage, row());
-
         // constraints at a glance: network (metered disables background
-        // whole-book caching) and the capacity water level
+        // whole-book caching); usage and clear moved to 缓存管理
         body.addView(label(a, com.foobnix.remote.RemoteBookSession.isNetworkMetered()
                 ? R.string.remote_cache_net_metered : R.string.remote_cache_net_wifi));
-        TextView cap = new TextView(a);
-        cap.setText(a.getString(R.string.remote_cache_capacity,
-                com.foobnix.pdf.info.ExtUtils.readableFileSize(BlockCacheStore.totalBytes()),
-                com.foobnix.pdf.info.ExtUtils.readableFileSize(
-                        (long) st.remoteCacheMaxMB * 1024L * 1024L)));
-        cap.setTextSize(15);
-        cap.setPadding(0, Dips.dpToPx(10), 0, Dips.dpToPx(2));
-        body.addView(cap, row());
 
         new AlertDialog.Builder(a)
                 .setTitle(R.string.remote_settings_title)
                 .setView(scroll(body))
                 .setPositiveButton(android.R.string.ok, (d, w) -> {
                     if (pro) {
-                        try {
-                            st.remoteCacheMaxMB = Math.max(50, Math.min(65536,
-                                    Integer.parseInt(cacheSize.getText().toString().trim())));
-                        } catch (Exception e) {
-                            st.remoteCacheMaxMB = 500;
-                        }
                         try {
                             st.remoteWholeBookThresholdMB = Math.max(0,
                                     Integer.parseInt(threshold.getText().toString().trim()));
@@ -160,25 +131,33 @@ public class RemoteCacheDialog {
                         onRefresh.run();
                     }
                 })
-                .setNeutralButton(R.string.remote_clear_cache, (d, w) -> {
-                    // recursive delete of hundreds of MB must not run on the UI
-                    // thread; run on a dedicated thread (NOT the shared single
-                    // executor — a stuck task there silently swallowed the
-                    // clear) and close every live session first, otherwise the
-                    // books just read stay pinned and survive the clear
-                    new Thread(() -> {
-                        com.foobnix.remote.RemoteSessionFactory.closeAllSessions();
-                        BlockCacheStore.clearAll();
-                        a.runOnUiThread(() -> {
-                            Toast.makeText(a, R.string.remote_cache_cleared, Toast.LENGTH_SHORT).show();
-                            if (onRefresh != null) {
-                                onRefresh.run();
-                            }
-                        });
-                    }, "@T ClearRemoteCache").start();
-                })
                 .setNegativeButton(android.R.string.cancel, null)
                 .show();
+    }
+
+    /** Two label-over-field columns side by side (50/50). */
+    private static View paired(Activity a, View leftLabel, View leftField,
+            View rightLabel, View rightField) {
+        android.widget.LinearLayout rowL = new android.widget.LinearLayout(a);
+        rowL.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        android.widget.LinearLayout left = new android.widget.LinearLayout(a);
+        android.widget.LinearLayout right = new android.widget.LinearLayout(a);
+        android.widget.LinearLayout.LayoutParams half = new android.widget.LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        int gap = Dips.dpToPx(10);
+        half.setMargins(0, 0, gap / 2, 0);
+        android.widget.LinearLayout.LayoutParams halfR = new android.widget.LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        halfR.setMargins(gap / 2, 0, 0, 0);
+        left.setOrientation(android.widget.LinearLayout.VERTICAL);
+        right.setOrientation(android.widget.LinearLayout.VERTICAL);
+        left.addView(leftLabel);
+        left.addView(leftField);
+        right.addView(rightLabel);
+        right.addView(rightField);
+        rowL.addView(left, half);
+        rowL.addView(right, halfR);
+        return rowL;
     }
 
     private static ViewGroup.LayoutParams row() {

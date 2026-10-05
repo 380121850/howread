@@ -105,6 +105,7 @@ public abstract class AbstractViewController extends AbstractComponentController
     }
 
     private AdvGuestureDetector guestureDetector;
+    /** 空文字网格自愈的一次性护栏：转换缓存删除+重载每进程只做一次，防循环 */
 
     protected List<IGestureDetector> initGestureDetectors(final List<IGestureDetector> list) {
         final AdvGuestureDetector listener = new AdvGuestureDetector(this, base.getListener());
@@ -402,6 +403,13 @@ public abstract class AbstractViewController extends AbstractComponentController
         StringBuilder build = new StringBuilder();
 
         boolean isHyphenWorld = false;
+        Page hitPage = null;
+
+        // BENCH 诊断（长按选中排查）：触点、可见页范围
+        LOG.bench("LongTap begin rect=[" + (int) tapRect.left + "," + (int) tapRect.top
+                + "," + (int) tapRect.right + "," + (int) tapRect.bottom + "] zoom=" + zoom
+                + " pages=" + firstVisiblePage + ".." + lastVisiblePage);
+        int logWords = 0;
 
         LOG.d("Add Word page", "----", firstVisiblePage, lastVisiblePage + 1);
         for (final Page page : model.getPages(firstVisiblePage, lastVisiblePage + 1)) {
@@ -409,8 +417,154 @@ public abstract class AbstractViewController extends AbstractComponentController
                 page.selectedText.clear();
             LOG.d("Add Word page", page.hashCode());
             final RectF bounds = page.getBounds(zoom);
+            LOG.bench("LongTapPage pg=" + page.index.docIndex
+                    + " bounds=[" + (int) bounds.left + "," + (int) bounds.top + ","
+                    + (int) bounds.right + "," + (int) bounds.bottom + "]"
+                    + " texts=" + (page.texts == null ? "null" : page.texts.length + "ln")
+                    + " hitBounds=" + RectF.intersects(bounds, tapRect));
             TextWord prevWord = null;
             if (RectF.intersects(bounds, tapRect)) {
+                hitPage = page;
+                // 强制现场重取：缓存的文字网格不可信——实证缺陷有二：①可能是
+                // 相邻页的提取结果（12S/MI9 双机浮点精确匹配实锤，选中文字与
+                // 页面所见错位）；②旧排版几何的压缩产物（词矩形只覆盖页面上部
+                // ~64%，页面下部长按永远无选中框）。owned page 直取毫秒级，
+                // 保证选中几何与当前渲染同页同源。取回仍是空网格才走下面的
+                // 重试与 heal。
+                if (BookCSS.get().isTextFormat()) {
+                    try {
+                        page.texts = null;
+                        base.getDecodeService().processTextForPages(new Page[] { page });
+                    } catch (final Throwable t) {
+                        LOG.e(t);
+                    }
+                }
+                if (LengthUtils.isEmpty(page.texts)) {
+                    // 修复：解码取词撞上共享页回收窗口的空网格此前会被永久缓存，
+                    // 该页整个会话选不了。长按现场补取（owned page，不经共享
+                    // 缓存，绕开回收竞态），UI 线程单页取词为毫秒级。12S 现场
+                    // 证明该提取会偶发空（开书探测取得到、随后取空），重试两次
+                    // 收窄竞态窗口。
+                    for (int attempt = 1; attempt <= 3 && LengthUtils.isEmpty(page.texts); attempt++) {
+                        try {
+                            base.getDecodeService().processTextForPages(new Page[] { page });
+                            LOG.bench("LongTap refetch#" + attempt + " pg=" + page.index.docIndex
+                                    + " texts=" + (page.texts == null ? "null" : page.texts.length + "ln"));
+                        } catch (final Throwable t) {
+                            LOG.e(t);
+                        }
+                        if (LengthUtils.isEmpty(page.texts) && attempt < 3) {
+                            try {
+                                Thread.sleep(120);
+                            } catch (final InterruptedException ie) {
+                                Thread.currentThread().interrupt();
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (LengthUtils.isEmpty(page.texts)) {
+                    // 12S 现场三轮实证：①开书探测取得到字、长按现场取空（打开后
+                    // 提取状态劣化）；②自愈必须盐化缓存路径（旧版少拼文件盐从未
+                    // 触发）；③该设备重转产物依旧无文字层——新缓存文件新签名，
+                    // "每文件一次"记账防不住连环删缓存+重启，且 restartActivity
+                    // 同步执行时同一手势的后续事件还会打进已回收的模型。现改为：
+                    // 与打开路径共用 kept:<book> 闩（每本书至多自愈一次），
+                    // 重启延迟投递，让当前触摸流先走完。
+                    try {
+                        final String bookPath = base.getListener().getCurrentBook().getPath();
+                        final org.ebookdroid.core.codec.CodecContext ctxC =
+                                org.ebookdroid.BookType.getCodecContextByPath(bookPath);
+                        if (ctxC instanceof org.ebookdroid.core.codec.AbstractCodecContext) {
+                            final android.content.SharedPreferences sp = com.foobnix.LibreraApp.context
+                                    .getSharedPreferences("codec_probe", 0);
+                            final java.io.File convCache = ((org.ebookdroid.core.codec.AbstractCodecContext) ctxC)
+                                    .getCacheFileName(bookPath
+                                            + org.ebookdroid.core.codec.AbstractCodecContext.getFileNameSalt(bookPath));
+                            final String healSig = convCache.getPath() + ":" + convCache.length()
+                                    + ":" + convCache.lastModified();
+                            final boolean alreadyHealed = sp.contains("healed:" + healSig)
+                                    || sp.contains("kept:" + bookPath);
+                            if (convCache.isFile() && !alreadyHealed) {
+                                sp.edit().putBoolean("healed:" + healSig, true)
+                                        .putBoolean("kept:" + bookPath, true).apply();
+                                LOG.bench("LongTap empty grid persists -> corrupt conversion cache, delete & reload: "
+                                        + convCache);
+                                convCache.delete();
+                                // 延迟重启：当前手势的 UP 事件仍会进入本视图，
+                                // 同步重启会让它命中已回收的页面数组（AIOOBE 闪退）
+                                new android.os.Handler(android.os.Looper.getMainLooper())
+                                        .postDelayed(new Runnable() {
+                                            @Override public void run() {
+                                                try {
+                                                    base.getListener().restartActivity();
+                                                } catch (final Throwable t) {
+                                                    LOG.e(t);
+                                                }
+                                            }
+                                        }, 300);
+                            } else {
+                                LOG.bench("LongTap empty grid persists (heal used or no cache): " + convCache);
+                            }
+                        }
+                    } catch (final Throwable t) {
+                        LOG.e(t);
+                    }
+                }
+                if (LengthUtils.isNotEmpty(page.texts)) {
+                    // 网格健康度（命中页才算）：texts 外层是"块"不是行（中文整行
+                    // 一词时 1ln 曾被误读为整页只有 1 行）。词数 + 词矩形纵向
+                    // 覆盖率一锤定音，选字排障先看这行。
+                    int gridWords = 0;
+                    float gridY0 = Float.MAX_VALUE, gridY1 = -Float.MAX_VALUE;
+                    for (final TextWord[] glines : page.texts) {
+                        if (glines == null) {
+                            continue;
+                        }
+                        for (final TextWord gword : glines) {
+                            if (gword == null || TxtUtils.isEmpty(gword.w)) {
+                                continue;
+                            }
+                            final RectF gr = page.getPageRegion(bounds, gword);
+                            if (gr == null) {
+                                continue;
+                            }
+                            gridWords++;
+                            gridY0 = Math.min(gridY0, gr.top);
+                            gridY1 = Math.max(gridY1, gr.bottom);
+                        }
+                    }
+                    if (gridWords > 0) {
+                        TextWord sw0 = null, swm = null, swN = null;
+                        int sn = 0;
+                        for (final TextWord[] glines : page.texts) {
+                            if (glines == null) {
+                                continue;
+                            }
+                            for (final TextWord gword : glines) {
+                                if (gword == null || TxtUtils.isEmpty(gword.w) || gword.isEmpty()) {
+                                    continue;
+                                }
+                                sn++;
+                                if (sn == 1) {
+                                    sw0 = gword;
+                                }
+                                if (sn == gridWords / 2 + 1) {
+                                    swm = gword;
+                                }
+                                swN = gword;
+                            }
+                        }
+                        LOG.bench("LongTap sample pg=" + page.index.docIndex
+                                + " w0=[" + (sw0 == null ? "-" : sw0.top + ".." + sw0.bottom) + "]"
+                                + " wm=[" + (swm == null ? "-" : swm.top + ".." + swm.bottom) + "]"
+                                + " wN=[" + (swN == null ? "-" : swN.top + ".." + swN.bottom) + "]");
+                        LOG.bench("LongTap grid pg=" + page.index.docIndex + " words=" + gridWords
+                                + " ycov=[" + (int) (Math.max(0f, (gridY0 - bounds.top) / bounds.height()) * 100)
+                                + "%," + (int) (Math.min(1f, (gridY1 - bounds.top) / bounds.height()) * 100)
+                                + "%] boundsH=" + (int) bounds.height());
+                    }
+                }
                 if (LengthUtils.isNotEmpty(page.texts)) {
 
                     for (final TextWord[] lines : page.texts) {
@@ -421,7 +575,20 @@ public abstract class AbstractViewController extends AbstractComponentController
                             }
                             RectF wordRect = page.getPageRegion(bounds, line);
                             if (wordRect == null) {
+                                if (logWords < 3) {
+                                    LOG.bench("LongTapWord pg=" + page.index.docIndex
+                                            + " NULL-REGION w=" + line.w
+                                            + " line=[" + line.left + "," + line.top + "]");
+                                    logWords++;
+                                }
                                 continue;
+                            }
+                            if (logWords < 3) {
+                                LOG.bench("LongTapWord pg=" + page.index.docIndex
+                                        + " w=" + line.w
+                                        + " rect=[" + (int) wordRect.left + "," + (int) wordRect.top
+                                        + "," + (int) wordRect.right + "," + (int) wordRect.bottom + "]");
+                                logWords++;
                             }
 
                             if (isHyphenWorld || (single && RectF.intersects(wordRect, tapRect))) {
@@ -513,6 +680,99 @@ public abstract class AbstractViewController extends AbstractComponentController
             }
 
         }
+        // 最近词吸附：长按触点是零面积矩形，落在行间/字间空隙时与任何词矩
+        // 形都不相交（大字号宽行距下尤其常见——12S 现场用户每次长按都掉进
+        // 缝隙，表现为"弹菜单但永远没有选中框"）。此时在容差内吸附最近词，
+        // 恢复标准"按词选中+选区框+拖拽手柄"交互；真空白（图片/页边大空档）
+        // 超出容差不吸附，继续走 HTML 兜底。
+        if (single && build.length() == 0 && hitPage != null && LengthUtils.isNotEmpty(hitPage.texts)) {
+            final RectF snapBounds = hitPage.getBounds(zoom);
+            final float tapX = tapRect.centerX();
+            final float tapY = tapRect.centerY();
+            TextWord best = null;
+            RectF bestRect = null;
+            double bestD2 = Double.MAX_VALUE;
+            for (final TextWord[] lines : hitPage.texts) {
+                if (lines == null) {
+                    continue;
+                }
+                for (final TextWord word : lines) {
+                    if (word == null || TxtUtils.isEmpty(word.w)) {
+                        continue;
+                    }
+                    final RectF r = hitPage.getPageRegion(snapBounds, word);
+                    if (r == null) {
+                        continue;
+                    }
+                    final float dx = Math.max(Math.max(r.left - tapX, 0), tapX - r.right);
+                    final float dy = Math.max(Math.max(r.top - tapY, 0), tapY - r.bottom);
+                    final double d2 = (double) dx * dx + (double) dy * dy;
+                    if (d2 < bestD2) {
+                        bestD2 = d2;
+                        best = word;
+                        bestRect = r;
+                    }
+                }
+            }
+            if (best != null && bestRect != null) {
+                final float tol = Math.max(bestRect.height(), bestRect.width() * 0.5f) * 1.5f;
+                LOG.bench("LongTap snap-check pg=" + hitPage.index.docIndex + " bestW=" + best.w
+                        + " rect=[" + (int) bestRect.left + "," + (int) bestRect.top
+                        + "," + (int) bestRect.right + "," + (int) bestRect.bottom + "]"
+                        + " d=" + (int) Math.sqrt(bestD2) + " tol=" + (int) tol);
+                if (bestD2 <= (double) tol * tol) {
+                    if (draw) {
+                        hitPage.selectedText.add(best);
+                    }
+                    build.append(best.w + TxtUtils.space());
+                    LOG.bench("LongTap snap-word pg=" + hitPage.index.docIndex + " w=" + best.w);
+                }
+            }
+        }
+        // 兜底：native 文字网格为空/缺失时（现场 12S 实证：该书的转换产物在
+        // 部分设备上文字提取持续为空，refetch 亦空），退回页面 HTML 文本作为
+        // 长按选中文本——选择菜单（复制/发送给AI/文内搜索）立即可用；精确到
+        // 词的高亮选区在该页不可用属可接受降级。
+        if (build.length() == 0 && hitPage != null) {
+            try {
+                final String html = base.getDecodeService().getPageHTML(hitPage.index.docIndex);
+                if (TxtUtils.isNotEmpty(html)) {
+                    final String plain = android.text.Html.fromHtml(html).toString().trim();
+                    if (TxtUtils.isNotEmpty(plain)) {
+                        // 12S 现场反馈"长按不同位置选中的都是页首文字"：没有词坐
+                        // 标时按长按点在页内的纵向比例近似截取附近一段，让选取
+                        // 至少跟着手指位置走（纯估算，非精确词界）。
+                        final RectF fb = hitPage.getBounds(zoom);
+                        float frac = 0f;
+                        if (fb.height() > 0) {
+                            frac = (tapRect.centerY() - fb.top) / fb.height();
+                            frac = Math.max(0f, Math.min(1f, frac));
+                        }
+                        final int WIN = 200;
+                        int mid = (int) (frac * plain.length());
+                        int from = Math.max(0, Math.min(mid - WIN / 2, Math.max(0, plain.length() - 1)));
+                        int to = Math.min(plain.length(), from + WIN);
+                        String slice = plain.substring(from, to);
+                        if (from > 0) {
+                            final int sp = slice.indexOf(' ');
+                            if (sp >= 0 && sp < slice.length() - 1) {
+                                slice = slice.substring(sp + 1);
+                            }
+                        }
+                        if (slice.trim().length() == 0) {
+                            slice = plain;
+                        }
+                        LOG.bench("LongTap HTML fallback pg=" + hitPage.index.docIndex
+                                + " len=" + plain.length() + " frac=" + ((int) (frac * 100))
+                                + "% slice=[" + from + "," + to + ")");
+                        build.append(slice);
+                    }
+                }
+            } catch (final Throwable t) {
+                LOG.e(t);
+            }
+        }
+        LOG.bench("LongTap result len=" + build.length());
         if (build.length() > 0) {
             redrawView();
 

@@ -30,6 +30,21 @@ public class TxtContext extends PdfContext {
                 extractFile = TxtExtract.extract(fileName, CacheZipUtils.CACHE_BOOK_DIR.getPath());
                 return openTextDoc(fileName, extractFile, "");
             }
+            // Currently-read bilingual book keeps the extractEpub chain: the
+            // bilingual base selection in openTextDoc keys on the converted
+            // .epub artifact, which the chunked path never produces.
+            final AppState stCtx = AppState.get();
+            final boolean bilingualBook = stCtx.aiBilingual
+                    && stCtx.aiBilingualBook != null && !stCtx.aiBilingualBook.isEmpty()
+                    && (stCtx.aiBilingualBook.equals(fileName)
+                        || stCtx.aiBilingualBook.replace("remote:/", "remote://").equals(fileName));
+            if (!bilingualBook
+                    && com.foobnix.pdf.info.ExtUtils.isLocalChunkedTxtCandidate(fileName)) {
+                // engine-chunked local txt: on-demand chapter layout, first
+                // screen needs only the first 256KB chunk (matches remote txt)
+                LOG.bench("txt-local-chunked " + fileName);
+                return openTextDoc(fileName, fileName, password);
+            }
             // Single-pass txt → EPUB with one spine chapter per detected
             // chapter heading (the old txt→fb2→epub chain did two full passes
             // and produced a single huge chapter).

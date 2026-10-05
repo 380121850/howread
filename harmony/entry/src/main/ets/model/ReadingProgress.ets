@@ -89,6 +89,13 @@ export async function saveRecentBook(ctx: Context, book: RecentBook): Promise<vo
         /* progress changed → re-derive */
         status = deriveStatus(book.page, book.totalPages);
       }
+      /* 0.9.19 (Android 10-01 parity): a book whose archived status is
+       * finished stays finished — re-opening it writes a lower re-derived
+       * progress which must not flip the status back. Manual marking goes
+       * through setBookStatus and is unaffected. */
+      if (old.status === 2 && status !== 2) {
+        status = 2;
+      }
     }
     const merged: RecentBook = {
       path: book.path,

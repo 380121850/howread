@@ -3,6 +3,8 @@ package com.foobnix.pdf.info.widget;
 import android.graphics.PointF;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewParent;
+import android.view.ViewGroup;
 import android.view.View.OnClickListener;
 import android.view.View.OnTouchListener;
 
@@ -22,6 +24,8 @@ public class DraggbleTouchListener implements OnTouchListener {
     private View root;
     private DragingPopup popup;
     private OnClickListener onClickListener;
+    private int rootTopOffset;
+    private SelectionMagnifier magnifier;
 
     public DraggbleTouchListener(View anchor, DragingPopup popup, OnClickListener onClickListener) {
         this.anchor = anchor;
@@ -69,6 +73,17 @@ public class DraggbleTouchListener implements OnTouchListener {
 
             sWidth = root.getWidth();
             sHeigh = root.getHeight();
+            try {
+                int[] rl = new int[2];
+                int[] wl = new int[2];
+                root.getLocationOnScreen(rl);
+                anchor.getRootView().getLocationOnScreen(wl);
+                rootTopOffset = rl[1] - wl[1];
+            } catch (Exception e) {
+                rootTopOffset = 0;
+            }
+            // 放开 root 及其祖先的裁剪，拖出父容器边界的部分（如拖到屏幕最底）仍可见
+            unclipChildChain(root);
 
             initLatout.x = anchor.getX();
             initLatout.y = anchor.getY();
@@ -102,8 +117,18 @@ public class DraggbleTouchListener implements OnTouchListener {
             if (y < 0) {
                 y = 0;
             }
-            if (y > sHeigh - heigh) {
-                y = sHeigh - heigh;
+            // 下限取 root 底与窗口底（补偿 root 顶部在窗口内的偏移）的较大者：
+            // root 可能止于导航栏上沿，弹出框/手柄至少能拖到屏幕最下面
+            float maxY = Math.max(sHeigh, anchor.getRootView().getHeight() - rootTopOffset) - heigh;
+            if (popup != null) {
+                // 弹窗允许继续下沉、底部越出屏幕下边框，只留顶部标题栏在屏内可抓
+                int headerH = popup.getHeaderHeight();
+                if (headerH > 0) {
+                    maxY = Math.max(maxY, anchor.getRootView().getHeight() - rootTopOffset - headerH);
+                }
+            }
+            if (y > maxY) {
+                y = maxY;
             }
 
             AnchorHelper.setXY(anchor, x, y);
@@ -128,6 +153,15 @@ public class DraggbleTouchListener implements OnTouchListener {
                 }
             }
 
+            if (magnifier != null) {
+                magnifier.showAt(anchor);
+            }
+
+        }
+        if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
+            if (magnifier != null) {
+                magnifier.hide();
+            }
         }
         if (event.getAction() == MotionEvent.ACTION_UP) {
             float dx = event.getRawX() - initPoint.x;
@@ -153,6 +187,27 @@ public class DraggbleTouchListener implements OnTouchListener {
     public void setOnMove(Runnable onMove) {
         this.onMove = onMove;
 
+    }
+
+    public void setMagnifier(SelectionMagnifier magnifier) {
+        this.magnifier = magnifier;
+    }
+
+    // 放开 view 自身及其全部祖先的子视图裁剪（拖动与弹窗显示时都会调用）
+    public static void unclipChildChain(View view) {
+        try {
+            View v = view;
+            while (v != null) {
+                if (v instanceof ViewGroup) {
+                    ((ViewGroup) v).setClipChildren(false);
+                    ((ViewGroup) v).setClipToPadding(false);
+                }
+                ViewParent p = v.getParent();
+                v = p instanceof View ? (View) p : null;
+            }
+        } catch (Exception e) {
+            LOG.e(e);
+        }
     }
 
     public Runnable getOnEventDetected() {

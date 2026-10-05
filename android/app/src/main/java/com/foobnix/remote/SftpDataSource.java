@@ -159,7 +159,7 @@ public class SftpDataSource implements RemoteDataSource {
 
     /** Closes and re-opens the whole SFTP session after a read failure. */
     private boolean reconnectQuiet() {
-        android.util.Log.i("REMOTE", "sftp reconnect attempt after read failure");
+        LOG.remote("sftp reconnect attempt after read failure");
         try {
             close();
             open();

@@ -74,7 +74,7 @@ public class BlockCacheStore {
             } catch (Exception e) {
                 LOG.w(e);
             }
-            android.util.Log.i("REMOTE", "block cache RAM limit: " + mb + "MB");
+            LOG.remote("block cache RAM limit: " + mb + "MB");
             memLimitBytes = mb * 1024L * 1024L;
             return memLimitBytes;
         }
@@ -216,7 +216,6 @@ public class BlockCacheStore {
                         && storedTag.equals(versionTag) && storedSize == fileSize && storedBlockSize == blockSize
                         && bitmapF.isFile() && bitmapF.length() >= blockCount
                         && dataF.isFile() && dataF.length() == fileSize) {
-                    fullyCached = m.optBoolean("fullyCached", false);
                     RandomAccessFile data = new RandomAccessFile(dataF, "rw");
                     byte[] bitmap = new byte[blockCount];
                     FileInputStream in = new FileInputStream(bitmapF);
@@ -226,6 +225,10 @@ public class BlockCacheStore {
                         data.close();
                         throw new IllegalStateException("bitmap truncated");
                     }
+                    // 完整性校验：历史缺陷可能把 fullyCached=true 写在空 bitmap 上
+                    // （只读句柄时代）——假 100% 降级为未完成，否则离线打开被拒、
+                    // 后台填充永远跳过；按未完成处理可在本轮自愈
+                    fullyCached = m.optBoolean("fullyCached", false) && bitIsComplete(bitmap);
                     dir.setLastModified(System.currentTimeMillis()); // fresh LRU signal on open
                     return new BlockCacheStore(dir, fileSize, data, bitmap, fullyCached, blockSize,
                             storedTag);
@@ -294,7 +297,10 @@ public class BlockCacheStore {
                 return null;
             }
             dir.setLastModified(System.currentTimeMillis()); // fresh LRU signal on open
-            RandomAccessFile data = new RandomAccessFile(dataF, "r");
+            // "rw"（而不是 "r"）：重开的缓存在线会话还要继续写入新块。
+            // "r" 模式下 putBlock 的每次写入都抛 IOException 并被静默吞掉——
+            // 缓存从此冻结、填充线程还会在空 bitmap 上标 fullyCached（假 100%）
+            RandomAccessFile data = new RandomAccessFile(dataF, "rw");
             return new BlockCacheStore(dir, size, data, bitmap, fullyCached, blockSize,
                     m.optString("versionTag", ""));
         } catch (Exception e) {
@@ -442,7 +448,7 @@ public class BlockCacheStore {
                     bitmap[(int) index] = 0;
                     mem.remove(index);
                     persistBitmap();
-                    android.util.Log.i("REMOTE", "block checksum mismatch, refetch idx="
+                    LOG.remote("block checksum mismatch, refetch idx="
                             + index + " book=" + dir.getName());
                     return null;
                 }
@@ -565,8 +571,24 @@ public class BlockCacheStore {
         }
     }
 
+    /** True when the cached/not-cached bitmap has every block marked. */
+    private static boolean bitIsComplete(byte[] bitmap) {
+        for (byte b : bitmap) {
+            if (b != 1) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     public void setFullyCached(String versionTag) {
         synchronized (lock) {
+            // 不变量：只有 bitmap 真的满了才允许置位。写入失败的填充曾在空
+            // bitmap 上打 100%（离线打开被拒、填充永久跳过），这里守住它
+            if (!bitIsComplete(bitmap)) {
+                LOG.remote("setFullyCached refused: bitmap incomplete book=" + dir.getName());
+                return;
+            }
             fullyCached = true;
         }
         persistMeta(versionTag);
@@ -748,7 +770,7 @@ public class BlockCacheStore {
                 }
                 long before = totalBytes();
                 com.foobnix.ext.CacheZipUtils.deleteDir(book);
-                android.util.Log.i("REMOTE", "evicted LRU book cache " + book.getName()
+                LOG.remote("evicted LRU book cache " + book.getName()
                         + ", freed " + ((before - totalBytes()) / (1024 * 1024)) + "MB");
             }
         } catch (Exception e) {

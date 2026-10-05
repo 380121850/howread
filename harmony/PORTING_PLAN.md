@@ -558,3 +558,45 @@ TTS 朗读、搜索全书、批注/高亮编辑、OPDS 书源、云同步等。*
 
 - AiClient 重写：openai/anthropic/google 三协议 + 错误分类 + lastTruncated；AiVendors.ets 多配置（指针/墓碑/明文密钥/镜像旧配置）；对话框配置行+协议芯片+密钥显隐；Bilingual 单 HTML/FB2 通道；DocConvert ODT；Reader 远程 100% 缓存双语（materializeBook）；Sync app-AI.json 合并。约束：MOBI 系双语（MuPDF 直开无转换链）、DOC。
 - 版本 0.9.14/52；50.104 四件套；L0 7/7。
+
+## 阶段 16o（0.9.15，2026-09-30）：同步安卓打开提速（打点+首帧优先）
+
+- 打点：bench_open_doc/reflow_probe/layout/pagelist/decode/first_frame（HRTEST，双构建保留）；安卓两项优化经实测在鸿蒙无对应开销（无固定首帧门限、解码已异步）。实施首帧优先（TOC/书签/批注延后一拍）。收益 fb2 -10%/epub -3%/pdf 噪声内持平。约束：openDocument 异步化与超大 reflow 排版为 native 层另立项。
+- 版本 0.9.15/53；50.104 四件套；L0 7/7。
+
+## 阶段 16t（0.9.20，2026-10-02）：同步安卓批次（PDF AI 翻译四模式 / 崩溃本地留痕 / 瘦身）
+
+- PDF 翻译四模式（对照面板/原位浮层/双语重排/原位替换）：model/PdfTranslate.ets（段落合并 buildPdfParagraphs + PdfTransSession 滚动窗口 [cur-1,cur+3]、三路并发、cacheDir/pdftrans 分页缓存）；Reader.ets 对话框"翻译方式"Select（ReaderSettings.pdfTransMode 记忆）、buildPdfBiPanel/buildPdfBadgeCard/buildPdfBiChip、PageRenderer @Prop biOverlays/biFlash（reflow/replace 译文叠层）；浮层角标放根层（页内点击被翻页手势区拦截）。
+- 引擎 NAPI 修复：mupdf_napi.cpp GetTextRects/OpTextRectsJson 弃 display-list 回放（坐标全 0.5 占位），改 fz_load_page+fz_run_page 直提、按 fz_bound_page 归一化——文本选择/搜索/翻译坐标同源修复。
+- 崩溃本地留痕：EntryAbility.registerCrashHooks（hiAppEvent watcher 订阅 OS/APP_CRASH，下次启动写 filesDir/crash.txt，1MB 重建；模型 CrashLog.ets）。
+- 瘦身：media 四图（drawer_banner_day/night、bg_wood 有损 q85，icon 无损）转 WebP，约 -1.6MB。
+- 版本 0.9.20/58；构建 50.104（50.111 不可达）；L0 8/8；端到端 mock AI 验证四模式+缓存命中。
+
+## 阶段 16s（0.9.19，2026-10-01）：同步安卓当日批次（远程多选批量下载/状态保持/设置成对/进度刻度）
+
+- 远程多选批量下载：Index.ets 选择态（remoteSelMode/Panel/Keys）+ 工具条 builder + 三协议行勾选/长按进入 + remoteBatchDownload（fetchWholeBookToCache 逐本 → copyFileSync 落盘所选目录 → saveRecentBook 入库）+ openDirPick('remoteBatch') 目录选择与记忆（settings.remoteBatchDir，不入同步）。
+- 阅读状态保持：ReadingProgress.saveRecentBook 增加 finished-keep 守卫（存档 status==2 且新推导 !=2 → 保持 2；手动标记走 setBookStatus 不受影响）。
+- 在线阅读设置两两成对：settingsNumRowPair（缓存上限｜整本阈值、重试次数｜重试间隔）。
+- 进度条章节刻度：Reader 顶部进度条改 Stack——底轨 + 已读高亮 + 目录位置刻度（≤120 章才画），依赖 0.9.18 目录页码解析。
+- 不适用：选择弹窗拖底/系统放大镜（鸿蒙无文字选择弹窗功能与系统放大镜组件）。
+- 验证：WebDAV（50.104）端到端 多选→全选→下载→"已下载 1/48，成功 1"实时推进；L0 7/7 PASS。50.104 新增 webdav 账号 hr/1 供验证。
+
+## 阶段 16r（0.9.18，2026-10-01）：同步安卓 09-30/10-01 批次（本地 TXT 分块直读 + 目录页码解析）
+
+- 本地 TXT 引擎分块直读：txt-chunk-doc.c 新增文件名入口（fz_open_txtchunk_document_with_filename）+ 编码门（UTF-8/ASCII/UTF-16 分块、GBK 回退 legacy，镜像安卓 isLocalChunkedTxtCandidate）；UTF-16 非首块自动补 BOM（块偏移 256KB 对齐保配对）。html-doc.c 本地 txt 入口委派。5MB 中文 TXT：open 1256→14ms、stage1 2837→676ms、首屏 4.6s→2.7s。
+- 目录页码解析（镜像安卓 MuPdfOutline_getLink 修复）：NAPI GetToc/OpTocJson 优先 outline->page 换算全局页码（fz_page_number_from_location），否则 fz_resolve_link 解析 URI；顺带修复鸿蒙既有 bug——目录 DFS 不跟根层 ->next 兄弟链，扁平 EPUB 目录被截成 1 条；修复后真实小说 15 条全出。
+- 不适用：安卓 fb2 转换层切章/单行锚点（鸿蒙无 fb2 转换链，引擎直读已由 16q 覆盖）。
+- 验证：GBK 回退正常、UTF-16 分块正常、四格式回归持平、L0 7/7 PASS。
+
+## 阶段 16q（0.9.17，2026-10-01）：共享引擎 fb2 分章文档（大 fb2 首帧根治）
+
+- 引擎新增 source/html/fb2-chunk-doc.c（仿 txt-chunk-doc/epub 章节模式）：按 `<section>` 边界把 fb2 切成 ~512KB 伪章节（自适应向下钻取嵌套大章），每章惰性"解析+排版"（MuPDF store 缓存 + hot 钉住），走通用章节 API（count_chapters/count_chapter_pages/load_page），0.9.16 的两阶段打开无需改动即自动受益。
+- html-doc.c fb2 入口委派到分章实现；<512KB / utf-16 / 无 section 结构 → 回退原整本路径（fz_open_fb2legacy_document_with_buffer）。
+- 分块边界各起新页（epub 章节语义）：总页数微增（big25 4664→4696）；大书目录改走异步 docOp(1)（修复主线程冻结 THREAD_BLOCK_3S/6S）。
+- 安卓侧：共享引擎源码同享，下次重建 libMuPDF.so 生效；Builder/CMakeLists.txt 补入 txt-chunk-doc.c（修复安卓引擎构建缺文件）。
+- 实测（Pura 90 模拟器，big25 22MB）：open 5.4s→195ms、stage1 7.8s→1.27s、壳就绪 15.6s→1.9s、首屏 15.6s→4.8s、THREAD_BLOCK NONE；四格式回归持平；L0 7/7 PASS。
+
+## 阶段 16p（0.9.16，2026-10-01）：移植安卓分阶段排版（两阶段打开）
+
+- 共享引擎（Builder/mupdf-1.23.7）已有按章惰性排版：NAPI 加 docOp op15 渐进计数；Reader reflow 书两阶段打开（首批≤400 页出首屏→400 页/步后台补页表→目录后置→stageGen 取消；非 reflow/无章节回退）。big25.fb2(22MB/4664页) 首帧 >90s(卡死)→15.6s(≥5.7x)；普通书持平；L0 7/7（修 CBZ pages=0）。
+- 版本 0.9.16/54；50.104 四件套。遗留：fb2 DOM 解析 5.4s 在首帧路径（native 增量解析另立项）；fb2 章节粒度粗。

@@ -211,9 +211,9 @@ def prepare_device(dev, flavor, apk, args, fixtures):
 
 
 def push_fixtures(dev, fixtures):
-    for key in ("pdf", "epub"):
+    for key in ("pdf", "epub", "txtbig", "txtgbk", "fb2sec", "fb2img"):
         src = fixtures[key]
-        dst = fixtures["device_pdf_path" if key == "pdf" else "device_epub_path"]
+        dst = fixtures["device_%s_path" % key]
         adb("-s", dev.serial, "push", src, dst, timeout=120)
 
 

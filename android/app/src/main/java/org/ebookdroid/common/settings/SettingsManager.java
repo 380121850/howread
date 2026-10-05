@@ -24,6 +24,11 @@ public class SettingsManager {
             LOG.d("load-getBookSettings", current.p, fileName);
             return current;
         } catch (Exception e) {
+            // 加载失败（进度文件被异常退出写坏等）不能回落到 current——那是
+            // 另一本书的设置，错误的 pg/zoom/split 会让这本书按错误参数打开。
+            // 返回全新默认设置，等价于"无进度"打开。
+            LOG.e(e, "getBookSettings load failed, fallback to fresh", fileName);
+            current = new AppBook(fileName);
             return current;
         } finally {
             lock.writeLock().unlock();

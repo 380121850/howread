@@ -2243,6 +2243,26 @@
     {
       "name": "ai_proto_google",
       "value": "Gemini"
+    },
+    {
+      "name": "trans_mode",
+      "value": "翻译方式"
+    },
+    {
+      "name": "trans_mode_panel",
+      "value": "对照面板"
+    },
+    {
+      "name": "trans_mode_float",
+      "value": "原位浮层"
+    },
+    {
+      "name": "trans_mode_reflow",
+      "value": "双语重排"
+    },
+    {
+      "name": "trans_mode_replace",
+      "value": "原位替换"
     }
   ]
 }

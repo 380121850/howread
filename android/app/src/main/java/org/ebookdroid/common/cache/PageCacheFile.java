@@ -50,7 +50,7 @@ public class PageCacheFile extends File {
                         infos[i] = null;
                     }
                 }
-                android.util.Log.i("REMOTE", "page-size cache hit: " + pages + " pages");
+                LOG.remote("page-size cache hit: " + pages + " pages");
                 return infos;
             } catch (final EOFException ex) {
                 ex.printStackTrace();
@@ -66,12 +66,12 @@ public class PageCacheFile extends File {
         } catch (final FileNotFoundException ex) {
             LOG.e(ex);
         }
-        android.util.Log.i("REMOTE", "page-size cache miss: " + getName());
+        LOG.remote("page-size cache miss: " + getName());
         return null;
     }
 
     public void save(final CodecPageInfo[] infos) {
-        android.util.Log.i("REMOTE", "page-size cache saved: "
+        LOG.remote("page-size cache saved: "
                 + (infos == null ? -1 : infos.length) + " pages");
         LOG.d("PageCacheFile-save");
         try {

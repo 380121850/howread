@@ -2971,6 +2971,12 @@ public class DragingDialogs {
                 objects.clear();
                 allData.clear();
 
+                // 一次性迁移：旧默认是页码排序，按产品要求统一为时间倒序（最新在前）
+                if (!AppState.get().sortBookmarksMigrated) {
+                    AppState.get().sortBookmarksMigrated = true;
+                    AppState.get().sortBookmarksOrder = AppState.BOOKMARK_SORT_DATE_ASC;
+                }
+
                 List<AppBookmark> bookmarksByBook = BookmarksData.get().getBookmarksByBook(controller.getCurrentBook());
 
                 final Comparator<AppBookmark> cmp = new Comparator<AppBookmark>() {

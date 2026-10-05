@@ -25,6 +25,79 @@ public class WebDavAdapter extends RecyclerView.Adapter<WebDavAdapter.Holder> {
     private ResultResponse<WebDavItem> onLongClick;
     private ResultResponse<WebDavItem> onRemove;
 
+    /** Multi-select download mode (long-press a file to enter). */
+    private boolean selectionMode;
+    private final java.util.LinkedHashSet<String> selected = new java.util.LinkedHashSet<String>();
+    private ResultResponse<Boolean> onSelectionMode;
+
+    public boolean isSelectionMode() {
+        return selectionMode;
+    }
+
+    public void setOnSelectionMode(ResultResponse<Boolean> onSelectionMode) {
+        this.onSelectionMode = onSelectionMode;
+    }
+
+    public void enterSelection(WebDavItem first) {
+        selectionMode = true;
+        selected.clear();
+        if (first != null) {
+            selected.add(first.href);
+        }
+        notifyDataSetChanged();
+        if (onSelectionMode != null) {
+            onSelectionMode.onResultRecive(true);
+        }
+    }
+
+    public void exitSelection() {
+        if (!selectionMode && selected.isEmpty()) {
+            return;
+        }
+        selectionMode = false;
+        selected.clear();
+        notifyDataSetChanged();
+        if (onSelectionMode != null) {
+            onSelectionMode.onResultRecive(false);
+        }
+    }
+
+    private void toggle(WebDavItem item) {
+        if (selected.contains(item.href)) {
+            selected.remove(item.href);
+        } else {
+            selected.add(item.href);
+        }
+        if (selected.isEmpty()) {
+            exitSelection();
+        } else {
+            notifyDataSetChanged();
+        }
+    }
+
+    public void selectAllFiles() {
+        for (WebDavItem it : items) {
+            if (!it.isDir && !it.isServer) {
+                selected.add(it.href);
+            }
+        }
+        notifyDataSetChanged();
+    }
+
+    public int getSelectedCount() {
+        return selected.size();
+    }
+
+    public java.util.List<WebDavItem> getSelectedItems() {
+        java.util.List<WebDavItem> res = new ArrayList<WebDavItem>();
+        for (WebDavItem it : items) {
+            if (selected.contains(it.href)) {
+                res.add(it);
+            }
+        }
+        return res;
+    }
+
     public void setItems(List<WebDavItem> items) {
         this.items = items;
         notifyDataSetChanged();
@@ -65,9 +138,25 @@ public class WebDavAdapter extends RecyclerView.Adapter<WebDavAdapter.Holder> {
             h.icon.setImageResource(R.drawable.glyphicons_72_book);
             h.remove.setVisibility(View.GONE);
         }
+        final boolean checkable = selectionMode && !item.isServer;
+        h.check.setVisibility(checkable ? View.VISIBLE : View.GONE);
+        h.check.setOnCheckedChangeListener(null);
+        h.check.setChecked(selected.contains(item.href));
+        h.check.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                toggle(item);
+            }
+        });
         h.itemView.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                if (selectionMode) {
+                    if (checkable) {
+                        toggle(item);
+                    }
+                    return;
+                }
                 if (onClick != null) {
                     onClick.onResultRecive(item);
                 }
@@ -76,6 +165,10 @@ public class WebDavAdapter extends RecyclerView.Adapter<WebDavAdapter.Holder> {
         h.itemView.setOnLongClickListener(new View.OnLongClickListener() {
             @Override
             public boolean onLongClick(View v) {
+                if (!selectionMode && !item.isDir && !item.isServer) {
+                    enterSelection(item);
+                    return true;
+                }
                 return onLongClick != null && onLongClick.onResultRecive(item);
             }
         });
@@ -110,9 +203,11 @@ public class WebDavAdapter extends RecyclerView.Adapter<WebDavAdapter.Holder> {
     public static class Holder extends RecyclerView.ViewHolder {
         TextView title, subtitle;
         ImageView icon, remove;
+        android.widget.CheckBox check;
 
         Holder(View v) {
             super(v);
+            check = (android.widget.CheckBox) v.findViewById(R.id.check);
             title = (TextView) v.findViewById(R.id.title);
             subtitle = (TextView) v.findViewById(R.id.subtitle);
             icon = (ImageView) v.findViewById(R.id.icon);

@@ -105,6 +105,14 @@ public class EventDraw implements IEvent {
 
         final boolean res = process(page.nodes);
 
+        // PDF 双语（原位替换/段落对照）：译文画进页面渲染本体（同坐标同缩放，滚动缩放一体）。
+        // 绘制钩子整体兜底：任何异常只影响译文呈现，绝不拖垮页面渲染/阅读器
+        try {
+            com.foobnix.ai.PdfBilingualPageDraw.drawPage(canvas, page, pageBounds, viewState);
+        } catch (Throwable t) {
+            LOG.benchW("PBDraw hook fail", t);
+        }
+
         if (MagicHelper.isNeedBookBackgroundImage()) {
 
 
@@ -250,7 +258,9 @@ public class EventDraw implements IEvent {
     private void drawSelectedText(final Page page) {
         final Paint p = new Paint();
         p.setColor(AppState.get().isDayNotInvert ? Color.BLUE : Color.YELLOW);
-        p.setAlpha(60);
+        // 60/255 的选区底色在纸色背景上几乎不可见（用户观感＝长按没有选中框），
+        // 提到 120 让单词选区清晰可辨；夜间反色分支同调。
+        p.setAlpha(120);
 
         if (page.selectionAnnotion != null) {
             final RectF rect = page.getPageRegion(pageBounds, new RectF(page.selectionAnnotion));

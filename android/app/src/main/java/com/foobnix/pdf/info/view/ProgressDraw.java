@@ -84,8 +84,16 @@ public class ProgressDraw extends View {
             paint.setColor(color);
 
 
-            float k = (float) getWidth() / pageCount;
             int h = getHeight();
+            // 底轨：进度为 0 或刚打开的书此前什么都不画，看起来像"没有进度条"
+            paint.setColor(color1);
+            canvas.drawRect(0, 0, getWidth(), h, paint);
+            if (pageCount <= 0) {
+                canvas.restore();
+                return; // 页数未知（排版未完成）：只画底轨，避免 NaN 画空
+            }
+            paint.setColor(color);
+            float k = (float) getWidth() / pageCount;
             int currentChapter = 0;
 
             int prevX = -1;

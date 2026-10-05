@@ -63,7 +63,7 @@ public class PdfContext extends MuPdfContext {
                             new TranslationCache(cacheKey), st.aiBilingualSrc, st.aiBilingualTgt);
                     if (bi != null) {
                         LOG.d("openTextDoc bilingual", bi.getPath());
-                        android.util.Log.i("BENCH", "openTextDoc bilingual base=" + base.getPath()
+                        LOG.bench("openTextDoc bilingual base=" + base.getPath()
                                 + " open=" + bi.getPath());
                         open = bi.getPath();
                     }
@@ -71,7 +71,7 @@ public class PdfContext extends MuPdfContext {
                     LOG.e(t);
                 }
             }
-            android.util.Log.i("BENCH", "openTextDoc bilingual-final open=" + open);
+            LOG.bench("openTextDoc bilingual-final open=" + open);
         }
         return new MuPdfDocument(this, MuPdfDocument.FORMAT_PDF, open, password);
     }

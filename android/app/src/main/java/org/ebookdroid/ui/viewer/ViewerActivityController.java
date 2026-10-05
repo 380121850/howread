@@ -258,7 +258,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
     /** Continues a paused phase-two layout when the reader becomes visible again. */
     public void resumePhase2() {
         if (progressiveLoad && documentModel != null) {
-            startPhaseTwoLayout(documentModel);
+            startPhaseTwoLayout(documentModel, false);
         }
     }
 
@@ -358,7 +358,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                         infos[i] = info;
                         fetched++;
                         if (fetched % 64 == 0) {
-                            android.util.Log.i("REMOTE", "size completion progress: "
+                            LOG.remote("size completion progress: "
                                     + fetched + "/" + count);
                         }
                         if (pass == 0) {
@@ -402,7 +402,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                 } catch (Exception e) {
                     LOG.w(e);
                 }
-                android.util.Log.i("REMOTE", "size completion done: fetched " + fetched
+                LOG.remote("size completion done: fetched " + fetched
                         + "/" + count + ", layout fixed " + layoutFixed + " in "
                         + (android.os.SystemClock.elapsedRealtime() - t0) + "ms");
                 // Lazy-tree finish: once every size is known and the block
@@ -506,21 +506,38 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
         // recycled below (it would otherwise keep the native lock busy).
         phase2Gen.incrementAndGet();
         final boolean finishing = getManagedComponent().isFinishing();
-        if (finishing) {
-            // unsubscribe the gesture detector from the process-wide EventBus:
-            // switchDocumentController (the only other destroyGestures call
-            // site) never runs on a normal close, so every Back exit used to
-            // leak the whole activity view graph
+        // 回收与 isFinishing 无关：系统后台回收（isFinishing=false）、最近任务
+        // 划掉等不经过 closeActivityFinal 的销毁同样必须释放原生文档，否则整套
+        // MuPDF 文档 + 页图缓存被静态引用钉在常驻进程里（数百 MB），下次开书
+        // 在泄漏内存之上再加载，低内存场景被 LMK 静默杀死（偶发闪退且无记录）。
+        // recycle 幂等：closeActivityFinal 已回收过时这里是安全空转。
+        try {
             final IViewController cur = ctrl.get();
             if (cur instanceof org.ebookdroid.core.AbstractViewController) {
+                // unsubscribe the gesture detector from the process-wide
+                // EventBus (leak + ghost text-selection events)
                 ((org.ebookdroid.core.AbstractViewController) cur).destroyGestures();
             }
-            getManagedComponent().view.onDestroy();
-            if (documentModel != null) {
+        } catch (final Throwable t) {
+            LOG.e(t);
+        }
+        try {
+            final IView v = getManagedComponent().view;
+            if (v != null) {
+                v.onDestroy();
+            }
+        } catch (final Throwable t) {
+            LOG.e(t);
+        }
+        try {
+            if (documentModel != null && documentModel != ActivityControllerStub.DM_STUB) {
                 documentModel.recycle();
             }
-            SettingsManager.removeListener(this);
+        } catch (final Throwable t) {
+            LOG.e(t);
         }
+        SettingsManager.removeListener(this);
+        LOG.bench("beforeDestroy finishing=" + finishing);
         LOG.d("ViewerActivityController beforeDestroy");
 
     }
@@ -605,7 +622,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
         if (pageCount > 0) {
             pageText = (page + 1) + "/" + pageCount;
         }
-        android.util.Log.i("REMOTE", "page now " + (page + 1) + "/" + pageCount);
+        LOG.remote("page now " + (page + 1) + "/" + pageCount);
 
         wrapperControlls.updateUI();
 
@@ -786,7 +803,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                     documentModel.recycle();
                     final long recycleMs = android.os.SystemClock.elapsedRealtime() - recycleT0;
                     if (recycleMs > 500) {
-                        android.util.Log.i("REMOTE", "codec recycle blocked UI " + recycleMs + "ms");
+                        LOG.remote("codec recycle blocked UI " + recycleMs + "ms");
                     }
                 }
 
@@ -824,7 +841,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                 || remoteSlowBanner != null) {
             return;
         }
-        android.util.Log.i("REMOTE", "slow first paint, showing progress banner: " + m_fileName);
+        LOG.remote("slow first paint, showing progress banner: " + m_fileName);
         final android.widget.LinearLayout bar = new android.widget.LinearLayout(a);
         bar.setOrientation(android.widget.LinearLayout.HORIZONTAL);
         bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
@@ -838,7 +855,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
         final android.widget.Button dl = new android.widget.Button(a);
         dl.setText(com.foobnix.pdf.info.R.string.remote_download_and_open);
         dl.setOnClickListener(v -> {
-            android.util.Log.i("REMOTE", "banner: user chose full download: " + m_fileName);
+            LOG.remote("banner: user chose full download: " + m_fileName);
             dismissRemoteSlowBanner();
             com.foobnix.remote.RemoteBookOpener.fetchToCache(a, m_fileName, 0, target -> {
                 com.foobnix.pdf.info.ExtUtils.openFile(a,
@@ -868,7 +885,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                     return;
                 }
                 if (com.foobnix.sys.FirstPaintGate.hasFirstBitmap()) {
-                    android.util.Log.i("REMOTE", "slow-paint banner: first bitmap arrived, hide");
+                    LOG.remote("slow-paint banner: first bitmap arrived, hide");
                     dismissRemoteSlowBanner();
                     return;
                 }
@@ -994,14 +1011,14 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                 super.onPreExecute();
             }
             benchT0 = android.os.SystemClock.elapsedRealtime();
-            android.util.Log.i("BENCH", "load-begin silent=" + silentReload);
+            LOG.bench("load-begin silent=" + silentReload);
         }
 
         @Override protected Throwable doInBackground(final String... params) {
             try {
                 //Thread.sleep(3000);
                 m_fileName = Apps.getBookPathFromActivity(getActivity());
-                android.util.Log.i("REMOTE", "openTask file=" + m_fileName + " model=" + documentModel);
+                LOG.remote("openTask file=" + m_fileName + " model=" + documentModel);
                 startRemoteProgress();
 
                 // Full metadata extraction + hyphenation language detection,
@@ -1017,15 +1034,15 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                     LOG.e(e);
                 }
 
-                android.util.Log.i("BENCH", "meta-done " + (android.os.SystemClock.elapsedRealtime() - benchT0) + "ms");
-                android.util.Log.i("REMOTE", "calling documentModel.open");
+                LOG.bench("meta-done " + (android.os.SystemClock.elapsedRealtime() - benchT0) + "ms");
+                LOG.remote("calling documentModel.open");
                 // fresh load: wipe a cancel flag left by a previous book
                 TempHolder.get().loadingCancelled.set(false);
                 // userOpenEnd runs in the task's finally: the page-size loop
                 // AFTER open needs the priority window just as much
                 com.foobnix.remote.RemoteSessionFactory.userOpenStart(m_fileName);
                 documentModel.open(m_fileName, m_password);
-                android.util.Log.i("BENCH", "doc-open-done " + (android.os.SystemClock.elapsedRealtime() - benchT0) + "ms");
+                LOG.bench("doc-open-done " + (android.os.SystemClock.elapsedRealtime() - benchT0) + "ms");
 
                 // Fast-open (two-phase layout): lay out only up to the saved
                 // reading position (or the first pages of a fresh book) so the
@@ -1091,7 +1108,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                 }
 
                 getDocumentController().init(this);
-                android.util.Log.i("BENCH", "layout-done " + (android.os.SystemClock.elapsedRealtime() - benchT0) + "ms");
+                LOG.bench("layout-done " + (android.os.SystemClock.elapsedRealtime() - benchT0) + "ms");
                 return null;
             } catch (final MuPdfPasswordException pex) {
                 return pex;
@@ -1111,10 +1128,10 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
             stopRemoteProgress();
             try {
                 LOG.d("onPostExecute");
-                android.util.Log.i("BENCH", "load-end " + (android.os.SystemClock.elapsedRealtime() - benchT0) + "ms");
+                LOG.bench("load-end " + (android.os.SystemClock.elapsedRealtime() - benchT0) + "ms");
                 com.foobnix.remote.RemoteTimeline.mark("reader load task done (vertical)");
                 if (TempHolder.get().loadingCancelled.get()) {
-                    android.util.Log.i("REMOTE", "load cancelled-gate trips, silent close: " + m_fileName);
+                    LOG.remote("load cancelled-gate trips, silent close: " + m_fileName);
                     super.onPostExecute(result);
                     closeActivity(null);
                     return;
@@ -1153,18 +1170,35 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                             // only jump while the reader still sits on that page
                             final String anchor = bilingualAnchorMd5;
                             final int approx = bilingualAnchorPage;
-                            getManagedComponent().view.getView().postDelayed(new Runnable() {
+                            final android.view.View anchorView = getManagedComponent().view.getView();
+                            anchorView.postDelayed(new Runnable() {
                                 @Override public void run() {
-                                    try {
-                                        int anchor0 = BilingualSession.locateAnchorPage(controller, anchor, approx);
-                                        android.util.Log.i("BENCH", "BilingualSilentReload anchorPage0=" + anchor0
-                                                + " approx0=" + approx);
-                                        if (anchor0 >= 0 && controller.getCurentPageFirst1() - 1 == approx) {
-                                            controller.onGoToPage(anchor0 + 1);
+                                    // 锚点定位最多扫 21 页文本层（每页 native 取 HTML）：
+                                    // 放到后台线程，扫完回主线程再决定是否跳页（横屏同款）
+                                    AppsConfig.executorServiceSingle.execute(new Runnable() {
+                                        @Override public void run() {
+                                            int anchor0 = -1;
+                                            try {
+                                                anchor0 = BilingualSession.locateAnchorPage(controller, anchor, approx);
+                                            } catch (Throwable t) {
+                                                LOG.e(t);
+                                            }
+                                            final int a0 = anchor0;
+                                            LOG.bench("BilingualSilentReload anchorPage0=" + a0
+                                                    + " approx0=" + approx);
+                                            anchorView.post(new Runnable() {
+                                                @Override public void run() {
+                                                    try {
+                                                        if (a0 >= 0 && controller.getCurentPageFirst1() - 1 == approx) {
+                                                            controller.onGoToPage(a0 + 1);
+                                                        }
+                                                    } catch (Throwable t) {
+                                                        LOG.e(t);
+                                                    }
+                                                }
+                                            });
                                         }
-                                    } catch (Throwable t) {
-                                        LOG.e(t);
-                                    }
+                                    });
                                 }
                             }, 600);
                         }
@@ -1172,7 +1206,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                         onBookLoaded.run();
 
                         if (progressiveLoad) {
-                            startPhaseTwoLayout(dm);
+                            startPhaseTwoLayout(dm, !silentReload);
                         }
 
                         if (!silentReload) {
@@ -1212,7 +1246,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
 
                 } else if (result != null) {
                     if (com.foobnix.remote.RemoteBook.isRemotePath(m_fileName)) {
-                        android.util.Log.i("REMOTE", "remote decode failed: " + result, result);
+                        LOG.remote("remote decode failed: " + result, result);
                         // remote book failed to decode (DRM / corrupt / engine
                         // error): offer the download fallback instead of the
                         // plain error dialog
@@ -1312,7 +1346,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
      * decoding, opening other books and activity teardown never queue behind
      * a long full-document count. Bumping {@link #phase2Gen} cancels it.
      */
-    private void startPhaseTwoLayout(final DocumentModel dm) {
+    private void startPhaseTwoLayout(final DocumentModel dm, final boolean waitForGate) {
         final long gen = phase2Gen.get();
         final int knownCount = dm.getPageCount();
         if (knownCount <= 0) {
@@ -1321,7 +1355,12 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
             return;
         }
         final long t0 = android.os.SystemClock.elapsedRealtime();
-        android.util.Log.i("BENCH", "phase2-begin n1=" + knownCount);
+        LOG.bench("phase2-begin n1=" + knownCount);
+        // Capture the gate sequence HERE, on the UI thread, before the arm
+        // call later in onPostExecute: the phase2 thread may be scheduled
+        // after that arm, so a capture inside run() could already see the
+        // bumped sequence and wait for a change that never comes.
+        final int gateSeq0 = waitForGate ? com.foobnix.sys.FirstPaintGate.armSeq() : 0;
         // dedicated thread: the shared 2-thread AppsConfig pool must stay
         // free for the decode consumer and other UI services
         new Thread(new Runnable() {
@@ -1331,9 +1370,30 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                 // cgroup (THREAD_PRIORITY_BACKGROUND) which MIUI throttles hard
                 android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_LESS_FAVORABLE);
                 try {
-                    // Let the first-screen decode grab the native lock first,
-                    // so content is on screen before we start filling in.
-                    Thread.sleep(2000);
+                    // Wait until the first screen is actually decoded
+                    // (FirstPaintGate released) instead of a fixed 2s sleep:
+                    // the sleep predated the dedicated decode thread and just
+                    // delayed TOC/full layout. A fresh arm bumps the gate's
+                    // sequence, so "not armed yet" is never mistaken for
+                    // "already released". Cap = the old 2s, so a book whose
+                    // first screen is slow starts phase two no later than
+                    // it did before.
+                    long benchWaited = 0;
+                    if (waitForGate) {
+                        final long benchT0 = android.os.SystemClock.elapsedRealtime();
+                        while (phase2Gen.get() == gen
+                                && !(com.foobnix.sys.FirstPaintGate.armSeq() != gateSeq0
+                                     && com.foobnix.sys.FirstPaintGate.isDone())
+                                && android.os.SystemClock.elapsedRealtime() - benchT0 < 8000) {
+                            try {
+                                Thread.sleep(60);
+                            } catch (final InterruptedException ie) {
+                                break;
+                            }
+                        }
+                        benchWaited = android.os.SystemClock.elapsedRealtime() - benchT0;
+                        LOG.bench("phase2-wait " + benchWaited + "ms");
+                    }
 
                     final android.app.Activity act = getActivity();
                     int total = knownCount;
@@ -1344,16 +1404,23 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                         // re-acquired by this loop faster than a blocked main
                         // thread wakes up, starving input for the whole run.
                         int yield = 0;
-                        while (phase2Gen.get() == gen && TempHolder.lock.hasQueuedThreads() && yield++ < 50) {
+                        while (phase2Gen.get() == gen && TempHolder.lock.hasQueuedThreads()) {
+                            // while the first screen has not painted (gate held)
+                            // a queued decode always wins — no 5s cap here, the
+                            // full-document layout resumes the moment the queue
+                            // drains; after release keep the old 5s politeness
+                            if (com.foobnix.sys.FirstPaintGate.isDone() && ++yield > 50) {
+                                break;
+                            }
                             Thread.sleep(100);
                         }
                         if (phase2Gen.get() != gen) {
-                            android.util.Log.i("BENCH", "phase2-cancelled at " + total);
+                            LOG.bench("phase2-cancelled at " + total);
                             return;
                         }
                         final int n = dm.decodeService.getPageCountProgressive(requested);
                         if (phase2Gen.get() != gen || act.isDestroyed() || act.isFinishing()) {
-                            android.util.Log.i("BENCH", "phase2-cancelled at " + total);
+                            LOG.bench("phase2-cancelled at " + total);
                             return;
                         }
                         if (n <= total) {
@@ -1365,7 +1432,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                         }
                         requested = total + 400;
                     }
-                    android.util.Log.i("BENCH", "phase2-end n2=" + total + " "
+                    LOG.bench("phase2-end n2=" + total + " "
                             + (android.os.SystemClock.elapsedRealtime() - t0) + "ms");
                     if (phase2Gen.get() != gen || total <= knownCount || getActivity() == null) {
                         return;

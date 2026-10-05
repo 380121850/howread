@@ -1,5 +1,7 @@
 package com.foobnix.remote;
 
+import com.foobnix.android.utils.LOG;
+
 import android.os.SystemClock;
 import android.util.Log;
 
@@ -31,11 +33,11 @@ public final class RemoteTimeline {
         }
         t0 = SystemClock.elapsedRealtime();
         label = what;
-        Log.i("REMOTE", "[T+0ms] open start: " + what);
+        LOG.remote("[T+0ms] open start: " + what);
     }
 
     public static void mark(String stage) {
-        Log.i("REMOTE", "[T+" + (SystemClock.elapsedRealtime() - t0) + "ms] " + stage);
+        LOG.remote("[T+" + (SystemClock.elapsedRealtime() - t0) + "ms] " + stage);
     }
 
     /** Logs the stage only the first time it is seen since start(). */
@@ -45,6 +47,6 @@ public final class RemoteTimeline {
                 return;
             }
         }
-        Log.i("REMOTE", "[T+" + (SystemClock.elapsedRealtime() - t0) + "ms] " + stage);
+        LOG.remote("[T+" + (SystemClock.elapsedRealtime() - t0) + "ms] " + stage);
     }
 }

@@ -153,7 +153,7 @@ public class RemoteBookSession {
             boolean full = cache.isFullyCached();
             long cachedMB = cache.cachedBytes() / (1024 * 1024);
             LOG.d("RemoteOffline open", remotePath, "full=" + full);
-            android.util.Log.i("REMOTE", "offline open " + remotePath
+            LOG.remote("offline open " + remotePath
                     + " full=" + full + " cached=" + cachedMB + "MB");
             return new RemoteBookSession(remotePath, new LocalBlockDataSource(cache), cache,
                     cache.getFileSize(), cache.getVersionTag(), cacheKey);
@@ -229,7 +229,7 @@ public class RemoteBookSession {
                     if (block == null) {
                         // a null block is a source failure, not EOF: report it
                         // instead of feeding MuPDF a silently truncated document
-                        android.util.Log.i("REMOTE", "readAt block fetch failed offset="
+                        LOG.remote("readAt block fetch failed offset="
                                 + pos + " idx=" + idx);
                         throw new IOException("Remote block read failed at offset " + pos);
                     }
@@ -453,7 +453,7 @@ public class RemoteBookSession {
             // the reader a silently truncated document that never healed (a
             // truncated tail block = epub central directory -> "Document is
             // corrupted" on every later open). Report a failure instead.
-            android.util.Log.i("REMOTE", "short block read idx=" + idx + " offset="
+            LOG.remote("short block read idx=" + idx + " offset="
                     + blockStart + ": got " + got + " of " + len);
             return null;
         }
@@ -537,7 +537,7 @@ public class RemoteBookSession {
         // path (the tree walk stalls on exactly these blocks). The whole-
         // book filler keeps its own yield rule.
         final long per = Math.max(1, depth / PREFETCH_LANES);
-        android.util.Log.i("REMOTE", "prefetch window [" + start + ","
+        LOG.remote("prefetch window [" + start + ","
                 + (start + depth) + ") x" + PREFETCH_LANES + " lanes");
         for (int c = 0; c < PREFETCH_LANES; c++) {
             final long cs = start + c * per;
@@ -670,7 +670,7 @@ public class RemoteBookSession {
                     return;
                 }
             }
-            android.util.Log.i("REMOTE", "filler start " + remotePath
+            LOG.remote("filler start " + remotePath
                     + " " + fMode + " range=[" + fFrom + "," + fTo + ")");
             for (long i = fFrom; i < fTo; i++) {
                 if (cancelled) {
@@ -715,13 +715,13 @@ public class RemoteBookSession {
                         }
                     }
                     if (i % 32 == 0) {
-                        android.util.Log.i("REMOTE", "filler " + remotePath + ": "
+                        LOG.remote("filler " + remotePath + ": "
                                 + (cache.cachedBytes() * 100 / Math.max(1, cache.getFileSize()))
                                 + "% (" + (cache.cachedBytes() / (1024 * 1024)) + "MB)");
                     }
                 } catch (Exception e) {
                     LOG.w(e);
-                    android.util.Log.i("REMOTE", "filler failed at block " + i + ": " + e);
+                    LOG.remote("filler failed at block " + i + ": " + e);
                     return;
                 }
             }
@@ -729,7 +729,7 @@ public class RemoteBookSession {
                 cache.setFullyCached(versionTag);
             }
             LOG.d("RemoteFiller done", remotePath, "capped=" + capped);
-            android.util.Log.i("REMOTE", "filler done " + remotePath + " whole=" + fWhole
+            LOG.remote("filler done " + remotePath + " whole=" + fWhole
                     + " capped=" + capped + " cached=" + (cache.cachedBytes() / (1024 * 1024)) + "MB");
             synchronized (RemoteBookSession.this) {
                 if (filler == Thread.currentThread()) {
@@ -792,7 +792,7 @@ public class RemoteBookSession {
         if (cancelled) {
             return;
         }
-        android.util.Log.i("REMOTE", "session abort " + remotePath);
+        LOG.remote("session abort " + remotePath);
         cancelled = true;
         try {
             source.abort();
@@ -809,7 +809,7 @@ public class RemoteBookSession {
     /** Drops the whole block cache of this book (open-failure self-heal). */
     public void invalidateCache() {
         try {
-            android.util.Log.i("REMOTE", "invalidate block cache " + remotePath);
+            LOG.remote("invalidate block cache " + remotePath);
             BlockCacheStore.clearBook(cacheKey);
         } catch (Exception e) {
             LOG.w(e);

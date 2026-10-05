@@ -91,7 +91,7 @@ public class RemoteVariantDetector {
         try {
             Verdict cached = readCached(s.remotePath, s.versionTag);
             if (cached != null) {
-                android.util.Log.i("REMOTE", "variant cached " + ext + ": " + cached);
+                LOG.remote("variant cached " + ext + ": " + cached);
                 return cached;
             }
             Verdict v;
@@ -106,14 +106,14 @@ public class RemoteVariantDetector {
             } else {
                 v = stream();
             }
-            android.util.Log.i("REMOTE", "variant=" + ext + " -> " + v);
+            LOG.remote("variant=" + ext + " -> " + v);
             if (v.action != STREAM) {
                 storeCached(s.remotePath, s.versionTag, v);
             }
             return v;
         } catch (Throwable t) {
             LOG.e(t);
-            android.util.Log.i("REMOTE", "variant probe failed -> stream: " + t);
+            LOG.remote("variant probe failed -> stream: " + t);
             return stream();
         }
     }
@@ -298,7 +298,7 @@ public class RemoteVariantDetector {
                 images += v[2];
             }
         }
-        android.util.Log.i("REMOTE", "epub variant: spine=" + spineCount + " maxXhtml=" + maxText
+        LOG.remote("epub variant: spine=" + spineCount + " maxXhtml=" + maxText
                 + " fonts=" + fonts + " images=" + images);
         if (spineCount >= 1 && spineCount <= 2 && maxText > EPUB_MAX_SINGLE_XHTML) {
             return download(true, "giant single xhtml " + maxText);

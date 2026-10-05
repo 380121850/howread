@@ -160,7 +160,7 @@ public class ImageExtractor {
             ((org.ebookdroid.droids.mupdf.codec.MuPdfDocument) codeCache)
                     .savePageTreeSidecar(bookPath, versionTag, fileSize);
         } catch (Throwable t) {
-            android.util.Log.i("REMOTE", "page tree save skipped: " + t);
+            LOG.remote("page tree save skipped: " + t);
         }
     }
 
@@ -171,13 +171,13 @@ public class ImageExtractor {
             final String path = pathCache;
             if (codeCache == null || path == null
                     || !(codeCache instanceof org.ebookdroid.droids.mupdf.codec.MuPdfDocument)) {
-                android.util.Log.i("REMOTE", "lazy tree finish skip: codec " + codeCache + " path " + path);
+                LOG.remote("lazy tree finish skip: codec " + codeCache + " path " + path);
                 return;
             }
             ((org.ebookdroid.droids.mupdf.codec.MuPdfDocument) codeCache)
                     .finishLazyTreeAndSaveSidecar(path);
         } catch (Throwable t) {
-            android.util.Log.i("REMOTE", "lazy tree finish skipped: " + t);
+            LOG.remote("lazy tree finish skipped: " + t);
         }
     }
 
@@ -196,12 +196,12 @@ public class ImageExtractor {
                 }
             }
         } catch (Throwable t) {
-            android.util.Log.i("REMOTE", "page tree save skipped: " + t);
+            LOG.remote("page tree save skipped: " + t);
         }
     }
 
     public static synchronized void clearCodeDocument() {
-        android.util.Log.i("REMOTE", "ImageExtractor.clearCodeDocument enter");
+        LOG.remote("ImageExtractor.clearCodeDocument enter");
         if (codeCache != null) {
             if (pathCache != null) {
                 savePageTreeIfPossible(pathCache);
@@ -367,7 +367,7 @@ public class ImageExtractor {
                 pageUrl.tempWithWatermakr = true;
                 return BaseExtractor.getBookCoverWithTitle(fm0.getAuthor(), fm0.getTitle(), true);
             } catch (Throwable t) {
-                android.util.Log.i("REMOTE", "remote cover placeholder failed: " + t);
+                LOG.remote("remote cover placeholder failed: " + t);
             }
         }
 
@@ -530,9 +530,9 @@ public class ImageExtractor {
                 } finally {
                     o.close();
                 }
-                android.util.Log.i("REMOTE", "remote cover saved: " + f.getName());
+                LOG.remote("remote cover saved: " + f.getName());
             } catch (Throwable t) {
-                android.util.Log.i("REMOTE", "remote cover save skipped: " + t);
+                LOG.remote("remote cover save skipped: " + t);
             }
         }, "RemoteCoverSave");
         th.setDaemon(true);

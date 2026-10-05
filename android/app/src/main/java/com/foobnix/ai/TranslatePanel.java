@@ -169,6 +169,13 @@ public class TranslatePanel {
             TextView orig = (TextView) pair.findViewById(R.id.aiTranslatePairOrig);
             TextView tv = (TextView) pair.findViewById(R.id.aiTranslateBlockText);
             orig.setText("▎" + firstLine(slot.orig));
+            pair.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    if (onLocate != null && slot.topY >= 0) {
+                        onLocate.onLocate(slot.topY);
+                    }
+                }
+            });
             switch (slot.state()) {
                 case 2:
                     tv.setText(slot.tran);
@@ -218,6 +225,17 @@ public class TranslatePanel {
                 }
             });
         }
+    }
+
+    /** 点行定位：把对应原文块在页面上高亮一下（topFrac=段落首行/页高，-1 未知） */
+    public interface OnLocateListener {
+        void onLocate(float topFrac);
+    }
+
+    private OnLocateListener onLocate;
+
+    public void setOnLocateListener(OnLocateListener l) {
+        this.onLocate = l;
     }
 
     public void dismiss() {

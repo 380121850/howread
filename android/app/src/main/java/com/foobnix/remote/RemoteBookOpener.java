@@ -149,7 +149,7 @@ public class RemoteBookOpener {
                     done = true;
                 } catch (Exception e) {
                     LOG.e(e);
-                    android.util.Log.i("REMOTE", "docx restricted failed: " + e);
+                    LOG.remote("docx restricted failed: " + e);
                     new File(target.getPath() + ".part").delete();
                     degrade = true;
                 } finally {
@@ -173,16 +173,16 @@ public class RemoteBookOpener {
                     }
                 }
                 if (cancelled.get()) {
-                    android.util.Log.i("REMOTE", "docx restricted cancelled by user");
+                    LOG.remote("docx restricted cancelled by user");
                     return;
                 }
                 if (!done || degrade) {
-                    android.util.Log.i("REMOTE", "docx restricted -> whole-book download: "
+                    LOG.remote("docx restricted -> whole-book download: "
                             + remotePath);
                     fetchToCacheAndOpen(a, remotePath, sizeHint, startPercent);
                     return;
                 }
-                android.util.Log.i("REMOTE", "docx restricted ok: " + target);
+                LOG.remote("docx restricted ok: " + target);
                 ensureMeta(remotePath, session == null ? 0 : session.size);
                 if (startPercent > 0f) {
                     ExtUtils.showDocumentWithoutDialog2(a, Uri.fromFile(target), startPercent, null);
@@ -240,17 +240,17 @@ public class RemoteBookOpener {
 
             @Override
             protected Object doInBackground(Object[] objects) {
-                android.util.Log.i("REMOTE", "openOnline probe " + remotePath);
+                LOG.remote("openOnline probe " + remotePath);
                 try {
                     session = RemoteSessionFactory.obtain(remotePath);
-                    android.util.Log.i("REMOTE", "openOnline probe ok size=" + session.size
+                    LOG.remote("openOnline probe ok size=" + session.size
                             + " range=" + session.isRangeSupported());
                     RemoteTimeline.mark("book info ok (size=" + session.size
                             + " range=" + session.isRangeSupported() + ")");
                 } catch (Exception e) {
                     LOG.e(e);
                     error = e.getMessage();
-                    android.util.Log.i("REMOTE", "openOnline probe failed: " + error);
+                    LOG.remote("openOnline probe failed: " + error);
                 }
                 if (session != null) {
                     // round 12: packaging-variant gate — DRM / giant-XHTML /
@@ -270,7 +270,7 @@ public class RemoteBookOpener {
                 if (a.isFinishing() || a.isDestroyed()) {
                     // the user left while the probe was running: showing a
                     // dialog on a dead activity token crashes (BadToken)
-                    android.util.Log.i("REMOTE", "openOnline finished: activity gone, drop verdict");
+                    LOG.remote("openOnline finished: activity gone, drop verdict");
                     return;
                 }
                 if (session != null && session.isOffline()) {
@@ -283,12 +283,12 @@ public class RemoteBookOpener {
                             fmtMB(got) + " / " + fmtMB(tot)), android.widget.Toast.LENGTH_LONG).show();
                 }
                 if (session == null) {
-                    android.util.Log.i("REMOTE", "openOnline session null, offer download fallback");
+                    LOG.remote("openOnline session null, offer download fallback");
                     offerDownloadFallback(a, remotePath, sizeHint, error);
                     return;
                 }
                 if (verdict != null && verdict.action == RemoteVariantDetector.UNSUPPORTED) {
-                    android.util.Log.i("REMOTE", "variant unsupported: " + verdict.detail);
+                    LOG.remote("variant unsupported: " + verdict.detail);
                     new AlertDialog.Builder(a)
                             .setTitle(R.string.remote_variant_drm_title)
                             .setMessage(R.string.remote_variant_drm_msg)
@@ -297,7 +297,7 @@ public class RemoteBookOpener {
                     return;
                 }
                 if (verdict != null && verdict.action == RemoteVariantDetector.DOWNLOAD) {
-                    android.util.Log.i("REMOTE", "variant download: " + verdict.detail);
+                    LOG.remote("variant download: " + verdict.detail);
                     if (verdict.prompt) {
                         new AlertDialog.Builder(a)
                                 .setTitle(R.string.remote_variant_full_title)
@@ -320,7 +320,7 @@ public class RemoteBookOpener {
                     // degrade to a full fetch instead of skipping (§6.5).
                     // Huge books ask first: a silent 200-300MB download with
                     // nothing opening reads like a hang
-                    android.util.Log.i("REMOTE", "openOnline range unsupported, full fetch size="
+                    LOG.remote("openOnline range unsupported, full fetch size="
                             + session.size);
                     if (session.size >= CONFIRM_FULL_FETCH_BYTES) {
                         new AlertDialog.Builder(a)
@@ -355,7 +355,7 @@ public class RemoteBookOpener {
                             .show();
                     return;
                 }
-                android.util.Log.i("REMOTE", "openOnline ok, launching viewer: " + remotePath
+                LOG.remote("openOnline ok, launching viewer: " + remotePath
                         + " (probe " + (android.os.SystemClock.elapsedRealtime() - openOnlineT0) + "ms)");
                 RemoteTimeline.mark("session ready, launching viewer");
                 // PDF stores its xref/trailer at the tail: warm it before the
@@ -403,6 +403,17 @@ public class RemoteBookOpener {
      */
     public static void fetchToCache(final Activity a, final String remotePath, final long sizeHint,
                                     final FileReady onReady) {
+        fetchToCache(a, remotePath, sizeHint, onReady, null);
+    }
+
+    /**
+     * Overload for callers that must observe the outcome of EVERY attempt:
+     * {@code onFinished} runs on the UI thread after {@code onReady} (success)
+     * or right after the failure toast / cancel. A batch driver waiting on the
+     * outcome used to hang 15 minutes on a failed file (no callback at all).
+     */
+    public static void fetchToCache(final Activity a, final String remotePath, final long sizeHint,
+                                    final FileReady onReady, final Runnable onFinished) {
         final File target = cacheBookFile(remotePath);
         final File tagFile = new File(target.getPath() + ".tag");
         // live progress (bytes fetched / total) + user cancel: 200-300MB
@@ -414,7 +425,7 @@ public class RemoteBookOpener {
                 new java.util.concurrent.atomic.AtomicReference<RemoteBookSession>();
         final Runnable cancelFetch = () -> {
             if (cancelled.compareAndSet(false, true)) {
-                android.util.Log.i("REMOTE", "fetchToCache cancel requested");
+                LOG.remote("fetchToCache cancel requested");
                 RemoteBookSession s = liveSession.get();
                 if (s != null) {
                     s.abort(); // interrupt the in-flight block read at once
@@ -479,7 +490,7 @@ public class RemoteBookOpener {
                     session = RemoteSessionFactory.open(remotePath);
                     liveSession.set(session);
                     total.set(session.size);
-                    android.util.Log.i("REMOTE", "fetchToCache start " + remotePath + " size=" + session.size);
+                    LOG.remote("fetchToCache start " + remotePath + " size=" + session.size);
                     if (isCopyCurrent(target, tagFile, session)) {
                         done = true;
                         return null;
@@ -504,7 +515,7 @@ public class RemoteBookOpener {
                             pos.addAndGet(n);
                             if (total.get() > 0 && pos.get() * 100 / total.get() >= lastLoggedPct + 5) {
                                 lastLoggedPct = (int) (pos.get() * 100 / total.get());
-                                android.util.Log.i("REMOTE", "fetchToCache " + lastLoggedPct + "% ("
+                                LOG.remote("fetchToCache " + lastLoggedPct + "% ("
                                         + fmtMB(pos.get()) + " / " + fmtMB(total.get()) + ")");
                             }
                         }
@@ -520,7 +531,7 @@ public class RemoteBookOpener {
                         throw new java.io.IOException("copy truncated: got "
                                 + pos.get() + " of " + session.size);
                     }
-                    android.util.Log.i("REMOTE", "fetchToCache 100%: " + fmtMB(session.size)
+                    LOG.remote("fetchToCache 100%: " + fmtMB(session.size)
                             + " in " + (android.os.SystemClock.elapsedRealtime() - fetchT0) / 1000 + "s");
                     java.io.FileWriter tw = new java.io.FileWriter(tagFile);
                     tw.write(session.versionTag == null ? "" : session.versionTag);
@@ -533,7 +544,7 @@ public class RemoteBookOpener {
                 } catch (Exception e) {
                     LOG.e(e);
                     error = e.getMessage();
-                    android.util.Log.i("REMOTE", "fetchToCache failed: " + error);
+                    LOG.remote("fetchToCache failed: " + error);
                     new File(target.getPath() + ".part").delete();
                     if (cancelled.get()) {
                         // an explicit user cancel must not fall through to
@@ -572,18 +583,24 @@ public class RemoteBookOpener {
                 }
                 if (!done) {
                     if (cancelled.get()) {
-                        android.util.Log.i("REMOTE", "fetchToCache cancelled by user");
-                        return;
+                        LOG.remote("fetchToCache cancelled by user");
+                    } else {
+                        LOG.remote("fetchToCache failed toast: " + error);
+                        Toast.makeText(a, TxtUtils.isNotEmpty(error) ? error
+                                : a.getString(R.string.remote_open_failed), Toast.LENGTH_LONG).show();
                     }
-                    android.util.Log.i("REMOTE", "fetchToCache failed toast: " + error);
-                    Toast.makeText(a, TxtUtils.isNotEmpty(error) ? error
-                            : a.getString(R.string.remote_open_failed), Toast.LENGTH_LONG).show();
+                    if (onFinished != null) {
+                        onFinished.run();
+                    }
                     return;
                 }
-                android.util.Log.i("REMOTE", "fetchToCache done: " + target);
+                LOG.remote("fetchToCache done: " + target);
                 ensureMeta(remotePath, session == null ? 0 : session.size);
                 if (onReady != null) {
                     onReady.onReady(target);
+                }
+                if (onFinished != null) {
+                    onFinished.run();
                 }
             }
 }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
