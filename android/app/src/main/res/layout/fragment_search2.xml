@@ -96,20 +96,16 @@
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
-            <TextView
+            <ImageView
                 android:contentDescription="@string/cd_sort_results"
                 android:id="@+id/sortBy"
-                android:layout_width="@dimen/sort_by_size"
+                android:layout_width="@dimen/wh_button"
                 android:layout_height="@dimen/wh_button"
                 android:background="?android:attr/selectableItemBackground"
                 android:clickable="true"
-                android:ellipsize="end"
-                android:gravity="center_vertical"
-                android:paddingLeft="8dip"
-                android:singleLine="true"
-                android:text="@string/by_path"
-                android:textColor="@color/white"
-                android:textStyle="normal" />
+                android:scaleType="fitCenter"
+                android:padding="8dip"
+                android:src="@drawable/ic_funnel" />
 
             <ImageView
                 android:visibility="visible"

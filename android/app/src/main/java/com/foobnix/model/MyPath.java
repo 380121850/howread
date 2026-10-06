@@ -55,17 +55,28 @@ public class MyPath {
         if (path == null) {
             return path;
         }
-        if (path.startsWith(INTERNAL_PREFIX)) {
-            return path;
+        String p = path;
+        if (p.startsWith(INTERNAL_PREFIX)) {
+            // internal-storage:/x 是 DB/同步层的虚拟形态，File 层不可直接使用，
+            // 统一还原为真实存在的 /sdcard/ 绝对路径
+            p = "/sdcard" + p.substring(INTERNAL_PREFIX.length());
+        } else if (p.startsWith("/storage/emulated/0/")) {
+            p = "/sdcard/" + p.substring("/storage/emulated/0/".length());
+        } else if (p.startsWith("/storage/self/primary/")) {
+            p = "/sdcard/" + p.substring("/storage/self/primary/".length());
         }
-        String abs = path;
-        if (abs.startsWith("/sdcard/")) {
-            abs = INTERNAL_ROOT + abs.substring("/sdcard".length());
+        // intent/URI 来源的路径可能带 URL 编码（%20、%E5...），解码后再比较
+        if (p.indexOf('%') >= 0) {
+            try {
+                final String dec = android.net.Uri.decode(p);
+                if (dec != null && dec.length() > 0) {
+                    p = dec;
+                }
+            } catch (final Throwable t) {
+                // keep undecoded
+            }
         }
-        if (abs.startsWith(INTERNAL_ROOT + "/")) {
-            return toRelative(abs);
-        }
-        return path;
+        return p;
     }
 
     public static String getSyncPath(String path) {

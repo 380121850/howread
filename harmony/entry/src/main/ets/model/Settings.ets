@@ -174,6 +174,8 @@ export interface ReaderSettings {
   remoteBatchDir: string;
   /** last PDF translation mode 0..3 (0.9.20) */
   pdfTransMode: number;
+  /** 0.9.21: last debug-log export file name (collapsed row header hint) */
+  debugLogExportPath: string;
   /** Initial retry interval in ms (exponential backoff; default 100) */
   remoteRetryIntervalMs: number;
 
@@ -279,6 +281,7 @@ export function defaultSettings(): ReaderSettings {
     remoteRetryCount: 3,
     remoteBatchDir: '',
     pdfTransMode: 0,
+    debugLogExportPath: '',
     remoteRetryIntervalMs: 100,
     volumeKeyAction: 1,
     tapLeftAction: 0,
@@ -383,6 +386,7 @@ export async function loadSettings(ctx: Context): Promise<ReaderSettings> {
       remoteRetryCount: typeof r.remoteRetryCount === 'number' ? r.remoteRetryCount : d.remoteRetryCount,
       remoteBatchDir: typeof r.remoteBatchDir === 'string' ? r.remoteBatchDir : d.remoteBatchDir,
       pdfTransMode: typeof r.pdfTransMode === 'number' ? r.pdfTransMode : d.pdfTransMode,
+      debugLogExportPath: typeof r.debugLogExportPath === 'string' ? r.debugLogExportPath : '',
       /* 0.9.6: a stored old default 1000 follows the new default 100
        * (Android AppState migration parity); custom values kept */
       remoteRetryIntervalMs: typeof r.remoteRetryIntervalMs === 'number' && r.remoteRetryIntervalMs !== 1000

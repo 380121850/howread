@@ -1,5 +1,6 @@
 package com.foobnix.ui2.fragment;
 
+import com.foobnix.pdf.info.view.AlertDialogs;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
@@ -120,7 +121,29 @@ public class DashboardFragment2 extends UIFragment<FileMeta> {
         if (statsHeader != null) {
             ((TextView) statsHeader.findViewById(R.id.sectionTitle))
                     .setText(getString(R.string.moon_home_stats) + " (Pro)");
-            statsHeader.findViewById(R.id.sectionMore).setVisibility(View.GONE);
+            // 齿轮入口：清空阅读统计（总时长/今日/速度）
+            View statsGear = statsHeader.findViewById(R.id.sectionMore);
+            statsGear.setVisibility(View.VISIBLE);
+            ((TextView) statsGear).setText("\u2699");
+            statsGear.setOnClickListener(v -> AlertDialogs.showOkDialog(
+                    getActivity(),
+                    getString(R.string.moon_stats_clear_confirm),
+                    () -> {
+                        AppSP sp = AppSP.get();
+                        sp.readTimeMs = 0;
+                        sp.readDayKey = "";
+                        sp.readDayMs = 0;
+                        sp.readPages = 0;
+                        sp.readMonthlyJson = "{}";
+                        sp.readDailyJson = "{}";
+                        sp.save();
+                        try {
+                            com.foobnix.model.ProfileStateIO.exportStats();
+                        } catch (final Throwable t) {
+                            LOG.w(t);
+                        }
+                        populate();
+                    }));
         }
         bindStat(view, R.id.statTotal, R.string.moon_stat_total);
         bindStat(view, R.id.statRead,  R.string.moon_stat_read);

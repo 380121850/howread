@@ -59,10 +59,36 @@ public class Fb2Context extends PdfContext {
 
         if (cacheFile.isFile()) {
             outName = cacheFile.getPath();
-        } else if (outName == null) {
+        } else if (AppState.get().isShowFooterNotesInText) {
+            // 脚注注入依赖转换链的脚注抽取：保持同步转换
             outName = cacheFile.getPath();
             Fb2Extractor.get().convert(fileName, outName, false, notes);
             LOG.d("Fb2Context create", fileName, "to", outName);
+        } else {
+            // 方案 B+A：首开免整本转换等待——引擎 fb2 分章直读源文件即时渲染
+            // （与远程 fb2 直开同一引擎流），同时低优先级后台线程做完整转换
+            // 入缓存；二次打开命中缓存即用转换产物（目录/脚注更全）。缓存被
+            // 清理（上限）时同样回退直读，打开速度不回退。
+            outName = fileName;
+            LOG.bench("fb2 direct open (bg convert) " + fileName);
+            final File bgOut = new File(cacheFile.getPath() + ".tmp");
+            final Thread bg = new Thread("@T fb2-bg-convert") {
+                @Override public void run() {
+                    try {
+                        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
+                        Fb2Extractor.get().convert(fileName, bgOut.getPath(), false, null);
+                        if (bgOut.renameTo(cacheFile)) {
+                            LOG.bench("fb2 bg-convert done " + cacheFile.getPath());
+                        } else {
+                            LOG.bench("fb2 bg-convert rename failed");
+                        }
+                    } catch (final Throwable t) {
+                        LOG.w(t);
+                    }
+                }
+            };
+            bg.setPriority(Thread.MIN_PRIORITY);
+            bg.start();
         }
 
         LOG.d("Fb2Context open", outName);

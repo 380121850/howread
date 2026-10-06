@@ -106,6 +106,11 @@ async function saveStore(ctx: Context, store: StatsStore): Promise<void> {
   }
 }
 
+/** 0.9.21: one-tap stats clear (Android 阅读统计一键清空, CHANGES 2026-10-06). */
+export async function clearReadingStats(ctx: Context): Promise<void> {
+  await saveStore(ctx, emptyStore());
+}
+
 /** Accumulate reading time (the Reader reports 30s chunks). */
 export async function recordReadTime(ctx: Context, ms: number): Promise<void> {
   try {

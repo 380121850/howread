@@ -621,6 +621,10 @@
       "value": "重置"
     },
     {
+      "name": "restore_default_config",
+      "value": "恢复默认配置"
+    },
+    {
       "name": "common_save_failed",
       "value": "保存失败"
     },

@@ -222,6 +222,7 @@
    <string name="cancel">取消</string>
    <string name="close">关闭</string>
    <string name="restore_defaults_full">恢复默认值?</string>
+   <string name="restore_default_config">恢复默认配置</string>
    <string name="send_file_to">发送文件到</string>
    <string name="apply_a_new_screen_orientation_">确认旋转屏幕？</string>
    <string name="send_mail">发送邮件</string>
@@ -484,6 +485,7 @@
    <string name="never">从不</string>
    <string name="general_settings">常规设置</string>
    <string name="debug_log_enable">调试日志</string>
+   <string name="debug_log_settings">调试日志</string>
    <string name="debug_log_export">导出调试日志</string>
    <string name="debug_log_exported">调试日志已导出：%s</string>
    <string name="debug_log_empty">调试日志为空或不存在（请先打开调试日志并使用一段时间）</string>
@@ -1031,4 +1033,6 @@
    <string name="support_issues_url">https://github.com/380121850/howread/issues</string>
     <string name="ai_key_show">显示</string>
     <string name="ai_key_hide">隐藏</string>
+    <string name="moon_stats_clear_confirm">确定清空总阅读时间、今日阅读与阅读速度统计？此操作不可恢复。</string>
+    <string name="reset_app_confirm">恢复默认配置：将清空全部配置、书籍索引、阅读统计与缓存并自动重启应用（书籍文件不受影响）。确定继续？</string>
 </resources>

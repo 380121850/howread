@@ -129,7 +129,8 @@ public class SearchFragment2 extends UIFragment<FileMeta> {
     private String libScrollKey;
     FileMetaAdapter searchAdapter;
     AuthorsAdapter2 authorsAdapter;
-    TextView countBooks, sortBy, layoutErrorOnRestart;
+    TextView countBooks, layoutErrorOnRestart;
+    ImageView sortBy;
     Handler handler;
     ImageView sortOrder, myAutoCompleteImage, cleanFilter;
     View onRefresh, secondTopPanel, layoutError;
@@ -618,7 +619,7 @@ public class SearchFragment2 extends UIFragment<FileMeta> {
         emptyLibraryHint = view.findViewById(R.id.emptyLibraryHint);
         onRefresh.setActivated(true);
         cleanFilter = (ImageView) view.findViewById(R.id.cleanFilter);
-        sortBy = (TextView) view.findViewById(R.id.sortBy);
+        sortBy = (ImageView) view.findViewById(R.id.sortBy);
         sortOrder = (ImageView) view.findViewById(R.id.sortOrder);
         myAutoCompleteImage = (ImageView) view.findViewById(R.id.myAutoCompleteImage);
         searchEditText = (AutoCompleteTextView) view.findViewById(R.id.filterLine);
@@ -1003,14 +1004,11 @@ public class SearchFragment2 extends UIFragment<FileMeta> {
             return;
         }
         searchEditText.setHint(R.string.msg_loading);
-        sortBy.setText(AppDB.SORT_BY.getByID(AppState.get().sortBy)
-                                    .getResName());
-
         sortOrder.setImageResource(AppState.get().isSortAsc ? R.drawable.glyphicons_221_chevron_down :
                 R.drawable.glyphicons_222_chevron_up);
 
         String order = getString(AppState.get().isSortAsc ? R.string.ascending : R.string.descending);
-        sortBy.setContentDescription(getString(R.string.cd_sort_results) + " " + sortBy.getText());
+        sortBy.setContentDescription(getString(R.string.cd_sort_results));
         sortOrder.setContentDescription(order);
 
         populate();
@@ -1124,7 +1122,8 @@ public class SearchFragment2 extends UIFragment<FileMeta> {
             if (//
                     AppState.get().sortBy == SORT_BY.PATH.getIndex() ||//
                             AppState.get().sortBy == SORT_BY.LANGUAGE.getIndex() ||//
-                            AppState.get().sortBy == SORT_BY.PUBLICATION_YEAR.getIndex() || AppState.get().sortBy == SORT_BY.SERIES.getIndex() || AppState.get().sortBy == SORT_BY.PUBLISHER.getIndex()) {//
+                            AppState.get().sortBy == SORT_BY.PUBLICATION_YEAR.getIndex() || AppState.get().sortBy == SORT_BY.SERIES.getIndex() || AppState.get().sortBy == SORT_BY.PUBLISHER.getIndex() ||//
+                            AppState.get().sortBy == SORT_BY.EXT.getIndex()) {//
 
                 List<FileMeta> res = new ArrayList<FileMeta>();
                 String last = null;
@@ -1160,6 +1159,13 @@ public class SearchFragment2 extends UIFragment<FileMeta> {
                             parentName = "---";
                         } else {
                             parentName = DialogTranslateFromTo.getLanuageByCode(lang);
+                        }
+                    } else if (AppState.get().sortBy == SORT_BY.EXT.getIndex()) {
+                        String ext = it.getExt();
+                        if (TxtUtils.isEmpty(ext)) {
+                            parentName = "---";
+                        } else {
+                            parentName = ext.replace(".", "").toUpperCase(java.util.Locale.US);
                         }
                     }
                     count++;
@@ -1266,7 +1272,6 @@ public class SearchFragment2 extends UIFragment<FileMeta> {
             prevLibModeAuthors = AppState.get().libraryMode;
             searchEditText.setEnabled(false);
             sortBy.setEnabled(false);
-            sortBy.setText("");
             sortOrder.setEnabled(false);
             sortOrder.setVisibility(View.INVISIBLE);
 

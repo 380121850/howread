@@ -629,6 +629,10 @@
       "value": "Reset"
     },
     {
+      "name": "restore_default_config",
+      "value": "Restore default config"
+    },
+    {
       "name": "common_save_failed",
       "value": "Save failed"
     },

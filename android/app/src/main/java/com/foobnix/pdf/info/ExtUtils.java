@@ -308,7 +308,10 @@ public class ExtUtils {
                     meta.getSize() == null ? 0 : meta.getSize());
             return;
         }
-        File file = new File(meta.getPath());
+        // internal-storage:/ 前缀是书架 DB 的虚拟形态，File 层不存在——先还原
+        // 成真实路径再判存在，否则收藏/最近阅读打开时误报"文件未找到"
+        File file = new File(com.foobnix.model.MyPath.toAbsolute(
+                org.ebookdroid.core.codec.AbstractCodecContext.normalizeStoragePath(meta.getPath())));
 
         if (ExtUtils.isExteralSD(meta.getPath())) {
             LOG.d("openFile isExteralSD");

@@ -4,6 +4,7 @@ import { window } from '@kit.ArkUI';
 import { tlog } from '../model/TestLog';
 import hiAppEvent from '@ohos.hiviewdfx.hiAppEvent';
 import { writeCrashLog } from '../model/CrashLog';
+import { debugLogInit, debugLogWrite, debugLogIsOn } from '../model/DebugLog';
 
 const TAG: string = 'Librera';
 export const KEY_PENDING_URI: string = 'pendingOpenUri';
@@ -51,6 +52,7 @@ export default class EntryAbility extends UIAbility {
     hilog.info(0x0000, TAG, '%{public}s', 'Ability onCreate');
     tlog('ability_onCreate');
     this.registerCrashHooks();
+    debugLogInit(this.context);
     stashWantUri(want);
   }
 
@@ -72,6 +74,11 @@ export default class EntryAbility extends UIAbility {
                 detail += JSON.stringify(ev.params);
               } catch (e) { /* keep the basic fields */ }
               writeCrashLog(this.context.filesDir, 'CRASH', detail);
+              /* 0.9.21: FATAL also lands in the debug log file (Android
+               * 2026-10-05: one file carries the whole repro). */
+              if (debugLogIsOn()) {
+                debugLogWrite('FATAL', detail);
+              }
             }
           }
         }

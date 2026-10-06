@@ -1181,6 +1181,7 @@ struct Reader {
       scanFormats: cur.scanFormats,
       remoteBatchDir: cur.remoteBatchDir,
       pdfTransMode: this.pdfBiMode,
+      debugLogExportPath: cur.debugLogExportPath,
       coverListSize: cur.coverListSize,
       coverGridSize: cur.coverGridSize,
       showBookCovers: cur.showBookCovers,

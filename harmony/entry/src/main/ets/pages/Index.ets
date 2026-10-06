@@ -22,9 +22,9 @@ import {
 } from '../model/Settings';
 import { importUriToSandbox } from '../model/FileImport';
 import { scanDeviceBooks, scanFolderBooks, importPathToSandbox, searchLibraryText, findMissingBooks, ScanHit, LibSearchHit } from '../model/LibrarySearch';
-import { initProfiles, listProfiles, createProfile, switchProfile, deleteProfile, getCurrentProfile, DEFAULT_PROFILE } from '../model/Profiles';
+import { initProfiles, listProfiles, createProfile, switchProfile, deleteProfile, getCurrentProfile, storeName, DEFAULT_PROFILE } from '../model/Profiles';
 import { getTagList, addTagToBook, removeTagFromBook, getSeriesList } from '../model/Tags';
-import { getReadingStats, getDailyStats, getMonthlyStats, ReadingStatsData, DayStat, MonthStat } from '../model/ReadingStats';
+import { getReadingStats, getDailyStats, getMonthlyStats, clearReadingStats, ReadingStatsData, DayStat, MonthStat } from '../model/ReadingStats';
 import { fetchOpds, OpdsEntry } from '../model/Opds';
 import { OpdsServer, DavServer, SmbServer, SftpServer, getOpdsServers, saveOpdsServer, removeOpdsServer, getDavServers, saveDavServer, removeDavServer, getSmbServers, saveSmbServer, removeSmbServer, getSftpServers, saveSftpServer, removeSftpServer, LibFolder, getLibFolders, saveLibFolders } from '../model/Servers';
 import { SyncConfig, SyncLogEntry, SYNC_CONFLICTS, defaultSyncConfig, loadSyncConfig, saveSyncConfig, getSyncLog, runSync, testSyncConnection, syncAiProfiles } from '../model/Sync';
@@ -38,8 +38,10 @@ import display from '@ohos.display';
 import promptAction from '@ohos.promptAction';
 import { KEY_PENDING_URI } from '../entryability/EntryAbility';
 import { tlog } from '../model/TestLog';
+import { debugLogIsOn, debugLogSetEnabled, debugLogClear, debugLogPath } from '../model/DebugLog';
 import web_webview from '@ohos.web.webview';
 import i18n from '@ohos.i18n';
+import preferences from '@ohos.data.preferences';
 import bundleManager from '@ohos.bundle.bundleManager';
 import Want from '@ohos.app.ability.Want';
 import { BUILD_TIME } from '../model/BuildInfo';
@@ -205,7 +207,7 @@ struct Index {
   /* group bars (lib/gen/ui) render their rows directly like Android; the
    * sub config containers start collapsed so the page opens as a compact
    * link-row list (Android PrefFragment2 parity) */
-  @State groupExp: Record<string, boolean> = { 'lib': true, 'gen': true, 'ui': true, 'backup': false, 'fmt': false, 'libset': false, 'libdisp': false, 'cov': false, 'read': false, 'theme': false, 'tabs': false, 'remote': false };
+  @State groupExp: Record<string, boolean> = { 'lib': true, 'gen': true, 'ui': true, 'backup': false, 'fmt': false, 'libset': false, 'libdisp': false, 'cov': false, 'read': false, 'theme': false, 'tabs': false, 'remote': false, 'cachemgr': false, 'dbglog': false };
   @State subPage: number = 0;           /* full-screen sub-page: 0=none 1=最近阅读 2=书签笔记 */
   @State showDirPick: boolean = false;  /* local directory picker dialog */
   @State dirPickTarget: string = '';    /* root | fonts | downloads | libFolder | libFolderEdit */
@@ -374,6 +376,9 @@ struct Index {
   @State remoteNumMin: number = 0;
   @State remoteNumMax: number = 99999;
   @State remoteCacheUsage: string = '';
+  @State appCacheUsage: string = '';
+  @State cacheTotalUsage: string = '';
+  @State dbgLogOn: boolean = false;
 
   /* ---- SMB/SFTP servers (native libsmb2 / libssh2 clients) ---- */
   @State smbServers: SmbServer[] = [];
@@ -3543,6 +3548,192 @@ tlog('download_start', 'name=' + fileName);    try {
   }
 
   /** Drawer "exit" button: optional confirm, then terminate the ability. */
+  /** 0.9.21: right-side hint of the collapsed 调试日志 row (last export). */
+  private dbgLogExportHint(): string {
+    const p: string = this.settings.debugLogExportPath;
+    if (p.length === 0) {
+      return '未导出';
+    }
+    const cut: number = p.lastIndexOf('/');
+    return cut >= 0 ? p.substring(cut + 1) : p;
+  }
+
+  /** 0.9.21: gear on the stats header -> confirm -> wipe reading stats. */
+  private confirmClearStats(): void {
+    AlertDialog.show({
+      title: '清空阅读统计',
+      message: '确定清空总阅读时间、今日阅读与阅读速度统计吗？月/日明细将同时清空，书籍数量不受影响。',
+      primaryButton: { value: '取消', action: () => {} },
+      secondaryButton: {
+        value: '清空',
+        action: () => {
+          clearReadingStats(getContext(this)).then(() => {
+            this.loadStats();
+            tlog('stats_cleared');
+            promptAction.showToast({ message: '阅读统计已清空' });
+          });
+        }
+      }
+    });
+  }
+
+  /** 0.9.21: cache dir size, one level deep (sync, cacheDir is small). */
+  private dirSize(dir: string): number {
+    let sum: number = 0;
+    try {
+      const names: string[] = fs.listFileSync(dir);
+      for (let i = 0; i < names.length; i++) {
+        try {
+          sum += fs.statSync(dir + '/' + names[i]).size;
+        } catch (e) { /* raced entry */ }
+      }
+    } catch (e) { /* no dir yet */ }
+    return sum;
+  }
+
+  private refreshCacheUsage(): void {
+    const ctx = getContext(this);
+    remoteCacheTotalBytes(ctx).then((remote: number) => {
+      const app: number = this.dirSize((getContext(this) as common.UIAbilityContext).cacheDir);
+      this.remoteCacheUsage = this.fmtBytes(remote);
+      this.appCacheUsage = this.fmtBytes(app);
+      this.cacheTotalUsage = this.fmtBytes(remote + app);
+    });
+  }
+
+  private confirmClearAppCache(): void {
+    AlertDialog.show({
+      title: '清空应用缓存',
+      message: '删除应用运行缓存（封面缩略、临时文件等）？书籍与设置不受影响。',
+      primaryButton: { value: '取消', action: () => {} },
+      secondaryButton: {
+        value: '清空',
+        action: () => {
+          const ctx = getContext(this) as common.UIAbilityContext;
+          try {
+            const names: string[] = fs.listFileSync(ctx.cacheDir);
+            for (let i = 0; i < names.length; i++) {
+              const p: string = ctx.cacheDir + '/' + names[i];
+              try {
+                const st: fs.Stat = fs.statSync(p);
+                if (st.isDirectory()) {
+                  fs.rmdirSync(p);
+                } else {
+                  fs.unlinkSync(p);
+                }
+              } catch (e) { /* skip entry */ }
+            }
+            promptAction.showToast({ message: '应用缓存已清空' });
+          } catch (e) {
+            promptAction.showToast({ message: '清空失败' });
+          }
+          this.refreshCacheUsage();
+        }
+      }
+    });
+  }
+
+  /** 0.9.21: export debug-log.txt via the system save picker (Android
+   * 2026-10-05: write straight to a user folder, no share panel). */
+  private async exportDebugLog(): Promise<void> {
+    const ctx = getContext(this) as common.UIAbilityContext;
+    try {
+      const src: string = debugLogPath(ctx);
+      try {
+        fs.statSync(src);
+      } catch (e) {
+        promptAction.showToast({ message: '日志为空：先打开调试日志并复现一次' });
+        return;
+      }
+      const docPicker = new picker.DocumentViewPicker(ctx);
+      const opts: picker.DocumentSaveOptions = new picker.DocumentSaveOptions();
+      opts.newFileNames = ['HowRead-debug-' + new Date().toISOString().replace(/[:.]/g, '-') + '.log'];
+      const uris: Array<string> = await docPicker.save(opts);
+      if (uris.length === 0) {
+        return;
+      }
+      const f: fs.File = fs.openSync(uris[0], fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      fs.copyFileSync(src, f.fd);
+      fs.closeSync(f);
+      const name: string = uris[0].substring(uris[0].lastIndexOf('/') + 1);
+      this.settings.debugLogExportPath = name;
+      this.saveNow();
+      tlog('debug_log_exported', 'name=' + name);
+      promptAction.showToast({ message: '已导出：' + name });
+    } catch (e) {
+      console.error('[Index] debug log export failed: ' + JSON.stringify(e));
+      promptAction.showToast({ message: '导出未完成' });
+    }
+  }
+
+  /** 0.9.21: 恢复默认配置 — full factory reset + auto restart (Android
+   * CHANGES 2026-10-06). Books on user storage are never touched. */
+  private confirmFactoryReset(): void {
+    AlertDialog.show({
+      title: '恢复默认配置',
+      message: '将清空：全部设置、书籍索引与书库、阅读进度/统计/收藏、书签与笔记、AI 配置、服务器列表、远程与应用缓存、调试与崩溃日志。\n书籍文件本身不受影响。\n\n确定继续吗？应用将自动重启。',
+      primaryButton: { value: '取消', action: () => {} },
+      secondaryButton: {
+        value: '恢复并重启',
+        action: () => {
+          this.performFactoryReset();
+        }
+      }
+    });
+  }
+
+  private async performFactoryReset(): Promise<void> {
+    tlog('factory_reset');
+    const ctx = getContext(this) as common.UIAbilityContext;
+    /* 1) preference stores: raw names + current-profile variants */
+    const stores: string[] = ['librera_settings', 'librera_reader', 'librera_stats', 'librera_bookmarks',
+      'librera_notes', 'librera_ai', 'librera_servers', 'librera_remote', 'librera_profiles', 'librera_debug'];
+    for (let i = 0; i < stores.length; i++) {
+      const names: string[] = [stores[i], storeName(stores[i])];
+      for (let j = 0; j < names.length; j++) {
+        try {
+          await preferences.deletePreferences(ctx, names[j]);
+        } catch (e) { /* may not exist */ }
+      }
+    }
+    /* 2) logs */
+    try {
+      fs.unlinkSync(ctx.filesDir + '/debug-log.txt');
+    } catch (e) { }
+    try {
+      fs.unlinkSync(ctx.filesDir + '/crash.txt');
+    } catch (e) { }
+    /* 3) caches */
+    try {
+      await clearRemoteCacheAll(ctx);
+    } catch (e) { }
+    try {
+      const names2: string[] = fs.listFileSync(ctx.cacheDir);
+      for (let i = 0; i < names2.length; i++) {
+        const p: string = ctx.cacheDir + '/' + names2[i];
+        try {
+          const st: fs.Stat = fs.statSync(p);
+          if (st.isDirectory()) {
+            fs.rmdirSync(p);
+          } else {
+            fs.unlinkSync(p);
+          }
+        } catch (e) { /* skip entry */ }
+      }
+    } catch (e) { }
+    /* 4) restart: start a fresh instance first, then exit (Android 2026-10-05
+     * fix: front-start before exit so the relaunch survives process death). */
+    try {
+      const want: Want = { bundleName: ctx.abilityInfo.bundleName, abilityName: ctx.abilityInfo.name };
+      await ctx.startAbility(want);
+    } catch (e) {
+      console.error('[Index] factory reset restart failed: ' + JSON.stringify(e));
+    }
+    try {
+      ctx.terminateSelf();
+    } catch (e) { }
+  }
+
   exitApp(): void {
     if (this.settings.showExitDialog) {
       this.showExitConfirm = true;
@@ -3990,8 +4181,20 @@ tlog('download_start', 'name=' + fileName);    try {
           .width('100%')
         }
 
-        /* 阅读统计: 3 + 2 white cards */
-        this.sectionHeader(this.L($r('app.string.sec_stats')) + ' (Pro)', -1)
+        /* 阅读统计: 3 + 2 white cards; 0.9.21: gear = one-tap stats clear
+         * (Android 阅读统计一键清空, CHANGES 2026-10-06) */
+        Row() {
+          Text(this.L($r('app.string.sec_stats')) + ' (Pro)')
+            .fontSize(17).fontWeight(FontWeight.Medium).fontColor(this.txtPri())
+          Blank()
+          Image($r('app.media.ic_settings'))
+            .width(18).height(18).fillColor(this.txtMid())
+            .onClick(() => {
+              this.confirmClearStats();
+            })
+        }
+        .width('94%')
+        .padding({ top: 14, bottom: 8 })
         Row({ space: 10 }) {
           this.statCard(0)
           this.statCard(1)
@@ -4181,18 +4384,14 @@ tlog('download_start', 'name=' + fileName);    try {
               this.runDeviceScan();
             })
 
-          /* sort: label + chevron */
-          Row({ space: 2 }) {
-            Text(this.sortName(this.libSortMode))
-              .fontSize(13).fontColor(Color.White)
-            Image($r('app.media.ic_chevron_up'))
-              .width(14).height(14).fillColor(Color.White)
-          }
-          .height(38)
-          .padding({ left: 8, right: 4 })
-          .onClick(() => {
-            this.libSortMode = (this.libSortMode + 1) % 5;
-          })
+          /* 0.9.21: sort = funnel icon + popup menu incl. 格式 (Android
+           * 书库排列改版, CHANGES 2026-10-06) */
+          Image($r('app.media.ic_filter'))
+            .width(20).height(20).fillColor(Color.White)
+            .margin({ left: 6, right: 6 })
+            .onClick(() => {
+              this.openOptSheet('libsort');
+            })
 
           Image($r('app.media.ic_refresh'))
             .width(20).height(20).fillColor(Color.White)
@@ -4326,7 +4525,7 @@ tlog('download_start', 'name=' + fileName);    try {
       if (this.getLibraryBooks().length === 0) {
         Text($r('app.string.lib_empty_import'))
           .fontSize(13).fontColor(this.txtFaint()).margin({ top: 60 })
-      } else if (this.libGroupBy > 0) {
+      } else if (this.libGroupBy > 0 || this.libSortMode === 5) {
         /* grouped view: author / series / genre (Android 分组视图 parity;
          * empty groups impossible here — the branch above handles the empty list) */
         Scroll() {
@@ -4334,7 +4533,7 @@ tlog('download_start', 'name=' + fileName);    try {
             ForEach(this.getGroupedLibrary(), (group: [string, RecentBook[]]) => {
               Column() {
                 Text(group[0] + ' (' + group[1].length + ')')
-                  .fontSize(14).fontWeight(FontWeight.Bold).fontColor(this.txtSec())
+                  .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtSec())
                   .width('100%').padding({ left: 8, top: 10, bottom: 4 })
                   .textAlign(TextAlign.Start)
                 ForEach(group[1], (book: RecentBook) => {
@@ -4457,12 +4656,22 @@ tlog('download_start', 'name=' + fileName);    try {
       list.sort((a: RecentBook, b2: RecentBook) => a.author.localeCompare(b2.author));
     } else if (this.libSortMode === 4) {
       list.sort((a: RecentBook, b2: RecentBook) => a.series.localeCompare(b2.series));
+    } else if (this.libSortMode === 5) {
+      /* 0.9.21: format sort -> aggregate groups (EPUB (12) headers) */
+      list.sort((a: RecentBook, b2: RecentBook) => {
+        const fa: string = fileExtOf(a.path);
+        const fb: string = fileExtOf(b2.path);
+        if (fa !== fb) {
+          return fa.localeCompare(fb);
+        }
+        return a.title.localeCompare(b2.title);
+      });
     }
     return list;
   }
 
   sortName(mode: number): string {
-    return mode === 0 ? this.L($r('app.string.sort_recent')) : mode === 1 ? this.L($r('app.string.common_name')) : mode === 2 ? this.L($r('app.string.sort_date')) : mode === 3 ? this.L($r('app.string.sort_author')) : this.L($r('app.string.sort_series'));
+    return mode === 0 ? this.L($r('app.string.sort_recent')) : mode === 1 ? this.L($r('app.string.common_name')) : mode === 2 ? this.L($r('app.string.sort_date')) : mode === 3 ? this.L($r('app.string.sort_author')) : mode === 4 ? this.L($r('app.string.sort_series')) : '格式';
   }
 
   /** Grouped library for the 分组 chip (1=author 2=series 3=genre). */
@@ -4471,9 +4680,11 @@ tlog('download_start', 'name=' + fileName);    try {
     const filtered = this.getLibraryBooks();
     for (let i = 0; i < filtered.length; i++) {
       const book = filtered[i];
+      const extKey: string = fileExtOf(book.path).toUpperCase();
       const key = this.libGroupBy === 2 ? book.series
         : this.libGroupBy === 3 ? book.genre
-          : book.author;
+          : this.libSortMode === 5 ? (extKey.length > 0 ? extKey : '其它')
+            : book.author;
       const label = key.length > 0 ? key : this.L($r('app.string.tag_none'));
       if (groups.has(label)) {
         groups.get(label)!.push(book);
@@ -8074,7 +8285,7 @@ tlog('download_start', 'name=' + fileName);    try {
           this.webdavDownloading = `(${i + 1}/${names.length}) ${name}`;
         });
         const dest: string = targetDir + '/' + name;
-        fs.copyFileSync(localPath, dest);
+        await fs.copyFile(localPath, dest);
         const book: RecentBook = {
           path: dest,
           title: name,
@@ -9052,20 +9263,15 @@ tlog('download_start', 'name=' + fileName);    try {
           this.openProfilePanel();
         })
 
-        Text($r('app.string.common_reset'))
+        /* 0.9.21: 「重置」→「恢复默认配置」+ full factory reset (Android CHANGES
+         * 2026-10-06: 应用重置并入原有入口). Book files are never touched. */
+        Text($r('app.string.restore_default_config'))
           .fontSize(this.fsp(14)).fontColor(this.thm())
           .decoration({ type: TextDecorationType.Underline, color: this.thm() })
           .width('100%')
           .padding({ left: 12, bottom: 4 })
           .onClick(() => {
-            this.settings = defaultSettings();
-            saveSettings(getContext(this), this.settings);
-            AppStorage.setOrCreate<string>('themeColorHex', '#3949AB');
-            AppStorage.setOrCreate<string>('accentColorHex', '#03A9F4');
-            AppStorage.setOrCreate<number>('fontScale', 1.0);
-            this.loadTabOrder();
-            this.status = '\u5DF2\u91CD\u7F6E\u4E3A\u9ED8\u8BA4\u8BBE\u7F6E';
-            console.info('[Index] Settings reset to defaults');
+            this.confirmFactoryReset();
           })
 
         /* ================= 1. 书库设置 (Android section1) ================= */
@@ -9557,7 +9763,116 @@ tlog('download_start', 'name=' + fileName);    try {
           }
         }
 
-        /* ================= 4. UI 配置 (Android section4) ================= */
+          /* 0.9.21: 缓存管理 (Android cache-manager entry, CHANGES 2026-10-05:
+           * one place shows the breakdown + total, clears everything) */
+          this.settingsSubBar('缓存管理', 'cachemgr')
+          if (this.groupExp['cachemgr'] === true) {
+            Row() {
+              Text('在线阅读缓存').fontSize(14).fontColor(this.accentTextColor() ? this.acc() : this.txtPri()).layoutWeight(1)
+              Text(this.remoteCacheUsage).fontSize(14).fontColor(this.txtSec())
+              Text('清空').fontSize(13).fontColor('#e57373').margin({ left: 12 })
+                .onClick(() => {
+                  AlertDialog.show({
+                    title: '清空远程缓存',
+                    message: '删除所有远程书籍的缓存块？已下载到本地的书不受影响。',
+                    primaryButton: { value: '取消', action: () => {} },
+                    secondaryButton: {
+                      value: '清空',
+                      action: () => {
+                        clearRemoteCacheAll(getContext(this)).then(() => {
+                          this.loadRemoteBooks();
+                          this.refreshCacheUsage();
+                          promptAction.showToast({ message: '已清空远程缓存' });
+                        });
+                      }
+                    }
+                  });
+                })
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+            Row() {
+              Text('应用缓存').fontSize(14).fontColor(this.accentTextColor() ? this.acc() : this.txtPri()).layoutWeight(1)
+              Text(this.appCacheUsage).fontSize(14).fontColor(this.txtSec())
+              Text('清空').fontSize(13).fontColor('#e57373').margin({ left: 12 })
+                .onClick(() => {
+                  this.confirmClearAppCache();
+                })
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+            Row() {
+              Text('合计占用').fontSize(14).fontWeight(FontWeight.Medium).fontColor(this.accentTextColor() ? this.acc() : this.txtPri()).layoutWeight(1)
+              Text(this.cacheTotalUsage).fontSize(14).fontColor(this.thm())
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+          }
+
+          /* 0.9.21: 调试日志 — collapsed row, export path shown on the right
+           * (Android CHANGES 2026-10-06 折叠式; switch/export/clear per 10-04) */
+          Row({ space: 10 }) {
+            Image($r('app.media.ic_sliders'))
+              .width(18).height(18).fillColor(this.isDark() ? this.thm() : '#00897B')
+            Text('调试日志')
+              .fontSize(this.fsp(15)).fontColor(this.isDark() ? this.thm() : '#00897B')
+              .decoration({ type: TextDecorationType.Underline, color: this.isDark() ? this.thm() : '#00897B' })
+              .layoutWeight(1)
+            Text(this.dbgLogExportHint())
+              .fontSize(11).fontColor(this.txtFaint()).maxLines(1)
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+          .onClick(() => {
+            if (!(this.groupExp['dbglog'] === true)) {
+              this.dbgLogOn = debugLogIsOn();
+            }
+            this.toggleGroup('dbglog');
+          })
+
+          if (this.groupExp['dbglog'] === true) {
+            Row({ space: 8 }) {
+              Text('启用调试日志（记录打开/远程/长按定位日志）')
+                .fontSize(14).fontColor(this.accentTextColor() ? this.acc() : this.txtPri())
+                .layoutWeight(1)
+              Toggle({ type: ToggleType.Switch, isOn: this.dbgLogOn })
+                .selectedColor(this.thm())
+                .onChange((v: boolean) => {
+                  this.dbgLogOn = v;
+                  debugLogSetEnabled(getContext(this), v);
+                  tlog('debug_log_' + (v ? 'on' : 'off'));
+                })
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            Row() {
+              Text('导出调试日志')
+                .fontSize(14).fontColor(this.accentTextColor() ? this.acc() : this.txtPri())
+                .layoutWeight(1)
+              Text(this.settings.debugLogExportPath.length > 0 ? this.dbgLogExportHint() : '')
+                .fontSize(11).fontColor(this.txtFaint()).maxLines(1)
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+            .onClick(() => {
+              this.exportDebugLog();
+            })
+            Row() {
+              Text('清空调试日志')
+                .fontSize(14).fontColor(this.accentTextColor() ? this.acc() : this.txtPri())
+                .layoutWeight(1)
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+            .onClick(() => {
+              debugLogClear(getContext(this)).then(() => {
+                promptAction.showToast({ message: '调试日志已清零，下次写入自动重建' });
+              });
+              tlog('debug_log_cleared');
+            })
+          }
+
+                /* ================= 4. UI 配置 (Android section4) ================= */
         this.settingsGroupBar(this.L($r('app.string.set_ui')), 'ui')
         if (this.groupExp['ui'] === true) {
           /* --- 主题配置 (Android themeConfig) --- */
@@ -10118,6 +10433,10 @@ tlog('download_start', 'name=' + fileName);    try {
       this.optTitle = this.L($r('app.string.set_volume_keys'));
       this.optLabels = [this.L($r('app.string.set_volkey_off')), this.L($r('app.string.set_volkey_page')), this.L($r('app.string.set_volkey_zoom'))];
       this.optSel = this.settings.volumeKeyAction;
+    } else if (target === 'libsort') {
+      this.optTitle = '排列方式';
+      this.optLabels = ['最近阅读', '名称', '日期', '作者', '系列', '格式'];
+      this.optSel = this.libSortMode;
     }
     this.showOptSheet = true;
   }
@@ -10150,6 +10469,8 @@ tlog('download_start', 'name=' + fileName);    try {
     } else if (t === 'volKey') {
       this.settings.volumeKeyAction = idx;
       this.saveNow();
+    } else if (t === 'libsort') {
+      this.libSortMode = idx;
     }
     this.showOptSheet = false;
   }

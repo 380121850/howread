@@ -105,6 +105,99 @@ public class AppDB {
 
     }
 
+    /** 把 src 的非空/更有值字段并入 dst（dst 优先），用于重复路径行合并不丢状态 */
+    private static void mergeMeta(final FileMeta dst, final FileMeta src) {
+        if (dst == null || src == null) {
+            return;
+        }
+        if (isBlank(dst.getTitle())) {
+            dst.setTitle(src.getTitle());
+        }
+        if (isBlank(dst.getAuthor())) {
+            dst.setAuthor(src.getAuthor());
+        }
+        if (isBlank(dst.getAnnotation())) {
+            dst.setAnnotation(src.getAnnotation());
+        }
+        if (dst.getSIndex() == null) {
+            dst.setSIndex(src.getSIndex());
+        }
+        if (dst.getCusType() == null) {
+            dst.setCusType(src.getCusType());
+        }
+        if (isBlank(dst.getExt())) {
+            dst.setExt(src.getExt());
+        }
+        if (dst.getSize() == null) {
+            dst.setSize(src.getSize());
+        }
+        if (dst.getDate() == null) {
+            dst.setDate(src.getDate());
+        }
+        if (isBlank(dst.getDateTxt())) {
+            dst.setDateTxt(src.getDateTxt());
+        }
+        if (isBlank(dst.getSizeTxt())) {
+            dst.setSizeTxt(src.getSizeTxt());
+        }
+        if (isBlank(dst.getPathTxt())) {
+            dst.setPathTxt(src.getPathTxt());
+        }
+        if (!truthy(dst.getIsStar()) && truthy(src.getIsStar())) {
+            dst.setIsStar(Boolean.TRUE);
+            if (dst.getIsStarTime() == null || (src.getIsStarTime() != null && src.getIsStarTime() > dst.getIsStarTime())) {
+                dst.setIsStarTime(src.getIsStarTime());
+            }
+        }
+        if (!truthy(dst.getIsRecent()) && truthy(src.getIsRecent())) {
+            dst.setIsRecent(Boolean.TRUE);
+            if (dst.getIsRecentTime() == null || (src.getIsRecentTime() != null && src.getIsRecentTime() > dst.getIsRecentTime())) {
+                dst.setIsRecentTime(src.getIsRecentTime());
+            }
+            if (dst.getIsRecentProgress() == null) {
+                dst.setIsRecentProgress(src.getIsRecentProgress());
+            }
+        }
+        if (!truthy(dst.getIsSearchBook()) && truthy(src.getIsSearchBook())) {
+            dst.setIsSearchBook(Boolean.TRUE);
+        }
+        if (isBlank(dst.getLang())) {
+            dst.setLang(src.getLang());
+        }
+        if (isBlank(dst.getTag())) {
+            dst.setTag(src.getTag());
+        }
+        if (dst.getPages() == null || (src.getPages() != null && src.getPages() > dst.getPages())) {
+            dst.setPages(src.getPages() != null && (dst.getPages() == null || src.getPages() > dst.getPages()) ? src.getPages() : dst.getPages());
+        }
+        if (isBlank(dst.getKeyword())) {
+            dst.setKeyword(src.getKeyword());
+        }
+        if (dst.getYear() == null) {
+            dst.setYear(src.getYear());
+        }
+        if (dst.getState() == null || (src.getState() != null && src.getState() > dst.getState())) {
+            dst.setState(src.getState() != null && (dst.getState() == null || src.getState() > dst.getState()) ? src.getState() : dst.getState());
+        }
+        if (isBlank(dst.getPublisher())) {
+            dst.setPublisher(src.getPublisher());
+        }
+        if (isBlank(dst.getIsbn())) {
+            dst.setIsbn(src.getIsbn());
+        }
+        if (isBlank(dst.getParentPath())) {
+            dst.setParentPath(src.getParentPath());
+        }
+    }
+
+    private static boolean isBlank(final String s) {
+        return s == null || s.trim().length() == 0;
+    }
+
+    private static boolean truthy(final Boolean b) {
+        return b != null && b;
+    }
+
     public synchronized void open(Context c, String appDB) {
 
         if (appDB.equals(currentDB)) {
@@ -148,15 +241,50 @@ public class AppDB {
                             keep.put(key, m);
                             continue;
                         }
-                        final boolean mNative = m.getPath().startsWith(com.foobnix.model.MyPath.INTERNAL_PREFIX);
-                        final boolean curNative = cur.getPath().startsWith(com.foobnix.model.MyPath.INTERNAL_PREFIX);
-                        if (mNative && !curNative) {
-                            remove.add(cur);
-                            keep.put(key, m);
-                        } else {
+                        mergeMeta(cur, m);
+                        remove.add(m);
+                    }
+                    // 代表行路径统一改写成规范化形态（internal-storage:/ 前缀不是
+                    // 真实文件系统路径，openFile/Dashboard 的 File.exists 都会失败）
+                    boolean rewritten = false;
+                    for (final String key : keep.keySet()) {
+                        final FileMeta m = keep.get(key);
+                        if (!key.equals(m.getPath())) {
+                            final FileMeta fixed = new FileMeta(key);
+                            fixed.setTitle(m.getTitle());
+                            fixed.setAuthor(m.getAuthor());
+                            fixed.setAnnotation(m.getAnnotation());
+                            fixed.setSIndex(m.getSIndex());
+                            fixed.setCusType(m.getCusType());
+                            fixed.setExt(m.getExt());
+                            fixed.setSize(m.getSize());
+                            fixed.setDate(m.getDate());
+                            fixed.setDateTxt(m.getDateTxt());
+                            fixed.setSizeTxt(m.getSizeTxt());
+                            fixed.setPathTxt(m.getPathTxt());
+                            fixed.setIsStar(m.getIsStar());
+                            fixed.setIsStarTime(m.getIsStarTime());
+                            fixed.setIsRecent(m.getIsRecent());
+                            fixed.setIsRecentTime(m.getIsRecentTime());
+                            fixed.setIsRecentProgress(m.getIsRecentProgress());
+                            fixed.setIsSearchBook(m.getIsSearchBook());
+                            fixed.setLang(m.getLang());
+                            fixed.setTag(m.getTag());
+                            fixed.setPages(m.getPages());
+                            fixed.setKeyword(m.getKeyword());
+                            fixed.setYear(m.getYear());
+                            fixed.setState(m.getState());
+                            fixed.setPublisher(m.getPublisher());
+                            fixed.setIsbn(m.getIsbn());
+                            fixed.setParentPath(MyPath.canonicalize(m.getParentPath()));
                             remove.add(m);
+                            keep.put(key, fixed);
+                            dedupeDao.insert(fixed);
+                            rewritten = true;
                         }
                     }
+                    LOG.bench("AppDB dedupe total=" + all.size() + " unique=" + keep.size()
+                            + " dups=" + remove.size() + (rewritten ? " (paths normalized)" : ""));
                     if (!remove.isEmpty()) {
                         for (final FileMeta m : remove) {
                             try {
@@ -488,6 +616,14 @@ public class AppDB {
     public void saveAll(List<FileMeta> list) {
         if (fileMetaDao == null) {
             return;
+        }
+
+        // 扫描 worker 走这里批量入库：路径必须规范化，否则同一物理文件会以
+        // /storage/emulated/0 与 /sdcard 两种形态插出两行（书架双份）
+        for (final FileMeta m : list) {
+            if (m != null) {
+                m.setPath(MyPath.canonicalize(m.getPath()));
+            }
         }
 
         long time = System.currentTimeMillis();

@@ -222,6 +222,7 @@
    <string name="cancel">Cancel</string>
    <string name="close">Close</string>
    <string name="restore_defaults_full">Restore default settings?</string>
+   <string name="restore_default_config">Restore default configuration</string>
    <string name="send_file_to">Send file to</string>
    <string name="apply_a_new_screen_orientation_">Apply new screen orientation?</string>
    <string name="send_mail">Send email</string>
@@ -484,6 +485,7 @@
    <string name="never">Never</string>
    <string name="general_settings">General Settings</string>
    <string name="debug_log_enable">Debug log</string>
+   <string name="debug_log_settings">Debug log</string>
    <string name="debug_log_export">Export debug log</string>
    <string name="debug_log_exported">Debug log exported: %s</string>
    <string name="debug_log_empty">Debug log is empty or missing (enable it and use the app for a while first)</string>
@@ -1030,4 +1032,6 @@
     <string name="mail_row_title">Email</string>
     <string name="ai_key_show">Show</string>
     <string name="ai_key_hide">Hide</string>
+    <string name="moon_stats_clear_confirm">Clear the total reading time, today reading time and speed statistics? This cannot be undone.</string>
+    <string name="reset_app_confirm">Restore default configuration will clear all settings, the book index, reading statistics and caches, then restart the app (book files are not affected). Continue?</string>
 </resources>

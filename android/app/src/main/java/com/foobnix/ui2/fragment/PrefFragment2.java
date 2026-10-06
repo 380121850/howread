@@ -1223,6 +1223,16 @@ public class PrefFragment2 extends UIFragment {
                                                           });
 
         // ---- 调试日志：开关 + 导出（常规设置） ----
+        // 调试日志折叠组：点击头部展开/收起（与其它二级分组一致）
+        final View debugLogHeader = inflate.findViewById(R.id.debugLogHeader);
+        final View debugLogConfigContainer = inflate.findViewById(R.id.debugLogConfigContainer);
+        debugLogHeader.setOnClickListener(new OnClickListener() {
+            @Override public void onClick(View v) {
+                debugLogConfigContainer.setVisibility(
+                        debugLogConfigContainer.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
+            }
+        });
+
         CheckBox isDebugLog = inflate.findViewById(R.id.isDebugLog);
         isDebugLog.setChecked(AppState.get().isDebugLogEnabled);
         isDebugLog.setOnCheckedChangeListener(new OnCheckedChangeListener() {
@@ -1275,6 +1285,7 @@ public class PrefFragment2 extends UIFragment {
                 showAppCacheDialog();
             }
         });
+
 
         CheckBox isRestoreSearchQuery = inflate.findViewById(R.id.isRestoreSearchQuery);
         isRestoreSearchQuery.setChecked(AppState.get().isRestoreSearchQuery);
@@ -2247,42 +2258,9 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
                 return true;
             }
 
-            AlertDialogs.showOkDialog(getActivity(), getString(R.string.restore_defaults_full), new Runnable() {
+            AlertDialogs.showOkDialog(getActivity(), getString(R.string.reset_app_confirm), new Runnable() {
                 @Override public void run() {
-                    //AppProfile.clear();
-                    DragingPopup.resetCache(getActivity());
-
-                    CacheZipUtils.emptyAllCacheDirs();
-
-
-                    final BookCSS b = new BookCSS();
-                    b.resetToDefault(getActivity());
-                    IO.writeObjSync(AppProfile.syncCSS, b);
-
-                    final AppState o = new AppState();
-                    o.defaults(getActivity());
-
-                    IO.writeObjSync(AppProfile.syncState, o);
-
-                    AppProfile.syncExclude.delete();
-
-                    File rootFiles = AppProfile.SYNC_FOLDER_DEVICE_PROFILE;
-                    if (rootFiles != null && rootFiles.listFiles()!=null) {
-                        for (File file : rootFiles.listFiles()) {
-                            String name = file.getName();
-                            if (name.endsWith(".css")) {
-                                file.delete();
-                                LOG.d("Delete-css", file);
-
-                            }
-                        }
-                    }
-
-                    //AppProfile.init(getActivity());
-                    //BooksService.startForeground(getActivity(), BooksService.ACTION_SEARCH_ALL);
-                    SearchAllBooksWorker.run(getActivity());
-                    onTheme();
-
+                    performFactoryReset();
                 }
             });
 
@@ -2864,16 +2842,24 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
         }
         final android.widget.TextView pathView =
                 (android.widget.TextView) root.findViewById(R.id.debugLogExportPath);
+        final android.widget.TextView headerPathView =
+                (android.widget.TextView) root.findViewById(R.id.debugLogHeaderPath);
         if (pathView == null) {
             return;
         }
         final String saved = getDebugLogDir();
+        final CharSequence headerText;
         if (saved == null) {
-            pathView.setText(R.string.debug_log_path_unset);
-            return;
+            headerText = getString(R.string.debug_log_path_unset);
+        } else {
+            headerText = debugLogDirName(android.net.Uri.parse(saved)) + "/HowRead-debug-*.log";
         }
-        final String dir = debugLogDirName(android.net.Uri.parse(saved));
-        pathView.setText(dir + "/HowRead-debug-*.log");
+        if (headerPathView != null) {
+            headerPathView.setText(headerText);
+        }
+        pathView.setText(saved == null
+                ? getString(R.string.debug_log_path_unset)
+                : debugLogDirName(android.net.Uri.parse(saved)) + "/HowRead-debug-*.log");
     }
 
     private void pickDebugLogDir(final int code) {
@@ -3108,4 +3094,73 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
         return prefix;
     }
 
+
+
+
+    /** 恢复出厂：清空配置（SharedPreferences）、书籍索引库、个人资料 JSON、
+     * 阅读统计与全部缓存，然后自动重启。书籍文件本身不受影响。 */
+    private void performFactoryReset() {
+        final android.content.Context c = getActivity() != null
+                ? getActivity().getApplicationContext()
+                : com.foobnix.LibreraApp.context;
+        LOG.bench("factory reset begin");
+        // 1. 数据库（书籍索引/书架元数据）
+        try {
+            deleteRecursive(new File(c.getApplicationInfo().dataDir, "databases"));
+        } catch (final Throwable t) {
+            LOG.w(t);
+        }
+        // 2. SharedPreferences（全部设置恢复默认）
+        try {
+            deleteRecursive(new File(c.getApplicationInfo().dataDir, "shared_prefs"));
+        } catch (final Throwable t) {
+            LOG.w(t);
+        }
+        // 3. 个人资料 JSON（进度/统计/收藏/AI 配置等）与日志
+        try {
+            final File profileRoot = new File("/sdcard/HowRead/profile.HowRead");
+            final File[] devs = profileRoot.listFiles();
+            if (devs != null) {
+                for (final File d : devs) {
+                    final File[] xs = d.listFiles();
+                    if (xs == null) {
+                        continue;
+                    }
+                    for (final File f : xs) {
+                        final String n = f.getName();
+                        if (n.startsWith("app-") && n.endsWith(".json")) {
+                            f.delete();
+                        }
+                    }
+                }
+            }
+            new File("/sdcard/HowRead/debug-log.txt").delete();
+            new File("/sdcard/HowRead/crash.txt").delete();
+        } catch (final Throwable t) {
+            LOG.w(t);
+        }
+        // 4. 缓存（转换/临时/运行缓存，含外部与内部）
+        try {
+            deleteRecursive(c.getCacheDir());
+            deleteRecursive(c.getExternalCacheDir());
+        } catch (final Throwable t) {
+            LOG.w(t);
+        }
+        // 5. 自动重启：趁进程仍在前台（豁免后台启动限制）直接 startActivity
+        //    启动入口，再杀进程。旧实现用 AlarmManager 延时启动，进程死后
+    //    挂起的 Activity 启动会被 Android 10+ 后台启动限制拦截
+    //    （EMUI/MIUI 实测必拦）——应用只是退出、不会重启。
+        try {
+            final android.content.Intent i = c.getPackageManager()
+                    .getLaunchIntentForPackage(c.getPackageName());
+            if (i != null) {
+                i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                        | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                c.startActivity(i);
+            }
+        } catch (final Throwable t) {
+            LOG.w(t);
+        }
+        android.os.Process.killProcess(android.os.Process.myPid());
+    }
 }

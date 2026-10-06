@@ -1,4 +1,5 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { debugLogWrite, debugLogIsOn } from './DebugLog';
 
 /**
  * CI test instrumentation log (ci/autotest-hmos): unified TAG "HRTEST".
@@ -8,4 +9,9 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
  */
 export function tlog(evt: string, kv: string = ''): void {
   hilog.info(0x0000, 'HRTEST', 'evt=%{public}s ts=%{public}d %{public}s', evt, Date.now(), kv);
+  /* 0.9.21: mirror event-level markers into the debug log file (Android
+   * DebugLog tightened capture: events only, chatty logs stay in hilog). */
+  if (debugLogIsOn()) {
+    debugLogWrite('TLOG', 'evt=' + evt + ' ts=' + Date.now() + (kv.length > 0 ? ' ' + kv : ''));
+  }
 }

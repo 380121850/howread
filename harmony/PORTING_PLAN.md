@@ -564,6 +564,18 @@ TTS 朗读、搜索全书、批注/高亮编辑、OPDS 书源、云同步等。*
 - 打点：bench_open_doc/reflow_probe/layout/pagelist/decode/first_frame（HRTEST，双构建保留）；安卓两项优化经实测在鸿蒙无对应开销（无固定首帧门限、解码已异步）。实施首帧优先（TOC/书签/批注延后一拍）。收益 fb2 -10%/epub -3%/pdf 噪声内持平。约束：openDocument 异步化与超大 reflow 排版为 native 层另立项。
 - 版本 0.9.15/53；50.104 四件套；L0 7/7。
 
+## 阶段 16u（0.9.21，2026-10-06）：同步安卓批次（调试日志/统计清空/恢复默认配置/书库格式分组/缓存管理）
+
+- 调试日志：model/DebugLog.ets（独立 librera_debug 偏好同步存开关、filesDir/debug-log.txt 2MB 重建、debugLogWrite 不抛错）；TestLog.tlog 镜像落盘（事件级收紧，对齐安卓 10-05 捕获策略）；EntryAbility debugLogInit 同步初始化 + 崩溃 FATAL 写入；BuildInfo 新增 IS_DEBUG_BUILD（build_hap_all.sh 按 buildMode 生成，checked-in 文件带 true 回退）——debug 包默认开/release 默认关；常规设置折叠行「调试日志」（右侧 dbgLogExportHint 显示上次导出文件名，Settings.debugLogExportPath），展开 = 启用 Toggle / 导出（DocumentViewPicker.save，fs.copyFile 到所选拿到的 uri）/ 清零。
+- 阅读统计一键清空：ReadingStats.clearReadingStats + 首页统计头齿轮 confirmClearStats（安卓 10-06）。
+- 恢复默认配置：偏好顶部 common_reset → restore_default_config（base/zh_CN 新字符串）；confirmFactoryReset + performFactoryReset（deletePreferences 全部 librera_* 原名+storeName profile 变体、删 debug-log/crash.txt、clearRemoteCacheAll、清 cacheDir 全部条目、startAbility 自身→terminateSelf 前台重启，安卓 10-05 重启修复同思路）。
+- 书库排序改版：漏斗图标 ic_filter.svg（Material filter_alt）替换文字循环；openOptSheet/applyOptSel 增 'libsort'（最近/名称/日期/作者/系列/格式六项）；libSortMode=5 按扩展名分组排序；getGroupedLibrary 格式键（大写扩展名，空=其它）+ 组头 14→16sp（安卓 10-06）。
+- 缓存管理：常规设置 'cachemgr' 折叠组 = 在线阅读缓存（复用 remoteCacheUsage）/应用缓存（dirSize cacheDir 单层）/合计占用 + 两个清空入口（远程走 clearRemoteCacheAll，应用走逐条 unlink/rmdir）（安卓 10-05）。
+- 批量下载落盘 fs.copyFileSync → await fs.copyFile（安卓 10-04 检视 #4 同构项，移出 UI 线程）。
+- 构建时间 BUILD_TIME 生成改 TZ=Asia/Shanghai GMT+8（安卓 10-05 ③）。
+- 编译坑：本 SDK fs 同步列目录是 listFileSync（非 listdirSync）；局部 const picker 遮蔽导入模块自身（改名 docPicker）；Reader.persistSettings 全量字面量需带新字段 debugLogExportPath: cur.debugLogExportPath。
+- 版本 0.9.21/59；50.111 四件套；L0 8/8；模拟器功能验证 13 项全过（开关翻转持久化 off→on、格式分组头 CBZ/EPUB/HTML/MOBI/PDF、factory_reset 事件+自动重启、debug-log.txt TLOG 内容实证）。
+
 ## 阶段 16t（0.9.20，2026-10-02）：同步安卓批次（PDF AI 翻译四模式 / 崩溃本地留痕 / 瘦身）
 
 - PDF 翻译四模式（对照面板/原位浮层/双语重排/原位替换）：model/PdfTranslate.ets（段落合并 buildPdfParagraphs + PdfTransSession 滚动窗口 [cur-1,cur+3]、三路并发、cacheDir/pdftrans 分页缓存）；Reader.ets 对话框"翻译方式"Select（ReaderSettings.pdfTransMode 记忆）、buildPdfBiPanel/buildPdfBadgeCard/buildPdfBiChip、PageRenderer @Prop biOverlays/biFlash（reflow/replace 译文叠层）；浮层角标放根层（页内点击被翻页手势区拦截）。
