@@ -522,10 +522,15 @@ public class DashboardFragment2 extends UIFragment<FileMeta> {
             // that just hit 100%. Count from the live progress store instead.
             // searchBy("") is the library's own base list (IsSearchBook=1,
             // no text filter), so the card numbers match what the user sees
-            // after tapping into the library.
+            // after tapping into the library. Remote books count too — the
+            // library keeps them (removeNotFound only drops missing local
+            // files), so File.exists() alone would undercount.
             BookStateStore.invalidate();
             for (FileMeta m : AppDB.get().searchBy("", AppDB.SORT_BY.DATA, false)) {
-                if (!AppDB.get().isFolder(m) && new File(m.getPath()).exists()) {
+                // 远程书计入总数：书库经 removeNotFound 保留远程书，
+                // 只按 File.exists() 计数会对混合书库系统性漏计
+                if (!AppDB.get().isFolder(m)
+                        && (RemoteBook.isRemotePath(m.getPath()) || new File(m.getPath()).exists())) {
                     totalBooks++;
                     if (BookStateStore.effective(m.getPath()) == BookStateStore.READ) {
                         readBooks++;

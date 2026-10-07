@@ -2406,6 +2406,9 @@ public class HorizontalViewActivity extends AdsFragmentActivity implements Bilin
             }
         } catch (Throwable t) {
             LOG.e(t);
+            // 重启失败必须复位标志：否则下一次真实退出会误消费它，
+            // 双语会话不停止、旧 Activity 的 DocumentController 泄漏
+            BilingualSession.suppressExitOnDestroy = false;
         }
     }
 

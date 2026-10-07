@@ -278,20 +278,12 @@ public abstract class AbstractCodecContext implements CodecContext {
         }
     }
 
-    /** 存储路径规范化：/storage/emulated/0/ 与 /sdcard/ 是同一卷的两种形态，
-     * 统一成 /sdcard/ 使转换缓存键、体检记忆、kept 闩对双身份稳定一致；
-     * internal-storage: 前缀（书架 DB 相对形态）一并归一。 */
+    /** 存储路径规范化：统一走 MyPath.canonicalize（/storage/emulated/0/、
+     * /storage/self/primary/、internal-storage:、URL 编码同一套形态集），
+     * 使转换缓存键、体检记忆、kept 闩与书架 DB 行对双身份稳定一致；
+     * 此前只归一前两种形态，多形态路径下缓存键仍按身份分裂。 */
     public static String normalizeStoragePath(final String path) {
-        if (path == null) {
-            return null;
-        }
-        if (path.startsWith("/storage/emulated/0/")) {
-            return "/sdcard/" + path.substring("/storage/emulated/0/".length());
-        }
-        if (path.startsWith("internal-storage:")) {
-            return "/sdcard" + path.substring("internal-storage:".length());
-        }
-        return path;
+        return com.foobnix.model.MyPath.canonicalize(path);
     }
 
     private static void markConvertKept(final String book) {

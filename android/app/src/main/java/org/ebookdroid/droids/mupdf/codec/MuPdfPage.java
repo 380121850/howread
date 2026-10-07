@@ -104,7 +104,15 @@ public class MuPdfPage extends AbstractCodecPage {
             if (docHandle == 0 || pageHandle == 0) {
                 return null;
             }
-            return text116(docHandle, pageHandle);
+            // native 文本提取必须与渲染/排版同锁（fz 上下文串行纪律，
+            // 与本类其余 native 入口一致）；AI 翻译线程从 worker 调入，
+            // 无锁会与解码线程构成同文档 native 竞态
+            TempHolder.lockDiag(Thread.currentThread().getName());
+            try {
+                return text116(docHandle, pageHandle);
+            } finally {
+                TempHolder.lock.unlock();
+            }
         } catch (Throwable t) {
             return null;
         }

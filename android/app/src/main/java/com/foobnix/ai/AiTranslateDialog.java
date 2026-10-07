@@ -336,7 +336,14 @@ public class AiTranslateDialog {
         BilingualSession.suppressExitOnDestroy = true;
         // re-open the book: the context chain now opens (or builds) the
         // bilingual edition and the activity attaches a BilingualSession
-        dc.restartActivity();
+        try {
+            dc.restartActivity();
+        } catch (Throwable t) {
+            LOG.e(t);
+            // 与 BilingualSession.requestRestart 同口径：重启失败复位标志，
+            // 防止下一次真实退出误消费（双语会话残留 + Activity 泄漏）
+            BilingualSession.suppressExitOnDestroy = false;
+        }
     }
 
     private static int indexOf(String code) {

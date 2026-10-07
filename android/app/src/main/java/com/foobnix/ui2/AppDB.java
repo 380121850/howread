@@ -247,6 +247,7 @@ public class AppDB {
                     // 代表行路径统一改写成规范化形态（internal-storage:/ 前缀不是
                     // 真实文件系统路径，openFile/Dashboard 的 File.exists 都会失败）
                     boolean rewritten = false;
+                    final List<FileMeta> fixedRows = new ArrayList<FileMeta>();
                     for (final String key : keep.keySet()) {
                         final FileMeta m = keep.get(key);
                         if (!key.equals(m.getPath())) {
@@ -279,12 +280,16 @@ public class AppDB {
                             fixed.setParentPath(MyPath.canonicalize(m.getParentPath()));
                             remove.add(m);
                             keep.put(key, fixed);
-                            dedupeDao.insert(fixed);
+                            fixedRows.add(fixed);
                             rewritten = true;
                         }
                     }
                     LOG.bench("AppDB dedupe total=" + all.size() + " unique=" + keep.size()
                             + " dups=" + remove.size() + (rewritten ? " (paths normalized)" : ""));
+                    // 先删后插：fixed 以规范化路径为主键，若重复行中已有行
+                    // 恰好落在规范键上，先插必撞 PATH 主键（greenDAO insert
+                    // 非 replace），异常会吞掉整个去重——必须先腾出主键位；
+                    // insertOrReplace 兜底万一有删除失败的残留行
                     if (!remove.isEmpty()) {
                         for (final FileMeta m : remove) {
                             try {
@@ -294,6 +299,9 @@ public class AppDB {
                             }
                         }
                         LOG.bench("AppDB dedupe merged " + remove.size() + " duplicate path rows");
+                    }
+                    if (!fixedRows.isEmpty()) {
+                        dedupeDao.insertOrReplaceInTx(fixedRows);
                     }
                 } catch (final Throwable t) {
                     LOG.w(t);

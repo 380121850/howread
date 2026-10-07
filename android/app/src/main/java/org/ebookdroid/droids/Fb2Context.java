@@ -114,9 +114,13 @@ public class Fb2Context extends PdfContext {
             if (cacheFile.isFile()) {
                 cacheFile.delete();
             }
-            Fb2Extractor.get().convert(fileName, outName, true, notes);
-            LOG.d("Fb2Context create 2", outName);
-            muPdfDocument = openTextDoc(fileName, outName, password);
+            // 直开形态 outName 就是源文件本身：convert 先开输出再读输入，
+            // 把源文件当输出会把用户的书截断成空壳。重试输出一律改走缓存
+            // 路径（后台转换写 .tmp 再改名，互不冲突）
+            String retryOut = outName.equals(fileName) ? cacheFile.getPath() : outName;
+            Fb2Extractor.get().convert(fileName, retryOut, true, notes);
+            LOG.d("Fb2Context create 2", retryOut);
+            muPdfDocument = openTextDoc(fileName, retryOut, password);
         }
 
         if (notes != null) {

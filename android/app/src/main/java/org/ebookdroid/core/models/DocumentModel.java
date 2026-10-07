@@ -324,7 +324,10 @@ public class DocumentModel extends ListenerProxy {
             if (pagesCount <= 0) {
                 // Fall back to the full count (also completes the layout).
                 pagesCount = base.getDecodeService().getPageCount();
-                progressive = pagesCount > 0;
+                // 全量排版此时已完成：与 else 分支的全量回退同口径置 false，
+                // 使 FileMeta 页码与页尺寸 sidecar 正常落盘（计数仍 <=0 时
+                // 本方法上方的空守卫会先返回，不受此值影响）
+                progressive = false;
             }
         } else {
             // 大部头（html 引擎万页级）全量计数可达数秒：首窗改用“阅读位置
