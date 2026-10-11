@@ -14,7 +14,8 @@ export interface RecentBook {
   title: string;
   /** last read page index (0-based) */
   page: number;
-  /** total pages at time of save */
+  /** total pages at time of save (0.9.23: <=0 = layout epoch not complete -
+   * staged window end, not the book's real total) */
   totalPages: number;
   /** ISO timestamp of last read */
   lastRead: string;
@@ -82,7 +83,12 @@ export async function saveRecentBook(ctx: Context, book: RecentBook): Promise<vo
     }
     let status: number = typeof book.status === 'number' ? book.status : deriveStatus(book.page, book.totalPages);
     if (old !== undefined) {
-      if (old.page === book.page) {
+      if (book.totalPages <= 0) {
+        /* 0.9.23: sentinel epoch - the staged layout is still running, so the
+         * page count is a moving window end, not the book's total. Keep the
+         * archived epoch/status; settleProgressEpoch re-derives at full count. */
+        status = old.status;
+      } else if (old.page === book.page) {
         /* same-page metadata update → keep the explicit status */
         status = old.status;
       } else {
@@ -101,7 +107,9 @@ export async function saveRecentBook(ctx: Context, book: RecentBook): Promise<vo
       path: book.path,
       title: book.title,
       page: book.page,
-      totalPages: book.totalPages,
+      /* 0.9.23: a sentinel (<=0) keeps the archived epoch - only a completed
+       * full layout may publish a new epoch to the progress entry */
+      totalPages: book.totalPages > 0 ? book.totalPages : (old !== undefined ? old.totalPages : 0),
       lastRead: book.lastRead,
       star: old !== undefined ? old.star : book.star === true,
       coverPath: (old !== undefined && (book.coverPath === undefined || book.coverPath.length === 0)) ? old.coverPath : book.coverPath,
@@ -273,6 +281,22 @@ export async function getPageForPath(ctx: Context, path: string): Promise<number
     /* ignore */
   }
   return 0;
+}
+
+/** One entry for a path (0.9.23: the layout-era settle reads the archived
+ * page + epoch before rewriting it at the full count). */
+export async function getRecentBookForPath(ctx: Context, path: string): Promise<RecentBook | undefined> {
+  try {
+    const list = await getRecentBooks(ctx);
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].path === path) {
+        return list[i];
+      }
+    }
+  } catch (e) {
+    /* ignore */
+  }
+  return undefined;
 }
 
 /** Full cleaned list, for backup export (sprint E). */

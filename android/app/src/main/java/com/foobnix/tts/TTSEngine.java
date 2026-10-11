@@ -112,6 +112,8 @@ public class TTSEngine {
         if (!hasBookmark) {
             final AppBookmark bookmark =
                     new AppBookmark(bookPath, c.getString(R.string.fast_bookmark), MyMath.percent(page, pages));
+            bookmark.pg = page - 1;
+            bookmark.pgs = pages;
             BookmarksData.get()
                          .add(bookmark);
 

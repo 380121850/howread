@@ -38,7 +38,7 @@ EpubContext extends PdfContext {
                 BookCSS.get().documentStyle +
                 BookCSS.get().isAutoHypens +
                 AppState.get().isBionicMode +
-                AppSP.get().hypenLang +
+                hyphenKeyPart() +
                 AppState.get().enableImageScale +
                 AppState.get().textReplacementHash +
                 AppState.get().isExperimental)

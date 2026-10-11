@@ -313,6 +313,10 @@ public class ExtUtils {
         File file = new File(com.foobnix.model.MyPath.toAbsolute(
                 org.ebookdroid.core.codec.AbstractCodecContext.normalizeStoragePath(meta.getPath())));
 
+        // 用户策略：手动添加/额外打开的本地书，自动把文件路径加入书库文件夹
+        // （刷新后仍在书架；缓存/临时解包文件不进）
+        com.foobnix.pdf.info.model.BookCSS.addToLibraryFolders(file.getPath());
+
         if (ExtUtils.isExteralSD(meta.getPath())) {
             LOG.d("openFile isExteralSD");
             CacheZipUtils.removeFiles(CacheZipUtils.ATTACHMENTS_CACHE_DIR.listFiles());

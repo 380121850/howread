@@ -1034,5 +1034,6 @@
     <string name="ai_key_show">显示</string>
     <string name="ai_key_hide">隐藏</string>
     <string name="moon_stats_clear_confirm">确定清空总阅读时间、今日阅读与阅读速度统计？此操作不可恢复。</string>
+    <string name="moon_stats_clear">清空阅读统计</string>
     <string name="reset_app_confirm">恢复默认配置：将清空全部配置、书籍索引、阅读统计与缓存并自动重启应用（书籍文件不受影响）。确定继续？</string>
 </resources>

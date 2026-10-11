@@ -374,21 +374,23 @@ public class ProfileStateIO {
                 return;
             }
             LinkedJSONObject o = new LinkedJSONObject();
-            // SECURITY: never publish the key through the sync file — the
-            // active key lives in the encrypted store on each device
-            o.put(K_API_KEY, "");
-            o.put(K_ACTIVE, AppState.get().aiConfigName == null ? "" : AppState.get().aiConfigName);
+            // 与网络配置（WebDAV/SMB/SFTP 密码明文同步）同口径：厂商 apiKey
+            // 一并备份，恢复出厂/换机后 AI 配置才能完整回来；文件只存放在
+            // 用户自己的 WebDAV 同步目录里
             LinkedJSONObject vendors = new LinkedJSONObject();
             JSONArray arr = parseAiProfiles(AppState.get().aiConfigs);
+            String activeKey = "";
             for (int i = 0; i < arr.length(); i++) {
                 LinkedJSONObject p = asLinked(arr.opt(i));
                 if (p != null && TxtUtils.isNotEmpty(p.optString("name"))) {
-                    // drop the (locally encrypted) key material from the copy
-                    // that leaves the device
-                    p.remove("apiKey");
                     vendors.put(p.optString("name"), p);
+                    if (p.optString("name").equals(AppState.get().aiConfigName)) {
+                        activeKey = p.optString("apiKey", "");
+                    }
                 }
             }
+            o.put(K_API_KEY, activeKey);
+            o.put(K_ACTIVE, AppState.get().aiConfigName == null ? "" : AppState.get().aiConfigName);
             o.put(K_VENDORS, vendors);
             writeIfChanged(AppProfile.syncAI, o.toString());
         } catch (Exception e) {
@@ -481,6 +483,20 @@ public class ProfileStateIO {
                 if (p != null) {
                     adoptAiProfile(p, active, c);
                 }
+            }
+            // 恢复出厂/新设备：本地加密库为空而激活厂商带 key 时回填，
+            // 让加密库（旧回退路径）与“已配置”判定一致
+            try {
+                if (c != null && TxtUtils.isEmpty(com.foobnix.ai.AiCredentials.load(c))) {
+                    JSONArray curNow = parseAiProfiles(AppState.get().aiConfigs);
+                    int aiIdx = aiProfileIndex(curNow, AppState.get().aiConfigName);
+                    LinkedJSONObject lp = aiIdx < 0 ? null : asLinked(curNow.opt(aiIdx));
+                    if (lp != null && TxtUtils.isNotEmpty(lp.optString("apiKey", ""))) {
+                        com.foobnix.ai.AiCredentials.save(c, lp.optString("apiKey"));
+                    }
+                }
+            } catch (Exception ex) {
+                LOG.e(ex);
             }
         } catch (Exception e) {
             LOG.e(e);

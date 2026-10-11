@@ -167,7 +167,10 @@ public class WebDavSyncer {
      */
     private static final Set<String> SYNC_CONFIG_FIELDS = new HashSet<String>(Arrays.asList(
             "webdavSyncEnabled", "webdavSyncServer", "webdavSyncRemoteDir",
-            "webdavSyncPolicy", "webdavSyncIntervalMin"));
+            "webdavSyncIntervalMin"));
+            // 注: webdavSyncPolicy(阅读进度冲突策略)不在此列——它是阅读偏好,
+            // 不是同步接线字段; 曾因留在集合里, 新装/恢复默认设备在首装采纳
+            // 时保本地默认值并发布上服务器, 覆盖其它设备选择的策略
 
     public static class SyncResult {
         public boolean ok = false;
@@ -197,6 +200,10 @@ public class WebDavSyncer {
 
     private static final Handler SYNC_SCHEDULER = new Handler(Looper.getMainLooper());
     private static final long CONFIG_SYNC_DEBOUNCE_MS = 3 * 1000;
+    /** 频率阈值：配置变更触发的同步轮最少间隔。阈值未到时变更被携带、
+    * 推迟到剩余间隔后执行（不丢失，只是延后）；手动/周期同步不受限。 */
+    private static final long CONFIG_SYNC_MIN_INTERVAL_MS = 15 * 1000;
+    private static volatile long lastConfigSyncAt;
     private static Runnable pendingConfigSync;
     private static Runnable pendingPeriodicSync;
 
@@ -240,18 +247,62 @@ public class WebDavSyncer {
             if (pendingConfigSync != null) {
                 SYNC_SCHEDULER.removeCallbacks(pendingConfigSync);
             }
-            pendingConfigSync = () -> {
-                pendingConfigSync = null;
-                if (syncingNow) {
-                    return;
-                }
-                if (AppState.get().webdavSyncEnabled && TxtUtils.isNotEmpty(AppState.get().webdavSyncServer)) {
-                    syncAsync(c.getApplicationContext(), null);
-                }
-            };
+            final Context app = c.getApplicationContext();
+            pendingConfigSync = () -> runConfigSyncIfDue(app);
             SYNC_SCHEDULER.postDelayed(pendingConfigSync, CONFIG_SYNC_DEBOUNCE_MS);
         } catch (Exception e) {
             LOG.e(e);
+        }
+    }
+
+    /** 配置触发同步的实际执行门卫：频率阈值未到则携带变更重排（见
+     * CONFIG_SYNC_MIN_INTERVAL_MS），到点才真正起一轮。 */
+    private static void runConfigSyncIfDue(final Context app) {
+        try {
+            if (syncingNow) {
+                return;
+            }
+            if (AppState.get().webdavSyncEnabled && TxtUtils.isNotEmpty(AppState.get().webdavSyncServer)) {
+                final long since = System.currentTimeMillis() - lastConfigSyncAt;
+                if (since >= CONFIG_SYNC_MIN_INTERVAL_MS) {
+                    lastConfigSyncAt = System.currentTimeMillis();
+                    syncAsync(app, null);
+                } else {
+                    pendingConfigSync = () -> runConfigSyncIfDue(app);
+                    SYNC_SCHEDULER.postDelayed(pendingConfigSync, CONFIG_SYNC_MIN_INTERVAL_MS - since);
+                }
+            }
+        } catch (Exception e) {
+            LOG.e(e);
+        }
+    }
+
+    /**
+     * Device-local marker: a 恢复默认配置 action ran on this device. While the
+     * local config still equals the factory defaults, the sync defers to the
+     * SERVER copy — a defaulted device must not publish factory values over
+     * the other devices' personalized config. The marker never syncs and only
+     * takes effect while the config is still fully default: the next real
+     * personalization reverts to the normal merge automatically (and the
+     * 12S case "set one field back to its default value must win" is
+     * unaffected — no restore action ran there, so the marker is unset).
+     */
+    public static void markDefaultsRestored() {
+        try {
+            LibreraApp.context.getSharedPreferences("webdavsync", Context.MODE_PRIVATE)
+                    .edit().putLong("defaultsRestoredAt", System.currentTimeMillis()).apply();
+        } catch (Exception e) {
+            LOG.e(e);
+        }
+    }
+
+    /** @see #markDefaultsRestored */
+    static boolean isDefaultsRestored() {
+        try {
+            return LibreraApp.context.getSharedPreferences("webdavsync", Context.MODE_PRIVATE)
+                    .getLong("defaultsRestoredAt", 0L) != 0L;
+        } catch (Exception e) {
+            return false;
         }
     }
 
@@ -1205,9 +1256,21 @@ public class WebDavSyncer {
                 // ---- steady state: merge against the stored base
                 final LinkedJSONObject baseCmp = withoutFields(baseObj, deviceFields);
                 // a local file that still equals the out-of-the-box defaults
-                // never wins: its personal fields adopt the server copy
-                final boolean localIsDefault = (stateFile || cssFile)
-                        && isDefaultConfig(localFull, defaultIgnoreSet(deviceFields, stateFile), stateFile);
+                // never wins: its personal fields adopt the server copy.
+                // ONLY when the base snapshot is default-configured too —
+                // i.e. this device really never personalized. A personalized
+                // device setting a field BACK to the factory value (font size
+                // 20 IS the default) must win and upload, otherwise the sync
+                // reverts that change forever (12S: 字号 19->20 被打回 19).
+                final Set<String> defaultIgnore = defaultIgnoreSet(deviceFields, stateFile);
+                final boolean localIsDefaultConfig = (stateFile || cssFile)
+                        && isDefaultConfig(localFull, defaultIgnore, stateFile);
+                // 恢复默认配置过的设备（本机标记）在配置仍等于出厂默认时让位
+                // 服务器：重置不得把出厂值发布上服务器、覆盖其它设备的个性化
+                // 配置；base 也默认（从未个性化）时维持原有让位规则
+                final boolean baseIsDefaultToo = isDefaultConfig(baseObj.toString(), defaultIgnore, stateFile);
+                final boolean localIsDefault = localIsDefaultConfig
+                        && (baseIsDefaultToo || isDefaultsRestored());
                 final LinkedJSONObject effLocal = localIsDefault ? baseCmp : localCmp;
                 final LinkedJSONObject mergedCmp = merge3(name, baseCmp, effLocal, remoteCmp, APPSP_IDENTITY_FIELDS);
                 mergedFull = new LinkedJSONObject(mergedCmp.toString());
@@ -1340,8 +1403,19 @@ public class WebDavSyncer {
      * unioned back
      */
     static boolean syncMetaUnion(Sardine s, String globalUrl, File local, String tombPrefix) {
-        if (local == null || !local.isFile()) {
+        if (local == null) {
             return false;
+        }
+        if (!local.isFile()) {
+            // 恢复出厂/新设备：本地列表文件还不存在，照旧跳过会让服务器上的
+            // 最近/收藏永远回不来——建一个空列表文件再走联合合并
+            try {
+                local.getParentFile().mkdirs();
+                IO.writeString(local, "[]");
+            } catch (Exception ioError) {
+                LOG.e(ioError, "WebDavSyncer meta", "create " + local.getName());
+                return false;
+            }
         }
         final String name = local.getName();
         final String url = globalUrl + "/" + name;
@@ -1631,6 +1705,12 @@ public class WebDavSyncer {
                 st.isShowWhatIsNewDialog = false;
             }
         }
+        // 调试日志开关的运行时默认是"debug 包开"(loadInit 按 FLAG_DEBUGGABLE);
+        // 出厂默认探测必须与真机默认文件同构, 否则 debug 包永远判不默认
+        st.isDebugLogEnabled = (a.getApplicationInfo().flags
+                & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+        // 同构: loadInit 会把 isLoaded 置 true, 真机默认文件同样带 true
+        st.isLoaded = true;
         // mirrors defaults(): brand default is LIGHT regardless of system dark mode
         st.appTheme = AppState.THEME_LIGHT;
         // first-run migration in loadInit() flips this once (the tab merge);

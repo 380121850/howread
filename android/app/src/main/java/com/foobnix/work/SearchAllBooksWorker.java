@@ -92,12 +92,16 @@ public class SearchAllBooksWorker extends MessageWorker {
             // and the scan never walks their folders, so without this they
             // would vanish from the 书库 on every refresh
             final List<String> rescuedBooks = new LinkedList<String>();
+            // 用户策略：书库文件夹删除/取消后，其书籍在刷新时移出书架——
+            // 只有仍位于当前书库文件夹之下的本地书才被保留（网络/云书不受影响）
+            // 只扫描勾选的书库文件夹（localFolderSel，缺省勾选；未勾选的书随搜索移出）
+            final List<String> scanRoots = activeScanRoots();
             try {
                 for (String p : AppDB.get().getSearchBookPaths()) {
                     if (com.foobnix.remote.RemoteBook.isRemotePathLoose(p) || Clouds.isCloud(p)) {
                         continue;
                     }
-                    if (new File(p).isFile()) {
+                    if (new File(p).isFile() && isUnderScanRoot(p, scanRoots)) {
                         rescuedBooks.add(p);
                     }
                 }
@@ -112,7 +116,7 @@ public class SearchAllBooksWorker extends MessageWorker {
 
             handler.post(timer);
             LOG.d("SearchAllBooksWorker","searchPaths-all", 3, BookCSS.get().searchPathsJson);
-            for (final String path : JsonDB.get(BookCSS.get().searchPathsJson)) {
+            for (final String path : scanRoots) {
                 if (path != null) {
                     final File root = new File(path);
                     if (root.exists()) {
@@ -193,10 +197,16 @@ public class SearchAllBooksWorker extends MessageWorker {
 
 
             // favorites whose file is gone (deleted locally or on the
-            // server) are not re-added: the shelf must not list dead books
+            // server) are not re-added: the shelf must not list dead books.
+            // 本地收藏同样受书库文件夹约束：文件夹删除后不再回填书架
+            // （网络/云收藏不随本地文件夹变化）
             for (FileMeta fav : AppData.get().getAllFavoriteFiles(false)) {
-                if (com.foobnix.remote.RemoteBook.isRemotePathLoose(fav.getPath())
-                        || new File(fav.getPath()).exists()) {
+                final String fp = fav.getPath();
+                if (com.foobnix.remote.RemoteBook.isRemotePathLoose(fp) || Clouds.isCloud(fp)) {
+                    itemsMeta.add(fav);
+                    continue;
+                }
+                if (new File(fp).exists() && isUnderScanRoot(fp, scanRoots)) {
                     itemsMeta.add(fav);
                 }
             }
@@ -352,5 +362,43 @@ public class SearchAllBooksWorker extends MessageWorker {
         }
     };
 
+
+
+    /** 用户策略：书架本地书籍只来自当前书库文件夹。判断 path（归一化后）
+     * 是否位于任一扫描根之下（根也可以是单文件）。 */
+    private static boolean isUnderScanRoot(final String path, final List<String> roots) {
+        if (path == null || roots == null || roots.isEmpty()) {
+            return false;
+        }
+        final String np = org.ebookdroid.core.codec.AbstractCodecContext.normalizeStoragePath(path);
+        for (final String root : roots) {
+            if (root == null) {
+                continue;
+            }
+            final String nr = org.ebookdroid.core.codec.AbstractCodecContext.normalizeStoragePath(root);
+            if (np.equals(nr) || np.startsWith(nr.endsWith("/") ? nr : nr + "/")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+
+    /** 当前勾选的书库文件夹（localFolderSel，缺省勾选）。未勾选的文件夹
+     * 其书籍随搜索移出书架（用户策略）。 */
+    private static java.util.List<String> activeScanRoots() {
+        final java.util.List<String> roots = new LinkedList<String>();
+        final android.content.SharedPreferences sel = com.foobnix.LibreraApp.context
+                .getSharedPreferences("localFolderSel", android.content.Context.MODE_PRIVATE);
+        for (final String rp : JsonDB.get(BookCSS.get().searchPathsJson)) {
+            if (rp == null || rp.trim().length() == 0) {
+                continue;
+            }
+            if (sel.getBoolean("local:" + rp, true)) {
+                roots.add(rp);
+            }
+        }
+        return roots;
+    }
 
 }

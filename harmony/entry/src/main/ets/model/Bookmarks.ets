@@ -15,6 +15,10 @@ export interface Bookmark {
   label: string;
   /** ISO timestamp */
   date: string;
+  /** total pages when the bookmark was made (-1 = legacy/unknown).
+   * 0.9.23 (Android 10-09 parity): layout-era epoch - the absolute page is
+   * a valid anchor only while the book keeps this page count. */
+  pgs: number;
 }
 
 const PREF_NAME = 'librera_bookmarks';
@@ -43,7 +47,15 @@ export async function getBookmarks(ctx: Context, path: string): Promise<Bookmark
     for (let i = 0; i < raw.length; i++) {
       const b = raw[i] as Bookmark;
       if (b.path === path && typeof b.page === 'number') {
-        list.push(b);
+        const clean: Bookmark = {
+          path: b.path,
+          page: b.page,
+          label: typeof b.label === 'string' ? b.label : '',
+          date: typeof b.date === 'string' ? b.date : '',
+          /* 0.9.23: legacy entries have no epoch - -1 keeps the absolute anchor */
+          pgs: typeof b.pgs === 'number' ? b.pgs : -1
+        };
+        list.push(clean);
       }
     }
     /* newest first */
@@ -54,7 +66,7 @@ export async function getBookmarks(ctx: Context, path: string): Promise<Bookmark
   }
 }
 
-export async function addBookmark(ctx: Context, path: string, page: number, label: string): Promise<boolean> {
+export async function addBookmark(ctx: Context, path: string, page: number, label: string, pgs: number = -1): Promise<boolean> {
   try {
     const prefs = await getPrefs(ctx);
     const json: string = await prefs.get(KEY_BOOKMARKS, '[]') as string;
@@ -70,7 +82,8 @@ export async function addBookmark(ctx: Context, path: string, page: number, labe
       path: path,
       page: page,
       label: label,
-      date: new Date().toISOString()
+      date: new Date().toISOString(),
+      pgs: pgs
     };
     list.push(bm);
     while (list.length > MAX_BOOKMARKS) {

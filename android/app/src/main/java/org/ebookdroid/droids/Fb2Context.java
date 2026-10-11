@@ -25,7 +25,7 @@ public class Fb2Context extends PdfContext {
         fileNameOriginal = fileNameOriginal +
                 AppState.get().isShowFooterNotesInText +
                 BookCSS.get().isAutoHypens +
-                AppSP.get().hypenLang +
+                hyphenKeyPart() +
                 AppState.get().isBionicMode +
                 AppState.get().enableImageScale +
                 AppSP.get().isDouble +

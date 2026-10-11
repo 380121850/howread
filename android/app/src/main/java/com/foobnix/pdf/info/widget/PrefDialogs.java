@@ -95,41 +95,33 @@ public class PrefDialogs {
 
     public static void chooseFolderDialog(final FragmentActivity a, final Runnable onChanges, final Runnable onScan) {
 
-        final PathAdapter recentAdapter = new PathAdapter();
-        recentAdapter.setPaths(JsonDB.get(BookCSS.get().searchPathsJson));
-
         final AlertDialog.Builder builder = new AlertDialog.Builder(a);
         builder.setTitle(R.string.library_folders_settings);
 
         final LinearLayout root = new LinearLayout(a);
         root.setOrientation(LinearLayout.VERTICAL);
 
-        // 本地文件夹路径 header with the add action on one row: the old
-        // bottom "+ add folder / + add file" button row was merged here and
-        // the add-file option removed
-        final LinearLayout localHeader = new LinearLayout(a);
-        localHeader.setOrientation(LinearLayout.HORIZONTAL);
-        localHeader.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        localHeader.setPadding(Dips.DP_5, Dips.DP_5, Dips.DP_5, 0);
-
+        // --- 本地文件夹：与网络文件夹一致的勾选行。添加/编辑/删除统一在
+        // 我的文件·书库文件夹；未勾选的文件夹其书籍随本次搜索移出书架
+        final LinearLayout localBox = new LinearLayout(a);
+        localBox.setOrientation(LinearLayout.VERTICAL);
         final TextView localTitle = new TextView(a);
         localTitle.setText(R.string.moon_lib_local_folders);
         localTitle.setTypeface(null, android.graphics.Typeface.BOLD);
-
-        final TextView addFolder = new TextView(a);
-        addFolder.setText(TxtUtils.notAndUnderline("+ ", a.getString(R.string.add_folder)));
-        addFolder.setPadding(Dips.dpToPx(10), 0, 0, 0);
-
-        localHeader.addView(localTitle, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        localHeader.addView(addFolder, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
-        root.addView(localHeader, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        final ListView list = new ListView(a);
-
-        list.setAdapter(recentAdapter);
-        root.addView(list, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        localTitle.setPadding(Dips.DP_5, Dips.DP_5, Dips.DP_5, 0);
+        localBox.addView(localTitle);
+        final android.content.SharedPreferences localSel =
+                a.getSharedPreferences("localFolderSel", android.content.Context.MODE_PRIVATE);
+        for (final String p : JsonDB.get(BookCSS.get().searchPathsJson)) {
+            if (TxtUtils.isEmpty(p)) {
+                continue;
+            }
+            localBox.addView(remoteScanRow(a, localSel, "local:" + p, 0, p, true));
+        }
+        if (localBox.getChildCount() > 1) {
+            root.addView(localBox, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        }
 
         // --- 远程目录: configured SMB / SFTP / WebDAV servers as checkbox
         // rows, default unchecked; ticking them scans the server into the
@@ -178,6 +170,8 @@ public class PrefDialogs {
                 // books of servers that are no longer configured cannot ever
                 // open again: drop them as part of the 搜索 action
                 com.foobnix.remote.RemoteLibraryCleaner.purgeUnconfigured(a);
+                // 用户策略：已配置但未勾选的服务器，其书籍同样随搜索移除
+                com.foobnix.remote.RemoteLibraryCleaner.purgeUncheckedSelection(a);
                 onScan.run();
                 scanCheckedRemoteServers(a);
             }
@@ -187,23 +181,6 @@ public class PrefDialogs {
             @Override
             public void onClick(DialogInterface dialog, int id) {
                 dialog.dismiss();
-            }
-        });
-        recentAdapter.setOnDeleClick(new ResultResponse<Uri>() {
-
-            @Override
-            public boolean onResultRecive(Uri result) {
-                String path = result.getPath();
-                LOG.d("TEST", "Remove " + path);
-                BookCSS.get().searchPathsJson = JsonDB.remove(BookCSS.get().searchPathsJson, path);
-                // deletion must survive the folder union sync
-                com.foobnix.remote.RemoteTombstones.add("folder:" + path);
-                // keep removed storage defaults hidden (see BookCSS.searchPathsHiddenJson)
-                BookCSS.get().searchPathsHiddenJson = JsonDB.add(BookCSS.get().searchPathsHiddenJson, path);
-                LOG.d("TEST", "Remove " + BookCSS.get().searchPathsJson);
-                recentAdapter.setPaths(JsonDB.get(BookCSS.get().searchPathsJson));
-                onChanges.run();
-                return false;
             }
         });
 
@@ -216,71 +193,8 @@ public class PrefDialogs {
             }
         });
 
-        addFolder.setOnClickListener(v -> {
-            create.dismiss();
-            ChooserDialogFragment.chooseFolder(a, BookCSS.get().dirLastPath).setOnSelectListener(new ResultResponse2<String, Dialog>() {
-                @Override
-                public boolean onResultRecive(String nPath, Dialog dialog) {
-
-                    if (nPath.equals("/")) {
-                        Toast.makeText(a, String.format("[ / ] %s", a.getString(R.string.incorrect_value)), Toast.LENGTH_LONG).show();
-                        return false;
-                    }
-                    boolean isExists = false;
-                    String existPath = "";
-                    for (String str : JsonDB.get(BookCSS.get().searchPathsJson)) {
-                        if (str != null && str.trim().length() != 0 && nPath.equals(str)) {
-                            isExists = true;
-                            existPath = str;
-                            break;
-                        }
-                    }
-                    if (ExtUtils.isExteralSD(nPath)) {
-                        Toast.makeText(a, R.string.incorrect_value, Toast.LENGTH_SHORT).show();
-                    } else if (isExists) {
-                        Toast.makeText(a, String.format("[ %s == %s ] %s", nPath, existPath, a.getString(R.string.this_directory_is_already_in_the_list)), Toast.LENGTH_LONG).show();
-                    } else {
-                        BookCSS.get().searchPathsJson = JsonDB.add(BookCSS.get().searchPathsJson, nPath);
-                        // re-added on purpose: clear any deletion marker or
-                        // the sync filter would strip it again
-                        com.foobnix.remote.RemoteTombstones.clear("folder:" + nPath);
-                        // explicitly added again: lift the fallback exclusion
-                        BookCSS.get().searchPathsHiddenJson = JsonDB.remove(BookCSS.get().searchPathsHiddenJson, nPath);
-                    }
-                    dialog.dismiss();
-                    onChanges.run();
-                    chooseFolderDialog(a, onChanges, onScan);
-                    return false;
-                }
-
-            });
-        });
-
         create.show();
 
-        AppsConfig.executorService.execute(() -> {
-            final List<String> allPaths = AppDB.get().getSearchBookPaths();
-            final Map<String, Long> counts = new HashMap<String, Long>();
-            for (String path : JsonDB.get(BookCSS.get().searchPathsJson)) {
-                if (path == null || path.trim().length() == 0) {
-                    continue;
-                }
-                final File file = new File(path);
-                long count = 0;
-                if (file.isFile()) {
-                    count = allPaths.contains(path) ? 1 : 0;
-                } else {
-                    String prefix = path.endsWith("/") ? path : path + "/";
-                    for (String dbPath : allPaths) {
-                        if (dbPath.startsWith(prefix)) {
-                            count++;
-                        }
-                    }
-                }
-                counts.put(path, count);
-            }
-            a.runOnUiThread(() -> recentAdapter.setCounts(counts));
-        });
     }
 
     /** One row of the 远程目录 section: the protocol icon (WebDAV/SMB/SFTP)
@@ -289,25 +203,33 @@ public class PrefDialogs {
     private static android.view.View remoteScanRow(final FragmentActivity a,
                                                    final android.content.SharedPreferences sel,
                                                    final String key, final int iconRes, final String label) {
+        return remoteScanRow(a, sel, key, iconRes, label, false);
+    }
+
+    private static android.view.View remoteScanRow(final FragmentActivity a,
+                                                   final android.content.SharedPreferences sel,
+                                                   final String key, final int iconRes, final String label,
+                                                   final boolean defChecked) {
         final android.widget.CheckBox box = new android.widget.CheckBox(a);
         box.setText(label);
-        box.setChecked(sel.getBoolean(key, false));
+        box.setChecked(sel.getBoolean(key, defChecked));
         box.setOnCheckedChangeListener((buttonView, isChecked) -> sel.edit().putBoolean(key, isChecked).commit());
 
         // the icon follows the dialog text color so it stays visible day/night
         // (the colored protocol logos keep their own colors instead)
-        final android.widget.ImageView icon = new android.widget.ImageView(a);
-        icon.setImageResource(iconRes);
-        if (!isBrandProtocolIcon(iconRes)) {
-            final int textColor = new android.widget.TextView(a).getCurrentTextColor();
-            icon.setColorFilter(textColor);
-        }
-        icon.setPadding(0, 0, Dips.dpToPx(6), 0);
-
         final android.widget.LinearLayout row = new android.widget.LinearLayout(a);
         row.setOrientation(android.widget.LinearLayout.HORIZONTAL);
         row.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        row.addView(icon, new android.widget.LinearLayout.LayoutParams(Dips.dpToPx(20), Dips.dpToPx(20)));
+        if (iconRes != 0) {
+            final android.widget.ImageView icon = new android.widget.ImageView(a);
+            icon.setImageResource(iconRes);
+            if (!isBrandProtocolIcon(iconRes)) {
+                final int textColor = new android.widget.TextView(a).getCurrentTextColor();
+                icon.setColorFilter(textColor);
+            }
+            icon.setPadding(0, 0, Dips.dpToPx(6), 0);
+            row.addView(icon, new android.widget.LinearLayout.LayoutParams(Dips.dpToPx(20), Dips.dpToPx(20)));
+        }
         row.addView(box, new android.widget.LinearLayout.LayoutParams(
                 android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
                 android.widget.LinearLayout.LayoutParams.WRAP_CONTENT));

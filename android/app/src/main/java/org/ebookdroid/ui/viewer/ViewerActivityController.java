@@ -494,6 +494,7 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
     public void onDestroy() {
         phase2Gen.incrementAndGet();
         progressiveLoad = false;
+        com.foobnix.sys.TempHolder.pendingLayoutJump = null;
         FirstPaintGate.cancel();
         if (wrapperControlls != null) {
             wrapperControlls.onDestroy();
@@ -1095,6 +1096,16 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                             }
                         }
                     }
+                } else if (intent != null && intent.getFloatExtra(DocumentController.EXTRA_PERCENT, 0f) > 0f
+                        && ExtUtils.isTextFomat(m_fileName)) {
+                    // 书签/笔记跳转带百分比落点:落点必须按全书总页数折算。
+                    // 仅跳过快速开书窗口还不够——DocumentModel 的"上次位置+400"
+                    // 兜底窗口仍会把 pageCount 停在部分值(且不启动 phase2),
+                    // 落点会差上千页、总页数显示错误。这里强制全量排版。
+                    documentModel.setProgressiveUpto(Integer.MAX_VALUE);
+                    progressiveLoad = true;
+                    com.foobnix.sys.TempHolder.layoutComplete = false;
+                    com.foobnix.sys.TempHolder.pendingLayoutJump = null;
                 }
                 if (remoteLazySizes) {
                     documentModel.setLazySizes(true);
@@ -1104,6 +1115,10 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                 }
                 if (uptoPage > 0) {
                     progressiveLoad = true;
+                    // fast-open window armed: the page count stays partial
+                    // until the background layout finishes
+                    com.foobnix.sys.TempHolder.layoutComplete = false;
+                    com.foobnix.sys.TempHolder.pendingLayoutJump = null;
                     documentModel.setProgressiveUpto(uptoPage);
                 }
 
@@ -1435,6 +1450,22 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                     LOG.bench("phase2-end n2=" + total + " "
                             + (android.os.SystemClock.elapsedRealtime() - t0) + "ms");
                     if (phase2Gen.get() != gen || total <= knownCount || getActivity() == null) {
+                        // nothing left to grow (or the reader is closing):
+                        // the count is final — release deferred jumps unless a
+                        // newer load has already taken ownership
+                        if (phase2Gen.get() == gen && getActivity() != null) {
+                            com.foobnix.sys.TempHolder.layoutComplete = true;
+                            final android.app.Activity fa = getActivity();
+                            fa.runOnUiThread(new Runnable() {
+                                @Override public void run() {
+                                    Runnable p = com.foobnix.sys.TempHolder.pendingLayoutJump;
+                                    com.foobnix.sys.TempHolder.pendingLayoutJump = null;
+                                    if (p != null) {
+                                        p.run();
+                                    }
+                                }
+                            });
+                        }
                         return;
                     }
                     final int fullCount = total;
@@ -1456,6 +1487,46 @@ public class ViewerActivityController extends ActionController<VerticalViewActiv
                                             IViewController.InvalidateSizeReason.PAGE_LOADED, marker);
                                     currentPageChanged(dm.getCurrentIndex().docIndex, -1);
                                     wrapperControlls.refreshPageCount();
+                                    // the count is final: re-anchor the saved
+                                    // percent against it — saves made during the
+                                    // fast-open window divided by the partial
+                                    // count (inflated p)
+                                    try {
+                                        final AppBook bsRe = SettingsManager.getBookSettings();
+                                        if (bsRe != null && fullCount > 0) {
+                                            int landIdx = dm.getCurrentIndex().docIndex;
+                                            // LOG.bench("era-check pgc=" + bsRe.pgc + " p=" + bsRe.p
+                                            //         + " land=" + landIdx + " full=" + fullCount);
+                                            // era change: the book was re-laid-out since
+                                            // the last save (font size etc.) — the saved
+                                            // absolute page now holds different content;
+                                            // re-land on the saved percentage instead
+                                            if (!AppState.get().isAlwaysOpenOnPage1 && bsRe.pgc > 0
+                                                    && bsRe.pgc != fullCount && bsRe.p > 0f && bsRe.p < 1f) {
+                                                final int target = Math.max(0, Math.min(fullCount - 1,
+                                                        Math.round(bsRe.p * fullCount) - 1));
+                                                if (target != landIdx) {
+                                                    LOG.bench("era-restore pgc=" + bsRe.pgc + " full=" + fullCount
+                                                            + " " + landIdx + " -> " + target);
+                                                    getDocumentController().goToPage(target, bsRe.x, bsRe.y);
+                                                    landIdx = target;
+                                                }
+                                            }
+                                            bsRe.currentPageChanged(landIdx + 1, fullCount);
+                                            bsRe.pgc = fullCount;
+                                            org.ebookdroid.common.settings.books.SharedBooks.saveAsync(bsRe);
+                                        }
+                                    } catch (Throwable e) {
+                                        LOG.e(e);
+                                    }
+                                }
+                                // the count is final either way: release the
+                                // bookmark/restore jumps deferred on it
+                                com.foobnix.sys.TempHolder.layoutComplete = true;
+                                Runnable pendJump = com.foobnix.sys.TempHolder.pendingLayoutJump;
+                                com.foobnix.sys.TempHolder.pendingLayoutJump = null;
+                                if (pendJump != null) {
+                                    pendJump.run();
                                 }
                                 // full layout is done: the TOC load is cheap now
                                 loadOutlineOnce();

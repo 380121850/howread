@@ -910,6 +910,29 @@ public class AppState {
                 LOG.e(e);
             }
 
+            // 默认 OPDS 目录清理：CBETA 电子佛典从列表移除（默认定义早已不含
+            // 它，这里清存量并写墓碑防止配置同步回灌）
+            try {
+                if (AppState.get().allOPDSLinks != null
+                        && AppState.get().allOPDSLinks.contains("cbeta.org/opds")) {
+                    final StringBuilder keep = new StringBuilder();
+                    for (final String line : AppState.get().allOPDSLinks.split(";")) {
+                        if (com.foobnix.android.utils.TxtUtils.isEmpty(line)) {
+                            continue;
+                        }
+                        if (line.contains("cbeta.org/opds")) {
+                            com.foobnix.remote.RemoteTombstones.add("opds:" + line);
+                        } else {
+                            keep.append(line).append(';');
+                        }
+                    }
+                    AppState.get().allOPDSLinks = keep.toString();
+                    LOG.d("migration", "opds-cbeta-removed");
+                }
+            } catch (Exception e) {
+                LOG.e(e);
+            }
+
             // The WebDAV sync folder was rebranded from "/Librera" to
             // "/HowRead". Follow the rebrand only when the stored dir is still
             // the old default; a user-chosen folder is left alone. (A stale

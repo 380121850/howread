@@ -350,6 +350,7 @@ public class PrefFragment2 extends UIFragment {
                                     @Override public void run() {
                                         synchronized (AppState.get().tabsOrder9) {
                                             AppState.get().tabsOrder9 = AppState.DEFAULTS_TABS_ORDER;
+                                            com.foobnix.webdav.WebDavSyncer.markDefaultsRestored();
                                         }
                                         onTheme();
                                     }
@@ -499,6 +500,7 @@ public class PrefFragment2 extends UIFragment {
                             @Override public void run() {
                                 IMG.clearDiscCache();
                                 IMG.clearMemoryCache();
+                                com.foobnix.webdav.WebDavSyncer.markDefaultsRestored();
                                 AppState.get().coverBigSize =
                                         (int) (((Dips.screenWidthDP() / (Dips.screenWidthDP() / 110)) - 8) * (
                                                 Dips.isXLargeScreen() ? 1.5f : 1));
@@ -1076,6 +1078,7 @@ public class PrefFragment2 extends UIFragment {
 
                                                @Override public void run() {
                                                    AppState.get().isPrefFormatMode = false;
+                                                   com.foobnix.webdav.WebDavSyncer.markDefaultsRestored();
                                                    AppState.get().prefScrollMode = AppState.PREF_SCROLL_MODE;
                                                    AppState.get().prefBookMode = AppState.PREF_BOOK_MODE;
                                                    AppState.get().prefMusicianMode = AppState.PREF_MUSIC_MODE;
@@ -3128,7 +3131,10 @@ View libPrefView = inflate.findViewById(R.id.moreLybraryettings);
                     }
                     for (final File f : xs) {
                         final String n = f.getName();
-                        if (n.startsWith("app-") && n.endsWith(".json")) {
+                        if (n.startsWith("app-") && (n.endsWith(".json") || n.endsWith(".base"))) {
+                            // .base 是同步三方合并的基准快照，必须随重置一起清掉：
+                            // 幸存的话重置后的空本地会被当成“本地删除”，
+                            // 配置同步既不回灌、还会把服务器副本清掉
                             f.delete();
                         }
                     }

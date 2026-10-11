@@ -564,6 +564,30 @@ TTS 朗读、搜索全书、批注/高亮编辑、OPDS 书源、云同步等。*
 - 打点：bench_open_doc/reflow_probe/layout/pagelist/decode/first_frame（HRTEST，双构建保留）；安卓两项优化经实测在鸿蒙无对应开销（无固定首帧门限、解码已异步）。实施首帧优先（TOC/书签/批注延后一拍）。收益 fb2 -10%/epub -3%/pdf 噪声内持平。约束：openDocument 异步化与超大 reflow 排版为 native 层另立项。
 - 版本 0.9.15/53；50.104 四件套；L0 7/7。
 
+## 阶段 16w（0.9.23，2026-10-11）：同步安卓批次（书签/进度排版纪元 + 深页跳转等待 + 重置补删同步基线 + 底栏 seek 行）
+
+- 安卓 10-06~10-11 窗口逐项比对：**5 项涉及鸿蒙**（下），7 项免疫——①书库文件夹 UX 重构（鸿蒙书库=最近+远程合并结构，无书库文件夹勾选机制）；②书架严格归属/扫描根过滤（同上）；③同步恢复 metaUnion 缺文件跳过 + AI key 同口径同步（鸿蒙 Sync.ets 实现不同构）；④改字号 recreate 重启（鸿蒙无程序化重启机制，排版设置原地生效）；⑤hypenLang 转换缓存键（鸿蒙无 mobi 转换链）；⑥排版视口 Dips 屏幕尺寸（鸿蒙 staged 排版用引擎固定尺寸 595×842，无视图尺寸依赖）；⑦配置同步 localIsDefault 默认值保护陷阱（鸿蒙配置合并无该逻辑）。
+- 书签纪元锚（安卓 10-09 ①⑦）：Bookmark 增 `pgs`（加签时总页数，-1=legacy 绝对锚），getBookmarks 读取归一化；jumpToBookmark 纪元分支——pgs>0 且 ≠ 当前页数 → `round(page/pgs×full)` 百分比落点（clamp 0.999/-1），layoutComplete 未就绪时 whenCanvasReady 等 phase2（15s 兜底）；tlog bookmark_era_jump/bookmark_jump。
+- 进度纪元 sentinel + era-restore（安卓 10-09 ④⑦⑧/第四轮 pgc 门槛）：Reader layoutComplete 旗标（staged 置 false、phase2 末/finishReaderOpen/remote 置 true、reflow 置 true）；staged 窗口期 saveProgress/addBookmark/退出保存一律 `totalPages=-1` sentinel，saveRecentBook 合并保留旧纪元+旧 status（页数≤0 不重推 status）；phase2 末 settleProgressEpoch(fullTotal)——存档纪元 ≠ 全量 → era_restore 百分比重落位 + 全量纪元重写（tlog era_restore/progress_settled）；applyReflow 完成即结算（tlog reflow_settled）。getRecentBookForPath 新导出。
+- 深页跳转等待（安卓 10-09 ③）：whenCanvasReady(pred,onDone) 500ms 轮询 15s 上限；书签超出增长中画布、标注深页 jumpAnnPage 接入（tlog ann_jump deferred）。
+- 重置补删 librera_syncbase（安卓 10-08 同步重置修复）：performFactoryReset stores 数组补 'librera_syncbase'——陈旧 base + 空本地书签会被下次同步判"本地全删"反向清空服务器。
+- 底栏 seek 行上移（安卓 10-10）：进度条 Row 移到图标 Scroll 行上方（原位置删除、新位置原样插入）。
+- Sync.ets：两处书签对象字面量携带 pgs（远程推送 + 写回合并）。
+- 显示修复（测试发现，同批重建）：书签面板空 label 渲染 `[object Object]`（$r() 资源对象插进模板字符串）→ this.L() 取本地化串；文件信息"页数: 未知"同款修复（Reader.ets 两处）。
+- 版本 0.9.23/61；构建 50.111 四件套。验证（Pura 90 模拟器 x86_64 debug）：深页专项 7/7（16MB 种子 3894/4800）；书签纪元专项 9/9（2.6MB 种子 780 页——16MB 种子 font16→20 会触发既有 applyReflow 主线程全书重排 THREAD_BLOCK_6S appfreeze，与移植无关，测试换小种子规避：387 加签→font20 重排 1140→bookmark_era_jump pgs=780 full=1140 to=565（理论 566）→指示器 565/1140→font16 还原 780）；纪元-restore E2E 10/10（50.104 植入 pose_epub.epub.howread.json（safeName 含扩展名）→同步拉回→强停重开 era_restore from=201 to=36 epoch=4400 full=780、progress_settled、指示器 36/780；顺带发现 50.104 WebDAV PUT 403 只读，50.23 才可写）；L0 门禁通过（SM-01~07 7/7）。测试脚本沉淀 tmp/scripts/v923_era_bookmark2.py、v923_e2e_erarest.py、v923_make_seed_small.py。
+
+## 阶段 16v（0.9.22，2026-10-08）：同步安卓打开链路修复（深页重开精确落位）+ 打开链路耗时基线
+
+- 安卓 09-30~10-06 打开性能/BUGFIX 全量缺口比对（0.9.15~0.9.18 已同步打点/首帧优先/分章渐进/fb2 引擎分章/TXT 分块）：10-05 渐进计数窗口 + 10-06 检视 7 项逐条核对——书签时间倒序（Bookmarks.ets 已按日期倒序）、AI 定位 native 锁（mupdf_napi 全部入口 g_mu 全程串行，架构免疫）、双语重启失败残留（鸿蒙无程序化重启机制）、仪表盘漏计远程书（statValue 已并入 remoteBooks）、远程缓存假 100%（BlockCacheStore dataFd 重开 READ_WRITE + fullyCached 仅全量拉完后置位）、fb2 源文件覆盖（DocConvert.convertToHtml 只写 cacheDir/converted）、路径归一化多形态（沙箱单一路径形态）——均不适用；唯一可移植项=渐进计数窗口（P1）。
+- P1（安卓 10-05 对齐）：initReader staged 计数 upto '400' → String(max(0,currentPage)+400)；bench_stage1 增 from= 字段。
+- 深页重开 UI 不落位（0.9.16 分章路径既有缺陷，四层插桩定位）：
+  - fix2 SwiperController.changeIndex 实测无 onChange 回显弃用；fix4 landOnRestoredPage 值抖动 0→target 强制 .index() 重放（ArkUI 绑定仅状态值变化时重应用，跳页对话框可用的同机理），Swiper 停在 0 故中间值无闪烁；
+  - fix3 openSettled 门（staged/finishReaderOpen/remote 完成点置位、aboutToDisappear 复位），onPageChanged 开完成前吞空列表 onChange(0)；
+  - fix5（真根因，24 个直写点逐一插桩实锤）：底部进度 Slider 初建时 totalPages=0 → max=Math.max(-1,1)=1 → 初始值(如 4866)被钳位触发 onChange(0)，handler 先直写 currentPage=0 再调 onPageChanged（openSettled 门在 onPageChanged 内拦不住直写）→ handler 头部加 openSettled 早退。
+- 验证：Pura 90 模拟器专项 7/7（6000 页 epub：恢复 4833 → 强停重开精确落位 4833；bench_stage1 from=4832 佐证）；六格式计时基线 0.9.21 vs 0.9.22 终版全套复测，稳态冷开差异在模拟器噪声内；L0 CI。
+- 测量工具沉淀：tmp/scripts/measure_open_hmos.py（六书 × first/cold1/cold2(+phase2)/warm，HRTEST 流式抓取；hilog -x 转储对刚写入的行不可靠，一律用流式）；数据 tmp/logs/open_bench_{base,v922,v922b}.json；深页专项 tmp/scripts/v922_verify_position.py。
+- 版本 0.9.22/60；50.104 四件套（50.111 SSH 中断，按预案切备用机，同一 NFS）。
+
 ## 阶段 16u（0.9.21，2026-10-06）：同步安卓批次（调试日志/统计清空/恢复默认配置/书库格式分组/缓存管理）
 
 - 调试日志：model/DebugLog.ets（独立 librera_debug 偏好同步存开关、filesDir/debug-log.txt 2MB 重建、debugLogWrite 不抛错）；TestLog.tlog 镜像落盘（事件级收紧，对齐安卓 10-05 捕获策略）；EntryAbility debugLogInit 同步初始化 + 崩溃 FATAL 写入；BuildInfo 新增 IS_DEBUG_BUILD（build_hap_all.sh 按 buildMode 生成，checked-in 文件带 true 回退）——debug 包默认开/release 默认关；常规设置折叠行「调试日志」（右侧 dbgLogExportHint 显示上次导出文件名，Settings.debugLogExportPath），展开 = 启用 Toggle / 导出（DocumentViewPicker.save，fs.copyFile 到所选拿到的 uri）/ 清零。

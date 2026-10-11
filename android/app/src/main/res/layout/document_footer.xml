@@ -62,6 +62,58 @@
             android:tag="no_tint"
             android:padding="5dip"
             android:visibility="gone"></androidx.recyclerview.widget.RecyclerView>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:clickable="true"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingLeft="2dip"
+            android:paddingRight="2dip">
+
+            <TextView
+                android:id="@+id/currentSeek"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:layout_marginLeft="4dip"
+                android:layout_weight="0"
+                android:clickable="true"
+                android:gravity="center"
+                android:minEms="2"
+                android:text="--"
+                android:textColor="#ffffff"
+                android:textSize="14sp"
+                android:textStyle="normal" />
+
+            <SeekBar
+                android:id="@+id/seekBar1"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center_vertical"
+                android:layout_marginTop="2dip"
+                android:layout_marginBottom="2dip"
+                android:layout_weight="1"
+                android:paddingTop="3dip"
+                android:paddingBottom="3dip"
+                android:progressTint="@android:color/white"
+                android:thumbTint="@android:color/white" />
+
+            <TextView
+                android:id="@+id/maxSeek"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:layout_marginRight="4dip"
+                android:layout_weight="0"
+                android:clickable="true"
+                android:gravity="center"
+                android:minEms="2"
+                android:text="--"
+                android:textColor="#ffffff"
+                android:textSize="14sp"
+                android:textStyle="normal" />
+        </LinearLayout>
+
         <LinearLayout
             android:id="@+id/footerIconRow"
             android:layout_width="match_parent"
@@ -184,58 +236,6 @@
                 android:contentDescription="@string/menu"
                 android:src="@drawable/glyphicons_498_more_vertical" />
         </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:clickable="true"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingLeft="2dip"
-            android:paddingRight="2dip">
-
-            <TextView
-                android:id="@+id/currentSeek"
-                android:layout_width="wrap_content"
-                android:layout_height="match_parent"
-                android:layout_marginLeft="4dip"
-                android:layout_weight="0"
-                android:clickable="true"
-                android:gravity="center"
-                android:minEms="2"
-                android:text="--"
-                android:textColor="#ffffff"
-                android:textSize="14sp"
-                android:textStyle="normal" />
-
-            <SeekBar
-                android:id="@+id/seekBar1"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="center_vertical"
-                android:layout_marginTop="2dip"
-                android:layout_marginBottom="2dip"
-                android:layout_weight="1"
-                android:paddingTop="3dip"
-                android:paddingBottom="3dip"
-                android:progressTint="@android:color/white"
-                android:thumbTint="@android:color/white" />
-
-            <TextView
-                android:id="@+id/maxSeek"
-                android:layout_width="wrap_content"
-                android:layout_height="match_parent"
-                android:layout_marginRight="4dip"
-                android:layout_weight="0"
-                android:clickable="true"
-                android:gravity="center"
-                android:minEms="2"
-                android:text="--"
-                android:textColor="#ffffff"
-                android:textSize="14sp"
-                android:textStyle="normal" />
-        </LinearLayout>
-
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

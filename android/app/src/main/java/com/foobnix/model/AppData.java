@@ -227,6 +227,8 @@ public class AppData {
         removeAll(meta, AppProfile.APP_RECENT_JSON);
         EventBus.getDefault()
                 .post(new NotifyAllFragments());
+        // 主动删除：立即安排一次配置同步（防抖与频率阈值由 notifyConfigChanged 统一裁决）
+        com.foobnix.webdav.WebDavSyncer.notifyConfigChanged(com.foobnix.LibreraApp.context);
     }
 
     public void removeFavorite(FileMeta meta) {
@@ -236,11 +238,15 @@ public class AppData {
         removeAll(meta, AppProfile.APP_FAVORITE_JSON);
         EventBus.getDefault()
                 .post(new NotifyAllFragments());
+        // 主动删除：立即安排一次配置同步（防抖与频率阈值由 notifyConfigChanged 统一裁决）
+        com.foobnix.webdav.WebDavSyncer.notifyConfigChanged(com.foobnix.LibreraApp.context);
     }
     public void removeFavorite(String path) {
         removeAll(new FileMeta(path), AppProfile.APP_FAVORITE_JSON);
         EventBus.getDefault()
                 .post(new NotifyAllFragments());
+        // 主动删除：立即安排一次配置同步（防抖与频率阈值由 notifyConfigChanged 统一裁决）
+        com.foobnix.webdav.WebDavSyncer.notifyConfigChanged(com.foobnix.LibreraApp.context);
     }
 
     public void removeExcluded(FileMeta meta) {
@@ -339,6 +345,8 @@ public class AppData {
         add(simpleMeta, AppProfile.syncFavorite);
         EventBus.getDefault()
                 .post(new NotifyAllFragments());
+        // 主动收藏：立即安排一次配置同步（addRecent 开书热路径除外，随周期轮同步）
+        com.foobnix.webdav.WebDavSyncer.notifyConfigChanged(com.foobnix.LibreraApp.context);
     }
 
     public void addExclue(String path) {
@@ -350,11 +358,13 @@ public class AppData {
     public void clearFavorites() {
         tombAll(AppProfile.APP_FAVORITE_JSON, com.foobnix.remote.RemoteTombstones.TOMB_FAVORITE);
         clearAll(AppProfile.APP_FAVORITE_JSON);
+        com.foobnix.webdav.WebDavSyncer.notifyConfigChanged(com.foobnix.LibreraApp.context);
     }
 
     public void clearRecents() {
         tombAll(AppProfile.APP_RECENT_JSON, com.foobnix.remote.RemoteTombstones.TOMB_RECENT);
         clearAll(AppProfile.APP_RECENT_JSON);
+        com.foobnix.webdav.WebDavSyncer.notifyConfigChanged(com.foobnix.LibreraApp.context);
     }
 
     /** Marks every current entry of a meta list deleted (clear-all flows):
@@ -406,7 +416,10 @@ public class AppData {
                 FileMeta meta = AppDB.get().getOrCreate(s.getPath());
                 meta.setIsStar(true);
                 meta.setIsStarTime(s.time);
-                meta.setIsSearchBook(true);
+                // 用户策略：本地收藏书只有位于勾选的书库文件夹之下才是书架书；
+                // 网络/云收藏不随本地文件夹变化。否则收藏会把已删除/未勾选
+                // 文件夹里的书重新立回书架（隐藏的副作用泄漏）。
+                meta.setIsSearchBook(isShelfEligible(meta.getPath()));
                 meta.setCusType(null);
                 res.remove(meta);
                 res.add(meta);
@@ -550,5 +563,30 @@ public class AppData {
         return res;
     }
 
-}
 
+    /** 书架归属判定（用户策略）：远程/云书恒可上架；本地书必须位于当前
+     * 勾选的书库文件夹（localFolderSel，缺省勾选）之下。 */
+    private boolean isShelfEligible(final String path) {
+        try {
+            if (com.foobnix.remote.RemoteBook.isRemotePathLoose(path)
+                    || Clouds.isCloud(path) || Clouds.isCloudFile(path)) {
+                return true;
+            }
+            final android.content.SharedPreferences sel = com.foobnix.LibreraApp.context
+                    .getSharedPreferences("localFolderSel", android.content.Context.MODE_PRIVATE);
+            final String np = org.ebookdroid.core.codec.AbstractCodecContext.normalizeStoragePath(path);
+            for (final String rp : com.foobnix.android.utils.JsonDB.get(com.foobnix.pdf.info.model.BookCSS.get().searchPathsJson)) {
+                if (rp == null || rp.trim().isEmpty() || !sel.getBoolean("local:" + rp, true)) {
+                    continue;
+                }
+                final String nr = org.ebookdroid.core.codec.AbstractCodecContext.normalizeStoragePath(rp);
+                if (np.equals(nr) || np.startsWith(nr.endsWith("/") ? nr : nr + "/")) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            LOG.e(e);
+        }
+        return false;
+    }
+}

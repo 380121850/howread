@@ -69,6 +69,17 @@ public class CheckDeletedBooksWorker extends MessageWorker {
                         LOG.e(e);
                     }
                     LOG.d("BooksService", "Delete-setIsSearchBook", meta.getPath());
+                } else if (!isRemoteOrCloud(meta.getPath())
+                        && !isUnderScanRoot(meta.getPath(), activeScanRoots())) {
+                    // 用户策略：书库文件夹删除/取消勾选后，其本地书籍在刷新时
+                    // 移出书架（文件仍在磁盘上，只是不再属于任何书库文件夹）
+                    AppDB.get().delete(meta);
+                    try {
+                        com.foobnix.pdf.info.BookmarksData.get().removeByBook(meta.getPath());
+                    } catch (Exception e) {
+                        LOG.e(e);
+                    }
+                    LOG.d("BooksService", "Delete-outOfRoot", meta.getPath());
                 }
             }
 
@@ -91,7 +102,7 @@ public class CheckDeletedBooksWorker extends MessageWorker {
         if (isStopped()) {
             return false;
         }
-        for (final String path : JsonDB.get(BookCSS.get().searchPathsJson)) {
+        for (final String path : activeScanRoots()) {
             if (path != null && path.trim()
                                     .length() > 0) {
                 final File root = new File(path);
@@ -153,4 +164,45 @@ public class CheckDeletedBooksWorker extends MessageWorker {
         return true;
 
     }
+
+    private static boolean isRemoteOrCloud(final String path) {
+        return com.foobnix.remote.RemoteBook.isRemotePathLoose(path) || Clouds.isCloud(path);
+    }
+
+    /** 用户策略：书架本地书籍只来自当前书库文件夹。判断 path（归一化后）
+     * 是否位于任一扫描根之下（根也可以是单文件）。 */
+    private static boolean isUnderScanRoot(final String path, final List<String> roots) {
+        if (path == null || roots == null || roots.isEmpty()) {
+            return false;
+        }
+        final String np = org.ebookdroid.core.codec.AbstractCodecContext.normalizeStoragePath(path);
+        for (final String root : roots) {
+            if (root == null) {
+                continue;
+            }
+            final String nr = org.ebookdroid.core.codec.AbstractCodecContext.normalizeStoragePath(root);
+            if (np.equals(nr) || np.startsWith(nr.endsWith("/") ? nr : nr + "/")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+
+    /** 当前勾选的书库文件夹（localFolderSel，缺省勾选）。 */
+    private static java.util.List<String> activeScanRoots() {
+        final java.util.List<String> roots = new LinkedList<String>();
+        final android.content.SharedPreferences sel = com.foobnix.LibreraApp.context
+                .getSharedPreferences("localFolderSel", android.content.Context.MODE_PRIVATE);
+        for (final String rp : JsonDB.get(BookCSS.get().searchPathsJson)) {
+            if (rp == null || rp.trim().length() == 0) {
+                continue;
+            }
+            if (sel.getBoolean("local:" + rp, true)) {
+                roots.add(rp);
+            }
+        }
+        return roots;
+    }
+
 }

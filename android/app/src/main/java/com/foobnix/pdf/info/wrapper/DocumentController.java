@@ -611,7 +611,12 @@ public abstract class DocumentController {
         try {
             if (getPageCount() != 0) {
                 AppBook bs = SettingsManager.getBookSettings(getCurrentBook().getPath());
-                if (getCurentPage() != bs.getCurrentPage(getPageCount()).viewIndex + 1) {
+                // era-bound re-anchor: the saved percent may belong to an
+                // older layout (font change / re-layout); re-applying it
+                // against a foreign era teleports the reader. Only resume
+                // onto it when the count matches the saved layout era.
+                if (bs != null && bs.pgc == getPageCount()
+                        && getCurentPage() != bs.getCurrentPage(getPageCount()).viewIndex + 1) {
                     onGoToPage(bs.getCurrentPage(getPageCount()).viewIndex + 1);
                 }
             }
@@ -749,8 +754,12 @@ public abstract class DocumentController {
             @Override
             public void run() {
                 ImageExtractor.clearCodeDocument();
-                activity.finish();
-                activity.startActivity(activity.getIntent());
+                // recreate() rebuilds the activity in place (same task).
+                // The old finish()+startActivity(getIntent()) idiom
+                // intermittently lost the start on EMUI/MIUI (task removed,
+                // system returnToHome): the reader vanished after a font-size
+                // change instead of reloading.
+                activity.recreate();
             }
         });
     }
@@ -777,8 +786,9 @@ public abstract class DocumentController {
             @Override
             public void run() {
                 ImageExtractor.clearCodeDocument();
-                activity.finish();
-                activity.startActivity(activity.getIntent());
+                // see restartActivity: recreate() instead of the
+                // finish()+startActivity idiom that could drop the task
+                activity.recreate();
             }
         });
     }

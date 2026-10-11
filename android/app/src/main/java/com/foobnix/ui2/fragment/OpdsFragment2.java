@@ -257,6 +257,7 @@ public class OpdsFragment2 extends UIFragment<Entry> {
                             }
                         }
                         AppState.get().allOPDSLinks = AppState.OPDS_DEFAULT;
+                        com.foobnix.webdav.WebDavSyncer.markDefaultsRestored();
                         url = "/";
                         populate();
                     }
@@ -496,6 +497,7 @@ public class OpdsFragment2 extends UIFragment<Entry> {
                             }
                         }
                         AppState.get().allOPDSLinks = AppState.OPDS_DEFAULT;
+                        com.foobnix.webdav.WebDavSyncer.markDefaultsRestored();
                         populate();
                     }
                 });

@@ -71,6 +71,7 @@
             <!-- 阅读统计 -->
             <include layout="@layout/dashboard_section_header" android:id="@+id/statsHeader" />
 
+            <!-- 总阅读时间占左侧上下两行，其余四个 2x2 排布对齐（用户要求） -->
             <LinearLayout
                 android:id="@+id/statsRow"
                 android:layout_width="match_parent"
@@ -79,26 +80,42 @@
                 android:paddingLeft="12dip"
                 android:paddingRight="12dip">
 
-                <include layout="@layout/dashboard_stat_item" android:id="@+id/statTotal" />
+                <LinearLayout
+                    android:layout_width="0dip"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="2"
+                    android:orientation="vertical">
 
-                <include layout="@layout/dashboard_stat_item" android:id="@+id/statRead" />
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
 
-                <include layout="@layout/dashboard_stat_item" android:id="@+id/statHours" />
+                        <include layout="@layout/dashboard_stat_item" android:id="@+id/statTotal" />
 
-            </LinearLayout>
+                        <include layout="@layout/dashboard_stat_item" android:id="@+id/statRead" />
 
-            <LinearLayout
-                android:id="@+id/statsRow2"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dip"
-                android:orientation="horizontal"
-                android:paddingLeft="12dip"
-                android:paddingRight="12dip">
+                    </LinearLayout>
 
-                <include layout="@layout/dashboard_stat_item" android:id="@+id/statToday" />
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dip"
+                        android:orientation="horizontal">
 
-                <include layout="@layout/dashboard_stat_item" android:id="@+id/statSpeed" />
+                        <include layout="@layout/dashboard_stat_item" android:id="@+id/statToday" />
+
+                        <include layout="@layout/dashboard_stat_item" android:id="@+id/statSpeed" />
+
+                    </LinearLayout>
+                </LinearLayout>
+
+                <include
+                    layout="@layout/dashboard_stat_item"
+                    android:id="@+id/statHours"
+                    android:layout_width="0dip"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1" />
 
             </LinearLayout>
 

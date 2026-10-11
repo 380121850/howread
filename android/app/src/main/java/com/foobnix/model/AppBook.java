@@ -31,6 +31,7 @@ public class AppBook implements CurrentPageListener {
 
     public float p; //percent
     public int pg = -1; //absolute 0-based page of the last save (fast-open anchor)
+    public int pgc = -1; // full page count of the layout era pg was captured in (-1 = legacy)
     public long t;//time
     public String ln;
 

@@ -3686,8 +3686,11 @@ tlog('download_start', 'name=' + fileName);    try {
     tlog('factory_reset');
     const ctx = getContext(this) as common.UIAbilityContext;
     /* 1) preference stores: raw names + current-profile variants */
+    /* 0.9.23 (Android 10-08 parity): the sync base snapshots must die with
+     * the reset - a stale base + empty local bookmarks would make the next
+     * sync propagate "deleted locally" and wipe the server-side copies. */
     const stores: string[] = ['librera_settings', 'librera_reader', 'librera_stats', 'librera_bookmarks',
-      'librera_notes', 'librera_ai', 'librera_servers', 'librera_remote', 'librera_profiles', 'librera_debug'];
+      'librera_notes', 'librera_ai', 'librera_servers', 'librera_remote', 'librera_profiles', 'librera_debug', 'librera_syncbase'];
     for (let i = 0; i < stores.length; i++) {
       const names: string[] = [stores[i], storeName(stores[i])];
       for (let j = 0; j < names.length; j++) {

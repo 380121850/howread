@@ -1065,6 +1065,7 @@ public class DragingDialogs {
 
                                                                   AppState.get().ttsPitch = (float) 1.0;
                                                                   AppState.get().ttsSpeed = (float) 1.0;
+                                                                  com.foobnix.webdav.WebDavSyncer.markDefaultsRestored();
 
                                                                   TTSEngine.get().shutdown();
                                                                   TTSEngine.get().getTTS();
@@ -2883,9 +2884,7 @@ public class DragingDialogs {
 
                 LOG.d("onItem", appBookmark);
 
-                int page = appBookmark.getPage(controller.getPageCount());
-
-                controller.onGoToPage(page);
+                ListBoxHelper.jumpToBookmark(controller, appBookmark);
 
                 onRefeshUI.run();
             }
@@ -3176,8 +3175,7 @@ public class DragingDialogs {
                                     controller.floatingBookmark = null;
                                 }
 
-                                int page = appBookmark.getPage(controller.getPageCount());
-                                controller.onGoToPage(page);
+                                ListBoxHelper.jumpToBookmark(controller, appBookmark);
                                 closeDialog();
                             }
                         });
@@ -5386,6 +5384,7 @@ public class DragingDialogs {
                                                               @Override public void run() {
                                                                   BookCSS.get()
                                                                          .resetToDefault(controller.getActivity());
+                                                                  com.foobnix.webdav.WebDavSyncer.markDefaultsRestored();
 
                                                                   fontsFolder.setText(TxtUtils.underline(TxtUtils.lastTwoPath(
                                                                           BookCSS.get().fontFolder)));
@@ -6073,6 +6072,7 @@ public class DragingDialogs {
                                                               @Override public void run() {
                                                                   AppState.get().readColors =
                                                                           AppState.READ_COLORS_DEAFAUL;
+                                                                  com.foobnix.webdav.WebDavSyncer.markDefaultsRestored();
                                                                   AppState.get().isUseBGImageDay = false;
                                                                   AppState.get().isUseBGImageNight = false;
 

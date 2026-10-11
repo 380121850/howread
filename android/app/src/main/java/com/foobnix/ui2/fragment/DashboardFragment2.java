@@ -125,25 +125,35 @@ public class DashboardFragment2 extends UIFragment<FileMeta> {
             View statsGear = statsHeader.findViewById(R.id.sectionMore);
             statsGear.setVisibility(View.VISIBLE);
             ((TextView) statsGear).setText("\u2699");
-            statsGear.setOnClickListener(v -> AlertDialogs.showOkDialog(
-                    getActivity(),
-                    getString(R.string.moon_stats_clear_confirm),
-                    () -> {
-                        AppSP sp = AppSP.get();
-                        sp.readTimeMs = 0;
-                        sp.readDayKey = "";
-                        sp.readDayMs = 0;
-                        sp.readPages = 0;
-                        sp.readMonthlyJson = "{}";
-                        sp.readDailyJson = "{}";
-                        sp.save();
-                        try {
-                            com.foobnix.model.ProfileStateIO.exportStats();
-                        } catch (final Throwable t) {
-                            LOG.w(t);
-                        }
-                        populate();
-                    }));
+            // 齿轮紧靠标题文字（原在行最右）
+            android.widget.RelativeLayout.LayoutParams gearLp =
+                    (android.widget.RelativeLayout.LayoutParams) statsGear.getLayoutParams();
+            gearLp.addRule(android.widget.RelativeLayout.ALIGN_PARENT_RIGHT, 0);
+            gearLp.addRule(android.widget.RelativeLayout.RIGHT_OF, R.id.sectionTitle);
+            gearLp.leftMargin = 10;
+            statsGear.setLayoutParams(gearLp);
+            statsGear.setOnClickListener(v -> new android.app.AlertDialog.Builder(getActivity())
+                    .setItems(new String[]{getString(R.string.moon_stats_clear)},
+                            (dg, which) -> AlertDialogs.showOkDialog(
+                                    getActivity(),
+                                    getString(R.string.moon_stats_clear_confirm),
+                                    () -> {
+                                        AppSP sp = AppSP.get();
+                                        sp.readTimeMs = 0;
+                                        sp.readDayKey = "";
+                                        sp.readDayMs = 0;
+                                        sp.readPages = 0;
+                                        sp.readMonthlyJson = "{}";
+                                        sp.readDailyJson = "{}";
+                                        sp.save();
+                                        try {
+                                            com.foobnix.model.ProfileStateIO.exportStats();
+                                        } catch (final Throwable t) {
+                                            LOG.w(t);
+                                        }
+                                        populate();
+                                    }))
+                    .show());
         }
         bindStat(view, R.id.statTotal, R.string.moon_stat_total);
         bindStat(view, R.id.statRead,  R.string.moon_stat_read);
@@ -629,6 +639,43 @@ public class DashboardFragment2 extends UIFragment<FileMeta> {
             float speed = minutes > 0 ? readPages / (float) minutes : 0f;
             statSpeedValue.setText(String.format(Locale.US, "%.1f", speed));
         }
+        // 数值自适应缩放：单行放下，同一行卡片高度一致（用户要求）
+        fitStatValue(statTotalValue);
+        fitStatValue(statReadValue);
+        fitStatValue(statHoursValue);
+        fitStatValue(statTodayValue);
+        fitStatValue(statSpeedValue);
+    }
+
+    /** 统计卡片数值自适应：先回到基准字号，超宽时逐级缩小直到单行放下。 */
+    private void fitStatValue(final TextView v) {
+        if (v == null) {
+            return;
+        }
+        v.setMaxLines(1);
+        v.post(new Runnable() {
+            @Override public void run() {
+                try {
+                    final int avail = v.getWidth() - v.getPaddingLeft() - v.getPaddingRight();
+                    if (avail <= 0) {
+                        return;
+                    }
+                    final float base = android.util.TypedValue.applyDimension(
+                            android.util.TypedValue.COMPLEX_UNIT_SP, 26,
+                            getResources().getDisplayMetrics());
+                    v.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, base);
+                    final android.text.TextPaint paint = v.getPaint();
+                    final String text = v.getText().toString();
+                    float size = base;
+                    while (size > base * 0.45f && paint.measureText(text) > avail) {
+                        size -= 1f;
+                        v.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, size);
+                    }
+                } catch (Exception e) {
+                    LOG.e(e);
+                }
+            }
+        });
     }
 
     // ---------------------------------------------------------------- adapters

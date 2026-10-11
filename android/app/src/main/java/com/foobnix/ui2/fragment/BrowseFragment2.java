@@ -1440,7 +1440,8 @@ import java.util.Map;
         // as one block that adapts to content and scrolls together
         List<String> libFolders = new ArrayList<String>();
         for (String p2 : JsonDB.get(BookCSS.get().searchPathsJson)) {
-            if (TxtUtils.isNotEmpty(p2) && new File(p2).isDirectory()) {
+            // 文件夹与单文件条目都显示（打开的书会自动以单文件入夹，用户策略）
+            if (TxtUtils.isNotEmpty(p2) && (new File(p2).isDirectory() || new File(p2).isFile())) {
                 libFolders.add(p2);
             }
         }
@@ -1461,8 +1462,14 @@ import java.util.Map;
             }
         }
         for (final String fp : libFolders) {
+            final boolean isFileEntry = new File(fp).isFile();
             View row = netListItem(R.drawable.glyphicons_336_folder, ExtUtils.getFileName(fp), new OnClickListener() {
                 @Override public void onClick(View v) {
+                    if (isFileEntry) {
+                        // 单文件条目：点击直接打开这本书
+                        com.foobnix.pdf.info.ExtUtils.openFile(a, new com.foobnix.dao2.FileMeta(fp));
+                        return;
+                    }
                     // same as the old root cards: detached folder page, the
                     // tab keeps its root view
                     ((MainTabs2) a).openFolderPage(fp);

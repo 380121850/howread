@@ -15,6 +15,7 @@ import com.foobnix.pdf.info.R;
 import com.foobnix.pdf.info.presentation.BookmarksAdapter;
 
 import java.util.List;
+import com.foobnix.sys.TempHolder;
 
 public class ListBoxHelper {
     public static void showAddDialog(final DocumentController controller,
@@ -60,6 +61,10 @@ public class ListBoxHelper {
                                 com.foobnix.remote.RemoteBook.fixCollapsed(controller.getCurrentBook().getPath()),
                                                                      text,
                                                                      controller.getPercentage());
+                        // capture the absolute page now: percent alone breaks
+                        // when the full layout is still growing
+                        bookmark.pg = Math.max(0, controller.getCurentPageFirst1() - 1);
+                        bookmark.pgs = controller.getPageCount();
                         bookmark.isF = isFloat.isChecked();
                         BookmarksData.get().add(bookmark);
                         if (objects != null) {
@@ -99,7 +104,47 @@ public class ListBoxHelper {
                 com.foobnix.remote.RemoteBook.fixCollapsed(controller.getCurrentBook().getPath()),
                                                      text,
                                                      controller.getPercentage());
+        bookmark.pg = Math.max(0, controller.getCurentPageFirst1() - 1);
+        bookmark.pgs = controller.getPageCount();
         BookmarksData.get().add(bookmark);
+    }
+
+    /**
+     * Jump to a bookmark. Bookmarks with an absolute page anchor jump
+     * immediately (the anchor is count-independent). Percent-only legacy
+     * bookmarks wait for the fast-open background layout to settle:
+     * resolving p against the partial count lands hundreds of pages off
+     * in big reflow books.
+     */
+    public static void jumpToBookmark(final DocumentController controller, final AppBookmark bookmark) {
+        final android.app.Activity act = controller.getActivity();
+        final int count = controller.getPageCount();
+        // era-bound: the anchor is only exact while the page count matches
+        // the one at add time (a font change repaginates the book)
+        final boolean anchored = bookmark.pg >= 0 && bookmark.pgs == count && count > 0 && bookmark.pg < count;
+        if (anchored || com.foobnix.sys.TempHolder.layoutComplete) {
+            controller.onGoToPage(bookmark.getPage(count));
+            return;
+        }
+        if (act == null || act.isDestroyed() || act.isFinishing()) {
+            return;
+        }
+        TempHolder.pendingLayoutJump = () -> {
+            TempHolder.pendingLayoutJump = null;
+            if (!act.isDestroyed() && !act.isFinishing()) {
+                controller.onGoToPage(bookmark.getPage(controller.getPageCount()));
+            }
+        };
+        final Runnable mine = TempHolder.pendingLayoutJump;
+        // safety net: if the background layout stalls, fall back to the
+        // old best-effort jump instead of swallowing the tap
+        act.getWindow().getDecorView().postDelayed(new Runnable() {
+            @Override public void run() {
+                if (TempHolder.pendingLayoutJump == mine) {
+                    mine.run();
+                }
+            }
+        }, 15000);
     }
 
     public static void showEditDeleteDialog(final AppBookmark bookmark,

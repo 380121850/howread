@@ -309,18 +309,10 @@ public class BookCSS {
 
             LOG.d("searchPaths-all", 1, instance.searchPathsJson,filtered);
 
+            // 未设置书库文件夹时保持为空：不再自动扫描整个存储根目录。
+            // 书库只来自用户设置的文件夹、网络来源与手动添加的书。
             if (TxtUtils.isListEmpty(filtered)) {
-                List<String> extFolders = ExtUtils.getAllExternalStorages(c);
-
-                if (!extFolders.contains(Environment.getExternalStorageDirectory().getPath())) {
-                    extFolders.add(Environment.getExternalStorageDirectory().getPath());
-                }
-
-                // don't resurrect storage defaults the user removed from the
-                // "my files" root list (possibly leaving it empty on purpose)
-                extFolders.removeAll(JsonDB.get(instance.searchPathsHiddenJson));
-                instance.searchPathsJson = JsonDB.set(extFolders);
-                LOG.d("searchPaths-all", 2, instance.searchPathsJson);
+                LOG.d("searchPaths-all", 2, "(empty: no auto root scan)");
             }
         } catch (Exception e) {
             List<String> fallbackList = new ArrayList<String>();
@@ -906,4 +898,54 @@ public class BookCSS {
 
     }
 
+
+    /**
+     * 用户策略：手动添加或额外打开的本地书，自动把书籍文件路径加入书库
+     * 文件夹（searchPathsJson 支持单文件根），刷新/搜索后书仍在书架上。
+     * 幂等；缓存与临时解包目录不进；打开即视为有意加入（清删除墓碑）。
+     */
+    public static void addToLibraryFolders(final String path) {
+        try {
+            if (path == null || path.length() == 0 || path.equals("/")) {
+                return;
+            }
+            if (com.foobnix.pdf.info.ExtUtils.isExteralSD(path)) {
+                return;
+            }
+            final java.io.File f = new java.io.File(path);
+            if (!f.isFile()) {
+                return;
+            }
+            final android.content.Context c = com.foobnix.LibreraApp.context;
+            if (path.startsWith(c.getCacheDir().getPath())) {
+                return;
+            }
+            if (c.getExternalCacheDir() != null && path.startsWith(c.getExternalCacheDir().getPath())) {
+                return;
+            }
+            if (path.startsWith(com.foobnix.ext.CacheZipUtils.ATTACHMENTS_CACHE_DIR.getPath())) {
+                return;
+            }
+            // 已位于任一书库文件夹之内（或就是该条目）：不另加单文件条目
+            final String np = org.ebookdroid.core.codec.AbstractCodecContext.normalizeStoragePath(path);
+            for (final String s0 : JsonDB.get(get().searchPathsJson)) {
+                if (s0 == null || s0.trim().length() == 0) {
+                    continue;
+                }
+                final String ns = org.ebookdroid.core.codec.AbstractCodecContext.normalizeStoragePath(s0);
+                if (np.equals(ns) || np.startsWith(ns.endsWith("/") ? ns : ns + "/")) {
+                    return;
+                }
+            }
+            get().searchPathsJson = JsonDB.add(get().searchPathsJson, path);
+            com.foobnix.remote.RemoteTombstones.clear("folder:" + path);
+            get().searchPathsHiddenJson = JsonDB.remove(get().searchPathsHiddenJson, path);
+            // 立即持久化：我的文件·书库文件夹与刷新即刻可见
+            AppProfile.save(c);
+            LOG.d("BookCSS", "addToLibraryFolders", path);
+        } catch (Exception e) {
+            LOG.e(e);
+        }
+    }
 }
+

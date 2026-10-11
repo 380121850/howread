@@ -1010,6 +1010,7 @@ public class Dialogs {
                     public void run() {
                         AppState.get().brigtnessImage = 0;
                         AppState.get().contrastImage = 0;
+                        com.foobnix.webdav.WebDavSyncer.markDefaultsRestored();
                         AppState.get().bolderTextOnImage = false;
                         isEnableBC.setChecked(AppState.get().bolderTextOnImage);
 

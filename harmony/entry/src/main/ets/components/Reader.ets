@@ -38,7 +38,7 @@ import {
   registerRemoteReader, unregisterRemoteReader, remoteReadDone, openDocumentRemoteAsync, docOpAsync,
   RenderResult, RenderOptions, TocEntry, CropRect, TextRect, TextLine, AnnotationInfo, DocumentInfo
 } from 'libmupdf_napi.so';
-import { saveRecentBook, getPageForPath, RecentBook } from '../model/ReadingProgress';
+import { saveRecentBook, getPageForPath, getRecentBookForPath, RecentBook } from '../model/ReadingProgress';
 import { recordReadTime, recordPagesRead } from '../model/ReadingStats';
 import { getBookmarks, addBookmark, removeBookmark, Bookmark } from '../model/Bookmarks';
 import { AiConfig, loadAiConfig, chatCompletion, chatCompletionStream, aiConfigReady, AiMessage, lastTruncated} from '../model/AiClient';
@@ -749,6 +749,18 @@ struct Reader {
   @State fontSize: number = 16;         /* em, reflowable only */
   @State lineHeight: number = 1.6;      /* CSS line-height, reflowable only */
   @State pageMargin: number = 20;       /* CSS body margin pt, reflowable only */
+  private swiperCtrl: SwiperController = new SwiperController();
+  /* 0.9.22 fix3: true once the current open finished; Swiper events that
+   * arrive earlier (empty-list init onChange(0)) would wipe the restored
+   * reading position. */
+  private openSettled: boolean = false;
+  /* 0.9.23 (Android 10-09 parity): true once the FULL page count of the
+   * current layout era is known (phase two done / full layout / reflow).
+   * Until then this.totalPages is only a moving window end. */
+  private layoutComplete: boolean = false;
+  /* 0.9.23: pending deep-jump wait (lands when the canvas has grown) */
+  private jumpWaitTimer: number = -1;
+  private jumpWaitStart: number = 0;
   @State reflowVersion: number = 0;
 
   // ---- Sprint G6: File info dialog ----
@@ -974,7 +986,10 @@ struct Reader {
     }
     this.remoteOpening = false;
     console.info(`[Reader] Remote document opened: ${this.totalPages} pages, page ${this.currentPage + 1}`);
+    this.openSettled = true;
+    this.layoutComplete = true; /* remote opens are fully laid out */
     tlog('book_open_done', 'remote=1 pages=' + this.totalPages);
+    this.landOnRestoredPage();
   }
 
   aboutToAppear(): void {
@@ -1308,11 +1323,18 @@ struct Reader {
           this.pageList.push(i);
         }
         this.totalPages = newTotal;
+        this.layoutComplete = true; /* full re-layout done - new era */
         this.currentPage = Math.min(this.currentPage, newTotal - 1);
         this.reflowVersion++;
         this.onPageChanged(this.currentPage);
         this.loadToc();
         this.persistSettings();
+        /* 0.9.23 (Android 10-09 parity): a typography change re-lays out the
+         * whole book - settle the archived progress entry to the new era
+         * immediately, so the absolute page (valid in the new geometry) is
+         * saved with a fresh epoch instead of a stale one. */
+        this.saveProgress(this.currentPage);
+        tlog('reflow_settled', 'pages=' + newTotal + ' page=' + (this.currentPage + 1));
         console.info(`[Reader] Reflow applied: ${newTotal} pages (em=${this.fontSize}, lh=${this.lineHeight.toFixed(1)}, m=${this.pageMargin})`);
       }
     } catch (e) {
@@ -1410,9 +1432,16 @@ struct Reader {
        * The old synchronous full layoutDocument is GONE from this path -
        * op15's fz_layout_document already fixed the geometry for the pages
        * it counted. */
-      const prog = await this.docOp(15, REFLOW_W, REFLOW_H, this.fontSize, '400');
+      /* 0.9.22 (Android 10-05 parity): count up to the saved reading
+       * position plus one window so the initial canvas always contains the
+       * page that must be shown - counting only the head 400 clamped deep
+       * positions back into the first window and lost the reader's place
+       * on reopen. */
+      const target: number = Math.max(0, this.currentPage);
+      this.layoutComplete = false; /* the count below is a window, not the era total */
+      const prog = await this.docOp(15, REFLOW_W, REFLOW_H, this.fontSize, String(target + 400));
       const n1: number = parseInt(prog === undefined ? '-1' : prog);
-      tlog('bench_stage1', 'ms=' + (Date.now() - benchT0) + ' n1=' + n1);
+      tlog('bench_stage1', 'ms=' + (Date.now() - benchT0) + ' n1=' + n1 + ' from=' + target);
       if (isNaN(n1) || n1 < 0) {
         /* fallback: one full layout + count (previous behaviour) */
         const handle2: ESObject | undefined = this.dataSource.getDocHandle();
@@ -1438,12 +1467,40 @@ struct Reader {
       this.currentPage = Math.min(this.currentPage, Math.max(0, this.totalPages - 1));
       console.info(`[Reader] Document opened (staged): ${this.totalPages} pages, starting at page ${this.currentPage + 1}`);
       tlog('book_open_done', 'pages=' + this.totalPages + ' staged=1');
+      this.openSettled = true;
+      this.landOnRestoredPage();
       this.stagedOpen = true;
       this.startPhaseTwo(gen);
     } catch (e) {
       console.error('[Reader] Failed to open document: ' + JSON.stringify(e));
       tlog('book_open_fail', 'err=1');
     }
+  }
+
+  /* 0.9.22 fix2: the page list is empty at the Swiper's first build, so
+   * the .index() binding does not re-apply when items arrive - without
+   * this, reopening a book saved at a deep page showed page 1 (slider and
+   * indicator at 1) while currentPage held the restored value. */
+  private landOnRestoredPage(): void {
+    if (this.currentPage <= 0) {
+      return;
+    }
+    setTimeout(() => {
+      if (this.currentPage <= 0 || this.totalPages <= 0) {
+        return;
+      }
+      const target: number = this.currentPage;
+      /* .index() only re-applies when the state VALUE changes; at open it
+       * was already the restored value at the Swiper's first (empty)
+       * build. Nudge 0 -> target: the Swiper is at 0, so the intermediate
+       * value causes no visible move. */
+      this.currentPage = 0;
+      setTimeout(() => {
+        this.currentPage = target;
+        setTimeout(() => {
+        }, 400);
+      }, 50);
+    }, 200);
   }
 
   /** (Re)build the Swiper page list from totalPages. */
@@ -1457,7 +1514,10 @@ struct Reader {
 
   /** Common tail of the open flow (0.9.15 first-frame priority kept). */
   private finishReaderOpen(): void {
+    this.openSettled = true;
+    this.layoutComplete = true; /* non-staged opens know their full count */
     this.rebuildPageList();
+    this.landOnRestoredPage();
     this.loadToc();
     this.loadBookmarks();
     this.refreshAnnotations();
@@ -1496,6 +1556,8 @@ struct Reader {
     }
     tlog('bench_phase2_end', 'total=' + total + ' ms=' + (Date.now() - t0));
     console.info(`[Reader] phase2 done: ${total} pages in ${Date.now() - t0}ms`);
+    this.layoutComplete = true;
+    this.settleProgressEpoch(total);
     this.loadToc();
   }
 
@@ -1532,6 +1594,12 @@ struct Reader {
   }
 
   aboutToDisappear(): void {
+    this.openSettled = false;
+    this.layoutComplete = false;
+    if (this.jumpWaitTimer >= 0) {
+      clearInterval(this.jumpWaitTimer);
+      this.jumpWaitTimer = -1;
+    }
     this.stageGen++; /* cancel a running staged-layout loop (0.9.16) */
     this.unregisterVolumeKeys();
     if (this.readTimerId >= 0) {
@@ -1562,7 +1630,7 @@ struct Reader {
         path: this.logicalPath.length > 0 ? this.logicalPath : this.documentPath,
         title: this.docTitle,
         page: this.currentPage,
-        totalPages: this.totalPages,
+        totalPages: this.layoutComplete ? this.totalPages : -1,
         lastRead: new Date().toISOString(),
         star: false,
         coverPath: '',
@@ -1602,6 +1670,11 @@ struct Reader {
   }
 
   private onPageChanged(index: number): void {
+    if (!this.openSettled) {
+      /* Swiper init fires onChange(0) on the empty pre-open list; swallow
+       * it so the restored position survives (0.9.22 fix3). */
+      return;
+    }
     const prevPage = this.currentPage;
     this.currentPage = index;
     if (this.selMode) {
@@ -1652,7 +1725,9 @@ struct Reader {
         path: this.logicalPath.length > 0 ? this.logicalPath : this.documentPath,
         title: this.docTitle,
         page: page,
-        totalPages: this.totalPages,
+        /* 0.9.23: only a completed full count may publish an epoch - the
+         * staged window end would poison the era check on reopen */
+        totalPages: this.layoutComplete ? this.totalPages : -1,
         lastRead: new Date().toISOString(),
         star: false,
         coverPath: '',
@@ -1842,8 +1917,6 @@ struct Reader {
     console.info(`[Reader] Prev hit: page ${this.searchResults[prev][0] + 1} (${prev + 1}/${this.searchResults.length})`);
   }
 
-
-
   // ---- Bookmarks (C4) ----
   private async toggleBookmark(): Promise<void> {
     const ctx = getContext(this);
@@ -1863,7 +1936,7 @@ struct Reader {
       console.info(`[Reader] Bookmark removed at page ${this.currentPage + 1}`);
       tlog('bookmark_removed', 'page=' + (this.currentPage + 1));
     } else {
-      const ok = await addBookmark(ctx, this.documentPath, this.currentPage, '');
+      const ok = await addBookmark(ctx, this.documentPath, this.currentPage, '', this.layoutComplete ? this.totalPages : -1);
       if (ok) {
         console.info(`[Reader] Bookmark added at page ${this.currentPage + 1}`);
         tlog('bookmark_added', 'page=' + (this.currentPage + 1));
@@ -1885,12 +1958,120 @@ struct Reader {
     tlog('bookmark_list_loaded', 'n=' + this.bookmarks.length);
   }
 
-  private jumpToBookmark(page: number): void {
-    this.pushPageHistory();
-    this.currentPage = Math.max(0, Math.min(page, this.totalPages - 1));
-    this.onPageChanged(this.currentPage);
-    this.showBookmarks = false;
-    console.info(`[Reader] Jumped to bookmark page ${page + 1}`);
+  /* 0.9.23 (Android 10-09 parity): a bookmark's absolute page is a valid
+   * anchor only inside its layout era. pgs = the total the book had when
+   * the bookmark was made; -1 = legacy (no epoch, absolute anchor).
+   * Cross-era (typography change, sync from another device): the percentage
+   * position is stable across eras, so land at page/pgs x full count; while
+   * the staged canvas is still growing, wait for phase two (15s cap, then
+   * clamp) instead of silently landing short. */
+  private jumpToBookmark(bm: Bookmark): void {
+    const closePanel: () => void = () => {
+      this.showBookmarks = false;
+    };
+    const land: (t: number) => void = (t: number) => {
+      this.pushPageHistory();
+      this.currentPage = Math.max(0, Math.min(t, this.totalPages - 1));
+      this.onPageChanged(this.currentPage);
+      closePanel();
+    };
+    const era: boolean = bm.pgs > 0 && bm.pgs !== this.totalPages;
+    if (era) {
+      const landEra: () => void = () => {
+        const target: number = Math.max(0, Math.min(
+          Math.round(Math.max(0, Math.min(bm.page / bm.pgs, 0.999)) * this.totalPages),
+          this.totalPages - 1));
+        tlog('bookmark_era_jump', 'from=' + (bm.page + 1) + ' pgs=' + bm.pgs + ' to=' + (target + 1) + ' full=' + this.totalPages);
+        console.info(`[Reader] Bookmark era jump: page ${bm.page + 1}/${bm.pgs} -> ${target + 1}/${this.totalPages}`);
+        land(target);
+      };
+      if (this.layoutComplete) {
+        landEra();
+      } else {
+        /* the era landing needs the full count - wait for phase two */
+        this.whenCanvasReady(() => this.layoutComplete, landEra);
+      }
+      return;
+    }
+    if (bm.page < this.totalPages) {
+      tlog('bookmark_jump', 'page=' + (bm.page + 1) + ' pgs=' + bm.pgs);
+      console.info(`[Reader] Jumped to bookmark page ${bm.page + 1}`);
+      land(bm.page);
+      return;
+    }
+    /* beyond the still-growing staged canvas - land when it reaches it */
+    this.whenCanvasReady(() => this.totalPages > bm.page, () => {
+      tlog('bookmark_jump', 'page=' + (bm.page + 1) + ' deferred=1');
+      land(bm.page);
+    });
+  }
+
+  /* 0.9.23: run onDone once the staged canvas satisfies pred(); polls every
+   * 500ms with a 15s cap, then fires on whatever the canvas holds (the same
+   * clamp a user sees when the book genuinely ends early). */
+  private whenCanvasReady(pred: () => boolean, onDone: () => void): void {
+    const fire: () => void = () => {
+      if (this.jumpWaitTimer >= 0) {
+        clearInterval(this.jumpWaitTimer);
+        this.jumpWaitTimer = -1;
+      }
+      onDone();
+    };
+    if (pred()) {
+      fire();
+      return;
+    }
+    this.jumpWaitStart = Date.now();
+    this.jumpWaitTimer = setInterval(() => {
+      if (pred() || Date.now() - this.jumpWaitStart >= 15000) {
+        fire();
+      }
+    }, 500);
+  }
+
+  /* 0.9.23 (Android 10-09 pgc era-restore parity): the phase-two full count
+   * is now the era of record. A window-period page flip saved the position
+   * with the moving window end as the epoch - rewrite the entry with the full
+   * count. If the stored epoch disagrees with the full count, the book was
+   * re-laid out since the last save (typography change, sync from another
+   * device): the absolute page no longer points at the same content, so
+   * re-land by percentage (stable across eras) and resave. */
+  private async settleProgressEpoch(fullTotal: number): Promise<void> {
+    if (this.documentPath.length === 0) {
+      return;
+    }
+    const ctx = getContext(this);
+    const pathKey: string = this.logicalPath.length > 0 ? this.logicalPath : this.documentPath;
+    const book: RecentBook | undefined = await getRecentBookForPath(ctx, pathKey);
+    if (book === undefined) {
+      return;
+    }
+    const epoch: number = book.totalPages;
+    if (epoch > 0 && epoch !== fullTotal) {
+      const landAt: number = Math.max(0, Math.min(
+        Math.round(book.page / epoch * fullTotal), fullTotal - 1));
+      if (landAt !== this.currentPage) {
+        tlog('era_restore', 'from=' + (this.currentPage + 1) + ' to=' + (landAt + 1) + ' epoch=' + epoch + ' full=' + fullTotal);
+        this.currentPage = landAt;
+        this.onPageChanged(landAt);
+      }
+    }
+    const settled: RecentBook = {
+      path: book.path,
+      title: book.title,
+      page: this.currentPage,
+      totalPages: fullTotal,
+      lastRead: book.lastRead.length > 0 ? book.lastRead : new Date().toISOString(),
+      star: book.star,
+      coverPath: book.coverPath,
+      author: book.author,
+      tags: book.tags,
+      series: book.series,
+      genre: book.genre,
+      status: book.status
+    };
+    saveRecentBook(ctx, settled);
+    tlog('progress_settled', 'page=' + (this.currentPage + 1) + ' epoch=' + fullTotal);
   }
 
   // ---- Annotations (C2 highlight) ----
@@ -2029,12 +2210,19 @@ struct Reader {
   /** Jump to the page holding an annotation. */
   private jumpAnnPage(idx: number): void {
     const p: number = this.annPages[idx];
-    if (p >= 0 && p < this.totalPages) {
-      this.currentPage = p;
-      this.showAnnPanel = false;
-      this.onPageChanged(p);
-      console.info(`[Reader] Jump to annotation page ${p + 1}`);
+    if (p < 0) {
+      return;
     }
+    /* 0.9.23: a deep annotation can sit beyond the still-growing staged
+     * canvas - land when it grows instead of silently no-oping. */
+    this.whenCanvasReady(() => this.totalPages > p, () => {
+      const deferred: number = this.totalPages > p ? 0 : 1;
+      this.showAnnPanel = false;
+      tlog('ann_jump', 'page=' + (p + 1) + ' deferred=' + deferred);
+      this.currentPage = Math.max(0, Math.min(p, this.totalPages - 1));
+      this.onPageChanged(this.currentPage);
+      console.info(`[Reader] Jump to annotation page ${this.currentPage + 1}`);
+    });
   }
 
   /* ---- Round 5: page-jump history (返回上一位置) ---- */
@@ -3286,7 +3474,7 @@ struct Reader {
         }
       }
 
-      parts.push(`页数: ${this.totalPages > 0 ? this.totalPages + ' 页' : $r('app.string.common_unknown')}`);
+      parts.push(`页数: ${this.totalPages > 0 ? this.totalPages + ' 页' : this.L($r('app.string.common_unknown'))}`);
       parts.push(`当前页: p${this.currentPage + 1}`);
 
       /* File size */
@@ -4466,7 +4654,7 @@ struct Reader {
         if (this.scrollMode === 0) {
           /* Horizontal Swiper mode */
           Stack() {
-            Swiper() {
+            Swiper(this.swiperCtrl) {
               ForEach(this.pageList, (pageIdx: number) => {
                 if (this.pageMode === 1) {
                   /* double-page: each swiper page shows a pair */
@@ -4769,6 +4957,40 @@ struct Reader {
           })
         }
 
+        /* 0.9.23 (Android 10-10 parity): the page seek row moved ABOVE the
+         * icon row (document_footer.xml order). */
+        Row({ space: 10 }) {
+          Text(this.totalPages > 0 ? '' + (this.currentPage + 1) : '0')
+            .fontSize(12).fontColor(Color.White).width(36).textAlign(TextAlign.Center)
+          Slider({ value: this.currentPage, min: 0, max: Math.max(this.totalPages - 1, 1), step: 1 })
+            .layoutWeight(1).height(24)
+            .selectedColor(Color.White)
+            .trackColor('#5c6bc0')
+            .blockColor(Color.White)
+            .onChange((value: number, mode: SliderChangeMode) => {
+              if (!this.openSettled) {
+                /* The Slider clamps its initial value on first build
+                 * (totalPages is still 0) and fires onChange — do not let
+                 * it stomp the restored reading position (0.9.22 fix5). */
+                return;
+              }
+              if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                const target: number = Math.max(0, Math.min(Math.round(value), this.totalPages - 1));
+                if (target !== this.currentPage) {
+                  this.pushPageHistory();
+                  this.currentPage = target;
+                  this.onPageChanged(target);
+                  console.info(`[Reader] Seek to page ${target + 1}`);
+                }
+              }
+            })
+          Text(this.totalPages > 0 ? '' + this.totalPages : '0')
+            .fontSize(12).fontColor(Color.White).width(36).textAlign(TextAlign.Center)
+        }
+        .width('100%')
+        .padding({ left: 8, right: 8, top: 2, bottom: 6 })
+        .backgroundColor(this.barBg())
+
         // Bottom toolbar (Android hr10/11: brand blue bar, white icons; Round 6: scrollable + full icon set)
         Scroll() {
           Row() {
@@ -4846,33 +5068,6 @@ struct Reader {
         .scrollBar(BarState.Off)
         .width('100%').height(44)
         .padding({ left: 16, right: 16 })
-        .backgroundColor(this.barBg())
-
-        /* Page seek slider row (Android hr10: page number left, total right, white on blue) */
-        Row({ space: 10 }) {
-          Text(this.totalPages > 0 ? '' + (this.currentPage + 1) : '0')
-            .fontSize(12).fontColor(Color.White).width(36).textAlign(TextAlign.Center)
-          Slider({ value: this.currentPage, min: 0, max: Math.max(this.totalPages - 1, 1), step: 1 })
-            .layoutWeight(1).height(24)
-            .selectedColor(Color.White)
-            .trackColor('#5c6bc0')
-            .blockColor(Color.White)
-            .onChange((value: number, mode: SliderChangeMode) => {
-              if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                const target: number = Math.max(0, Math.min(Math.round(value), this.totalPages - 1));
-                if (target !== this.currentPage) {
-                  this.pushPageHistory();
-                  this.currentPage = target;
-                  this.onPageChanged(target);
-                  console.info(`[Reader] Seek to page ${target + 1}`);
-                }
-              }
-            })
-          Text(this.totalPages > 0 ? '' + this.totalPages : '0')
-            .fontSize(12).fontColor(Color.White).width(36).textAlign(TextAlign.Center)
-        }
-        .width('100%')
-        .padding({ left: 8, right: 8, top: 2, bottom: 6 })
         .backgroundColor(this.barBg())
       }
       .width('100%').height('100%')
@@ -5633,7 +5828,6 @@ struct Reader {
                   .fontSize(10).fontColor('#999')
               }
 
-
                 /* Sprint L: text indent slider */
                 Row() {
                   Text($r('app.string.typo_indent_n')).fontSize(12).fontColor('#555').width(50)
@@ -5797,11 +5991,11 @@ struct Reader {
                 ForEach(this.bookmarks, (bm: Bookmark) => {
                   ListItem() {
                     Row() {
-                      Text(`p${bm.page + 1}  ${bm.label.length > 0 ? bm.label : $r('app.string.reader_bookmark')}`)
+                      Text(`p${bm.page + 1}  ${bm.label.length > 0 ? bm.label : this.L($r('app.string.reader_bookmark'))}`)
                         .fontSize(13).fontColor('#333')
                         .layoutWeight(1)
                         .onClick(() => {
-                          this.jumpToBookmark(bm.page);
+                          this.jumpToBookmark(bm);
                         })
                       Text('✕')
                         .fontSize(15).fontColor('#e57373')

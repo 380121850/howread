@@ -180,8 +180,22 @@ public abstract class AbstractViewController extends AbstractComponentController
             final int pageCount = getBase().getDocumentModel().getPageCount();
             // Fast-open: restore by the saved absolute page whenever it is
             // inside the laid-out range (percent math needs the final count).
-            PageIndex currentPage =
-                    bs.pg >= 0 && bs.pg < pageCount ? new PageIndex(bs.pg, bs.pg) : bs.getCurrentPage(pageCount);
+            final boolean anchored = bs.pg >= 0 && bs.pg < pageCount;
+            if (!anchored && !com.foobnix.sys.TempHolder.layoutComplete) {
+                // legacy/corrupt progress without an absolute page: percent
+                // against the partial window lands far off — show page 1 and
+                // jump when the background layout settles instead
+                com.foobnix.sys.TempHolder.pendingLayoutJump = () -> {
+                    com.foobnix.sys.TempHolder.pendingLayoutJump = null;
+                    org.ebookdroid.core.models.DocumentModel dmFull = getBase().getDocumentModel();
+                    if (dmFull != null && dmFull.getPageCount() > 0) {
+                        goToPage(bs.getCurrentPage(dmFull.getPageCount()).docIndex, bs.x, bs.y);
+                    }
+                };
+                goToPage(0, bs.x, bs.y);
+                return;
+            }
+            PageIndex currentPage = anchored ? new PageIndex(bs.pg, bs.pg) : bs.getCurrentPage(pageCount);
             int toPage = currentPage != null ? currentPage.docIndex : 0;
 
             if (AppState.get().isAlwaysOpenOnPage1) {

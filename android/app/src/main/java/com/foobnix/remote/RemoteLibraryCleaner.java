@@ -69,6 +69,61 @@ public class RemoteLibraryCleaner {
     }
 
     /**
+     * 书库搜索对话框（用户策略）：网络服务器仍配置但**未勾选**参与扫描时，
+     * 其书架书籍随本次搜索移除——与"书库文件夹删除后书籍移出书架"同口径。
+     * 勾选状态存 remoteScanSel（勾过的持续有效）；只处理 SMB/SFTP/WebDAV
+     * （对话框里只有它们有勾选行），OPDS 等其它远程类型不受影响。
+     */
+    public static void purgeUncheckedSelection(Context c) {
+        try {
+            final android.content.SharedPreferences sel =
+                    c.getSharedPreferences("remoteScanSel", android.content.Context.MODE_PRIVATE);
+            // 书路径携带 webdavId，勾选 key 用原始 url：建 id->url 映射
+            final java.util.Map<String, String> webdavIdToUrl = new java.util.HashMap<String, String>();
+            for (com.foobnix.webdav.WebDavServer s : com.foobnix.webdav.WebDavStore.load()) {
+                webdavIdToUrl.put(RemoteSessionFactory.webdavId(s.url), s.url);
+            }
+            int removed = 0;
+            for (FileMeta m : AppDB.get().getAll()) {
+                String p = m.getPath();
+                if (!RemoteBook.isRemotePath(p)) {
+                    continue;
+                }
+                String rest = p.substring(RemoteBook.PREFIX.length());
+                int slash = rest.indexOf('/');
+                int second = slash < 0 ? -1 : rest.indexOf('/', slash + 1);
+                if (slash <= 0 || second <= 0) {
+                    continue;
+                }
+                String type = rest.substring(0, slash);
+                String id = rest.substring(slash + 1, second);
+                final String selKey;
+                if (RemoteBook.TYPE_WEBDAV.equals(type)) {
+                    String url = webdavIdToUrl.get(id);
+                    if (url == null) {
+                        continue; // 服务器已删除：purgeUnconfigured 负责
+                    }
+                    selKey = "webdav:" + url;
+                } else if (RemoteBook.TYPE_SMB.equals(type) || RemoteBook.TYPE_SFTP.equals(type)) {
+                    selKey = type + ":" + id;
+                } else {
+                    continue;
+                }
+                if (!sel.getBoolean(selKey, false)) {
+                    deleteRow(m);
+                    removed++;
+                }
+            }
+            LOG.remote("purgeUnchecked removed=" + removed);
+            if (removed > 0) {
+                refresh();
+            }
+        } catch (Exception e) {
+            LOG.e(e);
+        }
+    }
+
+    /**
      * After a COMPLETED scan of one server: drop its books missing from the
      * listing (deleted on the server while the app was offline).
      */

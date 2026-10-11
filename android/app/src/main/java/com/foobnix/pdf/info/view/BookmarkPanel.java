@@ -23,6 +23,7 @@ import com.foobnix.pdf.info.wrapper.DocumentController;
 import com.foobnix.pdf.info.wrapper.MagicHelper;
 
 import java.util.List;
+import com.foobnix.pdf.info.wrapper.ListBoxHelper;
 
 public class BookmarkPanel {
 
@@ -110,7 +111,7 @@ public class BookmarkPanel {
                         dc.floatingBookmark = null;
                     }
 
-                    dc.onGoToPage(num);
+                    ListBoxHelper.jumpToBookmark(dc, appBookmark);
                 }
             });
             t.setOnLongClickListener(new OnLongClickListener() {

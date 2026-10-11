@@ -49,6 +49,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import com.foobnix.android.utils.Dips;
 
 public class DecodeServiceBase implements DecodeService {
 
@@ -593,13 +594,18 @@ public class DecodeServiceBase implements DecodeService {
 
     @Override
     public int getPageCount() {
-        return codecDocument != null ? codecDocument.getPageCount(view.getWidth(), view.getHeight(), BookCSS.get().fontSizeSp) : 0;
+        // stable layout geometry: the live view size changes between the
+        // first layout pass (pre edge-to-edge insets, h-44) and the settled
+        // one, which mixed short and tall pages in one document and made
+        // the total page count oscillate per open; TXT/FB2 already use the
+        // stable screen size, epub/mobi now do too
+        return codecDocument != null ? codecDocument.getPageCount(Dips.screenWidth(), Dips.screenHeight(), BookCSS.get().fontSizeSp) : 0;
     }
 
     @Override
     public int getPageCountProgressive(final int uptoPage) {
         return codecDocument != null
-                ? codecDocument.getPageCountProgressive(view.getWidth(), view.getHeight(), BookCSS.get().fontSizeSp, uptoPage)
+                ? codecDocument.getPageCountProgressive(Dips.screenWidth(), Dips.screenHeight(), BookCSS.get().fontSizeSp, uptoPage)
                 : 0;
     }
 

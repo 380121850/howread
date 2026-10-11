@@ -656,6 +656,7 @@ public class ShareDialog {
                         note.aiAnswer = replyView.getText().toString().trim();
                         note.isAiNote = true;
                         note.p = 0;
+                        note.pg = 0;
                         note.t = System.currentTimeMillis();
                         BookmarksData.get().add(note);
                         Toast.makeText(a, R.string.note_saved, Toast.LENGTH_SHORT).show();

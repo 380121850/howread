@@ -321,7 +321,7 @@ function mergeBookmarks(base: Bookmark[], local: Bookmark[], remote: Bookmark[])
     if (bmHas(base, remote[i].date)) {
       continue; /* deleted locally since base */
     }
-    out.push({ path: remote[i].path, page: remote[i].page, label: remote[i].label, date: remote[i].date });
+    out.push({ path: remote[i].path, page: remote[i].page, label: remote[i].label, date: remote[i].date, pgs: remote[i].pgs });
   }
   return out;
 }
@@ -497,7 +497,7 @@ export async function runSync(ctx: Context, cfg: SyncConfig): Promise<SyncLogEnt
       }
       for (let j = 0; j < merged.bookmarks.length; j++) {
         const bm = merged.bookmarks[j];
-        kept.push({ path: book.path, page: bm.page, label: bm.label, date: bm.date });
+        kept.push({ path: book.path, page: bm.page, label: bm.label, date: bm.date, pgs: bm.pgs });
       }
       await replaceBookmarks(ctx, kept);
       entry.details.push('\u3010\u5408\u5E76\u3011' + book.title + ' \u5DF2\u5E94\u7528\u5230\u672C\u5730\uFF08\u7B2C ' +

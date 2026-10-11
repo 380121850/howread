@@ -79,6 +79,28 @@ public abstract class AbstractCodecContext implements CodecContext {
         return hashCode;
     }
 
+    /**
+     * Hyphenation part of the conversion-cache key. Only en/sr/lv have real
+     * hyphenation patterns; for every other language (zh included)
+     * hypenLang is inert, so it must not take part in the key — the WebDAV
+     * sync flipping it (zh <-> absent) would otherwise orphan every
+     * converted book's cache and force a full re-conversion per open.
+     */
+    public static String hyphenKeyPart() {
+        if (!com.foobnix.pdf.info.model.BookCSS.get().isAutoHypens) {
+            return "";
+        }
+        String lang = AppSP.get().hypenLang;
+        if (lang == null || lang.length() == 0) {
+            return "";
+        }
+        lang = lang.substring(0, Math.min(2, lang.length())).toLowerCase(java.util.Locale.US);
+        if ("sp".equals(lang)) {
+            lang = "es";
+        }
+        return "en".equals(lang) || "sr".equals(lang) || "lv".equals(lang) ? lang : "";
+    }
+
     @Override
     public CodecDocument openDocument(String fileNameOriginal, String password) {
         // 同一物理文件常以不同路径身份出现（书架原生 /storage/emulated/0/... vs

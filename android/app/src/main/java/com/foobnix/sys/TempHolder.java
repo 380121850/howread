@@ -54,6 +54,14 @@ public class TempHolder {
 
     /** True while a reader activity is in the foreground; background warm-up tasks yield to it. */
     public static volatile boolean readerActive = false;
+    /** Fast-open layout state: false while the background phase-two is
+     *  still growing the page count of a progressively loaded book.
+     *  Percent-based jumps must wait for it or they divide by the partial
+     *  count and land far off. */
+    public static volatile boolean layoutComplete = true;
+    /** Single-slot jump (bookmark / open restore) deferred until the
+     *  full layout settles. UI thread only. */
+    public static volatile Runnable pendingLayoutJump;
 
     public static int isRecordFrom = 1;
     public static int isRecordTo = 1;
