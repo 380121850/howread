@@ -38,6 +38,17 @@ public class AiAskDialog {
 
     /** @param percent current reading position (0..1 fraction, same as bookmarks) */
     public static void show(final Activity a, final String selectedText, final String bookPath, final float percent) {
+        show(a, selectedText, bookPath, percent, -1, 0);
+    }
+
+    /**
+     * Full form: anchorPg/anchorPgs carry the absolute reading position for
+     * the note (pgs == AppBookmark.PGS_WINDOW marks a fast-open window
+     * capture; the phase-two finisher repairs it once the count is final).
+     * anchorPg &lt; 0 = no anchor available.
+     */
+    public static void show(final Activity a, final String selectedText, final String bookPath, final float percent,
+            final int anchorPg, final int anchorPgs) {
         if (a == null) {
             return;
         }
@@ -118,6 +129,10 @@ public class AiAskDialog {
                 note.isAiNote = true;
                 // Remember the reading position so the note can jump back to it
                 note.p = percent;
+                if (anchorPg >= 0) {
+                    note.pg = anchorPg;
+                    note.pgs = anchorPgs;
+                }
                 note.t = System.currentTimeMillis();
                 BookmarksData.get().add(note);
 

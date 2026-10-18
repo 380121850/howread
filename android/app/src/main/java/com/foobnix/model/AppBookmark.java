@@ -20,6 +20,10 @@ public class AppBookmark implements MyPath.RelativePath {
     // content, so the anchor only applies while pgs == current count;
     // across eras the percent anchor is the stable one.
     public int pgs = -1;
+    /** pgs sentinel: anchor captured while the fast-open partial window was
+     * still growing — pg is exact (phase two only appends), pgs unknown until
+     * the phase-two finisher rewrites it with the final count. */
+    public static final int PGS_WINDOW = 0;
     public long t;
     public boolean isF = false;
 

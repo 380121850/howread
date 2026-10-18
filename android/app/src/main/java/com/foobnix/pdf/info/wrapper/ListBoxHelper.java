@@ -64,7 +64,10 @@ public class ListBoxHelper {
                         // capture the absolute page now: percent alone breaks
                         // when the full layout is still growing
                         bookmark.pg = Math.max(0, controller.getCurentPageFirst1() - 1);
-                        bookmark.pgs = controller.getPageCount();
+                        // pgs = PGS_WINDOW marks a fast-open window capture: the
+                        // phase-two finisher rewrites pgs/p once the count is final
+                        bookmark.pgs = com.foobnix.sys.TempHolder.layoutComplete
+                                ? controller.getPageCount() : AppBookmark.PGS_WINDOW;
                         bookmark.isF = isFloat.isChecked();
                         BookmarksData.get().add(bookmark);
                         if (objects != null) {
@@ -105,7 +108,10 @@ public class ListBoxHelper {
                                                      text,
                                                      controller.getPercentage());
         bookmark.pg = Math.max(0, controller.getCurentPageFirst1() - 1);
-        bookmark.pgs = controller.getPageCount();
+        // pgs = PGS_WINDOW marks a fast-open window capture: the phase-two
+        // finisher rewrites pgs/p once the count is final
+        bookmark.pgs = com.foobnix.sys.TempHolder.layoutComplete
+                ? controller.getPageCount() : AppBookmark.PGS_WINDOW;
         BookmarksData.get().add(bookmark);
     }
 

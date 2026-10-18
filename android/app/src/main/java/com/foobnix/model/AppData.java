@@ -242,11 +242,10 @@ public class AppData {
         com.foobnix.webdav.WebDavSyncer.notifyConfigChanged(com.foobnix.LibreraApp.context);
     }
     public void removeFavorite(String path) {
-        removeAll(new FileMeta(path), AppProfile.APP_FAVORITE_JSON);
-        EventBus.getDefault()
-                .post(new NotifyAllFragments());
-        // 主动删除：立即安排一次配置同步（防抖与频率阈值由 notifyConfigChanged 统一裁决）
-        com.foobnix.webdav.WebDavSyncer.notifyConfigChanged(com.foobnix.LibreraApp.context);
+        // delegate to the FileMeta overload so the deletion carries its sync
+        // tombstone — a bare removal here resurrected on the next meta-union
+        // sync (the server copy was merged back and re-published)
+        removeFavorite(new FileMeta(path));
     }
 
     public void removeExcluded(FileMeta meta) {

@@ -581,6 +581,14 @@ public abstract class DocumentController {
             }
             AppBook bs = SettingsManager.getBookSettings();
             bs.updateFromAppState();
+            // HowRead: record the layout era once the page count is final —
+            // the era gates (onResume re-anchor, phase-two restore) need pgc
+            // on every persisted save, not only on phase-two "growth" books.
+            // Guard: during the fast-open window the count is partial and
+            // must not become the era base.
+            if (com.foobnix.sys.TempHolder.layoutComplete) {
+                bs.pgc = getPageCount();
+            }
             SharedBooks.save(bs);
 
             //AppBook bs = SettingsManager.getBookSettings(getCurrentBook().getPath());

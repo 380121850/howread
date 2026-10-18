@@ -113,7 +113,10 @@ public class TTSEngine {
             final AppBookmark bookmark =
                     new AppBookmark(bookPath, c.getString(R.string.fast_bookmark), MyMath.percent(page, pages));
             bookmark.pg = page - 1;
-            bookmark.pgs = pages;
+            // pgs = PGS_WINDOW marks a fast-open window capture: the phase-two
+            // finisher rewrites pgs/p once the count is final
+            bookmark.pgs = com.foobnix.sys.TempHolder.layoutComplete
+                    ? pages : AppBookmark.PGS_WINDOW;
             BookmarksData.get()
                          .add(bookmark);
 

@@ -90,6 +90,12 @@ public class NoteEditDialog {
                 }
                 AppBookmark note = new AppBookmark(bookPath, noteText, percent);
                 note.isAiNote = true;
+                // absolute anchor for the fast-open window: percent alone is
+                // inflated against the partial page count (pgs = PGS_WINDOW
+                // marks a window capture; the phase-two finisher repairs it)
+                note.pg = Math.max(0, dc.getCurentPageFirst1() - 1);
+                note.pgs = com.foobnix.sys.TempHolder.layoutComplete
+                        ? dc.getPageCount() : AppBookmark.PGS_WINDOW;
                 BookmarksData.get().add(note);
                 Toast.makeText(a, R.string.note_saved, Toast.LENGTH_SHORT).show();
                 Keyboards.close(a);

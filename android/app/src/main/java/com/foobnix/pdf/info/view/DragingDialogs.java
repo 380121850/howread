@@ -2000,7 +2000,11 @@ public class DragingDialogs {
                                     ? controller.getCurrentBook().getPath() : null;
                             com.foobnix.ai.AiAskDialog.show(controller.getActivity(),
                                     editText.getText().toString().trim(), bookPath,
-                                    controller.getPercentage());
+                                    controller.getPercentage(),
+                                    controller.getCurentPageFirst1() - 1,
+                                    com.foobnix.sys.TempHolder.layoutComplete
+                                            ? controller.getPageCount()
+                                            : com.foobnix.model.AppBookmark.PGS_WINDOW);
                         }
                     });
                 }

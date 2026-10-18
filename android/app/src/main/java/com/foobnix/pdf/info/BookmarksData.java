@@ -274,6 +274,61 @@ public class BookmarksData {
         }
     }
 
+
+    /**
+     * HowRead: anchors captured while the fast-open partial window was still
+     * growing carry pgs == AppBookmark.PGS_WINDOW and an inflated percent
+     * (percent = page / partial count). Once the full page count is known,
+     * pg is exact — phase two only appends pages at the tail — so both
+     * anchors can be repaired in place.
+     */
+    public synchronized void normalizeWindowAnchors(String bookPath, int fullCount) {
+        if (TxtUtils.isEmpty(bookPath) || fullCount <= 0) {
+            return;
+        }
+        try {
+            final String book = ExtUtils.getFileName(bookPath);
+            boolean any = false;
+            final List<File> allFiles = AppProfile.getAllFiles(AppProfile.APP_BOOKMARKS_JSON);
+            for (File file : allFiles) {
+                LinkedJSONObject obj = IO.readJsonObject(file);
+                boolean changed = false;
+                final Iterator<String> keys = obj.keys();
+                while (keys.hasNext()) {
+                    final String key = keys.next();
+                    try {
+                        final LinkedJSONObject e = obj.getJSONObject(key);
+                        final AppBookmark b = new AppBookmark();
+                        Objects.loadFromJson(b, e);
+                        if (b.pgs != AppBookmark.PGS_WINDOW || b.pg < 0 || b.pg >= fullCount) {
+                            continue;
+                        }
+                        if (!book.equals(ExtUtils.getFileName(b.getPath()))) {
+                            continue;
+                        }
+                        b.pgs = fullCount;
+                        b.p = (b.pg + 1f) / fullCount;
+                        obj.put(key, Objects.toJSONObject(b));
+                        changed = true;
+                    } catch (Exception entryError) {
+                        LOG.e(entryError, "normalizeWindowAnchors", key);
+                    }
+                }
+                if (changed) {
+                    IO.writeObjSync(file, obj);
+                    any = true;
+                    LOG.d("normalizeWindowAnchors", book, fullCount);
+                }
+            }
+            if (any) {
+                // the grouped export mirrors the primary store: refresh it too
+                saveByBook();
+            }
+        } catch (Exception e) {
+            LOG.e(e, "normalizeWindowAnchors", bookPath);
+        }
+    }
+
     static final Comparator<AppBookmark> BY_PERCENT = new Comparator<AppBookmark>() {
 
         @Override
