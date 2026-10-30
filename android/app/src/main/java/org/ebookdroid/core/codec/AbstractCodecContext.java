@@ -112,7 +112,9 @@ public abstract class AbstractCodecContext implements CodecContext {
         // Guarantee the native MuPDF library is loaded before any document
         // is opened (reader, cover thumbnail, library scan all funnel here).
         // Usually already preloaded on a background thread from Application.
+        LOG.bench("codec-so-check begin");
         AppsConfig.ensureMuPdfLoaded();
+        LOG.bench("codec-so-check end");
         LOG.d("Open-Document", normPath);
         // TempHolder.loadingCancelled = false;
         if (com.foobnix.remote.RemoteBook.isRemotePath(normPath)) {

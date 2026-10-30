@@ -822,25 +822,28 @@ public class AppState {
 
     public boolean loadInit(final Context a) {
         boolean init = isLoaded;
+        final long liT0 = android.os.SystemClock.elapsedRealtime();
 
         if (!isLoaded) {
             defaults(a);
+            LOG.bench("app10c1 defaults +" + (android.os.SystemClock.elapsedRealtime() - liT0) + "ms");
 
             load(a);
+            LOG.bench("app10c2 state-json +" + (android.os.SystemClock.elapsedRealtime() - liT0) + "ms");
 
             // config sync keeps the OPDS/WebDAV/SMB/SFTP/library-folder
             // lists cross-device only in app-NetworkSources.json, while the
             // local app-State.json can lag behind (a cold start before any
             // sync ran, or a state file written while the lists were
-            // empty): restore entries missing locally on every first load
-            // so 我的文件 keeps the user's servers/folders, then re-strip
-            // the ones this device explicitly deleted (tombstones).
-            try {
-                ProfileStateIO.importNetworkSources(a);
-                com.foobnix.remote.RemoteTombstones.apply();
-            } catch (Exception e) {
-                LOG.e(e);
-            }
+            // empty): entries missing locally are restored on every first
+            // load so 我的文件 keeps the user's servers/folders, then the
+            // ones this device explicitly deleted are re-stripped
+            // (tombstones). Deferred to AppProfile.init's DEFERRED_READY
+            // background task (2026-10-22): with 7 server entries the
+            // per-entry credential prefs restore costs ~85ms on the main
+            // thread; the open-book path never reads any of it, only
+            // 我的文件 does, and that awaits DEFERRED_READY.
+            LOG.bench("app10c3 net-sources(deferred) +" + (android.os.SystemClock.elapsedRealtime() - liT0) + "ms");
             if (AppState.get().isShowPanelBookNameBookMode && AppState.get().statusBarPosition == com.foobnix.model.AppState.STATUSBAR_POSITION_TOP) {
                 AppState.get().isShowPanelBookNameBookMode = false;
             }
@@ -987,6 +990,7 @@ public class AppState {
                 LOG.e(e);
             }
 
+            LOG.bench("app10c4 migrations +" + (android.os.SystemClock.elapsedRealtime() - liT0) + "ms");
             isLoaded = true;
         }
 

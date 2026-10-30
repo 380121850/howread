@@ -1682,23 +1682,23 @@ xml_to_boxes(fz_context *ctx, fz_html_font_set *set, fz_archive *zip, const char
 		{
 			g.is_fb2 = 1;
 
-		    //fz_parse_css(ctx, g.css, user_css, "<default:fb2>");
-			//if (fz_use_document_css(ctx))
-			//	fb2_load_css(ctx, g.set, g.zip, g.base_uri, g.css, root);
+		fz_parse_css(ctx, g.css, fb2_default_css, "<default:fb2>");
+		if (fz_use_document_css(ctx))
+			fb2_load_css(ctx, g.set, g.zip, g.base_uri, g.css, root);
 			g.images = load_fb2_images(ctx, root);
 		}
 		else if (is_mobi)
 		{
 			g.is_fb2 = 0;
-			//fz_parse_css(ctx, g.css, user_css, "<default:html>");
-			//fz_parse_css(ctx, g.css, mobi_default_css, "<default:mobi>");
+			fz_parse_css(ctx, g.css, html_default_css, "<default:html>");
+			fz_parse_css(ctx, g.css, mobi_default_css, "<default:mobi>");
 			if (fz_use_document_css(ctx))
 				html_load_css(ctx, g.set, g.zip, g.base_uri, g.css, root);
 		}
 		else
 		{
 			g.is_fb2 = 0;
-			//fz_parse_css(ctx, g.css, user_css, "<default:html>");
+			fz_parse_css(ctx, g.css, html_default_css, "<default:html>");
 			if (fz_use_document_css(ctx))
 				html_load_css(ctx, g.set, g.zip, g.base_uri, g.css, root);
 		}
@@ -2595,6 +2595,7 @@ fz_txt_buffer_to_html(fz_context *ctx, fz_buffer *in)
 	fz_buffer *outbuf = NULL;
 	fz_output *out = NULL;
 	int col = 0;
+	int nl_run = 0, saw_cr = 0, ws_buf = 0; /* v0.25: pending newlines / deferred CR / buffered line-leading spaces */
 
 	fz_var(outbuf);
 	fz_var(out);
@@ -2604,7 +2605,13 @@ fz_txt_buffer_to_html(fz_context *ctx, fz_buffer *in)
 		outbuf = fz_new_buffer(ctx, 1024);
 		out = fz_new_output_with_buffer(ctx, outbuf);
 
-		fz_write_string(ctx, out, "<!doctype html><style>body{margin:0}pre{page-break-before:always;margin:0;white-space:pre-wrap;}</style><pre>");
+			/* 2026-10-19: 首个 <pre> 豁免 page-break-before（.first）。当 @page
+	 * margin-top > 0（用户档案常见）时文档顶端不在页边界上，always 在
+	 * 起始处误触发 layout_block_page_break，把整段首块推到第 2 页——
+	 * 分块 TXT 每章首页只剩页边距带（空白页）。CSS 规范：文档最开头的
+	 * 强制分页应被忽略。form-feed 拆出的后续 <pre> 仍保持强制分页。 */
+		/* v0.25: TXT 段落化 —— 空行分段输出 <p>（段内换行经 pre-wrap 保留），\f 仍强制分页（p.brk）。正文由整块 <pre> 变为逐段 <p>，缩进(text-indent)/段距(p margin) 等 CSS 从此对 TXT 生效。 */
+		fz_write_string(ctx, out, "<!doctype html><p class=\"first\">");
 
 		if (encoding == ENCODING_UTF16_LE || encoding == ENCODING_UTF16_BE)
 		{
@@ -2638,10 +2645,15 @@ fz_txt_buffer_to_html(fz_context *ctx, fz_buffer *in)
 				c = fz_read_utf16_be(ctx, stream);
 			}
 
-			if (c == 10 || c == 13)
+			if (c == 10)
 			{
-				col = -1;
-				fz_write_byte(ctx, out, c);
+				nl_run++; saw_cr = 0; ws_buf = 0; col = -1;
+			}
+			else if (c == 13)
+			{
+				if (saw_cr)
+					nl_run++;
+				saw_cr = 1; ws_buf = 0; col = -1;
 			}
 			else if (c == 9)
 			{
@@ -2650,25 +2662,54 @@ fz_txt_buffer_to_html(fz_context *ctx, fz_buffer *in)
 					n = 8;
 				col += n-1;
 				while (n--)
-					fz_write_byte(ctx, out, ' ');
+				{
+					if (nl_run > 0)
+						ws_buf++;
+					else
+						fz_write_byte(ctx, out, ' ');
+				}
 			}
 			else if (c == 12)
 			{
-				col = -1;
-				fz_write_string(ctx, out, "</pre><pre>\n");
+				fz_write_string(ctx, out, "</p>\n<p class=\"brk\">");
+				nl_run = 0; saw_cr = 0; ws_buf = 0; col = -1;
 			}
-			else if (c == '<')
-				fz_write_string(ctx, out, "&lt;");
-			else if (c == '>')
-				fz_write_string(ctx, out, "&gt;");
-			else if (c == '"')
-				fz_write_string(ctx, out, "&quot;");
+			else if (c == ' ')
+			{
+				if (nl_run > 0)
+					ws_buf++; /* 行首空白先缓冲：整行皆空白则并入分段，不落盘 */
+				else
+					fz_write_byte(ctx, out, ' ');
+			}
 			else
-				fz_write_rune(ctx, out, c);
+			{
+				if (saw_cr)
+				{
+					nl_run++;
+					saw_cr = 0;
+				}
+				if (nl_run >= 2)
+					fz_write_string(ctx, out, "</p>\n<p>");
+				else if (nl_run == 1)
+					fz_write_byte(ctx, out, '\n');
+				nl_run = 0;
+				while (ws_buf-- > 0)
+					fz_write_byte(ctx, out, ' ');
+				ws_buf = 0;
+				if (c == '<')
+					fz_write_string(ctx, out, "&lt;");
+				else if (c == '>')
+					fz_write_string(ctx, out, "&gt;");
+				else if (c == '"')
+					fz_write_string(ctx, out, "&quot;");
+				else
+					fz_write_rune(ctx, out, c);
+			}
 
 			++col;
 		}
 
+		fz_write_string(ctx, out, "</p>");
 		fz_close_output(ctx, out);
 	}
 	fz_always(ctx)
@@ -2685,18 +2726,32 @@ fz_txt_buffer_to_html(fz_context *ctx, fz_buffer *in)
 	return outbuf;
 }
 
+/* TXT 基础样式：经 user css 通道注入（不受书内样式开关门控，始终生效）。
+ * p 必须 display:block——本源码树未加载 html_default_css（上游加载行被注释），
+ * 缺此规则时 p 退化为 inline，text-indent 与垂直 margin 全部失效（v0.25 实测）。 */
+static const char *txt_base_css =
+	"body{margin:0}"
+	"p{display:block;margin:0;white-space:pre-wrap}"
+	"p.brk{page-break-before:always}"
+	"p.first{page-break-before:auto}"
+	;
+
 fz_html *
 fz_parse_txt(fz_context *ctx, fz_html_font_set *set, fz_archive *zip, const char *base_uri, fz_buffer *buf, const char *user_css)
 {
 	fz_buffer *htmlbuf = fz_txt_buffer_to_html(ctx, buf);
 	fz_html *html;
+	char *css = fz_asprintf(ctx, "%s%s", txt_base_css, user_css ? user_css : "");
 
 	fz_try(ctx)
 	{
-		html = fz_parse_html_imp(ctx, set, zip, base_uri, htmlbuf, user_css, 0, 1, 0);
+		html = fz_parse_html_imp(ctx, set, zip, base_uri, htmlbuf, css, 0, 1, 0);
 	}
 	fz_always(ctx)
+	{
+		fz_free(ctx, css);
 		fz_drop_buffer(ctx, htmlbuf);
+	}
 	fz_catch(ctx)
 		fz_rethrow(ctx);
 

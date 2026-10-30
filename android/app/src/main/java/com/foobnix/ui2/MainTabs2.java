@@ -365,6 +365,14 @@ public class MainTabs2 extends AdsFragmentActivity {
             return;
         }
 
+        // the deferred init tail (bookshelf folder restore + popup cache)
+        // runs on a background thread; the shelf reads bookshelf data
+        // below, so wait for it here — it returns immediately once the
+        // tail has landed (typically before this screen is visible)
+        long mtA = android.os.SystemClock.elapsedRealtime();
+        com.foobnix.model.AppProfile.awaitDeferredReady(2000);
+        LOG.bench("mt01 deferred-await +" + (android.os.SystemClock.elapsedRealtime() - mtA) + "ms");
+
         // huawei channel: re-check the purchased entitlement in the background
         // so refunds revoke the pro unlock on the next launch (no-op elsewhere)
         mobi.librera.libgoogle.BillingManager.syncOwnershipSilently(this);

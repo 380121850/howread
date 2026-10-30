@@ -280,9 +280,12 @@ public class BookmarksData {
      * growing carry pgs == AppBookmark.PGS_WINDOW and an inflated percent
      * (percent = page / partial count). Once the full page count is known,
      * pg is exact — phase two only appends pages at the tail — so both
-     * anchors can be repaired in place.
+     * anchors can be repaired in place. Only sentinels created at/after
+     * sinceMs are repaired: an older sentinel may carry an absolute page
+     * from a PREVIOUS layout era (font change since), and stamping it with
+     * the current count would forge a valid-looking wrong-era anchor.
      */
-    public synchronized void normalizeWindowAnchors(String bookPath, int fullCount) {
+    public synchronized void normalizeWindowAnchors(String bookPath, int fullCount, long sinceMs) {
         if (TxtUtils.isEmpty(bookPath) || fullCount <= 0) {
             return;
         }
@@ -302,6 +305,9 @@ public class BookmarksData {
                         Objects.loadFromJson(b, e);
                         if (b.pgs != AppBookmark.PGS_WINDOW || b.pg < 0 || b.pg >= fullCount) {
                             continue;
+                        }
+                        if (b.t < sinceMs) {
+                            continue; // stale sentinel from an earlier session/era
                         }
                         if (!book.equals(ExtUtils.getFileName(b.getPath()))) {
                             continue;

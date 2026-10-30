@@ -9,6 +9,7 @@ import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.res.Configuration;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -23,7 +24,10 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 
+import com.foobnix.OpenerActivity;
+import com.foobnix.OpenerIntents;
 import com.foobnix.ai.BilingualHintUi;
 import com.foobnix.android.utils.Dips;
 import com.foobnix.android.utils.Intents;
@@ -51,6 +55,8 @@ import com.foobnix.tts.TTSNotification;
 import com.foobnix.ui2.FileMetaCore;
 import com.foobnix.ui2.MainTabs2;
 import com.foobnix.ui2.MyContextWrapper;
+
+import java.io.File;
 
 import org.ebookdroid.common.settings.SettingsManager;
 import org.ebookdroid.ui.viewer.viewers.PdfSurfaceView;
@@ -122,11 +128,14 @@ public class VerticalViewActivity extends AbstractActionActivity<VerticalViewAct
 
     @Override
     public void onCreate(final Bundle savedInstanceState) {
+        LOG.bench("vv01 onCreate begin");
         AppsConfig.ensureMuPdfLoaded();
+        LOG.bench("vv02 so-check end");
         TempHolder.readerActive = true;
         finishOtherViewer(this, HorizontalViewActivity.class);
         DocumentController.doRotation(this);
         DocumentController.doContextMenu(this);
+        LOG.bench("vv03 viewer-ctrl done");
 
         // Metadata extraction moved to BookLoadTask (background): doing it on
         // the main thread here froze the UI for the full parse of unscanned
@@ -153,7 +162,9 @@ public class VerticalViewActivity extends AbstractActionActivity<VerticalViewAct
 
         }
 
+        LOG.bench("vv04 book-settings done");
         getController().beforeCreate(this);
+        LOG.bench("vv05 beforeCreate done");
 
         BrightnessHelper.applyBrigtness(this);
 
@@ -163,13 +174,25 @@ public class VerticalViewActivity extends AbstractActionActivity<VerticalViewAct
             setTheme(R.style.StyledIndicatorsBlack);
         }
         super.onCreate(savedInstanceState);
+        LOG.bench("vv06 after-super");
 
         //FirebaseAnalytics.getInstance(this);
 
         if (PasswordDialog.isNeedPasswordDialog(this)) {
             return;
         }
+
+        // merged open entry (batch 2, 2026-10-21): system VIEW
+        // intents land on this activity directly (filters moved
+        // from OpenerActivity); resolve the target like the opener
+        // did and start the prefetch so the native open overlaps
+        // the rest of onCreate
+        if (handleViewEntry(this)) {
+            return;
+        }
+
         setContentView(R.layout.activity_vertical_view);
+        LOG.bench("vv07 setContentView done");
         DocumentController.applyEdgeToEdge(this);
 
         // the shared footer icon row keeps the tight XML margins for the
@@ -214,6 +237,38 @@ public class VerticalViewActivity extends AbstractActionActivity<VerticalViewAct
             }
         });
 
+    }
+
+    /** Merged open entry: resolves an ACTION_VIEW intent to a local
+     *  file via the shared {@link OpenerIntents} path and starts the
+     *  open-prefetch. Returns true when this onCreate is consumed
+     *  and the caller must return: non-scroll reading modes keep
+     *  their legacy dispatch (ExtUtils.openFile via the opener
+     *  trampoline — BOOK users get the horizontal reader there),
+     *  and unresolvable intents finish with the error toast. */
+    private static boolean handleViewEntry(final VerticalViewActivity a) {
+        final Intent intent = a.getIntent();
+        if (intent == null || !Intent.ACTION_VIEW.equals(intent.getAction())) {
+            return false;
+        }
+        final File file = OpenerIntents.resolve(a, intent);
+        if (file == null) {
+            a.finish();
+            return true;
+        }
+        intent.setData(Uri.fromFile(file));
+        if (AppSP.get().readingMode != AppState.READING_MODE_SCROLL) {
+            final Intent legacy = new Intent(a, OpenerActivity.class);
+            legacy.setData(intent.getData());
+            a.startActivity(legacy);
+            a.overridePendingTransition(0, 0);
+            a.finish();
+            return true;
+        }
+        com.foobnix.sys.OpenPrefetch.begin(file.getPath(),
+                intent.getStringExtra(DocumentController.EXTRA_PASSWORD));
+        LOG.bench("vv-open-intent " + file.getPath());
+        return false;
     }
 
     /** Widen the inter-icon gap of the footer icon row (vertical mode only). */

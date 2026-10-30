@@ -50,14 +50,18 @@ public class LibreraApp extends MultiDexApplication {
 //                    .penaltyDeath()
 //                    .build());
 //        }
+        final long appT0 = android.os.SystemClock.elapsedRealtime();
+        LOG.bench("app01 onCreate begin");
         super.onCreate();
 
         //AppsConfig.loadEngine(this);
 
         context = getApplicationContext();
+        LOG.bench("app02 super+context +" + (android.os.SystemClock.elapsedRealtime() - appT0) + "ms");
         if (!WorkManager.isInitialized()) {
             WorkManager.initialize(this, new Configuration.Builder().setMinimumLoggingLevel(Log.DEBUG).build());
         }
+        LOG.bench("app03 WorkManager +" + (android.os.SystemClock.elapsedRealtime() - appT0) + "ms");
 
 
 //        FirebaseAnalytics analytics = FirebaseAnalytics.getInstance(this);
@@ -67,12 +71,15 @@ public class LibreraApp extends MultiDexApplication {
 
 
         AppsConfig.init(this);
+        LOG.bench("app04 AppsConfig.init +" + (android.os.SystemClock.elapsedRealtime() - appT0) + "ms");
         // Preload MuPDF off the main thread so its load no longer blocks
         // cold start; readers re-check synchronously before opening a book.
         AppsConfig.executorService.execute(AppsConfig::ensureMuPdfLoaded);
+        LOG.bench("app05 so-preload-submitted +" + (android.os.SystemClock.elapsedRealtime() - appT0) + "ms");
         Dips.init(this);
         Prefs.get().init(this);
         DebugLog.init(this);
+        LOG.bench("app06 Dips-Prefs-DebugLog +" + (android.os.SystemClock.elapsedRealtime() - appT0) + "ms");
 
         try {
             if (AppsConfig.isShowAdsInApp(this)) {
@@ -85,6 +92,7 @@ public class LibreraApp extends MultiDexApplication {
         } catch (Exception e) {
             LOG.e(e);
         }
+        LOG.bench("app07 ADS +" + (android.os.SystemClock.elapsedRealtime() - appT0) + "ms");
 
         Log.d("Build", "Build.TestDeviceID :" + ADS.getByTestID(this));
         Log.d("Build", "Build.MODEL :" + Build.MODEL);
@@ -96,6 +104,7 @@ public class LibreraApp extends MultiDexApplication {
 
         IMG.init(this);
         TempHolder.get().loadingCancelled.set(true);
+        LOG.bench("app08 CacheZip-IMG +" + (android.os.SystemClock.elapsedRealtime() - appT0) + "ms");
 
         LOG.d("Build", "Build.MANUFACTURER", Build.MANUFACTURER);
         LOG.d("Build", "Build.PRODUCT", Build.PRODUCT);
@@ -161,6 +170,7 @@ public class LibreraApp extends MultiDexApplication {
             WorkManager.getInstance(context).cancelAllWork();
         });
 
+        LOG.bench("app09 onCreate end +" + (android.os.SystemClock.elapsedRealtime() - appT0) + "ms");
     }
 
 

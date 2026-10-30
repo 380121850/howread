@@ -1006,9 +1006,16 @@ public class ExtUtils {
         }
         intent.setData(checkPlaylisturi(uri, intent, playlist));
 
+        // open-prefetch (Plan A): open the document on a background thread
+        // now, while the reader Activity is still launching — the load task
+        // adopts it after verifying file identity + settings snapshot.
+        com.foobnix.sys.OpenPrefetch.begin(
+                intent.getData() != null ? intent.getData().getPath() : null,
+                intent.getStringExtra(DocumentController.EXTRA_PASSWORD));
         LOG.bench("open-intent " + uri);
         LOG.remote("showDocumentInner startActivity " + uri);
         c.startActivity(intent);
+        if (c instanceof Activity) ((Activity) c).overridePendingTransition(0, 0);
         LOG.remote("showDocumentInner startActivity returned");
     }
 
@@ -1053,8 +1060,13 @@ public class ExtUtils {
         if (percent > 0f) {
             Intents.putFloat(intent, DocumentController.EXTRA_PERCENT, percent);
         }
+        // open-prefetch (Plan A): same early open as the vertical route
+        com.foobnix.sys.OpenPrefetch.begin(
+                intent.getData() != null ? intent.getData().getPath() : null,
+                intent.getStringExtra(DocumentController.EXTRA_PASSWORD));
         LOG.remote("openHorizontalView startActivity " + uri);
         c.startActivity(intent);
+        if (c instanceof Activity) ((Activity) c).overridePendingTransition(0, 0);
 
         // FileMetaDB.get().addRecent(file.getPath());
 

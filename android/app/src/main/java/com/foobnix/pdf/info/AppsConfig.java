@@ -96,10 +96,14 @@ public class AppsConfig {
         if (mupdfLoaded) {
             return;
         }
+        final long soT0 = android.os.SystemClock.elapsedRealtime();
+        LOG.bench("so-load begin thread=" + Thread.currentThread().getName());
         System.loadLibrary("MuPDF");
+        LOG.bench("so-load library-ok +" + (android.os.SystemClock.elapsedRealtime() - soT0) + "ms");
         AppsConfig.MUPDF_FZ_VERSION = MuPdfDocument.getFzVersion();
         Log.d("Librera", "MUPDF_VERSION " + MUPDF_FZ_VERSION);
         mupdfLoaded = true;
+        LOG.bench("so-load done +" + (android.os.SystemClock.elapsedRealtime() - soT0) + "ms");
     }
 
     public static boolean isPDF_DRAW_ENABLE() {

@@ -117,6 +117,22 @@ public class AppProfile {
     // volatile non-final: clear() swaps in a fresh latch when the profile resets.
     private static volatile CountDownLatch DB_READY = new CountDownLatch(1);
 
+    // Signalled once the deferred tail of init() (network-source restore +
+    // bookshelf folder restore + brightness-popup cache) finishes on its
+    // background thread. Shelf
+    // entry points await it before reading bookshelf data; the open-book
+    // path never waits on it.
+    private static final CountDownLatch DEFERRED_READY = new CountDownLatch(1);
+
+    /** Block up to {@code timeoutMs} until the deferred init tail is done. */
+    public static void awaitDeferredReady(long timeoutMs) {
+        try {
+            DEFERRED_READY.await(timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     /** Block up to {@code timeoutMs} until the deferred DB count finishes. */
     public static void awaitDBReady(long timeoutMs) {
         try {
@@ -139,8 +155,10 @@ public class AppProfile {
 //            LOG.d("AppProfile exist");
 //            return;
 //        }
+        long profT0 = android.os.SystemClock.elapsedRealtime();
         AppSP.get()
              .init(c);
+        LOG.bench("app10a AppSP +" + (android.os.SystemClock.elapsedRealtime() - profT0) + "ms");
 
         if (profile.equals(getCurrent())) {
             LOG.d("AppProfile skip", profile);
@@ -150,6 +168,7 @@ public class AppProfile {
         String appDB = "db-" + AppSP.get().getRootPath(c).hashCode() + "-" + profile;
         AppDB.get()
              .open(c, appDB);
+        LOG.bench("app10b AppDB.open +" + (android.os.SystemClock.elapsedRealtime() - profT0) + "ms");
 
         // The DB itself is opened synchronously above, so every other reader
         // (workers, widgets, fragments) always sees a ready database. Only the
@@ -201,26 +220,58 @@ public class AppProfile {
         syncState = new File(SYNC_FOLDER_DEVICE_PROFILE, APP_STATE_JSON);
         syncCSS = new File(SYNC_FOLDER_DEVICE_PROFILE, APP_CSS_JSON);
 
+        long tC = android.os.SystemClock.elapsedRealtime();
         final boolean isLoaded = AppState.get()
                                          .loadInit(c);
         if (isLoaded) {
             AppState.get()
                     .load(c);
         }
+        LOG.bench("app10c AppState +" + (android.os.SystemClock.elapsedRealtime() - tC) + "ms");
 
+        long tD = android.os.SystemClock.elapsedRealtime();
         TintUtil.init();
         BookCSS.get()
                .load1(c);
+        LOG.bench("app10d Tint+BookCSS +" + (android.os.SystemClock.elapsedRealtime() - tD) + "ms");
 
         // load1 刚用磁盘 app-CSS.json 覆盖了 searchPathsJson：启动回灌的书库
-        // 文件夹（loadInit 内写入内存）在这里补一次，并重剥本机已删除的
-        ProfileStateIO.importFoldersAfterCssLoad(c);
+        // 文件夹（loadInit 内写入内存）要在这里补一次。网络源凭证回灌
+        //（importNetworkSources+墓碑，2026-10-22 从 loadInit 挪来——7 条
+        // 服务器条目主线程实测 ~85ms，开书路径从不读）与文件夹回灌、亮度
+        // 弹窗缓存一样只服务书架/阅读器交互件，不在“冷开书”关键路径上——改为后台
+        // 补齐 + DEFERRED_READY 闩：书架入口（MainTabs2）在读书库数据前
+        // await，开书路径完全不等待；save() 前也 await，防止后台未补齐就
+        // 落盘把缓存覆盖成默认值。
+        final Context cc = c.getApplicationContext();
+        final long deferredT0 = android.os.SystemClock.elapsedRealtime();
+        AppsConfig.executorServiceSingle.execute(new Runnable() {
+            @Override public void run() {
+                try {
+                    ProfileStateIO.importNetworkSources(cc);
+                    com.foobnix.remote.RemoteTombstones.apply();
+                } catch (final Throwable t) {
+                    LOG.e(t);
+                }
+                try {
+                    ProfileStateIO.importFoldersAfterCssLoad(cc);
+                    DragingPopup.loadCache(cc);
+                } catch (final Throwable t) {
+                    LOG.e(t);
+                } finally {
+                    LOG.bench("app10f deferred net+folders+popup +"
+                            + (android.os.SystemClock.elapsedRealtime() - deferredT0) + "ms");
+                    DEFERRED_READY.countDown();
+                }
+            }
+        });
 
+        long tE = android.os.SystemClock.elapsedRealtime();
         PasswordState.get()
                      .load(c);
-        DragingPopup.loadCache(c);
         ExtUtils.init(c);
         FontExtractor.extractFonts(c);
+        LOG.bench("app10e rest +" + (android.os.SystemClock.elapsedRealtime() - tE) + "ms");
 
     }
 
@@ -273,6 +324,10 @@ public class AppProfile {
         }
 
         if (TxtUtils.isNotEmpty(profile)) {
+            // the deferred init tail restores the popup cache on a
+            // background thread; never persist before it has landed
+            // (would overwrite the cache file with defaults)
+            awaitDeferredReady(1000);
             DragingPopup.saveCache(a);
             PasswordState.get()
                          .save(a);

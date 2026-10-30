@@ -235,7 +235,16 @@ public class PageTreeNode implements DecodeService.DecodeCallback {
         public boolean drawBitmap(final Canvas canvas, final PagePaint paint, final PointF viewBase,
                 final RectF targetRect, final RectF clipRect) {
             final Bitmaps bitmaps = ref.get();
-            return bitmaps != null ? bitmaps.draw(canvas, paint, viewBase, targetRect, clipRect) : false;
+            final boolean drawn = bitmaps != null
+                    ? bitmaps.draw(canvas, paint, viewBase, targetRect, clipRect)
+                    : false;
+            if (drawn) {
+                // content just painted in this traversal: drop the loading
+                // dialog in the same frame instead of queueing its removal
+                // behind the draw barrier
+                com.foobnix.sys.FirstPaintGate.notifyDrawn();
+            }
+            return drawn;
         }
 
         public Bitmaps reuse(final String nodeId, final BitmapRef bitmap, final Rect bitmapBounds) {

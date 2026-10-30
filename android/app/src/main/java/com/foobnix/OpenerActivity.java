@@ -36,43 +36,15 @@ import java.io.InputStream;
 public class OpenerActivity extends Activity {
     public static String TAG = "OpenerActivity";
 
-    public static String findFileInDownloads(Context context, String name, String id) {
-        try {
-            ContentResolver contentResolver = context.getContentResolver();
-            Uri uri = MediaStore.Files.getContentUri("external");
-
-            String[] projection = {
-                    MediaStore.Files.FileColumns.DATA
-            };
-
-            String selection = MediaStore.Files.FileColumns._ID + " = ? AND " +
-                    MediaStore.Files.FileColumns.DISPLAY_NAME + " = ?";
-
-            String[] selectionArgs = new String[]{id, name};
-
-            try (Cursor cursor = contentResolver.query(uri, projection, selection, selectionArgs, null)) {
-                if (cursor != null && cursor.moveToFirst()) {
-                    int filePathId = cursor.getColumnIndex(MediaStore.Files.FileColumns.DATA);
-                    String filePath = cursor.getString(filePathId);
-                    LOG.d(TAG, "FileFinder", "File Path: " + filePath);
-                    return filePath;
-                }
-            }
-        } catch (Exception e) {
-            LOG.e(e);
-        }
-
-        return null;
-    }
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        if (AppState.get().isDayNotInvert) {
-            setTheme(R.style.StyledIndicatorsWhite);
-        } else {
-            setTheme(R.style.StyledIndicatorsBlack);
-        }
+        LOG.bench("op01 onCreate begin");
+        // Plan C: Opener is a pure trampoline (no UI of its own). Give it a
+        // fully transparent window so the previous app stays visible until the
+        // reader's first frame, instead of an opaque HowRead beat + transition.
+        setTheme(android.R.style.Theme_Translucent_NoTitleBar);
 
+        LOG.bench("op02 theme+AppState done");
         super.onCreate(savedInstanceState);
 
 
@@ -81,6 +53,7 @@ public class OpenerActivity extends Activity {
 //            return;
 //        }
 
+        LOG.bench("op03 after-super");
         handleIntent();
     }
 
@@ -97,211 +70,29 @@ public class OpenerActivity extends Activity {
     }
 
     private void handleIntent() {
+        LOG.bench("op04 handleIntent begin");
         if (getIntent() == null) {
             Toast.makeText(this, R.string.msg_unexpected_error, Toast.LENGTH_SHORT).show();
             finish();
             return;
         }
-        Uri uri = getIntent().getData();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
-            try {
-                if (uri == null && getIntent().getClipData() != null) {
-                    getIntent().setData(getIntent().getClipData().getItemAt(0).getUri());
-                }
-            } catch (Exception e) {
-                LOG.e(e);
-            }
-
-        }
-        if (uri == null) {
-            Toast.makeText(this, R.string.msg_unexpected_error, Toast.LENGTH_SHORT).show();
-            finish();
-            return;
-        }
-
-
         LOG.d(TAG, getIntent());
-        LOG.d(TAG, " Uri", uri);
-        LOG.d(TAG, " dataPath", getDataPath());
-        LOG.d(TAG, " Scheme", getIntent().getScheme());
-        LOG.d(TAG, " Mime", getIntent().getType());
-
-        File downloadsDir = AppSP.get().getTempDownloadBooks(getApplicationContext());
-        downloadsDir.mkdirs();
-
-        File file = new File("");
-
-        if ("file".equals(uri.getScheme())) {
-            LOG.d(TAG, "Find file in file");
-            file = new File(uri.getPath());
-        }
-
-        String name = getCursorValue(MediaStore.MediaColumns.DISPLAY_NAME);
-        String id = uri.getLastPathSegment();
-        String size = getCursorValue(MediaStore.MediaColumns.SIZE);
-        String dataPath = getDataPath();
-
-        LOG.d(TAG, "id", id, "name", name, "size", size);
-
-        if (!file.isFile()) {
-            LOG.d(TAG, "Find file in getLastPathSegment");
-            if (id != null) {
-                String utfID = Uri.decode(id).replace("file://", "");
-                LOG.d(TAG, "utfID", utfID);
-                file = new File(utfID);
-                LOG.d(TAG, "File:", file.getPath());
-            }
-        }
-
-
-        if (!file.isFile()) {
-            LOG.d(TAG, "Find file in getDataPath");
-            file = new File(dataPath);
-            LOG.d(TAG, "File:", file.getPath());
-        }
-        if (!file.isFile()) {
-            LOG.d(TAG, "Find file in getDataPath /indexOf 1");
-            int beginIndex = dataPath.indexOf("/", 1);
-            if (beginIndex > 0) {
-                file = new File(dataPath.substring(beginIndex));
-            }
-            LOG.d(TAG, "File:", file.getPath());
-        }
-        if (!file.isFile()) {
-            LOG.d(TAG, "Find file in getDataPath /indexOf 2");
-            int beginIndex = dataPath.indexOf("/", 1);
-            if (beginIndex > 0) {
-                file = new File(dataPath.substring(beginIndex));
-            }
-            LOG.d(TAG, "File:", file.getPath());
-        }
-
-        if (!file.isFile()) {
-            LOG.d(TAG, "Find file in Telegram");
-            if (dataPath.startsWith("/media/Android/data/org.telegram.messenger/files/")) {
-                file = new File(AppProfile.DOWNLOADS_DIR, "Telegram/" + name);
-            }
-            LOG.d(TAG, "File:", file.getPath());
-        }
-
-        if (!file.isFile() && id != null) {
-            LOG.d(TAG, "Find file in all Downloads by name and id", name, id);
-            String documentID = id.replaceAll("\\D", "");
-            LOG.d(TAG, "documentID", documentID);
-            String fileInDownlaods = findFileInDownloads(this, name, documentID);
-            if (fileInDownlaods != null) {
-                LOG.d(TAG, "findFileInDownloads", fileInDownlaods);
-                file = new File(fileInDownlaods);
-            }
-            LOG.d(TAG, "File:", file.getPath());
-        }
-//        if (!file.isFile()) {
-//            LOG.d(TAG, "Find file in [Downloads]");
-//            if (TxtUtils.isEmpty(ExtUtils.getFileExtension(name))) {
-//                String extByMimeType = ExtUtils.getExtByMimeType(getIntent().getType());
-//                LOG.d("extByMimeType", extByMimeType, getIntent().getType());
-//                name = name + "." + extByMimeType;
-//            }
-//            name = TxtUtils.fixFileName(name);
-//            file = new File(AppProfile.DOWNLOADS_DIR, name);
-//        }
-
-        if (!file.isFile()) {
-            LOG.d(TAG, "Find file in [Librera/Downloads]");
-            downloadsDir.mkdirs();
-            LOG.d(TAG, "Find file in [Downloads]");
-            if (TxtUtils.isEmpty(ExtUtils.getFileExtension(name))) {
-                String extByMimeType = ExtUtils.getExtByMimeType(getIntent().getType());
-                LOG.d("extByMimeType", extByMimeType, getIntent().getType());
-                name = name + "." + extByMimeType;
-            }
-            name = TxtUtils.fixFileName(name);
-            file = new File(downloadsDir, name);
-
-
-            if (file.length() != MyMath.longValueOfNoException(size)) {
-                file.delete();
-                LOG.d(TAG, "Delete old file");
-            }
-            LOG.d(TAG, "File:", file.getPath());
-        }
-
-        if (!file.isFile()) {
-            LOG.d(TAG, "Create file in [Librera/Downloads]");
-            try {
-                FileOutputStream out = new FileOutputStream(file);
-                InputStream inputStream = getContentResolver().openInputStream(uri);
-                IOUtils.copyClose(inputStream, out);
-            } catch (Exception e) {
-                LOG.e(e);
-            }
-            LOG.d(TAG, "File:", file.getPath());
-        }
-
-        if (file == null || !file.canRead() || !file.isFile()) {
-            Toast.makeText(this, R.string.msg_unexpected_error, Toast.LENGTH_SHORT).show();
+        // file resolution lives in OpenerIntents since batch 2 (2026-10-21):
+        // VerticalViewActivity resolves system VIEW intents through the very
+        // same code, so the two entries cannot drift apart
+        final File file = OpenerIntents.resolve(this, getIntent());
+        if (file == null) {
             finish();
             return;
         }
         LOG.d(TAG, "Open file", file);
-        // a book opened from ANOTHER app joins the 书库 by default — the
-        // same flag write the manual "add to library" action uses. Cache
-        // copies (the content:// fallback lands in TempDownloads), remote /
-        // cloud paths and books the user explicitly removed from the library
-        // (excluded list) are never auto-added.
-        try {
-            final String p = file.getPath();
-            final boolean cacheCopy = p.startsWith(downloadsDir.getPath())
-                    || p.startsWith(getCacheDir().getPath())
-                    || (getExternalCacheDir() != null && p.startsWith(getExternalCacheDir().getPath()));
-            final boolean excluded = AppData.get().getAllExcluded()
-                    .contains(SimpleMeta.SyncSimpleMeta(p));
-            if (AppState.get().isAutoAddToLibrary && !cacheCopy && !excluded
-                    && !com.foobnix.remote.RemoteBook.isRemotePathLoose(p)
-                    && !Clouds.isCloud(p)) {
-                FileMeta load = AppDB.get().getOrCreate(p);
-                if (load.getIsSearchBook() == null || !load.getIsSearchBook()) {
-                    load.setIsSearchBook(true);
-                    AppDB.get().update(load);
-                    AppData.get().removeExcluded(load);
-                    Toast.makeText(this, R.string.add_to_library, Toast.LENGTH_SHORT).show();
-                }
-            }
-        } catch (Exception e) {
-            LOG.e(e);
-        }
+        OpenerIntents.autoAddToLibrary(this, file);
         ExtUtils.openFile(this, new FileMeta(file.getPath()));
-    }
-
-    public String getCursorValue(String id) {
-        try {
-            return Cursors.getValue(this, id);
-        } catch (Exception e) {
-            LOG.e(e);
-            return null;
-        }
     }
 
     @Override
     protected void attachBaseContext(Context context) {
         super.attachBaseContext(MyContextWrapper.wrap(context));
-    }
-
-
-    private String getDataPath() {
-        if (getIntent() == null) {
-            return "";
-        }
-        if (getIntent().getData() == null) {
-            return "";
-        }
-
-        String path = getIntent().getData().getPath();
-        if (path == null) {
-            return "";
-        }
-
-        return path;
     }
 
 

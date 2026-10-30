@@ -15,7 +15,12 @@ import com.foobnix.android.utils.LOG;
  */
 public class FirstPaintGate {
 
-    private static final long QUIET_MS = 150;
+    /** Quiet window after the last page bitmap before the loading dialog
+     *  drops. 60ms: still lets a same-screen neighbor node decode land
+     *  without flashing placeholders, short enough not to read as lag
+     *  (the check itself now runs right after every decode, not on the
+     *  100ms tick, so the old 150+tick quantization is gone). */
+    private static final long QUIET_MS = 60;
     private static final long NO_DECODE_MS = 1200;
     private static final long HARD_CAP_MS = 8000;
     private static final long TICK_MS = 100;
@@ -132,6 +137,29 @@ public class FirstPaintGate {
                 LOG.bench("first-node-decoded " + (now - armAt) + "ms after open");
             }
             lastDecodeAt = now;
+            // Evaluate the quiet-window release right here instead of
+            // waiting for the next 100ms tick: the tick quantization
+            // alone used to hold the loading dialog ~100-250ms past the
+            // last bitmap. notifyDecoded runs on the UI thread, so this
+            // just re-anchors the single TICK chain at lastDecode+QUIET;
+            // tick() keeps the chain alive when it does not release.
+            UI.removeCallbacks(TICK);
+            UI.postDelayed(TICK, QUIET_MS);
+        }
+    }
+
+    /** Called from inside the view draw traversal (PageTreeNode.BitmapHolder
+     *  drawBitmap) right after a page bitmap has been painted on the canvas.
+     *  Dismissing from within the traversal lets the dialog's window removal
+     *  land in the same frame as the content: a plain dismiss() posts a sync
+     *  message that the Choreographer draw barrier blocks, so the dialog
+     *  otherwise visibly lingers ~0.8s past the already-painted content
+     *  (open-speed settle benchmarks read that as lag). Nodes still being
+     *  decoded keep the old quiet-window path as the fallback. */
+    public static void notifyDrawn() {
+        if (armed && firstBitmapSeen && ACTIVE_DECODES.get() == 0) {
+            LOG.bench("FirstPaintGate release-on-draw");
+            release();
         }
     }
 

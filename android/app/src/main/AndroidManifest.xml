@@ -119,8 +119,38 @@
             android:configChanges="orientation|screenSize|keyboard|keyboardHidden"
             android:exported="true"
             android:launchMode="singleTask"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
             android:windowSoftInputMode="adjustPan">
 
+            <!-- Merged open entry (batch 2, 2026-10-21): the VIEW
+                 intent-filters moved to VerticalViewActivity — the system
+                 opens books straight in the reader. This trampoline stays
+                 exported for explicit launches (autotest / measure scripts
+                 target it by component) and for the rare reading-mode
+                 dispatch forwarded from VerticalViewActivity. -->
+
+        </activity>
+
+
+        <activity
+            android:name="com.foobnix.pdf.search.activity.HorizontalViewActivity"
+            android:configChanges="orientation|screenSize|keyboard|keyboardHidden"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:windowSoftInputMode="adjustPan" />
+
+        <activity
+            android:name="org.ebookdroid.ui.viewer.VerticalViewActivity"
+            android:configChanges="orientation|screenSize|keyboard|keyboardHidden"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:windowSoftInputMode="adjustPan">
+
+                    <!-- receives the system VIEW open intents (moved from
+                 OpenerActivity, batch 2 2026-10-21): books open straight
+                 into the vertical reader -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
 
@@ -224,40 +254,7 @@
                 <data android:pathPattern=".*\\.md" />
             </intent-filter>
 
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW_" />
-
-                <category android:name="android.intent.category.DEFAULT_" />
-                <category android:name="android.intent.category.BROWSABLE_" />
-
-                <data android:scheme="file" />
-                <data android:scheme="content" />
-                <data android:host="*" />
-                <data android:mimeType="*/*" />
-
-
-            </intent-filter>
-
-        </activity>
-
-
-        <activity
-            android:name="com.foobnix.pdf.search.activity.HorizontalViewActivity"
-            android:configChanges="orientation|screenSize|keyboard|keyboardHidden"
-            android:exported="true"
-            android:launchMode="singleTask"
-            android:resizeableActivity="true"
-            android:windowSoftInputMode="adjustPan" />
-
-        <activity
-            android:name="org.ebookdroid.ui.viewer.VerticalViewActivity"
-            android:configChanges="orientation|screenSize|keyboard|keyboardHidden"
-            android:exported="true"
-            android:launchMode="singleTask"
-            android:resizeableActivity="true"
-            android:windowSoftInputMode="adjustPan">
-
-        </activity>
+</activity>
 
         <!--
         <service

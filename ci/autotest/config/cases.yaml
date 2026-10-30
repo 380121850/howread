@@ -47,8 +47,8 @@ ai_mock:
 test_server:
   # 2026-10-03: 50.23 整机离线(ping 不通),按预案切备用测试服务器 50.104
   # (三协议端口/账号/书集与 50.23 一致);50.23 恢复后改回。
-  host: 192.168.50.104
-  webdav_url: http://192.168.50.104:8765/
+  host: 192.168.50.23
+  webdav_url: http://192.168.50.23:8765/
   webdav_user: howread
   webdav_password: howread123
   smb_share: testbooks

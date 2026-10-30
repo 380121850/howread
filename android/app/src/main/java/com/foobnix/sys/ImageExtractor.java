@@ -94,6 +94,30 @@ public class ImageExtractor {
     public static String pathCache;
     static int pageCount = 0;
     static int whCache;
+
+    /** Docs owned by a live reader's DecodeService (its codecDocument).
+     *  clearCodeDocument() must DETACH (not recycle) one of these: that doc's
+     *  lifetime is governed by the owner's shutdown, which frees the native
+     *  handle only after the decode thread has drained. Recycling the static
+     *  slot here while the owner's decode thread was still rendering caused a
+     *  SIGSEGV use-after-free on hot book switch (FB2 ~11-15s first pass),
+     *  2026-10-20. Identity-based: CodecDocument impls are JNI wrappers with
+     *  no equals/hashCode, so reference identity is the owner's identity. */
+    static final java.util.Set<CodecDocument> activeDocs =
+            java.util.Collections.synchronizedSet(
+                    java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<CodecDocument, Boolean>()));
+
+    public static void markActive(CodecDocument doc) {
+        if (doc != null) {
+            activeDocs.add(doc);
+        }
+    }
+
+    public static void unmarkActive(CodecDocument doc) {
+        if (doc != null) {
+            activeDocs.remove(doc);
+        }
+    }
     private static ImageExtractor instance;
     private final Context c;
 
@@ -206,10 +230,20 @@ public class ImageExtractor {
             if (pathCache != null) {
                 savePageTreeIfPossible(pathCache);
             }
-            codeCache.recycle();
-            codeCache = null;
-            pathCache = null;
-            LOG.d("getNewCodecContext codeCache recycle");
+            if (activeDocs.contains(codeCache)) {
+                // A live reader still owns this doc (its decode thread may be
+                // mid-render). Detach only -- the owner's shutdown frees the
+                // native handle once its decode thread has drained. Recycling
+                // here = freeing a doc a decode thread is touching (UAF).
+                codeCache = null;
+                pathCache = null;
+                LOG.d("clearCodeDocument detach only (owner active, NOT recycled)");
+            } else {
+                codeCache.recycle();
+                codeCache = null;
+                pathCache = null;
+                LOG.d("getNewCodecContext codeCache recycle");
+            }
         }
         if (codecContex != null) {
             codecContex.recycle();
@@ -217,6 +251,22 @@ public class ImageExtractor {
             LOG.d("getNewCodecContext codecContex recycle");
         }
 
+    }
+
+    /**
+     * 旧阅读器销毁时的静态登记解绑：只有当 codeCache 仍指向本服务自己的
+     * 文档时才清空登记。会话内换书时新书往往已接管 codeCache——此前的
+     * 无条件 clearCodeDocument() 会把新书的活动文档回收掉：热态切 PDF 在
+     * getPageInfo 里踩已释放句柄 SIGSEGV（2026-10-19 三轮复现，fault addr
+     * 0x746e6f436365cc），热态切 TXT/FB2 则被 isRecycled 守卫静默吞掉解码
+     * 渲染、首页永久空白。只解绑不回收：文档本体由调用方紧接着 recycle。
+     */
+    public static synchronized void detachIfOwner(final CodecDocument doc) {
+        if (doc != null && codeCache == doc) {
+            codeCache = null;
+            pathCache = null;
+            LOG.d("getNewCodecContext codeCache detach (owner shutdown)");
+        }
     }
 
     public static void init(CodecDocument codec, String path) {

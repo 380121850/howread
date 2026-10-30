@@ -147,7 +147,24 @@ public class DecodeServiceBase implements DecodeService {
     @Override
     public void open(final String fileName, final String password) {
         ImageExtractor.clearCodeDocument();
-        codecDocument = codecContext.openDocument(fileName, password);
+        // open-prefetch (Plan A): the document was opened on a background
+        // thread as soon as the path was known, before the reader Activity
+        // existed — adopt it when the file identity and the settings
+        // snapshot baked into the open still match, else fall back to the
+        // normal serial openDocument below.
+        CodecDocument adopted = com.foobnix.sys.OpenPrefetch.adopt(fileName, password);
+        if (adopted != null) {
+            codecDocument = adopted;
+        } else {
+            codecDocument = codecContext.openDocument(fileName, password);
+        }
+        // Register this reader's doc as "active" so a later book's open (which
+        // runs clearCodeDocument) detaches rather than recycles it out from
+        // under this reader's still-rendering decode thread (hot-switch UAF).
+        // Freed by this service's own shutdownInner once the decode drains.
+        if (codecDocument != null) {
+            ImageExtractor.markActive(codecDocument);
+        }
         ImageExtractor.init(codecDocument, fileName);
 
     }
@@ -773,6 +790,11 @@ public class DecodeServiceBase implements DecodeService {
     class ExecutorRunnable implements Runnable, org.ebookdroid.core.ExecutorRunnable {
 
         final AtomicBoolean run = new AtomicBoolean(true);
+        /** The dedicated decode thread, kept so the shutdown path can join it
+         *  (wait for its in-flight native pass to truly return) BEFORE freeing
+         *  the native document. Freeing under a still-rendering decode thread
+         *  is the hot FB2→MOBI UAF/SIGSEGV (2026-10-20). */
+        volatile Thread decodeThread;
 
         ExecutorRunnable() {
             // Dedicated thread, not the shared 2-thread executorService: the
@@ -783,6 +805,7 @@ public class DecodeServiceBase implements DecodeService {
             final Thread t = new Thread(this, "@T Decoding");
             t.setPriority(Thread.NORM_PRIORITY - 1);
             t.start();
+            decodeThread = t;
         }
 
         @Override
@@ -1003,13 +1026,44 @@ public class DecodeServiceBase implements DecodeService {
         private void shutdownInner() {
 
             LOG.d("Begin shutdown 1");
+            // Fast part stays on the caller thread (usually the UI destroy
+            // path): stop the decode loop so no NEW native pass can start.
             run.set(false);
             shutdownStarted = true;
 
-            // bounded wait for an in-flight decode: the native document/pages
-            // below used to be freed under a still-rendering thread (a narrow
-            // but real SIGSEGV window when closing a book mid-render)
-            final long deadline = System.currentTimeMillis() + 3000;
+            // The native document + pages must be freed OFF the caller thread,
+            // and only AFTER the in-flight decode has truly returned. The old
+            // code freed after a 3s cap on the UI thread: a heavy reflow book
+            // (e.g. a 420-page FB2) keeps its decode pass alive 11–15s, so the
+            // cap expired mid-pass and the still-rendering decode thread
+            // dereferenced the freed native doc (UAF → SIGSEGV in @T Decoding;
+            // 2026-10-20 hot FB2→MOBI crash, reproducible 3/3). Moving the free
+            // to a background thread that first joins the decode thread removes
+            // both the UAF and any UI-thread ANR.
+            final Thread drainerTarget = decodeThread;
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        drainAndFreeNative(drainerTarget);
+                    } catch (Throwable th) {
+                        LOG.e(th);
+                    }
+                }
+            }, "@T DecodeDrain").start();
+        }
+
+        /** Bounded drain (wait for the in-flight decode pass to return, then
+         *  join the decode thread) and free the native document, pages and
+         *  context. Runs on a background thread so the caller (UI destroy
+         *  path) is never blocked by a long decode pass. */
+        private void drainAndFreeNative(final Thread decodeThread) {
+            LOG.d("Begin shutdown drain");
+
+            // Wait for the in-flight decode's native pass to return. A bounded
+            // cap (generous: a normal reflow pass is ≤~15s) keeps a
+            // pathological hang from leaking the native doc forever.
+            final long deadline = System.currentTimeMillis() + 20000;
             while (inFlightDecodes.get() > 0 && System.currentTimeMillis() < deadline) {
                 try {
                     Thread.sleep(20);
@@ -1018,11 +1072,24 @@ public class DecodeServiceBase implements DecodeService {
                     break;
                 }
             }
-            if (inFlightDecodes.get() > 0) {
-                // 有界折中的残余窗口：超期仍在渲染的线程会碰到即将回收的原生
-                // 句柄（单次渲染 >3s）。至少留一条取证线索
+            // Joining the decode thread (not just inFlightDecodes==0) also
+            // covers outline / annotation / page-count tasks that run on the
+            // same thread and touch the native doc without bumping that
+            // counter. Once the thread has exited it cannot make further
+            // native calls, so the free below is race-free.
+            if (decodeThread != null && decodeThread.isAlive()) {
+                try {
+                    decodeThread.join(Math.max(1, deadline - System.currentTimeMillis()));
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            if (inFlightDecodes.get() > 0 || (decodeThread != null && decodeThread.isAlive())) {
+                // 有界折中的残余窗口：解码线程超期仍未退出（单次原生 pass >20s，
+                // 本身就是另一处需要排查的挂起）。留一条取证线索后再回收。
                 LOG.e(new java.util.concurrent.TimeoutException(
-                        "shutdown with " + inFlightDecodes.get() + " in-flight decode(s) after 3s"));
+                        "shutdown drain timeout: inFlight=" + inFlightDecodes.get()
+                        + " decodeThreadAlive=" + (decodeThread != null && decodeThread.isAlive())));
             }
 
             // same monitor as nextTask/getPageHolder: without it a concurrent
@@ -1046,6 +1113,13 @@ public class DecodeServiceBase implements DecodeService {
 
             LOG.d("Begin shutdown 3");
             if (getCodecDocument() != null) {
+                // 先解绑静态登记（仅当仍属于本文档），再回收本体——
+                // 不能无条件 clearCodeDocument()：会话内换书时静态槽
+                // 已被新书接管，无条件回收=把新书文档从活线程脚下抽走
+                // （热态切 PDF SIGSEGV / 热态 TXT+FB2 空白页根因，
+                // 2026-10-19 定位）。
+                ImageExtractor.detachIfOwner(getCodecDocument());
+                ImageExtractor.unmarkActive(getCodecDocument());
                 getCodecDocument().recycle();
                 codecDocument = null;
             }
@@ -1055,7 +1129,8 @@ public class DecodeServiceBase implements DecodeService {
 
             LOG.d("Begin shutdown 6");
 
-            ImageExtractor.clearCodeDocument();
+            // clearCodeDocument() 已由上方 detachIfOwner(本文档) 取代：
+            // 静态槽属于新书时绝不能在此回收（2026-10-19）。
 
         }
 

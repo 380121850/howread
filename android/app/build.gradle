@@ -494,7 +494,10 @@ dependencies {
 /** Testing **/
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
+    androidTestImplementation(libs.junit)
     androidTestImplementation(libs.runner)
+    androidTestImplementation 'androidx.benchmark:benchmark-macro:1.2.4'
+    androidTestImplementation 'androidx.benchmark:benchmark-macro-junit4:1.2.4'
 
 }
 
