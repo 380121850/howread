@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -67,14 +66,34 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.scrollBy
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Slider
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Crop
+import androidx.compose.material.icons.filled.FormatSize
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -177,6 +196,7 @@ fun ReaderScreen(path: String, initialPage: Int = -1, onClose: () -> Unit, onOpe
     var prefsRev by remember(path) { mutableIntStateOf(0) }
     var immersive by remember(path) { mutableStateOf(false) }
     var themeMenu by remember(path) { mutableStateOf(false) }
+    var moreMenu by remember(path) { mutableStateOf(false) }
     var trimWhite by remember(path) { mutableStateOf(LibPrefs.bool("trimWhite", false)) }
     // ---- 批次三（v0.52.0 对齐安卓）：双页并排 / RSVP 速读 / TTS 导出 ----
     var twoPage by remember(path) { mutableStateOf(LibPrefs.bool("twoPage", false)) }
@@ -393,6 +413,32 @@ fun ReaderScreen(path: String, initialPage: Int = -1, onClose: () -> Unit, onOpe
                 ttsProg = ""
             }
         }) { i, n -> if (run == ttsRunId) ttsProg = "$i/$n" }
+    }
+
+    // 导出当前页朗读为 WAV（v0.52.0 对齐安卓 TTS 导出；v0.57 移入「更多」菜单）
+    fun exportTtsWav() {
+        val d0 = doc
+        if (d0 == null) { ttsExpMsg = L10n.s("书未打开", "No book"); return }
+        val paras = runCatching { d0.pageParagraphs(page) }.getOrDefault(emptyList())
+        if (paras.isEmpty()) { ttsExpMsg = L10n.s("本页无可读文本", "No text"); return }
+        val parent = File(path).parentFile?.takeIf { it.isDirectory } ?: AppPaths.dataDir
+        val ttsDir = java.io.File(java.io.File(AppPaths.dataDir, "downloads"), "TTS")
+        val baseDir = if (ttsDir.isDirectory || ttsDir.mkdirs()) ttsDir else parent
+        val chooser = javax.swing.JFileChooser(baseDir)
+        chooser.dialogTitle = L10n.s("导出朗读音频（WAV）", "Export speech audio (WAV)")
+        chooser.selectedFile = File(baseDir, File(path).nameWithoutExtension.take(40) + "-p" + (page + 1) + ".wav")
+        javax.swing.SwingUtilities.invokeLater {
+            if (chooser.showSaveDialog(null) != javax.swing.JFileChooser.APPROVE_OPTION) { ttsExpMsg = ""; return@invokeLater }
+            val outF = chooser.selectedFile
+            ttsExpMsg = L10n.s("导出中…", "Exporting…")
+            TestLog.evt("tts_export_begin", "page=${page + 1} paras=" + paras.size)
+            val t0 = System.currentTimeMillis()
+            TtsSpeaker.export(paras, outF, { ok2, m ->
+                ttsExpMsg = if (ok2) L10n.s("已导出 ", "Exported ") + outF.name else m
+                TestLog.evt(if (ok2) "tts_export_ui" else "tts_export_ui_fail",
+                    outF.name + " ms=" + (System.currentTimeMillis() - t0))
+            }) { i, n -> ttsExpMsg = L10n.s("导出中", "Exporting") + " $i/$n" }
+        }
     }
 
     LaunchedEffect(path, page) {
@@ -669,6 +715,8 @@ fun ReaderScreen(path: String, initialPage: Int = -1, onClose: () -> Unit, onOpe
     var selReqToken by remember(path) { mutableIntStateOf(0) }
     val selCache = remember(path) { TranslationCache.forBook(path) }
     var pageBoxArr by remember(path) { mutableStateOf<FloatArray?>(null) }
+    var selPage by remember(path) { mutableIntStateOf(-1) }   // 划词所在页（滚动模式逐页选取；翻页模式=当前页）
+    var selMoveKey by remember(path) { mutableFloatStateOf(-999f) }   // 滚动模式拖选取词节流
     // ---- 离线词典（划词查词） ----
     var dictOpen by remember(path) { mutableStateOf(false) }
     var dictWord by remember(path) { mutableStateOf("") }
@@ -849,143 +897,32 @@ fun ReaderScreen(path: String, initialPage: Int = -1, onClose: () -> Unit, onOpe
 
 
     Column(Modifier.fillMaxSize().background(bg)) {
-        // ---- 工具栏（沉浸模式隐藏） ----
+        // ---- 顶栏（v0.57 对齐安卓阅读界面）：书名居左，右侧图标条；次要动作收进「更多」菜单 ----
         if (!immersive) Row(
-            Modifier.fillMaxWidth().height(40.dp).background(UiTheme.p.bar),
+            Modifier.fillMaxWidth().height(44.dp).background(UiTheme.p.bar).padding(horizontal = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            ToolBtn(L10n.s("换书", "Switch"), panel == Panel.RECENT) { panel = if (panel == Panel.RECENT) Panel.NONE else Panel.RECENT }
-            ToolBtn(L10n.s("目录", "TOC"), panel == Panel.TOC) { panel = if (panel == Panel.TOC) Panel.NONE else Panel.TOC }
-            ToolBtn(L10n.s("书签", "Mark"), panel == Panel.BOOKMARK) { panel = if (panel == Panel.BOOKMARK) Panel.NONE else Panel.BOOKMARK }
-            ToolBtn(L10n.s("回退", "Back"), navBack.isNotEmpty()) { navGoBack() }
-            ToolBtn(L10n.s("前进", "Fwd"), navFwd.isNotEmpty()) { navGoFwd() }
-            ToolBtn(L10n.s("搜索", "Search"), panel == Panel.SEARCH) { panel = if (panel == Panel.SEARCH) Panel.NONE else Panel.SEARCH }
-            ToolBtn(L10n.s("译", "Tr"), panel == Panel.TRANSLATE) { panel = if (panel == Panel.TRANSLATE) Panel.NONE else Panel.TRANSLATE }
-            ToolBtn(L10n.s("双语", "Bi"), bilingual) {
-                bilingual = !bilingual
-                TestLog.evt("bilingual_toggle", if (bilingual) "on" else "off")
-            }
-            ToolBtn(L10n.s("问", "Ask"), panel == Panel.QA) { panel = if (panel == Panel.QA) Panel.NONE else Panel.QA }
-            ToolBtn(
-                if (ttsOn) L10n.s("停读", "Stop") + (if (ttsProg.isEmpty()) "" else " $ttsProg")
-                else L10n.s("朗读", "Speak"),
-                ttsOn,
-            ) {
-                if (ttsOn) {
-                    TtsSpeaker.cancel()
-                    ttsRunId++
-                    ttsOn = false
-                    ttsProg = ""
-                    TestLog.evt("tts_stop", "manual")
-                } else {
-                    speakPage(page)
-                }
-            }
-            ToolBtn(L10n.s("连读", "Auto"), ttsCont) {
-                ttsCont = !ttsCont
-                TestLog.evt("tts_cont", if (ttsCont) "on" else "off")
-            }
-            ToolBtn(if (ttsTimerMin > 0) L10n.s("定时", "Timer") + ttsTimerMin + "m" else L10n.s("定时", "Timer"),
-                ttsTimerMin > 0) {
-                ttsTimerMin = when (ttsTimerMin) { 0 -> 15; 15 -> 30; 30 -> 60; else -> 0 }
-                TestLog.evt("tts_timer", if (ttsTimerMin > 0) "set=" + ttsTimerMin + "m" else "off")
-            }
-            // 导出当前页朗读为 WAV（v0.52.0 对齐安卓 TTS 导出音频）
-            ToolBtn(L10n.s("导出", "Export")) {
-                val d0 = doc
-                if (d0 == null) { ttsExpMsg = L10n.s("书未打开", "No book"); return@ToolBtn }
-                val paras = runCatching { d0.pageParagraphs(page) }.getOrDefault(emptyList())
-                if (paras.isEmpty()) { ttsExpMsg = L10n.s("本页无可读文本", "No text"); return@ToolBtn }
-                val parent = File(path).parentFile?.takeIf { it.isDirectory } ?: AppPaths.dataDir
-                // v0.56 音频文件默认目录（偏好→备份配置→音频文件；安卓 Download/HowRead/TTS 同语义）
-                val ttsDir = java.io.File(java.io.File(AppPaths.dataDir, "downloads"), "TTS")
-                val baseDir = if (ttsDir.isDirectory || ttsDir.mkdirs()) ttsDir else parent
-                val chooser = javax.swing.JFileChooser(baseDir)
-                chooser.dialogTitle = L10n.s("导出朗读音频（WAV）", "Export speech audio (WAV)")
-                chooser.selectedFile = File(baseDir, File(path).nameWithoutExtension.take(40) + "-p" + (page + 1) + ".wav")
-                javax.swing.SwingUtilities.invokeLater {
-                    if (chooser.showSaveDialog(null) != javax.swing.JFileChooser.APPROVE_OPTION) { ttsExpMsg = ""; return@invokeLater }
-                    val outF = chooser.selectedFile
-                    ttsExpMsg = L10n.s("导出中…", "Exporting…")
-                    TestLog.evt("tts_export_begin", "page=${page + 1} paras=" + paras.size)
-                    val t0 = System.currentTimeMillis()
-                    TtsSpeaker.export(paras, outF, { ok2, m ->
-                        ttsExpMsg = if (ok2) L10n.s("已导出 ", "Exported ") + outF.name else m
-                        TestLog.evt(if (ok2) "tts_export_ui" else "tts_export_ui_fail",
-                            outF.name + " ms=" + (System.currentTimeMillis() - t0))
-                    }) { i, n -> ttsExpMsg = L10n.s("导出中", "Exporting") + " $i/$n" }
-                }
-            }
-            if (isReflowable) {
-                ToolBtn(L10n.s("排", "Layout"), panel == Panel.LAYOUT) { panel = if (panel == Panel.LAYOUT) Panel.NONE else Panel.LAYOUT }
-                ToolBtn("A-") { fontScale = (fontScale - 10).coerceIn(60, 220); ReaderPrefsStore.save(prefs.copy(fontScale = fontScale)); TestLog.evt("font_change", "scale=$fontScale") }
-                ToolBtn("A+") { fontScale = (fontScale + 10).coerceIn(60, 220); ReaderPrefsStore.save(prefs.copy(fontScale = fontScale)); TestLog.evt("font_change", "scale=$fontScale") }
-                ToolBtn("${fontScale}%") {}
-            } else {
-                ToolBtn("-") { zoomPdf = (zoomPdf / 1.15f).coerceIn(0.5f, 4f) }
-                ToolBtn("+") { zoomPdf = (zoomPdf * 1.15f).coerceIn(0.5f, 4f) }
-                ToolBtn("x${"%.2f".format(zoomPdf)}") {}
-            }
-            ToolBtn(
-                if (theme.id == "day") L10n.s("背景", "Theme") else L10n.s("背景·", "Theme·") + theme.label,
-                themeMenu,
-            ) { themeMenu = !themeMenu }
-            // 裁白边（v0.51.0 对齐安卓 CropImage）：按页面背景色裁掉四周空白，翻页/滚动两模式生效
-            ToolBtn(if (trimWhite) L10n.s("白边·裁", "Trim·on") else L10n.s("白边", "Trim"), trimWhite) {
+            Icon(Icons.Filled.MenuBook, contentDescription = L10n.s("阅读", "Read"),
+                tint = UiTheme.p.accent, modifier = Modifier.padding(start = 8.dp).size(18.dp))
+            Text(
+                File(path).nameWithoutExtension,
+                color = UiTheme.p.textSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+            )
+            BarIcon(Icons.Filled.Menu, L10n.s("目录", "TOC"), panel == Panel.TOC) { panel = if (panel == Panel.TOC) Panel.NONE else Panel.TOC }
+            BarIcon(Icons.Filled.Bookmark, L10n.s("书签", "Mark"), panel == Panel.BOOKMARK) { panel = if (panel == Panel.BOOKMARK) Panel.NONE else Panel.BOOKMARK }
+            BarIcon(Icons.Filled.Search, L10n.s("搜索", "Search"), panel == Panel.SEARCH) { panel = if (panel == Panel.SEARCH) Panel.NONE else Panel.SEARCH }
+            BarIcon(Icons.Filled.Crop, L10n.s("裁白边", "Trim"), trimWhite) {
                 trimWhite = !trimWhite
                 LibPrefs.put("trimWhite", trimWhite.toString())
                 TestLog.evt("trim_white", if (trimWhite) "on" else "off")
             }
-            // 双页并排（v0.52.0 对齐安卓横屏双页）：翻页两页并排/滚动双列，翻页步进 2
-            ToolBtn(if (twoPage) L10n.s("双页 ✓", "2pg ✓") else L10n.s("双页", "2pg"), twoPage) {
-                twoPage = !twoPage
-                LibPrefs.put("twoPage", twoPage.toString())
-                TestLog.evt("two_page", if (twoPage) "on" else "off")
+            BarIcon(Icons.Filled.Palette, L10n.s("背景", "Theme"), themeMenu) { themeMenu = !themeMenu }
+            if (isReflowable) {
+                BarIcon(Icons.Filled.FormatSize, L10n.s("排版", "Layout"), panel == Panel.LAYOUT) { panel = if (panel == Panel.LAYOUT) Panel.NONE else Panel.LAYOUT }
             }
-            ToolBtn(L10n.s("速读", "RSVP"), rsvpOn) {
-                rsvpOn = !rsvpOn
-                rsvpIdx = 0
-                rsvpPause = false
-                TestLog.evt("rsvp", if (rsvpOn) "on page=${page + 1}" else "off")
-            }
-            ToolBtn(if (viewMode == ViewMode.PAGE)
-                LibPrefs.str("modeNameScroll", "").ifBlank { L10n.s("滚动", "Scroll") }
-            else LibPrefs.str("modeNamePage", "").ifBlank { L10n.s("翻页", "Paged") }) {
-                viewMode = if (viewMode == ViewMode.PAGE) ViewMode.SCROLL else ViewMode.PAGE
-                TestLog.evt("view_toggle", viewMode.name)
-            }
-            if (viewMode == ViewMode.SCROLL) {
-                // 自动滚动（滚动模式）：开关 + 速度循环（像素/帧，2..30）
-                ToolBtn(if (autoScrollOn) L10n.s("自动·", "Auto·") else L10n.s("自动", "Auto")) {
-                    autoScrollOn = !autoScrollOn
-                    TestLog.evt("auto_scroll", if (autoScrollOn) "on speed=$autoScrollSpeed" else "off")
-                }
-                ToolBtn("x$autoScrollSpeed") {
-                    autoScrollSpeed = if (autoScrollSpeed >= 30) 2 else autoScrollSpeed + 2
-                    LibPrefs.put("autoScrollSpeed", "$autoScrollSpeed")
-                    TestLog.evt("auto_scroll_speed", "$autoScrollSpeed")
-                }
-            } else {
-                // 自动翻页（翻页模式）：开关 + 间隔循环（5/10/30/60 秒）
-                ToolBtn(if (autoFlipOn) L10n.s("自动·", "Auto·") else L10n.s("自动", "Auto")) {
-                    autoFlipOn = !autoFlipOn
-                    TestLog.evt("auto_flip", if (autoFlipOn) "on sec=$autoFlipSec" else "off")
-                }
-                ToolBtn("${autoFlipSec}s") {
-                    autoFlipSec = when (autoFlipSec) { 5 -> 10; 10 -> 30; 30 -> 60; else -> 5 }
-                    LibPrefs.put("autoFlipSec", "$autoFlipSec")
-                    TestLog.evt("auto_flip_sec", "$autoFlipSec")
-                }
-            }
-            ToolBtn(L10n.s("沉浸", "Immersive")) {
-                immersive = !immersive
-                TestLog.evt("immersive", if (immersive) "on" else "off")
-            }
-            Spacer(Modifier.weight(1f))
-            if (ttsExpMsg.isNotEmpty()) Text(ttsExpMsg.take(36), color = UiTheme.p.textFaint, fontSize = 11.sp,
-                maxLines = 1, modifier = Modifier.padding(end = 6.dp))
-            Text(if (pageCount > 0) "${page + 1} / $pageCount" else "…", color = UiTheme.p.textSecondary, fontSize = 13.sp, modifier = Modifier.padding(end = 4.dp))
-            ToolBtn(L10n.s("关闭", "Close")) { requestClose() }
+            BarIcon(Icons.Filled.MoreVert, L10n.s("更多", "More"), moreMenu) { moreMenu = !moreMenu }
+            BarIcon(Icons.Filled.Close, L10n.s("关闭", "Close")) { requestClose() }
         }
 
         Row(Modifier.weight(1f).fillMaxWidth()) {
@@ -1039,6 +976,7 @@ fun ReaderScreen(path: String, initialPage: Int = -1, onClose: () -> Unit, onOpe
                                 if (selPopup || selQuads.isNotEmpty()) {
                                     selPopup = false
                                     selQuads = emptyList()
+                                    selPage = -1
                                 }
                                 val third = size.width / 3f
                                 when {
@@ -1071,6 +1009,7 @@ fun ReaderScreen(path: String, initialPage: Int = -1, onClose: () -> Unit, onOpe
                         detectDragGestures(
                             onDragStart = { off ->
                                 val m = toPage(off)
+                                selPage = page
                                 selAnchor = m
                                 selCur = m
                                 selQuads = emptyList()
@@ -1154,7 +1093,63 @@ fun ReaderScreen(path: String, initialPage: Int = -1, onClose: () -> Unit, onOpe
                 } else {
                     ScrollView(d, pageCount, theme, page, zoomPdf, scrollJumpToken, isReflowable, layoutRev, pageCache,
                         onPageFromScroll = { page = it },
-                        autoScroll = autoScrollOn, autoScrollSpeed = autoScrollSpeed, trimWhite = trimWhite, twoPage = twoPage)
+                        autoScroll = autoScrollOn, autoScrollSpeed = autoScrollSpeed, trimWhite = trimWhite, twoPage = twoPage,
+                        selPage = selPage, selQuads = selQuads, hlAll = hlAll,
+                        onSelStart = { p, m ->
+                            if (m != null) {
+                                selPage = p
+                                selAnchor = m
+                                selCur = m
+                                selQuads = emptyList()
+                                selPopup = false
+                                selMoveKey = -999f
+                            }
+                        },
+                        onSelMove = { _, m ->
+                            selCur = m
+                            val a = selAnchor
+                            if (a != null && m != null && abs(m.first - selMoveKey) > 3f) {
+                                selMoveKey = m.first
+                                scope.launch(Dispatchers.Default) {
+                                    val r = runCatching { doc?.selection(selPage, a.first, a.second, m.first, m.second) }
+                                        .getOrNull() ?: ("" to emptyList())
+                                    selQuads = r.second
+                                }
+                            }
+                        },
+                        onSelEnd = { _, m ->
+                            val a = selAnchor
+                            val c = m
+                            if (a != null && c != null &&
+                                !(abs(a.first - c.first) < 6f && abs(a.second - c.second) < 6f)
+                            ) {
+                                scope.launch(Dispatchers.Default) {
+                                    val r = runCatching { doc?.selection(selPage, a.first, a.second, c.first, c.second) }
+                                        .getOrNull() ?: ("" to emptyList())
+                                    if (r.first.isNotBlank()) {
+                                        selText = r.first
+                                        selQuads = r.second
+                                        selPopup = true
+                                        TestLog.evt("sel_text", "len=" + r.first.length + " page=" + (selPage + 1) + " mode=scroll")
+                                        runSelTranslate()
+                                    } else {
+                                        selQuads = emptyList()
+                                        selPopup = false
+                                    }
+                                }
+                            } else {
+                                selQuads = emptyList()
+                                selPopup = false
+                            }
+                        },
+                        onSelTap = {
+                            if (selPopup || selQuads.isNotEmpty()) {
+                                selPopup = false
+                                selQuads = emptyList()
+                                selPage = -1
+                            }
+                        },
+                    )
                 }
                 // 背景质感（v0.29.0）：纸/布纹理乘色叠加（仅浅色主题），纯显示层不触发重排
                 if (!theme.dark && prefs.readTexture != "none") {
@@ -1199,12 +1194,121 @@ fun ReaderScreen(path: String, initialPage: Int = -1, onClose: () -> Unit, onOpe
                         modifier = Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 12.dp),
                     )
                 }
-                Text(
+                if (moreMenu) {
+                    Column(
+                        Modifier
+                            .width(248.dp)
+                            .heightIn(max = 560.dp)
+                            .verticalScroll(rememberScrollState())
+                            .shadow(6.dp, RoundedCornerShape(10.dp))
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(UiTheme.p.panel)
+                            .padding(vertical = 6.dp),
+                    ) {
+                        MenuRow(L10n.s("换书", "Switch book")) { moreMenu = false; panel = Panel.RECENT }
+                        MenuRow(L10n.s("回退", "Back"), enabled = navBack.isNotEmpty()) { moreMenu = false; navGoBack() }
+                        MenuRow(L10n.s("前进", "Fwd"), enabled = navFwd.isNotEmpty()) { moreMenu = false; navGoFwd() }
+                        MenuDivider()
+                        MenuRow(L10n.s("译 · 翻译面板", "Translate"), checked = panel == Panel.TRANSLATE) { moreMenu = false; panel = Panel.TRANSLATE }
+                        MenuRow(L10n.s("双语对照", "Bilingual"), checked = bilingual) {
+                            moreMenu = false
+                            bilingual = !bilingual
+                            TestLog.evt("bilingual_toggle", if (bilingual) "on" else "off")
+                        }
+                        MenuRow(L10n.s("问 AI", "Ask AI"), checked = panel == Panel.QA) { moreMenu = false; panel = Panel.QA }
+                        MenuDivider()
+                        MenuRow(if (ttsOn) L10n.s("停读", "Stop") + (if (ttsProg.isEmpty()) "" else " $ttsProg") else L10n.s("朗读本页", "Speak")) {
+                            moreMenu = false
+                            if (ttsOn) {
+                                TtsSpeaker.cancel(); ttsRunId++; ttsOn = false; ttsProg = ""
+                                TestLog.evt("tts_stop", "manual")
+                            } else speakPage(page)
+                        }
+                        MenuRow(L10n.s("连读", "Auto read"), checked = ttsCont) {
+                            moreMenu = false
+                            ttsCont = !ttsCont
+                            TestLog.evt("tts_cont", if (ttsCont) "on" else "off")
+                        }
+                        MenuRow(if (ttsTimerMin > 0) L10n.s("定时朗读 ", "Timer ") + ttsTimerMin + "m" else L10n.s("定时朗读·关", "Timer off")) {
+                            moreMenu = false
+                            ttsTimerMin = when (ttsTimerMin) { 0 -> 15; 15 -> 30; 30 -> 60; else -> 0 }
+                            TestLog.evt("tts_timer", if (ttsTimerMin > 0) "set=" + ttsTimerMin + "m" else "off")
+                        }
+                        MenuRow(L10n.s("导出朗读 WAV", "Export WAV")) { moreMenu = false; exportTtsWav() }
+                        MenuDivider()
+                        MenuRow(L10n.s("速读 RSVP", "RSVP"), checked = rsvpOn) {
+                            moreMenu = false
+                            rsvpOn = !rsvpOn
+                            rsvpIdx = 0
+                            rsvpPause = false
+                            TestLog.evt("rsvp", if (rsvpOn) "on page=${page + 1}" else "off")
+                        }
+                        MenuRow(L10n.s("双页并排", "Two pages"), checked = twoPage) {
+                            moreMenu = false
+                            twoPage = !twoPage
+                            LibPrefs.put("twoPage", twoPage.toString())
+                            TestLog.evt("two_page", if (twoPage) "on" else "off")
+                        }
+                        MenuRow(
+                            if (viewMode == ViewMode.PAGE)
+                                LibPrefs.str("modeNameScroll", "").ifBlank { L10n.s("上下翻页", "Scroll") }
+                            else LibPrefs.str("modeNamePage", "").ifBlank { L10n.s("左右翻页", "Paged") }
+                        ) {
+                            moreMenu = false
+                            viewMode = if (viewMode == ViewMode.PAGE) ViewMode.SCROLL else ViewMode.PAGE
+                            TestLog.evt("view_toggle", viewMode.name)
+                        }
+                        MenuRow(
+                            if (if (viewMode == ViewMode.SCROLL) autoScrollOn else autoFlipOn) L10n.s("自动·开", "Auto·on")
+                            else L10n.s("自动·关", "Auto·off"),
+                            checked = autoScrollOn || autoFlipOn,
+                        ) {
+                            if (viewMode == ViewMode.SCROLL) {
+                                autoScrollOn = !autoScrollOn
+                                TestLog.evt("auto_scroll", if (autoScrollOn) "on speed=$autoScrollSpeed" else "off")
+                            } else {
+                                autoFlipOn = !autoFlipOn
+                                TestLog.evt("auto_flip", if (autoFlipOn) "on sec=$autoFlipSec" else "off")
+                            }
+                        }
+                        if (viewMode == ViewMode.SCROLL) {
+                            MenuRow(L10n.s("滚动速度 ", "Speed ") + "x$autoScrollSpeed") {
+                                autoScrollSpeed = if (autoScrollSpeed >= 30) 2 else autoScrollSpeed + 2
+                                LibPrefs.put("autoScrollSpeed", "$autoScrollSpeed")
+                                TestLog.evt("auto_scroll_speed", "$autoScrollSpeed")
+                            }
+                        } else {
+                            MenuRow(L10n.s("翻页间隔 ", "Interval ") + "${autoFlipSec}s") {
+                                autoFlipSec = when (autoFlipSec) { 5 -> 10; 10 -> 30; 30 -> 60; else -> 5 }
+                                LibPrefs.put("autoFlipSec", "$autoFlipSec")
+                                TestLog.evt("auto_flip_sec", "$autoFlipSec")
+                            }
+                        }
+                        if (!isReflowable) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 2.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("x${"%.2f".format(zoomPdf)}", color = UiTheme.p.textSecondary, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                                ToolBtn("−") { zoomPdf = (zoomPdf / 1.15f).coerceIn(0.5f, 4f) }
+                                ToolBtn("＋") { zoomPdf = (zoomPdf * 1.15f).coerceIn(0.5f, 4f) }
+                            }
+                        }
+                        MenuDivider()
+                        MenuRow(L10n.s("沉浸模式", "Immersive")) {
+                            moreMenu = false
+                            immersive = !immersive
+                            TestLog.evt("immersive", if (immersive) "on" else "off")
+                        }
+                    }
+                }
+                if (immersive) Text(
                     File(path).nameWithoutExtension,
                     modifier = Modifier.align(Alignment.TopCenter).padding(top = 4.dp),
                     color = UiTheme.p.textFaintest, fontSize = 11.sp,
                 )
-                if (selQuads.isNotEmpty() && pageBoxArr != null) {
+                if (viewMode == ViewMode.PAGE && selQuads.isNotEmpty() && pageBoxArr != null) {
                     Canvas(Modifier.matchParentSize()) {
                         val pb = pageBoxArr ?: return@Canvas
                         val padX = 24.dp.toPx()
@@ -1226,7 +1330,7 @@ fun ReaderScreen(path: String, initialPage: Int = -1, onClose: () -> Unit, onOpe
                         }
                     }
                 }
-                if (hlList.isNotEmpty() && pageBoxArr != null) {
+                if (viewMode == ViewMode.PAGE && hlList.isNotEmpty() && pageBoxArr != null) {
                     Canvas(Modifier.matchParentSize()) {
                         val pb = pageBoxArr ?: return@Canvas
                         val padX = 24.dp.toPx()
@@ -1251,10 +1355,11 @@ fun ReaderScreen(path: String, initialPage: Int = -1, onClose: () -> Unit, onOpe
                     }
                 }
                 if (selPopup) {
+                    val sp = if (selPage >= 0) selPage else page
                     SelectionPopup(
                         selText = selText, selTran = selTran, selBusy = selBusy, selErr = selErr, selTgt = selTgt,
                         onTgt = { selTgt = it; runSelTranslate() },
-                        onClose = { selPopup = false; selQuads = emptyList(); selAnchor = null; selCur = null },
+                        onClose = { selPopup = false; selQuads = emptyList(); selAnchor = null; selCur = null; selPage = -1 },
                         onCopy = {
                             clipboard.setText(AnnotatedString(selText))
                             TestLog.evt("sel_copy", "len=" + selText.length)
@@ -1266,9 +1371,9 @@ fun ReaderScreen(path: String, initialPage: Int = -1, onClose: () -> Unit, onOpe
                             TtsSpeaker.speak(listOf(selText), onDone = { ttsOn = false; ttsProg = "" })
                         },
                         onBookmark = {
-                            Db.addBookmark(path, page, "第${page + 1}页", selText.take(200))
+                            Db.addBookmark(path, sp, "第${sp + 1}页", selText.take(200))
                             bookmarks = Db.listBookmarks(path)
-                            TestLog.evt("sel_bm", "page=" + (page + 1))
+                            TestLog.evt("sel_bm", "page=" + (sp + 1))
                         },
                         onDict = { runDictLookup(selText) },
                         onWebSearch = {
@@ -1319,12 +1424,12 @@ fun ReaderScreen(path: String, initialPage: Int = -1, onClose: () -> Unit, onOpe
                             }
                         },
                         onHighlight = { c ->
-                            Db.addAnnotation(path, page, c, selQuads.map { AnnQuad(it.x0, it.y0, it.x1, it.y1) },
+                            Db.addAnnotation(path, sp, c, selQuads.map { AnnQuad(it.x0, it.y0, it.x1, it.y1) },
                                 selText.take(200), pageCount)
-                            hlList = Db.listAnnotations(path, page).filter { it.pageCount == pageCount }
+                            hlList = Db.listAnnotations(path, sp).filter { it.pageCount == pageCount }
                             hlAll = Db.listAllAnnotations(path)
-                            selPopup = false; selQuads = emptyList(); selAnchor = null; selCur = null
-                            TestLog.evt("hl_add", "page=" + (page + 1) + " color=" + c)
+                            selPopup = false; selQuads = emptyList(); selAnchor = null; selCur = null; selPage = -1
+                            TestLog.evt("hl_add", "page=" + (sp + 1) + " color=" + c)
                         },
                         modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
                     )
@@ -1708,33 +1813,69 @@ fun ReaderScreen(path: String, initialPage: Int = -1, onClose: () -> Unit, onOpe
             }
         }
 
-        // ---- 快速导航条（页模式底部；拖动即时跳页，对齐安卓快速导航条） ----
-        if (!immersive && viewMode == ViewMode.PAGE && pageCount > 1) {
-            var sliderPos by remember(path) { mutableFloatStateOf(page.toFloat()) }
-            var sliderDragging by remember(path) { mutableStateOf(false) }
-            LaunchedEffect(page) { if (!sliderDragging) sliderPos = page.toFloat() }
+        // ---- 底部导航条（v0.57 对齐安卓：滚动/翻页两模式统一 页码滑条+常用图标行） ----
+        if (!immersive && pageCount > 0) {
+            if (pageCount > 1) {
+                var sliderPos by remember(path) { mutableFloatStateOf(page.toFloat()) }
+                var sliderDragging by remember(path) { mutableStateOf(false) }
+                LaunchedEffect(page) { if (!sliderDragging) sliderPos = page.toFloat() }
+                Row(
+                    Modifier.fillMaxWidth().height(32.dp).background(UiTheme.p.bar),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("${page + 1}", color = UiTheme.p.textTertiary, fontSize = 12.sp,
+                        modifier = Modifier.padding(start = 14.dp))
+                    Slider(
+                        value = sliderPos.coerceIn(0f, (pageCount - 1).toFloat()),
+                        onValueChange = {
+                            sliderDragging = true
+                            sliderPos = it
+                            page = it.toInt().coerceIn(0, pageCount - 1)
+                        },
+                        onValueChangeFinished = {
+                            sliderDragging = false
+                            scrollJumpToken++
+                            TestLog.evt("nav_slider", "to=${page + 1}")
+                        },
+                        valueRange = 0f..(pageCount - 1).toFloat(),
+                        modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
+                    )
+                    Text("$pageCount", color = UiTheme.p.textTertiary, fontSize = 12.sp,
+                        modifier = Modifier.padding(end = 14.dp))
+                }
+            }
             Row(
-                Modifier.fillMaxWidth().height(32.dp).background(UiTheme.p.bar),
+                Modifier.fillMaxWidth().height(38.dp).background(UiTheme.p.bar).padding(horizontal = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("${page + 1}", color = UiTheme.p.textTertiary, fontSize = 12.sp,
-                    modifier = Modifier.padding(start = 14.dp))
-                Slider(
-                    value = sliderPos.coerceIn(0f, (pageCount - 1).toFloat()),
-                    onValueChange = {
-                        sliderDragging = true
-                        sliderPos = it
-                        page = it.toInt().coerceIn(0, pageCount - 1)
-                    },
-                    onValueChangeFinished = {
-                        sliderDragging = false
-                        TestLog.evt("nav_slider", "to=${page + 1}")
-                    },
-                    valueRange = 0f..(pageCount - 1).toFloat(),
-                    modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
-                )
-                Text("$pageCount", color = UiTheme.p.textTertiary, fontSize = 12.sp,
-                    modifier = Modifier.padding(end = 14.dp))
+                BarIcon(Icons.Filled.Language, L10n.s("译", "Tr"), panel == Panel.TRANSLATE) { panel = if (panel == Panel.TRANSLATE) Panel.NONE else Panel.TRANSLATE }
+                BarIcon(Icons.Filled.Translate, L10n.s("双语", "Bi"), bilingual) {
+                    bilingual = !bilingual
+                    TestLog.evt("bilingual_toggle", if (bilingual) "on" else "off")
+                }
+                BarIcon(if (ttsOn) Icons.Filled.Stop else Icons.Filled.RecordVoiceOver, L10n.s("朗读", "Speak"), ttsOn) {
+                    if (ttsOn) {
+                        TtsSpeaker.cancel()
+                        ttsRunId++
+                        ttsOn = false
+                        ttsProg = ""
+                        TestLog.evt("tts_stop", "manual")
+                    } else {
+                        speakPage(page)
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                if (ttsExpMsg.isNotEmpty()) {
+                    Text(ttsExpMsg.take(30), color = UiTheme.p.textFaint, fontSize = 11.sp, maxLines = 1,
+                        modifier = Modifier.padding(end = 6.dp))
+                } else if (ttsProg.isNotEmpty()) {
+                    Text(L10n.s("朗读 ", "Speaking ") + ttsProg, color = UiTheme.p.textFaint, fontSize = 11.sp,
+                        modifier = Modifier.padding(end = 6.dp))
+                }
+                BarIcon(Icons.Filled.Fullscreen, L10n.s("沉浸", "Immersive")) {
+                    immersive = !immersive
+                    TestLog.evt("immersive", if (immersive) "on" else "off")
+                }
             }
         }
         if (immersive) {
@@ -1815,6 +1956,45 @@ private fun ToolBtn(label: String, active: Boolean = false, onClick: () -> Unit)
             fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
         )
     }
+}
+
+/** 顶栏/底栏图标按钮（v0.57 对齐安卓阅读界面图标条）。 */
+@Composable
+private fun BarIcon(icon: ImageVector, label: String, active: Boolean = false, onClick: () -> Unit) {
+    IconButton(onClick = onClick, modifier = Modifier.size(36.dp)) {
+        Icon(
+            icon, contentDescription = label,
+            tint = if (active) UiTheme.p.accent else UiTheme.p.textSecondary,
+            modifier = Modifier.size(19.dp),
+        )
+    }
+}
+
+/** 「更多」菜单行（勾选态打勾；禁用置灰）。 */
+@Composable
+private fun MenuRow(label: String, checked: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .then(if (enabled) Modifier.clickable { onClick() } else Modifier)
+            .padding(horizontal = 14.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label, fontSize = 13.sp,
+            color = if (!enabled) UiTheme.p.textFaintest else if (checked) UiTheme.p.accent else UiTheme.p.textSecondary,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (checked) Text("✓", color = UiTheme.p.accent, fontSize = 13.sp)
+    }
+}
+
+@Composable
+private fun MenuDivider() {
+    Box(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp)
+            .height(1.dp).background(UiTheme.p.textFaintest.copy(alpha = 0.25f))
+    )
 }
 
 /** 排版面板数字输入（边距，0..60）。 */
@@ -2104,7 +2284,7 @@ private fun PageImage(doc: DocumentHandle, page: Int, widthPx: Int, mode: ReadMo
     }
 }
 
-/** 连续滚动：LazyColumn 按页铺开，条目按各自页宽高比占位，视口内按需渲染。 */
+/** 连续滚动：LazyColumn 按页铺开，条目按各自页宽高比占位，视口内按需渲染；每页支持长按拖动划词（v0.57）。 */
 @Composable
 private fun ScrollView(
     doc: DocumentHandle,
@@ -2121,6 +2301,13 @@ private fun ScrollView(
     autoScrollSpeed: Int = 3,
     trimWhite: Boolean = false,
     twoPage: Boolean = false,
+    selPage: Int = -1,
+    selQuads: List<SelRect> = emptyList(),
+    hlAll: List<AnnotationRow> = emptyList(),
+    onSelStart: (Int, Pair<Float, Float>?) -> Unit = { _, _ -> },
+    onSelMove: (Int, Pair<Float, Float>?) -> Unit = { _, _ -> },
+    onSelEnd: (Int, Pair<Float, Float>?) -> Unit = { _, _ -> },
+    onSelTap: () -> Unit = {},
 ) {
     val listState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
     // 自动滚动（对齐安卓 autoScroll）：逐帧像素推进，零重排（LazyColumn 按需渲染，开销恒定）
@@ -2152,70 +2339,129 @@ private fun ScrollView(
             modifier = Modifier.fillMaxSize(),
         ) {
             items(pageCount, key = { it }) { p ->
-                PageScrollItem(doc, p, theme, zoom, reflow, layoutRev, cache, trimWhite)
+                PageScrollItem(doc, p, theme, zoom, reflow, layoutRev, cache, trimWhite,
+                    selHere = selPage == p,
+                    selQuads = if (selPage == p) selQuads else emptyList(),
+                    hlAnnos = if (hlAll.isEmpty()) emptyList() else hlAll.filter { it.page == p && it.pageCount == pageCount },
+                    onSelStart = { m -> onSelStart(p, m) },
+                    onSelMove = { m -> onSelMove(p, m) },
+                    onSelEnd = { m -> onSelEnd(p, m) },
+                    onTap = onSelTap,
+                )
             }
         }
-        ScrollBarOverlay(listState, pageCount, Modifier.align(Alignment.CenterEnd))
     }
 }
 
-/** 滚动模式右侧滚动条（v0.30.0）：按可见页比例画滑块，可拖动跳页。 */
+/** 滚动模式单页容器：长按拖动划词（对齐安卓长按选择；普通拖动仍归列表滚动）+ 批注/选区覆盖层。 */
 @Composable
-private fun ScrollBarOverlay(listState: androidx.compose.foundation.lazy.grid.LazyGridState, pageCount: Int, modifier: Modifier) {
-    if (pageCount <= 1) return
-    val info = listState.layoutInfo
-    val total = info.totalItemsCount
-    val vis = info.visibleItemsInfo
-    if (total <= 0 || vis.isEmpty()) return
-    val first = vis.first().index
-    val frac = (first.toFloat() / total).coerceIn(0f, 1f)
-    val thumbH = (vis.size.toFloat() / total).coerceIn(0.05f, 1f)
-    var dragging by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    Canvas(
-        modifier.width(18.dp).fillMaxHeight().pointerInput(total) {
-            detectVerticalDragGestures(
-                onDragStart = { dragging = true },
-                onVerticalDrag = { ch, _ ->
-                    val p = (ch.position.y / size.height.toFloat()).coerceIn(0f, 1f)
-                    val target = (p * total).toInt().coerceIn(0, total - 1)
-                    if (target != listState.firstVisibleItemIndex) scope.launch { runCatching { listState.scrollToItem(target) } }
-                },
-                onDragEnd = { dragging = false },
+private fun ScrollItemBox(
+    modifier: Modifier,
+    pb: FloatArray?,
+    selHere: Boolean,
+    selQuads: List<SelRect>,
+    hlAnnos: List<AnnotationRow>,
+    onSelStart: (Pair<Float, Float>?) -> Unit,
+    onSelMove: (Pair<Float, Float>?) -> Unit,
+    onSelEnd: (Pair<Float, Float>?) -> Unit,
+    onTap: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Box(modifier) {
+        content()
+        if (pb != null) {
+            Box(
+                Modifier.matchParentSize()
+                    .pointerInput(pb) {
+                        detectTapGestures { _ -> onTap() }
+                    }
+                    .pointerInput(pb) {
+                        val padH = 16.dp.toPx()
+                        val padV = 6.dp.toPx()
+                        fun toPage(off: Offset): Pair<Float, Float>? {
+                            val availW = size.width - padH * 2
+                            val availH = size.height - padV * 2
+                            val pw = maxOf(1f, pb[2] - pb[0])
+                            val ph = maxOf(1f, pb[3] - pb[1])
+                            val sc = minOf(availW / pw, availH / ph)
+                            val offX = padH + (availW - pw * sc) / 2
+                            val offY = padV + (availH - ph * sc) / 2
+                            val x = pb[0] + (off.x - offX) / sc
+                            val y = pb[1] + (off.y - offY) / sc
+                            if (x < pb[0] || x > pb[2] || y < pb[1] || y > pb[3]) return null
+                            return x to y
+                        }
+                        var lastOff: Offset? = null
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = { off ->
+                                lastOff = off
+                                onSelStart(toPage(off))
+                            },
+                            onDrag = { ch, _ ->
+                                lastOff = ch.position
+                                onSelMove(toPage(ch.position))
+                            },
+                            onDragEnd = {
+                                val off = lastOff
+                                onSelEnd(if (off != null) toPage(off) else null)
+                            },
+                            onDragCancel = { onSelEnd(null) },
+                        )
+                    }
             )
+            // 批注高亮 + 当前划词覆盖层（滚动模式逐页绘制，坐标映射与取词一致）
+            if (hlAnnos.isNotEmpty() || (selHere && selQuads.isNotEmpty())) {
+                Canvas(Modifier.matchParentSize()) {
+                    val padH = 16.dp.toPx()
+                    val padV = 6.dp.toPx()
+                    val availW = size.width - padH * 2
+                    val availH = size.height - padV * 2
+                    val pw = maxOf(1f, pb[2] - pb[0])
+                    val ph = maxOf(1f, pb[3] - pb[1])
+                    val sc = minOf(availW / pw, availH / ph)
+                    val offX = padH + (availW - pw * sc) / 2
+                    val offY = padV + (availH - ph * sc) / 2
+                    for (a in hlAnnos) {
+                        val c = Color(a.color).copy(alpha = 0.32f)
+                        for (q in a.quads) {
+                            drawRect(c, Offset(offX + (q.x0 - pb[0]) * sc, offY + (q.y0 - pb[1]) * sc),
+                                Size((q.x1 - q.x0) * sc, (q.y1 - q.y0) * sc))
+                        }
+                    }
+                    if (selHere) {
+                        val c = UiTheme.p.accent.copy(alpha = 0.30f)
+                        for (q in selQuads) {
+                            drawRect(c, Offset(offX + (q.x0 - pb[0]) * sc, offY + (q.y0 - pb[1]) * sc),
+                                Size((q.x1 - q.x0) * sc, (q.y1 - q.y0) * sc))
+                        }
+                    }
+                }
+            }
         }
-    ) {
-        val trackW = 5.dp.toPx()
-        val x = this.size.width - trackW - 5.dp.toPx()
-        drawRect(
-            UiTheme.p.textFaintest.copy(alpha = 0.18f),
-            topLeft = Offset(x, 0f),
-            size = Size(trackW, this.size.height),
-        )
-        val th = this.size.height * thumbH
-        drawRect(
-            UiTheme.p.accent.copy(alpha = if (dragging) 0.9f else 0.5f),
-            topLeft = Offset(x, (this.size.height - th) * frac),
-            size = Size(trackW, th),
-        )
     }
 }
 
 @Composable
-private fun PageScrollItem(doc: DocumentHandle, page: Int, theme: ReadTheme, zoom: Float, reflow: Boolean, layoutRev: Int, cache: MutableMap<Int, BufferedImage>, trimWhite: Boolean = false) {
+private fun PageScrollItem(
+    doc: DocumentHandle, page: Int, theme: ReadTheme, zoom: Float, reflow: Boolean, layoutRev: Int,
+    cache: MutableMap<Int, BufferedImage>, trimWhite: Boolean = false,
+    selHere: Boolean = false, selQuads: List<SelRect> = emptyList(),
+    hlAnnos: List<AnnotationRow> = emptyList(),
+    onSelStart: (Pair<Float, Float>?) -> Unit = {}, onSelMove: (Pair<Float, Float>?) -> Unit = {},
+    onSelEnd: (Pair<Float, Float>?) -> Unit = {}, onTap: () -> Unit = {},
+) {
     var w by remember(page, doc, layoutRev) { mutableIntStateOf(0) }
     val size = remember(page, doc, layoutRev) { runCatching { doc.pageSize(page) }.getOrNull() }
+    val pbSel = remember(page, doc, layoutRev) { runCatching { doc.pageBox(page) }.getOrNull() }
     val ratio = if (size != null && size.second > 0) size.first / size.second else 0.72f
     if (reflow && size != null && size.first > 0) {
         // 重排文档：页宽=版心宽，条目按自然宽居中（不再拉满视口宽）
         BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             val natDp = with(LocalDensity.current) { (size.first * zoom).toInt().toDp() }
             val boxW = if (natDp < maxWidth) natDp else maxWidth
-            Box(
-                Modifier
-                    .width(boxW)
-                    .aspectRatio(ratio / zoom)
-                    .onSizeChanged { w = it.width }
+            ScrollItemBox(
+                Modifier.width(boxW).aspectRatio(ratio / zoom).onSizeChanged { w = it.width },
+                pbSel, selHere, selQuads, hlAnnos, onSelStart, onSelMove, onSelEnd, onTap,
             ) {
                 if (w > 0) {
                     PageImage(doc, page, (w * zoom).toInt(), pixelMode(theme), pixelTint(theme), cache, layoutRev,
@@ -2224,11 +2470,9 @@ private fun PageScrollItem(doc: DocumentHandle, page: Int, theme: ReadTheme, zoo
             }
         }
     } else {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .aspectRatio(ratio / zoom)
-                .onSizeChanged { w = it.width }
+        ScrollItemBox(
+            Modifier.fillMaxWidth().aspectRatio(ratio / zoom).onSizeChanged { w = it.width },
+            pbSel, selHere, selQuads, hlAnnos, onSelStart, onSelMove, onSelEnd, onTap,
         ) {
             if (w > 0) {
                 PageImage(doc, page, (w * zoom).toInt(), pixelMode(theme), pixelTint(theme), cache, layoutRev,

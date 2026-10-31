@@ -86,3 +86,7 @@ harmony/*.csr
 __pycache__/
 *.pyc
 *.bak_*
+
+# ---------- Desktop (Compose) build artifacts (2026-11-01) ----------
+# desktop 下任意深度的 build/ 产物目录(含 desktop/build、desktop/{app,core,engine}/build)
+desktop/**/build/

@@ -67,6 +67,29 @@ for jar in glob.glob(app + "/material-icons-extended-*.jar"):
     os.replace(tmpf, jar)
     print("icons slim: %s -> %d entries kept" % (os.path.basename(jar), len(keep)))
 
+# sqlite-jdbc 只保留 Windows/x86_64 native（v0.57.1 体积优化；jar 内其余 ~14 平台 native 共 ~23MB 全部未用）
+for jar in glob.glob(app + "/sqlite-jdbc-*.jar"):
+    zin = zipfile.ZipFile(jar)
+    keep = []
+    drop = 0
+    for n in zin.namelist():
+        p = n.replace("\\", "/").split("/")
+        if "native" in p:
+            i = p.index("native")
+            plat = p[i + 1] if i + 1 < len(p) else ""
+            arch = p[i + 2] if i + 2 < len(p) else ""
+            if plat != "Windows" or arch != "x86_64":
+                drop += 1
+                continue
+        keep.append(n)
+    tmpf = jar + ".slim"
+    with zipfile.ZipFile(tmpf, "w", zipfile.ZIP_DEFLATED) as zout:
+        for n in keep:
+            zout.writestr(n, zin.read(n))
+    zin.close()
+    os.replace(tmpf, jar)
+    print("sqlite slim: %s -> %d entries kept (dropped %d native)" % (os.path.basename(jar), len(keep), drop))
+
 PYEOF
 echo SLIM_DONE
 
