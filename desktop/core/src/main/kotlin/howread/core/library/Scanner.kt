@@ -14,7 +14,7 @@ object Scanner {
 
     /** 扫描全部书库目录（mtime+size 指纹增量 upsert），返回在册书籍总数。
      *  v0.30.0：只扫描勾选上架（shelf=1）的目录——取消勾选的目录其书籍随本次扫描自动从书架移除。 */
-    fun scanAll(ignoreNomedia: Boolean = false): Int {
+    fun scanAll(ignoreNomedia: Boolean = false, useCalibreOpf: Boolean = false): Int {
         val t0 = System.currentTimeMillis()
         val dirs = Db.listScanDirRows().filter { it.shelf }.map { it.path }
         val existing = HashSet<String>()
@@ -27,7 +27,7 @@ object Scanner {
             if (!dir.isDirectory) { anyDirMissing = true; continue }
             try {
                 walkBooks(File(d), ignoreNomedia) { f ->
-                    Db.upsertFileMeta(f.absolutePath, f.nameWithoutExtension, f.length(), f.lastModified())
+                    Db.upsertFileMeta(f.absolutePath, bookTitle(f, useCalibreOpf), f.length(), f.lastModified())
                     if (existing.add(f.absolutePath)) added++
                 } ?: run { anyDirMissing = true }   // listFiles 为 null=目录不可读
             } catch (e: Exception) {
@@ -53,4 +53,24 @@ object Scanner {
         }
         return true
     }
+
+    /** 书名：默认=文件名去扩展名；useCalibreOpf 时优先取书同目录 Calibre metadata.opf 的 dc:title（v0.55.0）。 */
+    fun bookTitle(f: File, useCalibreOpf: Boolean): String {
+        if (useCalibreOpf) calibreOpfTitle(f)?.let { return it }
+        return f.nameWithoutExtension
+    }
+
+    /** Calibre opf 书名：同目录 metadata.opf / <书名>.opf 的 dc:title，未命中返 null。 */
+    fun calibreOpfTitle(book: File): String? = runCatching {
+        val opf = File(book.parentFile, "metadata.opf").takeIf { it.isFile }
+            ?: File(book.parentFile, book.nameWithoutExtension + ".opf").takeIf { it.isFile }
+            ?: return@runCatching null
+        val xml = opf.readText(Charsets.UTF_8)
+        Regex("<dc:title[^>]*>([\\s\\S]*?)</dc:title>", RegexOption.IGNORE_CASE)
+            .find(xml)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }?.let { unescapeXml(it) }
+    }.getOrNull()
+
+    private fun unescapeXml(s: String): String = s
+        .replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"")
+        .replace("&apos;", "'").replace("&amp;", "&")
 }

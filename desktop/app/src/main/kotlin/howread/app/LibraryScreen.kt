@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -54,7 +56,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -136,6 +140,7 @@ private fun FullTextSearchDialog(appState: AppState, onDismiss: () -> Unit) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = query, onValueChange = { query = it },
+                        textStyle = TextStyle(fontSize = 14.sp, color = UiTheme.p.textPrimary),
                         label = { Text(L10n.s("关键词", "Keyword")) }, singleLine = true, modifier = Modifier.weight(1f),
                     )
                     TextButton(onClick = { runAll(query.trim()) }, enabled = !busy && query.isNotBlank()) {
@@ -228,7 +233,53 @@ fun LibraryGrid(appState: AppState) {
             introText = if (r.ok) r.reply.trim() else L10n.s("生成失败：", "Failed: ") + r.error
         }.apply { isDaemon = true }.start()
     }
-    var fulls by remember { mutableStateOf(false) }
+    // v0.54 全文搜索=顶栏输入框就地模式（不再开新页）：点「全文搜索」切换，输入回车执行，结果替换网格区
+    var fulltextMode by remember { mutableStateOf(false) }
+    var ftQuery by remember { mutableStateOf("") }
+    var ftBusy by remember { mutableStateOf(false) }
+    var ftQueried by remember { mutableStateOf(false) }
+    var ftScanned by remember { mutableStateOf(0) }
+    var ftHits by remember { mutableStateOf<List<FullHit>>(emptyList()) }
+    var ftJob by remember { mutableStateOf<Job?>(null) }
+    val ftScope = rememberCoroutineScope()
+    fun runFullText(q: String) {
+        if (q.isBlank()) return
+        ftJob?.cancel()
+        ftHits = emptyList()
+        ftScanned = 0
+        ftBusy = true
+        ftQueried = true
+        TestLog.evt("fulltext_begin", "q=$q books=${appState.library.size}")
+        val books = appState.library.toList()
+        ftJob = ftScope.launch {
+            EngineLib.ensure()
+            for (b in books) {
+                if (!isActive) break
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        val h = DocumentHandle(FormatRouter.openablePath(b.path))
+                        try {
+                            val pc = h.pageCount()
+                            for (p in 0 until minOf(pc, 4000)) {
+                                if (h.searchPage(p, q) > 0) {
+                                    val paras = runCatching { h.pageParagraphs(p) }.getOrDefault(emptyList())
+                                    val ex = paras.firstOrNull { it.contains(q, ignoreCase = true) } ?: ""
+                                    ftHits = ftHits + FullHit(b.path, b.title, p, ex.take(140))
+                                    if (ftHits.size >= 150) return@runCatching
+                                }
+                            }
+                        } finally {
+                            h.close()
+                        }
+                    }
+                }
+                ftScanned++
+                if (ftHits.size >= 150) break
+            }
+            ftBusy = false
+            TestLog.evt("fulltext_done", "hits=${ftHits.size} books=$ftScanned")
+        }
+    }
     var foldersDlg by remember { mutableStateOf(false) }
     var delFor by remember { mutableStateOf<Book?>(null) }
     var deleteHint by remember { mutableStateOf("") }   // 检视修复：删除失败反馈
@@ -243,15 +294,25 @@ fun LibraryGrid(appState: AppState) {
 
     Column(Modifier.fillMaxSize().padding(20.dp)) {
         Row(
-            Modifier.fillMaxWidth().height(48.dp),
+            Modifier.fillMaxWidth().height(56.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             OutlinedTextField(
-                value = appState.query,
-                onValueChange = { appState.query = it },
-                label = { Text(L10n.s("搜索书名 / 路径", "Search title / path")) },
+                value = if (fulltextMode) ftQuery else appState.query,
+                onValueChange = { if (fulltextMode) ftQuery = it else appState.query = it },
+                textStyle = TextStyle(fontSize = 14.sp, color = UiTheme.p.textPrimary),
+                label = { Text(if (fulltextMode) L10n.s("全文搜索：输入关键词回车", "Full-text: keyword + Enter")
+                               else L10n.s("搜索书名 / 路径", "Search title / path")) },
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { if (fulltextMode) runFullText(ftQuery.trim()) }),
+                trailingIcon = {
+                    if (fulltextMode) TextButton(onClick = { runFullText(ftQuery.trim()) },
+                        enabled = !ftBusy && ftQuery.isNotBlank()) {
+                        Text(L10n.s("搜索", "Search"), fontSize = 11.sp)
+                    } else null
+                },
                 modifier = Modifier.weight(1f),
             )
             Text(L10n.s("${appState.visibleBooks().size} 本", "${appState.visibleBooks().size} books"), color = UiTheme.p.textFaint, fontSize = 13.sp)
@@ -271,25 +332,16 @@ fun LibraryGrid(appState: AppState) {
                     )
                 }
             }
-            TextButton(onClick = { fulls = true; TestLog.evt("fulltext_open") }) {
-                Text(L10n.s("全文搜索", "Full-text"), color = UiTheme.p.accent, fontSize = 12.sp)
+            TextButton(onClick = {
+                if (fulltextMode) { ftJob?.cancel(); ftHits = emptyList(); ftQueried = false }
+                fulltextMode = !fulltextMode
+                TestLog.evt("fulltext_mode", if (fulltextMode) "on" else "off")
+            }) {
+                Text(L10n.s("全文搜索", "Full-text"), fontSize = 12.sp,
+                    color = if (fulltextMode) UiTheme.p.accent else UiTheme.p.textTertiary,
+                    fontWeight = if (fulltextMode) FontWeight.Bold else FontWeight.Normal)
             }
-            // 格式过滤 chips（v0.50.0 安卓 ExtFilter 等价）：仅列出书库实际出现的扩展名，多选叠加
-            val presentExts = remember(appState.library) {
-                appState.library.map { it.path.substringAfterLast('.', "").lowercase() }
-                    .filter { it.isNotEmpty() && !it.contains('/') && !it.contains(':') && it.length <= 5 }
-                    .distinct().sorted()
-            }
-            for (fx in presentExts) {
-                val onExt = fx in appState.extFilter
-                TextButton(onClick = {
-                    appState.extFilter = if (onExt) appState.extFilter - fx else appState.extFilter + fx
-                    TestLog.evt("lib_ext_filter", appState.extFilter.sorted().joinToString(","))
-                }) {
-                    Text(fx, color = if (onExt) UiTheme.p.accent else UiTheme.p.textFaint, fontSize = 11.sp,
-                        fontWeight = if (onExt) FontWeight.Bold else FontWeight.Normal)
-                }
-            }
+            // v0.54 移除顶栏格式 chips（安卓书库顶栏无此项，格式勾选仍在文件夹配置对话框内）
             Spacer(Modifier.weight(1f))
             var sortMenu by remember { mutableStateOf(false) }
             Box {
@@ -366,6 +418,36 @@ fun LibraryGrid(appState: AppState) {
                 }) { Text(L10n.s("移出书库", "Remove"), fontSize = 12.sp, color = UiTheme.p.danger) }
             }
         }
+        if (fulltextMode && ftQueried) {
+            // 全文搜索结果区（v0.54 由独立页并入本页）：点击直达该书该页
+            if (ftBusy) {
+                Text(L10n.s("检索中 $ftScanned / ${appState.library.size} 本 · 命中 ${ftHits.size}",
+                        "Scanning $ftScanned/${appState.library.size} · ${ftHits.size} hits"),
+                    color = UiTheme.p.textFaint, fontSize = 12.sp, modifier = Modifier.padding(vertical = 8.dp))
+            }
+            if (ftHits.isEmpty() && !ftBusy) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(L10n.s("没有匹配的书籍", "No matching books"), color = UiTheme.p.textTertiary, fontSize = 14.sp)
+                }
+            } else LazyColumn(Modifier.fillMaxSize()) {
+                items(ftHits, key = { it.path + "#" + it.page + "#" + it.excerpt.hashCode() }) { h ->
+                    Column(
+                        Modifier.fillMaxWidth().clickable {
+                            TestLog.evt("fulltext_jump", "page=${h.page + 1}")
+                            ftJob?.cancel()
+                            appState.openAt(h.path, h.page)
+                        }.padding(vertical = 6.dp),
+                    ) {
+                        Text(L10n.s("${h.title} · 第 ${h.page + 1} 页", "${h.title} · p${h.page + 1}"),
+                            color = UiTheme.p.accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        if (h.excerpt.isNotBlank()) {
+                            Text(h.excerpt, color = UiTheme.p.textTertiary, fontSize = 12.sp, maxLines = 2,
+                                overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+        } else {
         val books = appState.visibleBooks()
         if (books.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -436,6 +518,7 @@ fun LibraryGrid(appState: AppState) {
                 }
             }
         }
+        }
     }
 
     tagFor?.let { b ->
@@ -503,9 +586,6 @@ fun LibraryGrid(appState: AppState) {
         )
     }
 
-    if (fulls) {
-        FullTextSearchDialog(appState) { fulls = false }
-    }
     if (foldersDlg) {
         ShelfFoldersDialog(appState, onDismiss = { foldersDlg = false })
     }
@@ -579,7 +659,7 @@ private fun ShelfFoldersDialog(appState: AppState, onDismiss: () -> Unit) {
                                     n += runCatching { howread.core.library.RemoteScanner.registerSource(sv) }.getOrDefault(0)
                                 }
                                 // 检视修复：与启动扫描同口径（否则 .nomedia 目录的书扫描后入库、重启又消失）
-                                howread.core.library.Scanner.scanAll(LibPrefs.bool("ignoreNomedia", true))
+                                howread.core.library.Scanner.scanAll(LibPrefs.bool("ignoreNomedia", true), LibPrefs.bool("useCalibreOpf", true))
                                 javax.swing.SwingUtilities.invokeLater {
                                     appState.reloadLibrary()
                                     scanning = false

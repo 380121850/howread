@@ -403,6 +403,11 @@ android {
 // ("app not compatible with new versions"). Sardine only uses the stable public
 // okhttp API (Response/Request/OkHttpClient/Interceptor/Authenticator), so force
 // the app-wide okhttp version back to 3.12.6.
+// CONSTRAINT: okhttp-digest must stay on the 1.x line (1.21) — 2.x and 3.x call
+// okhttp 4's internal Platform.log(String,int,Throwable) which does not exist
+// in 3.12.6 (only log(int,String,Throwable)); the mismatch crashed the process
+// on the first WebDAV 401 challenge (10-31 12S: 12x with 3.1.1, 4x with 2.7).
+// Verified by byte-scanning every published release; 1.21 is the only clean one.
 configurations.configureEach {
     resolutionStrategy {
         force 'com.squareup.okhttp3:okhttp:3.12.6'

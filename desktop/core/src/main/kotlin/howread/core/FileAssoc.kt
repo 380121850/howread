@@ -1,10 +1,12 @@
 package howread.core
 
+import howread.core.library.Scanner
 import java.io.File
 
 /** Windows 文件关联（HKCU 当前用户注册表，无需管理员）。 */
 object FileAssoc {
-    val EXTS = listOf("epub", "pdf", "mobi", "azw3", "fb2", "txt", "cbz")
+    /** 可关联格式 = 当前支持的书籍格式全集（Scanner.BOOK_EXTS，v0.56 对齐用户裁定）。 */
+    val EXTS: List<String> = Scanner.BOOK_EXTS.sorted()
     private const val PROGID = "HowReadPro.Book"
 
     fun isWindows(): Boolean = System.getProperty("os.name").lowercase().contains("win")
@@ -44,25 +46,29 @@ object FileAssoc {
 
     private fun esc(s: String): String = s.replace("\\", "\\\\").replace("\"", "\\\"")
 
-    fun associate(): String {
+    fun associate(): String = associate(EXTS)
+
+    fun associate(exts: Collection<String>): String {
         val cmd = openCommand() ?: return "无法定位程序目录（dev 运行或目录不完整）"
         val sb = StringBuilder()
         sb.append("[HKEY_CURRENT_USER\\Software\\Classes\\").append(PROGID).append("]\r\n")
             .append("@=\"HowRead 电子书\"\r\n")
         sb.append("[HKEY_CURRENT_USER\\Software\\Classes\\").append(PROGID).append("\\shell\\open\\command]\r\n")
             .append("@=\"").append(esc(cmd)).append("\"\r\n")
-        for (e in EXTS) {
+        for (e in exts) {
             sb.append("[HKEY_CURRENT_USER\\Software\\Classes\\.").append(e).append("]\r\n")
                 .append("@=\"").append(PROGID).append("\"\r\n")
         }
         val ok = regImport(sb.toString())
-        return if (ok) "已建立关联：" + EXTS.joinToString(" ") { "." + it } else "写入失败（reg import 返回非 0）"
+        return if (ok) "已建立关联：" + exts.sorted().joinToString(" ") { "." + it } else "写入失败（reg import 返回非 0）"
     }
 
-    fun disassociate(): String {
+    fun disassociate(): String = disassociate(EXTS)
+
+    fun disassociate(exts: Collection<String>): String {
         reg("delete", "HKCU\\Software\\Classes\\$PROGID", "/f")
         var n = 0
-        for (e in EXTS) {
+        for (e in exts) {
             val q = runCatching {
                 val p = ProcessBuilder("reg", "query", "HKCU\\Software\\Classes\\.$e", "/ve")
                     .redirectErrorStream(true).start()

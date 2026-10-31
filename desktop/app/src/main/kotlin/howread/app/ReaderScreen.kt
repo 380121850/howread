@@ -285,6 +285,27 @@ fun ReaderScreen(path: String, initialPage: Int = -1, onClose: () -> Unit, onOpe
         if (a.isNotBlank()) Db.setAuthor(path, a)
     }
 
+    // 退出确认（v0.56 对齐安卓 show_application_close_dialog_every_time）：关闭按钮/Esc 均先问
+    var exitAsk by remember { mutableStateOf(false) }
+    fun requestClose() { if (LibPrefs.bool("exitConfirmReading", true)) exitAsk = true else onClose() }
+    if (exitAsk) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { exitAsk = false },
+            title = { Text(L10n.s("退出阅读", "Close book"), color = UiTheme.p.textPrimary, fontSize = 15.sp) },
+            text = { Text(L10n.s("确定退出当前书籍吗？", "Close the current book?"), color = UiTheme.p.textSecondary, fontSize = 13.sp) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { exitAsk = false; onClose() }) {
+                    Text(L10n.s("确定", "OK"), color = UiTheme.p.accent)
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { exitAsk = false }) {
+                    Text(L10n.s("取消", "Cancel"), color = UiTheme.p.textTertiary)
+                }
+            },
+        )
+    }
+
     var pageCount by remember(path) { mutableIntStateOf(0) }
 
     // ---- 进度恢复（v0.27.0 乐观落位）：先按上次页码直接渲染首屏（重开有加速器时页数秒得），
@@ -876,9 +897,12 @@ fun ReaderScreen(path: String, initialPage: Int = -1, onClose: () -> Unit, onOpe
                 val paras = runCatching { d0.pageParagraphs(page) }.getOrDefault(emptyList())
                 if (paras.isEmpty()) { ttsExpMsg = L10n.s("本页无可读文本", "No text"); return@ToolBtn }
                 val parent = File(path).parentFile?.takeIf { it.isDirectory } ?: AppPaths.dataDir
-                val chooser = javax.swing.JFileChooser(parent)
+                // v0.56 音频文件默认目录（偏好→备份配置→音频文件；安卓 Download/HowRead/TTS 同语义）
+                val ttsDir = java.io.File(java.io.File(AppPaths.dataDir, "downloads"), "TTS")
+                val baseDir = if (ttsDir.isDirectory || ttsDir.mkdirs()) ttsDir else parent
+                val chooser = javax.swing.JFileChooser(baseDir)
                 chooser.dialogTitle = L10n.s("导出朗读音频（WAV）", "Export speech audio (WAV)")
-                chooser.selectedFile = File(parent, File(path).nameWithoutExtension.take(40) + "-p" + (page + 1) + ".wav")
+                chooser.selectedFile = File(baseDir, File(path).nameWithoutExtension.take(40) + "-p" + (page + 1) + ".wav")
                 javax.swing.SwingUtilities.invokeLater {
                     if (chooser.showSaveDialog(null) != javax.swing.JFileChooser.APPROVE_OPTION) { ttsExpMsg = ""; return@invokeLater }
                     val outF = chooser.selectedFile
@@ -961,7 +985,7 @@ fun ReaderScreen(path: String, initialPage: Int = -1, onClose: () -> Unit, onOpe
             if (ttsExpMsg.isNotEmpty()) Text(ttsExpMsg.take(36), color = UiTheme.p.textFaint, fontSize = 11.sp,
                 maxLines = 1, modifier = Modifier.padding(end = 6.dp))
             Text(if (pageCount > 0) "${page + 1} / $pageCount" else "…", color = UiTheme.p.textSecondary, fontSize = 13.sp, modifier = Modifier.padding(end = 4.dp))
-            ToolBtn(L10n.s("关闭", "Close")) { onClose() }
+            ToolBtn(L10n.s("关闭", "Close")) { requestClose() }
         }
 
         Row(Modifier.weight(1f).fillMaxWidth()) {
@@ -989,7 +1013,7 @@ fun ReaderScreen(path: String, initialPage: Int = -1, onClose: () -> Unit, onOpe
                                 TestLog.evt("immersive", if (immersive) "on" else "off")
                                 true
                             }
-                            Key.Escape -> if (immersive) { immersive = false; true } else { onClose(); true }
+                            Key.Escape -> if (immersive) { immersive = false; true } else { requestClose(); true }
                             // Alt+←/→=链接历史回退/前进（v0.51.0；CMP 桌面修饰键取包装的 AWT 事件）；无 Alt 方向键仍直接翻页
                             Key.DirectionLeft, Key.DirectionRight -> {
                                 val altNav = if (viewMode == ViewMode.PAGE)

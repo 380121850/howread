@@ -183,7 +183,11 @@ public class WebDavClient {
                 logRawPropfind(url, login, password);
             }
             return items;
-        } catch (Exception e) {
+        } catch (Throwable e) {
+            // contract: report failure via lastError + null. Errors (not just
+            // exceptions) must degrade the same way — a test-connection or
+            // listing call runs on an AsyncTask and any escaped Error kills
+            // the whole process instead of showing "连接失败"
             LOG.e(e);
             lastError = classifyError(e);
             lastErrorWasAuth = "auth".equals(lastError);

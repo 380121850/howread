@@ -37,6 +37,21 @@ object RemoteOpenCache {
     fun windowBytes(): Long =
         (LibPrefs.str("remoteCacheWindowMB", "5").toLongOrNull()?.coerceIn(1, 4096L) ?: 5L) * 1024L * 1024L
 
+    /** v0.54 小书整本缓存阈值（安卓 remoteWholeBookThresholdMB 同语义，0 = 关闭整本缓存分档）。 */
+    fun wholeBookBytes(): Long =
+        (LibPrefs.str("remoteWholeBookThresholdMB", "20").toLongOrNull()?.coerceIn(0, 4096L) ?: 20L) * 1024L * 1024L
+
+    /** v0.54 在线缓存上限（MB，0 = 不限；安卓 remoteCacheMaxMB 同默认 500）。 */
+    fun capMB(): Long =
+        LibPrefs.str("remoteCacheMaxMB", "500").toLongOrNull()?.coerceIn(0, 1024L * 1024L) ?: 500L
+
+    /** 简易联网判定：存在已启用、非回环、非虚拟且有地址的网络接口（仅区分离线/在线）。 */
+    fun netUsable(): Boolean = runCatching {
+        java.net.NetworkInterface.getNetworkInterfaces().asSequence()
+            .any { nic -> nic.isUp && !nic.isLoopback && !nic.isVirtual &&
+                nic.inetAddresses.asSequence().any { a -> !a.isLoopbackAddress } }
+    }.getOrDefault(true)
+
     fun parse(path: String): Pair<Long, String>? {
         val body = path.removePrefix("remote://")
         val i = body.indexOf('/')
@@ -92,12 +107,15 @@ object RemoteOpenCache {
             TestLog.evt("remote_cache_hit", "size=" + dest.length())
             return Resolution.Local(dest.absolutePath)
         }
+        // v0.54 每次打开远程书前先核对缓存上限（超限按目录最旧整目录回收）
+        BlockCacheStore.capMaxMB = capMB()
+        runCatching { BlockCacheStore.enforceCap(capMB()) }
         dest.parentFile?.mkdirs()
         val t0 = System.currentTimeMillis()
 
         // 小书（≤ 窗口阈值）或大小未知：整本缓存（.part→rename 完整落定）；
         // djvu 不经 mupdf 流入口（引擎内 libdjvu 桥 v0.46.0），恒整本缓存。
-        if (exp in 1..windowBytes() || exp <= 0 || ext == "djvu") {
+        if (exp in 1..wholeBookBytes() || exp <= 0 || ext == "djvu") {   // v0.54 阈值=整本缓存阈值（安卓同键）
             onMsg("正在缓存 0%")
             val c = RemoteClients.create(src)
             try {
@@ -123,6 +141,33 @@ object RemoteOpenCache {
             }
         }
 
+        // v0.54「点击远程书在线阅读」关闭时：大书也先整本下载完成再打开（安卓 remoteOnlineFirst=false 同语义）
+        if (!LibPrefs.bool("remoteOnlineFirst", true)) {
+            onMsg(L10n.s("正在下载整本…", "Downloading whole book…"))
+            val c2 = RemoteClients.create(src)
+            try {
+                var last = 0L
+                c2.downloadTo(rel, dest) { done, _ ->
+                    val now = System.currentTimeMillis()
+                    if (now - last > 400) {
+                        last = now
+                        onMsg(L10n.s("正在下载整本…", "Downloading…") + " " + done * 100 / exp.coerceAtLeast(1) + "%")
+                    }
+                }
+                TestLog.evt("remote_whole_dl", "ms=" + (System.currentTimeMillis() - t0) + " size=" + dest.length())
+                onMsg(L10n.s("下载完成", "Download complete"))
+                return Resolution.Local(dest.absolutePath)
+            } catch (t2: Throwable) {
+                if (t2 is kotlinx.coroutines.CancellationException) throw t2
+                TestLog.evt("remote_whole_dl_fail", "rel=$rel err=$t2")
+                onMsg(L10n.s("下载失败：", "Download failed: ") + (t2.message ?: t2.toString()))
+                runCatching { dest.delete() }
+                return null
+            } finally {
+                runCatching { c2.close() }
+            }
+        }
+
         // 大书：块缓存流式打开（v0.34.0）——任意格式按需取块，magic=纯文件名（安卓 magicFor 同思路）
         // v0.35.0：取块加离线熔断（连续 2 次失败停发网络请求，60s 半开试探）；
         // 整书补齐完成后自动"晋升"为整本缓存（下次走 Local+排版加速器，惰性回收块缓存目录）。
@@ -138,7 +183,21 @@ object RemoteOpenCache {
                 if (offline && now - offlineAt < 60_000) null   // 熔断中
                 else {
                     if (offline) { offline = false; TestLog.evt("block_cache_halfopen", "rel=$rel") }
-                    val got = runCatching { c.readRange(rel, off, len) }.getOrNull()
+                    // v0.54 网络重试（安卓 remoteRetryCount/IntervalMs 同键）：检视修复=单次退避钳 500ms
+                    // 且总等待预算 2s（fetcher 也被前台同步调用，防大参数组合卡 UI）
+                    val rN = LibPrefs.str("remoteRetryCount", "3").toIntOrNull()?.coerceIn(0, 10) ?: 3
+                    val rMs = LibPrefs.str("remoteRetryIntervalMs", "100").toLongOrNull()?.coerceIn(0, 500L) ?: 100L
+                    var got: ByteArray? = null
+                    var spent = 0L
+                    for (k in 0..rN) {
+                        got = runCatching { c.readRange(rel, off, len) }.getOrNull()
+                        if (got != null) break
+                        val d = rMs * (k + 1)
+                        if (k < rN && d > 0 && spent + d <= 2000L) {
+                            runCatching { Thread.sleep(d) }
+                            spent += d
+                        }
+                    }
                     if (got == null) {
                         if (++consecFail >= 2) {
                             offline = true
@@ -153,8 +212,13 @@ object RemoteOpenCache {
                 }
             },
             memLimit = windowBytes(),
+            windowBeforePct = LibPrefs.str("remoteWindowBeforePct", "20").toIntOrNull()?.coerceIn(1, 90) ?: 20,
+            windowAfterPct = LibPrefs.str("remoteWindowAfterPct", "30").toIntOrNull()?.coerceIn(1, 90) ?: 30,
         )
-        session.fillWhole = LibPrefs.bool("remoteFillWhole", true)
+        // v0.54「仅 WiFi 下预取与整本缓存」消费：检测不到可用网络（离线）时停后台整本补齐；
+        // 有网即视为稳定网络（桌面无计费网络 API，仅区分离线/在线）
+        session.fillWhole = LibPrefs.bool("remoteFillWhole", true) &&
+            (!LibPrefs.bool("remoteWifiOnly", true) || netUsable())
         session.onCacheUpdate = {
             val now = System.currentTimeMillis()
             if (now - lastMsg > 800) {

@@ -1,5 +1,13 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+
 package howread.app
 
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.LocalMinimumInteractiveComponentEnforcement
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
@@ -47,8 +55,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.awt.ComposeWindow
@@ -79,11 +89,11 @@ import kotlin.system.exitProcess
 
 /**
  * 偏好页（v0.39.0 1:1 对齐安卓偏好页：fragment_preferences.xml + P30 真机实测行序）：
- * 标题行（偏好 + 退出程序）→ 配置文件（首字母+名称+齿轮+恢复默认配置）→
+ * 标题行（偏好 + 退出程序）→ 配置文件（字母头像+当前配置名+齿轮→配置文件弹窗；恢复默认配置=出厂复位确认）→
  * ■书库设置色条：格式配置/书库设置/书库显示配置/书籍封面配置/阅读配置（展开行，就地展开）→
  * ■常规设置色条：调试日志(展开)/屏幕/语言/WebDAV 同步(Pro)/AI 大模型(Pro)/在线阅读(Pro)/缓存管理（键值行，右值弹对话框）/
  * 备份配置/文件关联配置(展开) → ■UI配置色条：主题配置/标签栏配置(展开)/软件说明(行→对话框)。
- * 朗读与离线词典归入阅读配置（安卓对应行在其二级内）；屏幕方向为移动概念桌面省略。
+ * 阅读配置=安卓同款纯 10 行（字体/朗读/词典等桌面自有内容已按用户裁定移除）；屏幕方向为移动概念桌面省略。
  */
 @Composable
 fun PrefsScreen(appState: AppState, window: ComposeWindow) {
@@ -100,14 +110,21 @@ fun PrefsScreen(appState: AppState, window: ComposeWindow) {
     var cacheDlg by remember { mutableStateOf(false) }
     var colDlg by remember { mutableStateOf(false) }
     var singleTapDlg by remember { mutableStateOf(false) }
+    var widgetRecentDlg by remember { mutableStateOf(false) }
+    var widgetLayoutDlg by remember { mutableStateOf(false) }
+    var widgetCountDlg by remember { mutableStateOf(false) }
+    // 首页“最近读书”小部件配置（显示/布局/书籍数）：桌面无小部件，值存 LibPrefs 备用（键名对齐安卓）
+    var widgetRecent by remember { mutableStateOf(LibPrefs.str("widgetForRecent", "recent")) }
+    var widgetLayout by remember { mutableStateOf(LibPrefs.str("widgetLayout", "list")) }
+    var widgetCount by remember { mutableStateOf(LibPrefs.str("widgetItemsCount", "4")) }
     var migPicking by remember { mutableStateOf(false) }
     var themeDlg by remember { mutableStateOf(false) }
     var fontSizeDlg by remember { mutableStateOf(false) }
-    var blueDlg by remember { mutableStateOf(false) }
-    var engineDlg by remember { mutableStateOf(false) }
     var lockDlg by remember { mutableStateOf(false) }
-    var modeNameDlg by remember { mutableStateOf(false) }
     var aboutOpen by remember { mutableStateOf(false) }
+    var profileDlg by remember { mutableStateOf(false) }
+    var switchTarget by remember { mutableStateOf<Pair<String, File>?>(null) }
+    var profileMsg by remember { mutableStateOf("") }
 
     val maximized = window.extendedState and JFrame.MAXIMIZED_BOTH != 0
     val webdavServers = remember { Db.listRemoteSources().filter { it.protocol.equals("webdav", ignoreCase = true) } }
@@ -128,43 +145,50 @@ fun PrefsScreen(appState: AppState, window: ComposeWindow) {
             )
         }
 
-        // ==================== 配置文件（安卓：左粗体标题+圆头像+当前配置+齿轮；下方恢复默认配置） ====================
-        Text(L10n.s("配置文件", "Profile"), color = UiTheme.p.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.padding(start = 6.dp, top = 4.dp)) {
-            Box(Modifier.size(40.dp).clip(CircleShape).background(UiTheme.p.accent), contentAlignment = Alignment.Center) {
-                Text("H", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        // ==================== 配置文件（v0.55 对齐安卓：粗体标题 + 字母头像 + 当前配置名 + 齿轮→弹窗；第二行恢复默认配置） ====================
+        val curProfile = remember { AppProfiles.currentName() }
+        // 行 1：标签 + 字母头像 + 当前配置名（居中）+ 齿轮（安卓 fragment_preferences profile 行同款）
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+            Text(L10n.s("配置文件", "Profile"), color = UiTheme.p.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.weight(1f))
+            Box(Modifier.size(26.dp).clip(CircleShape).background(UiTheme.p.accent), contentAlignment = Alignment.Center) {
+                Text(if (curProfile.isEmpty()) "?" else curProfile.take(1).uppercase(),
+                    color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
-            Column(Modifier.weight(1f)) {
-                Text("HowReadPro（好好读Pro）", color = UiTheme.p.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                Text(L10n.s("厂商 leestudio · v" + AppInfo.VERSION, "vendor leestudio · v" + AppInfo.VERSION),
-                    color = UiTheme.p.textFaintest, fontSize = 11.sp)
-            }
-            Icon(Icons.Filled.Settings, contentDescription = L10n.s("打开数据文件夹", "Open data folder"),
-                tint = UiTheme.p.textTertiary, modifier = Modifier.size(18.dp).clickable {
+            Spacer(Modifier.width(8.dp))
+            Text(curProfile, color = UiTheme.p.accent, fontSize = 13.sp, textDecoration = TextDecoration.Underline,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.clickable { profileDlg = true; TestLog.evt("prefs_profile_open") })
+            Spacer(Modifier.weight(1f))
+            Icon(Icons.Filled.Settings, contentDescription = L10n.s("配置文件设置", "Profile settings"),
+                tint = UiTheme.p.textTertiary, modifier = Modifier.size(18.dp)
+                    .clickable { profileDlg = true; TestLog.evt("prefs_profile_gear") })
+        }
+        // 行 2：恢复默认配置 | 更改数据目录 | 数据目录路径（点击=打开目录）
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+            Text(
+                L10n.s("恢复默认配置", "Restore default configuration"), color = UiTheme.p.accent, fontSize = 12.sp,
+                textDecoration = TextDecoration.Underline,
+                modifier = Modifier.clickable { restoreConfirm = true }.padding(vertical = 2.dp),
+            )
+            Spacer(Modifier.width(18.dp))
+            Text(
+                L10n.s("更改数据目录", "Change data folder"), color = UiTheme.p.accent, fontSize = 12.sp,
+                textDecoration = TextDecoration.Underline,
+                modifier = Modifier.clickable { ddPicking = true }.padding(vertical = 2.dp),
+            )
+            Spacer(Modifier.width(18.dp))
+            Text(AppPaths.dataDir.absolutePath, color = UiTheme.p.textSecondary, fontSize = 11.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).clickable {
                     runCatching { java.awt.Desktop.getDesktop().open(AppPaths.dataDir) }
                     TestLog.evt("datadir_open")
                 })
         }
-        Text(AppPaths.dataDir.absolutePath, color = UiTheme.p.textSecondary, fontSize = 11.sp,
-            maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 6.dp))
-        Text(
-            if (AppPaths.overrideConfigured()) L10n.s("当前：自定义目录（data-dir.txt），重启生效。", "Custom location (data-dir.txt).")
-            else L10n.s("当前：默认——随软件目录（便携模式）。", "Default: portable, next to the program."),
-            color = UiTheme.p.textFaintest, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp),
-        )
-        Text(
-            L10n.s("更改数据目录", "Change data folder"), color = UiTheme.p.accent, fontSize = 12.sp,
-            textDecoration = TextDecoration.Underline,
-            modifier = Modifier.clickable { ddPicking = true }.padding(start = 6.dp, top = 4.dp, bottom = 2.dp),
-        )
-        Text(
-            L10n.s("恢复默认配置", "Restore default configuration"), color = UiTheme.p.accent, fontSize = 12.sp,
-            textDecoration = TextDecoration.Underline,
-            modifier = Modifier.clickable { restoreConfirm = true }.padding(start = 6.dp, top = 2.dp, bottom = 8.dp),
-        )
-        if (ddMsg.isNotEmpty()) Text(ddMsg, color = UiTheme.p.textSecondary, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp))
-        if (restoreMsg.isNotEmpty()) Text(restoreMsg, color = UiTheme.p.textSecondary, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp))
+        if (ddMsg.isNotEmpty()) Text(ddMsg, color = UiTheme.p.textSecondary, fontSize = 11.sp)
+        if (restoreMsg.isNotEmpty()) Text(restoreMsg, color = UiTheme.p.textSecondary, fontSize = 11.sp)
+        if (profileMsg.isNotEmpty()) Text(profileMsg, color = UiTheme.p.textSecondary, fontSize = 11.sp)
+        Spacer(Modifier.height(8.dp))
 
         // ==================== ■ 书库设置（色条分组，安卓 bg_search_second 同款） ====================
         SectionBar(L10n.s("书库设置", "Library settings"))
@@ -204,14 +228,9 @@ fun PrefsScreen(appState: AppState, window: ComposeWindow) {
         }
         // ---- 书库设置（更多）：安卓同款 10 项（P30 实测顺序；7 真开关 + 3 桌面无底层项禁用） ----
         ExpandRow(L10n.s("书库设置", "Library settings")) {
-            Text(L10n.s("书库目录（本地文件夹）的添加/编辑/删除/扫描在「我的文件」页的「本地位置」分组。当前在册 ${dirs.size} 个目录 / ${appState.library.size} 本书。",
-                    "Folder management lives in My Files → Local. ${dirs.size} folders / ${appState.library.size} books."),
-                color = UiTheme.p.textFaintest, fontSize = 10.sp)
-            TextButton(onClick = { appState.rescan(); TestLog.evt("prefs_rescan") }, enabled = !appState.scanning) {
-                Text(if (appState.scanning) L10n.s("扫描中…", "Scanning…") else L10n.s("立即扫描", "Scan now"), fontSize = 12.sp)
-            }
+            // v0.55 对齐安卓 populateLibrarySettings：纯勾选框列表（无立即扫描按钮、无灰字说明）
             var scanLaunch by remember { mutableStateOf(LibPrefs.bool("scanAtLaunch", true)) }
-            CheckRow(L10n.s("启动时扫描新书", "Scan for new books at launch"), scanLaunch) { v ->
+            CheckRow(L10n.s("发布会上扫描即可查看新书。", "Scan for new books at launch"), scanLaunch) { v ->
                 scanLaunch = v; LibPrefs.put("scanAtLaunch", v); TestLog.evt("pref_scan_launch", "$v")
             }
             var surname by remember { mutableStateOf(LibPrefs.bool("authorSurnameFirst", false)) }
@@ -230,8 +249,10 @@ fun PrefsScreen(appState: AppState, window: ComposeWindow) {
             CheckRow(L10n.s("显示文件名而非元数据", "Show file names instead of metadata"), showFn) { v ->
                 showFn = v; LibPrefs.put("showFileName", v); TestLog.evt("pref_show_filename", "$v")
             }
-            DisabledRow(L10n.s("使用Calibre metadata.opf", "Use Calibre metadata.opf"),
-                L10n.s("暂不支持", "not on desktop"))
+            var calibre by remember { mutableStateOf(LibPrefs.bool("useCalibreOpf", true)) }
+            CheckRow(L10n.s("使用Calibre metadata.opf", "Use Calibre metadata.opf"), calibre) { v ->
+                calibre = v; LibPrefs.put("useCalibreOpf", v); TestLog.evt("pref_calibre_opf", "$v")
+            }
             var showDesc by remember { mutableStateOf(LibPrefs.bool("showDescription", true)) }
             CheckRow(L10n.s("显示书籍描述", "Show book description"), showDesc) { v ->
                 showDesc = v; LibPrefs.put("showDescription", v); TestLog.evt("pref_show_desc", "$v")
@@ -251,29 +272,44 @@ fun PrefsScreen(appState: AppState, window: ComposeWindow) {
         }
         // ---- 书库显示配置（安卓行序：列表滑杆/网格滑杆/列数+重置/显示封面；默认视图/排序为桌面特有置后） ----
         ExpandRow(L10n.s("书库显示配置", "Library display")) {
-            SeekRow(L10n.s("列表（封面小图）", "List cover size"),
-                LibPrefs.str("coverListDp", "34").toIntOrNull() ?: 34, 28..72) { v ->
+            // v0.56 对齐安卓 libraryDisplayConfigContainer：列表/网格滑杆(带−/+)、列数+重置同行、
+            // 显示书籍封面、显示/布局/书籍数（安卓首页"最近读书"小部件的 内容/布局/数量；桌面无小部件，按用户裁定做成可配置存 LibPrefs）
+            SeekRow(L10n.s("列表", "List"), LibPrefs.str("coverListDp", "34").toIntOrNull() ?: 34, 28..72, indent = CheckTextIndent) { v ->
                 LibPrefs.put("coverListDp", v); TestLog.evt("pref_cover_list", "$v")
             }
-            SeekRow(L10n.s("网格（封面大图）", "Grid cover size"),
-                LibPrefs.str("coverGridDp", "150").toIntOrNull() ?: 150, 110..280) { v ->
+            SeekRow(L10n.s("网格", "Grid"), LibPrefs.str("coverGridDp", "150").toIntOrNull() ?: 150, 110..280, indent = CheckTextIndent) { v ->
                 LibPrefs.put("coverGridDp", v); TestLog.evt("pref_cover_grid", "$v")
             }
-            KeyValRow(L10n.s("列数", "Columns"),
-                if (LibPrefs.str("gridColumnCount", "0") == "0") L10n.s("自适应", "Auto")
-                else LibPrefs.str("gridColumnCount", "0")) { colDlg = true }
-            TextButton(onClick = {
-                LibPrefs.put("gridColumnCount", "0")
-                LibPrefs.put("coverListDp", "34")
-                LibPrefs.put("coverGridDp", "150")
-                TestLog.evt("pref_display_reset")
-            }) { Text(L10n.s("重置", "Reset"), fontSize = 12.sp) }
+            Row(Modifier.fillMaxWidth().padding(start = CheckTextIndent).padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(L10n.s("列数", "Columns"), color = UiTheme.p.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (LibPrefs.str("gridColumnCount", "0") == "0") L10n.s("自适应", "Auto")
+                    else LibPrefs.str("gridColumnCount", "0"),
+                    color = UiTheme.p.accent, fontSize = 13.sp, textDecoration = TextDecoration.Underline,
+                    modifier = Modifier.clickable { colDlg = true },
+                )
+                Spacer(Modifier.width(18.dp))
+                Text(
+                    L10n.s("重置", "Reset"), color = UiTheme.p.accent, fontSize = 12.sp, textDecoration = TextDecoration.Underline,
+                    modifier = Modifier.clickable {
+                        LibPrefs.put("gridColumnCount", "0")
+                        LibPrefs.put("coverListDp", "34")
+                        LibPrefs.put("coverGridDp", "150")
+                        TestLog.evt("pref_display_reset")
+                    },
+                )
+            }
             var showCovers by remember { mutableStateOf(LibPrefs.bool("showCovers", true)) }
-            CheckRow(L10n.s("显示书籍封面（关闭后书卡片只显示文字占位）。", "Show book covers."), showCovers) { v ->
+            CheckRow(L10n.s("显示书籍封面", "Show book covers"), showCovers) { v ->
                 showCovers = v; LibPrefs.put("showCovers", v); TestLog.evt("pref_covers", "$v")
             }
-            Text(L10n.s("视图与排序的默认值=书库页顶栏最近一次选择（自动记住）。", "View/sort defaults follow the library toolbar."),
-                color = UiTheme.p.textFaintest, fontSize = 10.sp)
+            // 安卓原语义（PrefFragment2）：显示=最近/收藏、布局=列表/网格、书籍数=1..50（默认 4）
+            KeyValRow(L10n.s("显示", "Show"), if (widgetRecent == "starred") L10n.s("收藏", "Starred") else L10n.s("最近", "Recent"),
+                indent = CheckTextIndent) { widgetRecentDlg = true }
+            KeyValRow(L10n.s("布局", "Layout"), if (widgetLayout == "grid") L10n.s("网格", "Grid") else L10n.s("列表", "List"),
+                indent = CheckTextIndent) { widgetLayoutDlg = true }
+            KeyValRow(L10n.s("书籍数", "Books count"), widgetCount, indent = CheckTextIndent) { widgetCountDlg = true }
         }
         // ---- 书籍封面配置（安卓同款 3 开关 + 缓存清理） ----
         ExpandRow(L10n.s("书籍封面配置", "Book covers")) {
@@ -289,35 +325,27 @@ fun PrefsScreen(appState: AppState, window: ComposeWindow) {
             CheckRow(L10n.s("显示边框和阴影", "Borders and shadows"), cborder) { v ->
                 cborder = v; LibPrefs.put("coverBorder", v); TestLog.evt("pref_cover_border", "$v")
             }
-            Text(L10n.s("封面缓存占用：${coversSizeText()}（封面图缩略缓存，可安全清除）。", "Cover cache: ${coversSizeText()}."),
-                color = UiTheme.p.textSecondary, fontSize = 12.sp)
-            TextButton(onClick = {
-                val d = File(AppPaths.cacheDir, "covers")
-                var n = 0
-                for (f in d.listFiles() ?: emptyArray()) if (f.delete()) n++
-                TestLog.evt("covers_clear", "n=$n")
-            }) { Text(L10n.s("清除封面缓存", "Clear cover cache"), fontSize = 12.sp) }
         }
         // ---- 阅读配置（安卓 10 项行序：单击/双击/密码/上次书/第1页/记住搜索/锁定/退出确认/无障碍/上下文菜单） ----
         ExpandRow(L10n.s("阅读配置", "Reading")) {
-            // 阅读时单击（安卓同款值行；桌面映射=打开书籍默认模式：滚动/书页）
+            // v0.56 对齐安卓阅读配置 10 行：单击(=开书默认模式)/双击(置灰)/密码(真开关+密码链接)/上次书/
+            // 第1页/记住搜索/锁定/退出确认(真开关)/无障碍/上下文菜单；桌面自有附加块（字体/朗读/词典）已移除
             KeyValRow(L10n.s("阅读时单击", "Single tap while reading"),
-                if (LibPrefs.defaultReaderModePage()) L10n.s("书页（横）", "Book pages") else L10n.s("滚动（竖）", "Scroll")) {
+                if (LibPrefs.defaultReaderModePage()) L10n.s("左右翻页", "Book mode") else L10n.s("上下翻页", "Scroll mode"),
+                indent = CheckTextIndent) {
                 singleTapDlg = true
             }
-            DisabledRow(L10n.s("阅读时双击", "Double tap while reading"), L10n.s("桌面不适用", "n/a on desktop"))
-            DisabledRow(L10n.s("打开应用时需输入密码", "Password on start"), L10n.s("桌面不适用", "n/a on desktop"))
-            DisabledRow(L10n.s("密码", "Password"), L10n.s("桌面不适用", "n/a on desktop"))
-            Text(L10n.s("字体：放入 .ttf/.otf/.ttc 后，阅读器「排」面板即可选用；阅读器内可调字号/行距/版心（会记住）。",
-                    "Fonts go here; size/line-height/margins adjustable in reader."),
-                color = UiTheme.p.textFaintest, fontSize = 10.sp)
-            TextButton(onClick = {
-                runCatching {
-                    ReaderPrefsStore.fontsDir().mkdirs()
-                    java.awt.Desktop.getDesktop().open(ReaderPrefsStore.fontsDir())
-                }
-                TestLog.evt("fonts_open_folder")
-            }) { Text(L10n.s("打开字体文件夹", "Open fonts folder"), fontSize = 12.sp) }
+            KeyValRowGray(L10n.s("阅读时双击", "Double tap while reading"), L10n.s("缩放到合适大小", "Zoom to fit"),
+                indent = CheckTextIndent)
+            // 打开应用时需输入密码（真开关；勾选/取消/点「密码」都打开密码设置框，空密码保存=清除）
+            val hasLock = LibPrefs.str("appLockPassword", "").isNotEmpty()
+            Row(Modifier.fillMaxWidth().clickable { lockDlg = true }.padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = hasLock, onCheckedChange = { lockDlg = true })
+                Text(L10n.s("打开应用时需输入密码", "Password on start"), color = UiTheme.p.textSecondary, fontSize = 12.sp,
+                    modifier = Modifier.weight(1f))
+                Text(L10n.s("密码", "Password"), color = UiTheme.p.accent, fontSize = 12.sp, textDecoration = TextDecoration.Underline)
+            }
             var openLast by remember { mutableStateOf(LibPrefs.bool("openLastOnStart", false)) }
             CheckRow(L10n.s("启动时打开上次读的书", "Open the last book at launch"), openLast) { v ->
                 openLast = v; LibPrefs.put("openLastOnStart", v); TestLog.evt("pref_open_last", "$v")
@@ -330,39 +358,36 @@ fun PrefsScreen(appState: AppState, window: ComposeWindow) {
             CheckRow(L10n.s("记住上次的搜索", "Restore last search"), rememberQ) { v ->
                 rememberQ = v; LibPrefs.put("rememberSearch", v); TestLog.evt("pref_remember_search", "$v")
             }
-            DisabledRow(L10n.s("默认锁定书籍", "Lock books by default"), L10n.s("桌面不适用", "n/a on desktop"))
-            DisabledRow(L10n.s("返回手势退出时需确认", "Confirm on exit gesture"), L10n.s("桌面不适用", "n/a on desktop"))
-            DisabledRow(L10n.s("启用无障碍模式", "Accessibility mode"), L10n.s("桌面不适用", "n/a on desktop"))
-            DisabledRow(L10n.s("集成到全局上下文菜单", "Global context menu"), L10n.s("桌面不适用", "n/a on desktop"))
-            TtsBlock()
-            val n = remember { Dicts.installed(true).size }
-            Text(
-                if (n == 0) L10n.s("离线词典：未检测到词典。把 StarDict 词典文件夹（含 .ifo/.idx/.dict）放入词典目录后，阅读器划词即可「查词」。",
-                    "Dictionaries: none. Put StarDict folders (.ifo/.idx/.dict) into the dict folder.")
-                else L10n.s("离线词典：已安装 $n 本词典，阅读器划词后点「查词」即可离线释义。", "Dictionaries: $n installed."),
-                color = UiTheme.p.textFaint, fontSize = 11.sp,
-            )
-            TextButton(onClick = {
-                runCatching {
-                    Dicts.dictDir().mkdirs()
-                    java.awt.Desktop.getDesktop().open(Dicts.dictDir())
-                }
-                TestLog.evt("dict_open_folder")
-            }) { Text(L10n.s("打开词典文件夹", "Open dict folder"), fontSize = 12.sp) }
+            // 默认锁定书籍/无障碍/上下文菜单按用户裁定改为正常开关（键名/默认值对齐安卓 AppState）；
+            // 后两项桌面暂无底层行为，仅存开关状态
+            var lockDefault by remember { mutableStateOf(LibPrefs.bool("lockBooksByDefault", true)) }
+            CheckRow(L10n.s("默认锁定书籍", "Lock books by default"), lockDefault) { v ->
+                lockDefault = v; LibPrefs.put("lockBooksByDefault", v); TestLog.evt("pref_lock_default", "$v")
+            }
+            var exitAskPref by remember { mutableStateOf(LibPrefs.bool("exitConfirmReading", true)) }
+            CheckRow(L10n.s("返回手势退出时需确认", "Confirm before closing a book"), exitAskPref) { v ->
+                exitAskPref = v; LibPrefs.put("exitConfirmReading", v); TestLog.evt("pref_exit_confirm", "$v")
+            }
+            var accMode by remember { mutableStateOf(LibPrefs.bool("isEnableAccessibility", false)) }
+            CheckRow(L10n.s("启用无障碍模式", "Accessibility mode"), accMode) { v ->
+                accMode = v; LibPrefs.put("isEnableAccessibility", v); TestLog.evt("pref_accessibility", "$v")
+            }
+            var menuInteg by remember { mutableStateOf(LibPrefs.bool("isMenuIntegration", false)) }
+            CheckRow(L10n.s("集成到全局上下文菜单", "Global context menu"), menuInteg) { v ->
+                menuInteg = v; LibPrefs.put("isMenuIntegration", v); TestLog.evt("pref_menu_integration", "$v")
+            }
         }
 
         // ==================== ■ 常规设置（色条） ====================
         SectionBar(L10n.s("常规设置", "General settings"))
         // ---- 调试日志（安卓同款三行：开关/导出/清空） ----
-        ExpandRow(L10n.s("调试日志", "Debug log")) {
+        ExpandRow(L10n.s("调试日志", "Debug log"), trailing = AppPaths.logsDir.absolutePath) {
             var dbg by remember { mutableStateOf(LibPrefs.bool("debugLog", true)) }
             CheckRow(L10n.s("记录调试事件日志（hrtest.log；默认关，问题排查时开启）。", "Write event log (for troubleshooting)."), dbg) { v ->
                 dbg = v; LibPrefs.put("debugLog", v)
                 TestLog.enabled = v
                 TestLog.evt("pref_debuglog", "$v")
             }
-            Text(AppPaths.logsDir.absolutePath, color = UiTheme.p.textFaintest, fontSize = 10.sp,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
             TextButton(onClick = {
                 runCatching { java.awt.Desktop.getDesktop().open(AppPaths.logsDir) }
                 TestLog.evt("logs_open")
@@ -380,21 +405,6 @@ fun PrefsScreen(appState: AppState, window: ComposeWindow) {
         // ---- 语言（值行 → 弹窗） ----
         KeyValRow(L10n.s("语言", "Language"),
             L10nTables.LANGS.firstOrNull { it.first == L10n.lang }?.second ?: "中文") { langDlg = true }
-        // ---- 蓝光滤镜（v0.50.0 对齐安卓护眼：桌面=全局暖色叠加层，即时生效） ----
-        KeyValRow(L10n.s("蓝光滤镜", "Blue light filter"),
-            when (appState.blueFilter) { 2 -> L10n.s("中", "Medium"); 1 -> L10n.s("轻", "Light"); else -> L10n.s("关", "Off") }
-        ) { blueDlg = true }
-        // ---- 搜索引擎（阅读器选区「网搜」用，安卓 WebSearch 可自定义等价） ----
-        KeyValRow(L10n.s("搜索引擎", "Web search engine"), LibPrefs.str("webSearchEngine", "google")) { engineDlg = true }
-        // ---- 应用密码锁（v0.51.0 对齐安卓 PasswordLock） ----
-        KeyValRow(L10n.s("应用密码锁", "App lock"),
-            if (LibPrefs.str("appLockPassword", "").isNotEmpty()) L10n.s("已开启", "On") else L10n.s("关", "Off")
-        ) { lockDlg = true }
-        // ---- 阅读模式自定义命名（v0.52.0 对齐安卓 dialog_custom_reading_modes） ----
-        KeyValRow(L10n.s("Reading mode names", "阅读模式命名"),
-            LibPrefs.str("modeNamePage", "").ifBlank { L10n.s("翻页", "Paged") } + " / " +
-                LibPrefs.str("modeNameScroll", "").ifBlank { L10n.s("滚动", "Scroll") }
-        ) { modeNameDlg = true }
         // ---- WebDAV 同步 (Pro)（值行 → 对话框） ----
         KeyValRow(
             L10n.s("WebDAV 同步 (Pro)", "WebDAV sync (Pro)"),
@@ -413,18 +423,13 @@ fun PrefsScreen(appState: AppState, window: ComposeWindow) {
         ) { onlineDlg = true }
         // ---- 缓存管理（值=占用 → 明细对话框，安卓同款） ----
         KeyValRow(L10n.s("缓存管理", "Cache management"), cacheSizeText()) { cacheDlg = true }
-        // ---- 备份配置（安卓同款：提示+导入导出+路径行） ----
+        // ---- 备份配置（v0.56 对齐安卓 backup_section：介绍+导入/导出/迁移+四路径行） ----
         ExpandRow(L10n.s("备份配置", "Backup")) {
-            BackupBlock()
-            TextButton(onClick = { migPicking = true; TestLog.evt("prefs_migrate_click") }) {
-                Text(L10n.s("迁移", "Migrate"), fontSize = 12.sp, color = UiTheme.p.accent)
-            }
-            Text(L10n.s("迁移=把数据目录指向新位置（配合备份导出，可将数据带到另一台电脑）。", "Migrate = point the data folder to a new location."),
-                color = UiTheme.p.textFaintest, fontSize = 10.sp)
+            BackupBlock(onMigrate = { migPicking = true; TestLog.evt("prefs_migrate_click") })
             PathRow(L10n.s("配置文件", "Profile"), AppPaths.dataDir)
             PathRow(L10n.s("字体路径", "Fonts"), ReaderPrefsStore.fontsDir())
             PathRow(L10n.s("下载", "Downloads"), File(AppPaths.dataDir, "downloads"))
-            DisabledRow(L10n.s("音频文件", "Audio files"), L10n.s("桌面不适用", "n/a on desktop"))
+            PathRow(L10n.s("音频文件", "Audio files"), File(File(AppPaths.dataDir, "downloads"), "TTS"))
         }
         // ---- 文件关联配置（桌面特有，置于常规设置尾） ----
         ExpandRow(L10n.s("文件关联配置", "File association")) {
@@ -432,16 +437,28 @@ fun PrefsScreen(appState: AppState, window: ComposeWindow) {
                 Text(L10n.s("文件关联仅 Windows 提供。", "Windows only."), color = UiTheme.p.textFaint, fontSize = 12.sp)
             } else {
                 var assocMsg by remember { mutableStateOf("") }
+                var sel by remember { mutableStateOf(FileAssoc.EXTS.toSet()) }
                 Text(
-                    L10n.s("把 .epub/.pdf/.mobi/.azw3/.fb2/.txt/.cbz 的双击打开方式关联到本程序（写入当前用户注册表，无需管理员）。",
-                        "Associate ebook extensions with this program (per-user registry)."),
+                    L10n.s("勾选要关联的书籍格式，再点「建立关联」或「解除关联」（写入当前用户注册表，无需管理员）。",
+                        "Tick the formats to change, then press Associate or Disassociate (per-user registry)."),
                     color = UiTheme.p.textFaint, fontSize = 12.sp,
                 )
+                // 格式勾选（当前支持格式全集，5 个一行）
+                for (r in FileAssoc.EXTS.chunked(5)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        for (e in r) {
+                            Row(Modifier.width(92.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(checked = e in sel, onCheckedChange = { c -> sel = if (c) sel + e else sel - e })
+                                Text(".$e", color = UiTheme.p.textSecondary, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 6.dp)) {
-                    Button(onClick = { assocMsg = FileAssoc.associate(); TestLog.evt("file_assoc", "associate") }) {
+                    Button(onClick = { assocMsg = FileAssoc.associate(sel); TestLog.evt("file_assoc", "associate n=" + sel.size) }) {
                         Text(L10n.s("建立关联", "Associate"))
                     }
-                    OutlinedButton(onClick = { assocMsg = FileAssoc.disassociate(); TestLog.evt("file_assoc", "disassociate") }) {
+                    OutlinedButton(onClick = { assocMsg = FileAssoc.disassociate(sel); TestLog.evt("file_assoc", "disassociate n=" + sel.size) }) {
                         Text(L10n.s("解除关联", "Disassociate"))
                     }
                 }
@@ -466,29 +483,19 @@ fun PrefsScreen(appState: AppState, window: ComposeWindow) {
                     "Font scale applies to newly opened books; per-book tweaks in the reader."),
                 color = UiTheme.p.textFaintest, fontSize = 10.sp)
         }
-        // ---- 标签栏配置（安卓=底部标签栏位置/动画/顺序拖拽；桌面为左侧栏，仅保留侧栏开关） ----
+        // ---- 标签栏配置（安卓=底部标签栏位置/动画/顺序拖拽；桌面不支持配置→置灰展示当前状态） ----
         ExpandRow(L10n.s("标签栏配置", "Tabs")) {
-            Text(L10n.s("桌面版导航为左侧标签栏（无底部标签栏，顺序固定）；安卓的标签栏位置/动画/顺序拖拽不适用。",
-                    "Desktop uses the left sidebar; tab position/animation/reorder are Android-only."),
-                color = UiTheme.p.textFaintest, fontSize = 10.sp)
             var sidebar by remember { mutableStateOf(LibPrefs.bool("showSidebar", true)) }
-            CheckRow(L10n.s("显示左侧标签栏（重启生效）。", "Show left sidebar (restart to apply)."), sidebar) { v ->
-                sidebar = v; LibPrefs.put("showSidebar", v); TestLog.evt("pref_sidebar", "$v")
-            }
+            DisabledRow(L10n.s("显示左侧标签栏（重启生效）。", "Show left sidebar (restart to apply)."), sidebar)
         }
-        // ---- 软件说明（行 → 对话框） ----
+        // ---- 软件说明（行 → 对话框；v0.55 对齐安卓：入口行显示"软件说明"，不再直接显示应用名与版本号） ----
         Row(
             Modifier.fillMaxWidth().clickable { aboutOpen = true; TestLog.evt("prefs_about_open") }.padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.size(34.dp).clip(CircleShape).background(UiTheme.p.accent), contentAlignment = Alignment.Center) {
-                Text("H", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            }
-            Text(
-                "HowReadPro（好好读Pro）v${AppInfo.VERSION}",
-                color = UiTheme.p.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(start = 10.dp),
-            )
+            Icon(Icons.Filled.Info, contentDescription = null, tint = UiTheme.p.textTertiary, modifier = Modifier.size(15.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(L10n.s("软件说明", "About"), color = UiTheme.p.textPrimary, fontSize = 13.sp, textDecoration = TextDecoration.Underline)
             Spacer(Modifier.weight(1f))
             Text(L10n.s("查看 ›", "View ›"), color = UiTheme.p.accent, fontSize = 12.sp)
         }
@@ -525,20 +532,101 @@ fun PrefsScreen(appState: AppState, window: ComposeWindow) {
         AlertDialog(
             onDismissRequest = { restoreConfirm = false },
             title = { Text(L10n.s("恢复默认配置", "Restore default configuration")) },
-            text = { Text(L10n.s("将数据目录恢复为默认（随软件目录，便携模式）。阅读进度与配置文件保留。", "Restore the default portable data folder. Progress and configs are kept.")) },
+            text = { Text(L10n.s("恢复默认配置：将清空全部配置、书籍索引、阅读统计与缓存并退出程序（书籍文件不受影响）。下次启动即恢复所有默认配置。确定继续？",
+                    "Restore defaults: all settings, book index, reading stats and cache will be cleared, then the app exits (book files are not touched). Defaults apply on next start. Continue?")) },
             confirmButton = {
                 TextButton(onClick = {
                     restoreConfirm = false
-                    restoreMsg = if (AppPaths.overrideConfigured()) {
-                        AppPaths.clearDataDirOverride()
-                        TestLog.evt("datadir_reset")
-                        L10n.s("已恢复默认（随软件目录），重启后生效。", "Restored default. Restart to apply.")
-                    } else {
-                        L10n.s("当前已是默认配置。", "Already default.")
-                    }
+                    TestLog.evt("prefs_factory_reset")
+                    AppProfiles.requestFactoryReset()
                 }) { Text(L10n.s("确定", "OK"), color = UiTheme.p.danger) }
             },
             dismissButton = { TextButton(onClick = { restoreConfirm = false }) { Text(L10n.s("取消", "Cancel")) } },
+        )
+    }
+    // 配置文件弹窗（v0.55 对齐安卓 AppProfile.showDialog：列表点选切换 + 输入名称新建并切换）
+    if (profileDlg) {
+        var newName by remember { mutableStateOf("") }
+        var err by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { profileDlg = false },
+            title = { Text(L10n.s("配置文件", "Profile")) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (!AppPaths.isWindows) {
+                        Text(L10n.s("Linux 版数据目录固定（~/.howread），切换/新建仅在 Windows 生效。", "Linux data folder is fixed; profile switching works on Windows only."),
+                            color = UiTheme.p.textFaintest, fontSize = 11.sp)
+                    }
+                    for ((name, dir) in AppProfiles.list()) {
+                        val isCur = dir == AppPaths.dataDir
+                        Row(
+                            Modifier.fillMaxWidth().clickable(enabled = !isCur) {
+                                profileDlg = false
+                                switchTarget = name to dir
+                            }.padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(Modifier.size(22.dp).clip(CircleShape).background(UiTheme.p.accent), contentAlignment = Alignment.Center) {
+                                Text(if (name.isEmpty()) "?" else name.take(1).uppercase(),
+                                    color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Text(name, color = UiTheme.p.textPrimary, fontSize = 13.sp,
+                                fontWeight = if (isCur) FontWeight.Bold else FontWeight.Normal)
+                            if (isCur) {
+                                Spacer(Modifier.weight(1f))
+                                Text(L10n.s("当前", "Current"), color = UiTheme.p.textFaintest, fontSize = 11.sp)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = newName, onValueChange = { newName = it; err = "" }, singleLine = true,
+                        label = { Text(L10n.s("新建配置文件", "New profile")) },
+                        isError = err.isNotEmpty(),
+                    )
+                    if (err.isNotEmpty()) Text(err, color = UiTheme.p.danger, fontSize = 11.sp)
+                    TextButton(onClick = {
+                        val nm = newName.trim()
+                        when {
+                            !AppProfiles.validName(nm) ->
+                                err = L10n.s("名称不能为空，且不能含 \\ / : * ? \" < > | 等字符", "Name must be non-empty without \\ / : * ? \" < > |")
+                            AppProfiles.create(nm) == null ->
+                                err = L10n.s("同名配置文件已存在", "A profile with this name already exists")
+                            else -> {
+                                AppProfiles.switchTo(File(AppProfiles.root(), nm))
+                                profileMsg = L10n.s("已创建并切换到「$nm」——该配置文件使用独立书库与设置，重启程序后生效。", "Created & switched to \"$nm\" (independent library & settings). Restart to apply.")
+                                TestLog.evt("profile_create", nm)
+                                profileDlg = false
+                            }
+                        }
+                    }) { Text(L10n.s("新建并切换", "Create & switch"), color = UiTheme.p.accent) }
+                }
+            },
+            confirmButton = { TextButton(onClick = { profileDlg = false }) { Text(L10n.s("关闭", "Close")) } },
+        )
+    }
+    if (switchTarget != null) {
+        val swName = switchTarget!!.first
+        val swDir = switchTarget!!.second
+        AlertDialog(
+            onDismissRequest = { switchTarget = null },
+            title = { Text(L10n.s("切换配置文件", "Switch profile")) },
+            text = { Text(L10n.s("您要切换配置文件吗？\n\n「$swName」使用独立的书库与设置；切换后重启程序生效。", "Switch profile?\n\n\"$swName\" has its own library and settings. Restart to apply.")) },
+            confirmButton = {
+                TextButton(onClick = {
+                    switchTarget = null
+                    if (!AppPaths.isWindows) {
+                        profileMsg = L10n.s("Linux 版数据目录固定，暂不支持切换配置文件。", "Linux data folder is fixed; switching is not supported.")
+                    } else if (AppProfiles.switchTo(swDir)) {
+                        profileMsg = L10n.s("已切换到「$swName」，重启程序后生效。", "Switched to \"$swName\". Restart to apply.")
+                        TestLog.evt("profile_switch", swName)
+                    } else {
+                        profileMsg = L10n.s("写入失败——软件所在目录可能只读。", "Failed to write (program folder may be read-only).")
+                    }
+                }) { Text(L10n.s("确定", "OK"), color = UiTheme.p.accent) }
+            },
+            dismissButton = { TextButton(onClick = { switchTarget = null }) { Text(L10n.s("取消", "Cancel")) } },
         )
     }
     if (langDlg) {
@@ -554,23 +642,6 @@ fun PrefsScreen(appState: AppState, window: ComposeWindow) {
             val max = pick == L10n.s("最大化", "Maximized")
             window.extendedState = if (max) JFrame.MAXIMIZED_BOTH else JFrame.NORMAL
             TestLog.evt("pref_screen", if (max) "maximized" else "normal")
-        }
-    }
-    if (blueDlg) {
-        PickDialog(L10n.s("蓝光滤镜", "Blue light filter"),
-            listOf(L10n.s("关", "Off"), L10n.s("轻", "Light"), L10n.s("中", "Medium")),
-            onDismiss = { blueDlg = false }) { pick ->
-            val lv = when (pick) { L10n.s("轻", "Light") -> 1; L10n.s("中", "Medium") -> 2; else -> 0 }
-            appState.blueFilter = lv
-            LibPrefs.put("blueFilter", "$lv")
-            TestLog.evt("blue_filter", "$lv")
-        }
-    }
-    if (engineDlg) {
-        PickDialog(L10n.s("搜索引擎", "Web search engine"),
-            listOf("google", "bing", "baidu", "duckduckgo"), onDismiss = { engineDlg = false }) { pick ->
-            LibPrefs.put("webSearchEngine", pick)
-            TestLog.evt("web_search_engine", pick)
         }
     }
     if (lockDlg) {
@@ -607,72 +678,75 @@ fun PrefsScreen(appState: AppState, window: ComposeWindow) {
             dismissButton = { TextButton(onClick = { lockDlg = false }) { Text(L10n.s("取消", "Cancel"), color = UiTheme.p.textTertiary) } },
         )
     }
-    if (modeNameDlg) {
-        var pn by remember { mutableStateOf(LibPrefs.str("modeNamePage", "")) }
-        var sn by remember { mutableStateOf(LibPrefs.str("modeNameScroll", "")) }
-        AlertDialog(
-            onDismissRequest = { modeNameDlg = false },
-            title = { Text(L10n.s("阅读模式命名", "Reading mode names"), color = UiTheme.p.textPrimary, fontSize = 15.sp) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(L10n.s("自定义两种阅读模式的显示名（留空=默认；阅读器切换按钮即用此名）。",
-                        "Custom names for the two reading modes (blank = default)."),
-                        color = UiTheme.p.textTertiary, fontSize = 12.sp)
-                    androidx.compose.material3.OutlinedTextField(pn, { pn = it }, singleLine = true,
-                        label = { Text(L10n.s("翻页模式名称", "Paged mode name")) })
-                    androidx.compose.material3.OutlinedTextField(sn, { sn = it }, singleLine = true,
-                        label = { Text(L10n.s("滚动模式名称", "Scroll mode name")) })
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    LibPrefs.put("modeNamePage", pn.trim())
-                    LibPrefs.put("modeNameScroll", sn.trim())
-                    TestLog.evt("mode_names", "page=" + pn.trim().take(12) + " scroll=" + sn.trim().take(12))
-                    modeNameDlg = false
-                }) { Text(L10n.s("保存", "Save"), color = UiTheme.p.accent) }
-            },
-            dismissButton = { TextButton(onClick = { modeNameDlg = false }) { Text(L10n.s("取消", "Cancel"), color = UiTheme.p.textTertiary) } },
-        )
-    }
     if (syncDlg) {
-        SimpleDialog(L10n.s("WebDAV 同步 (Pro)", "WebDAV sync (Pro)"), onDismiss = { syncDlg = false }) { WebDavBlock() }
+        SimpleDialog(L10n.s("WebDAV 同步 (Pro)", "WebDAV sync (Pro)"), onDismiss = { syncDlg = false }, showClose = false) { WebDavBlock(onClose = { syncDlg = false }) }
     }
     if (onlineDlg) {
-        SimpleDialog(L10n.s("在线阅读 (Pro)", "Online reading (Pro)"), onDismiss = { onlineDlg = false }) {
-            var online by remember { mutableStateOf(LibPrefs.bool("onlineReading", true)) }
-            CheckRow(L10n.s("启用网上书库（我的文件中的 OPDS/WebDAV/SMB/SFTP 分组与远程目录扫描）。",
-                "Enable network libraries in My Files."), online) { v ->
-                online = v; LibPrefs.put("onlineReading", v); TestLog.evt("pref_online", "$v")
+        SimpleDialog(L10n.s("在线阅读", "Online reading"), onDismiss = { onlineDlg = false }, showClose = false) {
+            // v0.54 对齐安卓 RemoteCacheDialog（行序同款；键与安卓 app-State 同名，随字段映射互通）
+            var onlineFirst by remember { mutableStateOf(LibPrefs.bool("remoteOnlineFirst", true)) }
+            CheckRow(L10n.s("点击远程书在线阅读", "Tap remote book to read online"), onlineFirst) { v ->
+                onlineFirst = v; LibPrefs.put("remoteOnlineFirst", v); TestLog.evt("pref_online_first", "$v")
             }
-            var winText by remember { mutableStateOf(LibPrefs.str("remoteCacheWindowMB", "5")) }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(L10n.s("远程缓存窗口 (MB)", "Remote cache window (MB)"), color = UiTheme.p.textSecondary, fontSize = 12.sp)
-                OutlinedTextField(
-                    value = winText,
-                    onValueChange = { v ->
-                        winText = v
-                        v.toLongOrNull()?.let { n ->
-                            if (n in 1..4096) { LibPrefs.put("remoteCacheWindowMB", n); TestLog.evt("pref_cache_window", "$n") }
-                        }
-                    },
-                    singleLine = true, modifier = Modifier.width(90.dp),
-                )
+            var wifiOnly by remember { mutableStateOf(LibPrefs.bool("remoteWifiOnly", true)) }
+            CheckRow(L10n.s("仅 WiFi 下预取与整本缓存", "Prefetch and whole-book cache on Wi-Fi only"), wifiOnly) { v ->
+                wifiOnly = v; LibPrefs.put("remoteWifiOnly", v); TestLog.evt("pref_online_wifi", "$v")
             }
-            Text(L10n.s("小于该值的小书整本缓存后打开；大书按此为内存上限分块边读边缓存（默认 5）。",
-                    "Books smaller than this cache whole; bigger ones stream in blocks (default 5)."),
+            var thrText by remember { mutableStateOf(LibPrefs.str("remoteWholeBookThresholdMB", "20")) }
+            Text(L10n.s("小书整本缓存阈值 (MB，0 = 关闭)", "Whole-book cache threshold (MB, 0 = off)"),
+                color = UiTheme.p.textSecondary, fontSize = 12.sp)
+            CompactField(thrText, { v ->
+                thrText = v
+                v.toIntOrNull()?.let { n -> if (n in 0..4096) { LibPrefs.put("remoteWholeBookThresholdMB", n); TestLog.evt("pref_online_thr", "$n") } }
+            }, hint = L10n.s("如 20；0 = 关闭", "e.g. 20; 0 = off"), modifier = Modifier.width(160.dp))
+            var wB by remember { mutableStateOf(LibPrefs.str("remoteWindowBeforePct", "20")) }
+            var wA by remember { mutableStateOf(LibPrefs.str("remoteWindowAfterPct", "30")) }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text(L10n.s("阅读位置前缓存范围（%）", "Window before (%)"), color = UiTheme.p.textSecondary, fontSize = 12.sp)
+                    CompactField(wB, { v -> wB = v; v.toIntOrNull()?.let { n -> if (n in 1..90) LibPrefs.put("remoteWindowBeforePct", n) } }, hint = "20")
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(L10n.s("阅读位置后缓存范围（%）", "Window after (%)"), color = UiTheme.p.textSecondary, fontSize = 12.sp)
+                    CompactField(wA, { v -> wA = v; v.toIntOrNull()?.let { n -> if (n in 1..90) LibPrefs.put("remoteWindowAfterPct", n) } }, hint = "30")
+                }
+            }
+            var rC by remember { mutableStateOf(LibPrefs.str("remoteRetryCount", "3")) }
+            var rI by remember { mutableStateOf(LibPrefs.str("remoteRetryIntervalMs", "100")) }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text(L10n.s("网络重试次数", "Network retries"), color = UiTheme.p.textSecondary, fontSize = 12.sp)
+                    CompactField(rC, { v -> rC = v; v.toIntOrNull()?.let { n -> if (n in 0..10) LibPrefs.put("remoteRetryCount", n) } }, hint = "3")
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(L10n.s("重试基础间隔（毫秒）", "Retry base interval (ms)"), color = UiTheme.p.textSecondary, fontSize = 12.sp)
+                    CompactField(rI, { v -> rI = v; v.toIntOrNull()?.let { n -> if (n in 0..30000) LibPrefs.put("remoteRetryIntervalMs", n) } }, hint = "100")
+                }
+            }
+            Text(L10n.s("当前网络：稳定（后台整本缓存开启）", "Network: stable (background fill on)"),
                 color = UiTheme.p.textFaintest, fontSize = 10.sp)
-            var fw by remember { mutableStateOf(LibPrefs.bool("remoteFillWhole", true)) }
-            CheckRow(L10n.s("后台自动补齐整本（关=只预取阅读位置前后，省流量；对新打开的书生效）。",
-                "Auto-fill whole book in background."), fw) { v ->
-                fw = v; LibPrefs.put("remoteFillWhole", v); TestLog.evt("pref_cache_fillwhole", "$v")
+            // 底部：关闭/保存（用户裁定：右下角；各项即时落盘，保存=显式提交全部字段并关闭）
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { onlineDlg = false }) { Text(L10n.s("关闭", "Close"), fontSize = 12.sp, color = UiTheme.p.textTertiary) }
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = {
+                    LibPrefs.put("remoteOnlineFirst", onlineFirst)
+                    LibPrefs.put("remoteWifiOnly", wifiOnly)
+                    LibPrefs.put("remoteWholeBookThresholdMB", thrText.toIntOrNull()?.coerceIn(0, 4096) ?: 20)
+                    LibPrefs.put("remoteWindowBeforePct", wB.toIntOrNull()?.coerceIn(1, 90) ?: 20)
+                    LibPrefs.put("remoteWindowAfterPct", wA.toIntOrNull()?.coerceIn(1, 90) ?: 30)
+                    LibPrefs.put("remoteRetryCount", rC.toIntOrNull()?.coerceIn(0, 10) ?: 3)
+                    LibPrefs.put("remoteRetryIntervalMs", rI.toIntOrNull()?.coerceIn(0, 30000) ?: 100)
+                    TestLog.evt("online_cfg_save")
+                    onlineDlg = false
+                }) { Text(L10n.s("保存", "Save")) }
             }
         }
     }
     if (cacheDlg) {
         var lines by remember { mutableStateOf(cacheLines()) }
         var total by remember { mutableStateOf(cacheSizeText()) }
-        SimpleDialog(L10n.s("缓存管理", "Cache management"), onDismiss = { cacheDlg = false }) {
+        SimpleDialog(L10n.s("缓存管理", "Cache management"), onDismiss = { cacheDlg = false }, showClose = false) {
             for ((k, v) in lines) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(k, color = UiTheme.p.textPrimary, fontSize = 12.sp, modifier = Modifier.weight(1f))
@@ -685,22 +759,38 @@ fun PrefsScreen(appState: AppState, window: ComposeWindow) {
                     modifier = Modifier.weight(1f))
                 Text(total, color = UiTheme.p.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             }
-            Button(onClick = {
-                var n = 0
-                for (sub in listOf("covers", "accels", "convert", "txt", "zip", "ai")) {
-                    val d = File(AppPaths.cacheDir, sub)
-                    for (f in d.listFiles() ?: emptyArray()) if (f.delete()) n++
-                }
-                for (sub in listOf("remote", "remote-blocks")) {
-                    val d = File(AppPaths.cacheDir, sub)
-                    if (d.exists()) {
-                        n += d.walkTopDown().count { it.isFile }
-                        runCatching { d.deleteRecursively() }
+            Spacer(Modifier.height(8.dp))
+            // v0.54 缓存大小上限（安卓 remoteCacheMaxMB 同键同默认 500；0 = 不限，超限按最旧整目录回收）
+            Text(L10n.s("缓存大小上限 (MB)", "Cache size limit (MB)"), color = UiTheme.p.textSecondary, fontSize = 12.sp)
+            var capText by remember { mutableStateOf(LibPrefs.str("remoteCacheMaxMB", "500")) }
+            CompactField(capText, { v ->
+                capText = v
+                v.toLongOrNull()?.let { n -> if (n in 0..1048576L) LibPrefs.put("remoteCacheMaxMB", n) }
+            }, hint = L10n.s("如 500；0 = 不限", "e.g. 500; 0 = no limit"), modifier = Modifier.width(160.dp))
+            // 底部按钮行（用户裁定+附图：清空全部缓存 | 取消、保存上限；保存后关闭）
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween) {
+                TextButton(onClick = {
+                    var n = 0
+                    for (f in AppPaths.cacheDir.listFiles() ?: emptyArray()) {
+                        if (f.isDirectory) { n += f.walkTopDown().count { it.isFile }; runCatching { f.deleteRecursively() } }
+                        else if (f.delete()) n++
                     }
+                    lines = cacheLines(); total = cacheSizeText()
+                    TestLog.evt("cache_clear", "n=$n")
+                }) { Text(L10n.s("清空全部缓存", "Clear all caches"), fontSize = 12.sp) }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { cacheDlg = false }) { Text(L10n.s("取消", "Cancel"), fontSize = 12.sp, color = UiTheme.p.textTertiary) }
+                    Button(onClick = {
+                        val n = capText.toLongOrNull()?.coerceIn(0, 1048576L) ?: 500L
+                        LibPrefs.put("remoteCacheMaxMB", n)
+                        howread.core.remote.BlockCacheStore.capMaxMB = n   // 即时生效，不等下本书
+                        runCatching { howread.core.remote.BlockCacheStore.enforceCap(n) }
+                        TestLog.evt("cache_cap", "$n")
+                        cacheDlg = false
+                    }) { Text(L10n.s("保存上限", "Save limit"), fontSize = 12.sp) }
                 }
-                lines = cacheLines(); total = cacheSizeText()
-                TestLog.evt("cache_clear", "n=$n")
-            }) { Text(L10n.s("清理全部缓存", "Clear all caches"), fontSize = 12.sp) }
+            }
         }
     }
     if (colDlg) {
@@ -713,11 +803,35 @@ fun PrefsScreen(appState: AppState, window: ComposeWindow) {
     }
     if (singleTapDlg) {
         PickDialog(L10n.s("阅读时单击", "Single tap while reading"),
-            listOf(L10n.s("滚动（竖）", "Scroll (vertical)"), L10n.s("书页（横）", "Book pages (horizontal)")),
+            listOf(L10n.s("上下翻页", "Scroll mode"), L10n.s("左右翻页", "Book mode")),
             onDismiss = { singleTapDlg = false }) { pick ->
-            val page = pick == L10n.s("书页（横）", "Book pages (horizontal)")
+            val page = pick == L10n.s("左右翻页", "Book mode")
             LibPrefs.put("defaultReaderMode", if (page) "page" else "scroll")
             TestLog.evt("pref_readmode", if (page) "page" else "scroll")
+        }
+    }
+    if (widgetRecentDlg) {
+        PickDialog(L10n.s("显示", "Show"), listOf(L10n.s("最近", "Recent"), L10n.s("收藏", "Starred")),
+            onDismiss = { widgetRecentDlg = false }) { pick ->
+            widgetRecent = if (pick == L10n.s("收藏", "Starred")) "starred" else "recent"
+            LibPrefs.put("widgetForRecent", widgetRecent)
+            TestLog.evt("pref_widget_recent", widgetRecent)
+        }
+    }
+    if (widgetLayoutDlg) {
+        PickDialog(L10n.s("布局", "Layout"), listOf(L10n.s("列表", "List"), L10n.s("网格", "Grid")),
+            onDismiss = { widgetLayoutDlg = false }) { pick ->
+            widgetLayout = if (pick == L10n.s("网格", "Grid")) "grid" else "list"
+            LibPrefs.put("widgetLayout", widgetLayout)
+            TestLog.evt("pref_widget_layout", widgetLayout)
+        }
+    }
+    if (widgetCountDlg) {
+        PickDialog(L10n.s("书籍数", "Books count"), (1..50).map { it.toString() },
+            onDismiss = { widgetCountDlg = false }) { pick ->
+            widgetCount = pick
+            LibPrefs.put("widgetItemsCount", pick)
+            TestLog.evt("pref_widget_count", pick)
         }
     }
     if (migPicking) {
@@ -783,11 +897,44 @@ private fun SectionBar(title: String) {
     }
 }
 
-/** 键值行（安卓 ConfLineView：左粗体标题 + 右下划线值，整行可点）。 */
+/** 紧凑下划线输入框（对话框用：替代 56dp 的 OutlinedTextField，行高约 26dp；hint=空态占位）。 */
 @Composable
-private fun KeyValRow(title: String, value: String, onClick: () -> Unit) {
+internal fun CompactField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    hint: String,
+    modifier: Modifier = Modifier,
+    visual: VisualTransformation = VisualTransformation.None,
+) {
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        textStyle = TextStyle(color = UiTheme.p.textPrimary, fontSize = 13.sp),
+        cursorBrush = SolidColor(UiTheme.p.accent),
+        visualTransformation = visual,
+        modifier = modifier.fillMaxWidth(),
+        decorationBox = { inner ->
+            Column {
+                Box {
+                    if (value.isEmpty()) Text(hint, color = UiTheme.p.textTertiary, fontSize = 13.sp, maxLines = 1)
+                    inner()
+                }
+                Spacer(Modifier.height(3.dp))
+                Box(Modifier.fillMaxWidth().height(1.dp).background(UiTheme.p.textFaintest.copy(alpha = 0.45f)))
+            }
+        },
+    )
+}
+
+/** 展开子项中非勾选行文本的统一缩进 = 勾选行 Checkbox 视觉框宽（桌面无 48dp 触摸目标强制，组件宽 20dp）。 */
+private val CheckTextIndent = 20.dp
+
+/** 键值行（安卓 ConfLineView：左粗体标题 + 右下划线值，整行可点）。indent 用于与勾选行文本列对齐。 */
+@Composable
+private fun KeyValRow(title: String, value: String, indent: Dp = 0.dp, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 9.dp),
+        Modifier.fillMaxWidth().padding(start = indent).clickable(onClick = onClick).padding(vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(title, color = UiTheme.p.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(190.dp))
@@ -796,9 +943,9 @@ private fun KeyValRow(title: String, value: String, onClick: () -> Unit) {
     }
 }
 
-/** 二级展开行（安卓：小图标+下划线标题，点开就地展开）。 */
+/** 二级展开行（安卓：小图标+下划线标题，点开就地展开）。trailing=标题行右侧灰字（如路径）。 */
 @Composable
-private fun ExpandRow(title: String, content: @Composable () -> Unit) {
+private fun ExpandRow(title: String, trailing: String? = null, content: @Composable () -> Unit) {
     var open by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth()) {
         Row(
@@ -809,10 +956,15 @@ private fun ExpandRow(title: String, content: @Composable () -> Unit) {
             Spacer(Modifier.width(8.dp))
             Text(title, color = UiTheme.p.textPrimary, fontSize = 13.sp, textDecoration = TextDecoration.Underline)
             Spacer(Modifier.weight(1f))
+            if (trailing != null) {
+                Text(trailing, color = UiTheme.p.textTertiary, fontSize = 11.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End,
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
+            }
             Text(if (open) "▾" else "▸", color = UiTheme.p.textFaintest, fontSize = 12.sp)
         }
         if (open) {
-            Column(Modifier.padding(start = 23.dp, bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(Modifier.padding(bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 content()
             }
         }
@@ -840,28 +992,44 @@ private fun StaticRow(title: String, value: String) {
     }
 }
 
-/** 禁用行（桌面无对应底层能力的安卓配置项：照常占位保持 1:1 行序，置灰并注明原因）。 */
+/** 键值行（灰）：安卓有对应行但桌面无底层能力（桌面小部件配置/双击动作等），置灰展示不可点。 */
 @Composable
-private fun DisabledRow(text: String, note: String) {
+private fun KeyValRowGray(title: String, value: String, indent: Dp = 0.dp) {
+    Row(Modifier.fillMaxWidth().padding(start = indent).padding(vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, color = UiTheme.p.textFaintest, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(190.dp))
+        Text(value, color = UiTheme.p.textFaintest, fontSize = 13.sp)
+    }
+}
+
+/** 禁用行（桌面无对应底层能力的安卓配置项：安卓同款禁用勾选框置灰不可点，保持 1:1 行序）。 */
+@Composable
+private fun DisabledRow(text: String, checked: Boolean = false) {
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-        Checkbox(checked = false, enabled = false, onCheckedChange = null)
+        Checkbox(checked = checked, enabled = false, onCheckedChange = null)
         Text(text, color = UiTheme.p.textFaintest, fontSize = 12.sp, modifier = Modifier.weight(1f))
-        Text(note, color = UiTheme.p.textFaintest, fontSize = 10.sp)
     }
 }
 
 /** 滑杆行（安卓 CustomSeek 同款：标签+当前值+滑轨）。 */
 @Composable
-private fun SeekRow(label: String, init: Int, range: IntRange, onCommit: (Int) -> Unit) {
+private fun SeekRow(label: String, init: Int, range: IntRange, indent: Dp = 0.dp, onCommit: (Int) -> Unit) {
     var v by remember { mutableStateOf(init.toFloat()) }
-    Text("$label：${v.toInt()}", color = UiTheme.p.textSecondary, fontSize = 11.sp)
-    Slider(
-        value = v,
-        onValueChange = { v = it },
-        onValueChangeFinished = { onCommit(v.toInt()) },
-        valueRange = range.first.toFloat()..range.last.toFloat(),
-        modifier = Modifier.fillMaxWidth(),
-    )
+    // v0.56 对齐安卓 CustomSeek：标签+当前值+滑轨+−/+ 步进
+    Row(Modifier.fillMaxWidth().padding(start = indent), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = UiTheme.p.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(60.dp))
+        Text("${v.toInt()}", color = UiTheme.p.textSecondary, fontSize = 12.sp, modifier = Modifier.width(34.dp))
+        Slider(
+            value = v,
+            onValueChange = { v = it },
+            onValueChangeFinished = { onCommit(v.toInt()) },
+            valueRange = range.first.toFloat()..range.last.toFloat(),
+            modifier = Modifier.weight(1f),
+        )
+        Text("−", color = UiTheme.p.textSecondary, fontSize = 16.sp, modifier = Modifier
+            .clickable(enabled = v.toInt() > range.first) { v -= 1f; onCommit(v.toInt()) }.padding(horizontal = 6.dp))
+        Text("+", color = UiTheme.p.textSecondary, fontSize = 16.sp, modifier = Modifier
+            .clickable(enabled = v.toInt() < range.last) { v += 1f; onCommit(v.toInt()) }.padding(horizontal = 6.dp))
+    }
 }
 
 /** 路径行（安卓备份配置同款：左标签+右路径下划线，点击打开文件夹）。 */
@@ -890,7 +1058,10 @@ private fun ColorRow(label: String, current: Color, onPick: (Int) -> Unit) {
         0x00000000, 0xFF2E6BD6.toInt(), 0xFF1F837C.toInt(), 0xFF7C4DCF.toInt(), 0xFFB0524B.toInt(),
         0xFFC97B2D.toInt(), 0xFF2E7D32.toInt(), 0xFF546E7A.toInt(),
     )
-    Text(label, color = UiTheme.p.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+    // v0.56 对齐安卓主题配置：标签与色块同一行左右排列
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = UiTheme.p.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(190.dp))
+        Spacer(Modifier.weight(1f))
     Row(
         horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 2.dp),
@@ -909,6 +1080,7 @@ private fun ColorRow(label: String, current: Color, onPick: (Int) -> Unit) {
                 if (selected && !isDefault) Text("✓", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
         }
+    }
     }
     Text(L10n.s("首块恢复随亮/暗主题。", "Default restores the theme color."),
         color = UiTheme.p.textFaintest, fontSize = 10.sp)
@@ -937,13 +1109,18 @@ private fun PickDialog(title: String, options: List<String>, onDismiss: () -> Un
 
 /** 内容弹窗（WebDAV 同步/在线阅读/缓存管理对话框容器）。 */
 @Composable
-private fun SimpleDialog(title: String, onDismiss: () -> Unit, content: @Composable () -> Unit) {
+private fun SimpleDialog(title: String, onDismiss: () -> Unit, showClose: Boolean = true, content: @Composable () -> Unit) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.width(560.dp).padding(vertical = 24.dp), color = UiTheme.p.panel, shape = RoundedCornerShape(12.dp)) {
-            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(title, color = UiTheme.p.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                content()
-                TextButton(onClick = onDismiss) { Text(L10n.s("关闭", "Close"), fontSize = 12.sp) }
+                // 对话框内紧凑：禁 48dp 触摸目标（勾选框回 20dp，行高减半）
+                CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
+                    content()
+                }
+                if (showClose) {
+                    TextButton(onClick = onDismiss) { Text(L10n.s("关闭", "Close"), fontSize = 12.sp) }
+                }
             }
         }
     }
@@ -952,12 +1129,6 @@ private fun SimpleDialog(title: String, onDismiss: () -> Unit, content: @Composa
 private object ScanPrefsUi {
     fun enabledSet(): Set<String> = howread.core.library.ScanPrefs.configured() ?: howread.core.library.Scanner.BOOK_EXTS
     fun save(sel: Set<String>) = howread.core.library.ScanPrefs.setExts(sel.toList())
-}
-
-private fun coversSizeText(): String {
-    val d = File(AppPaths.cacheDir, "covers")
-    val b = (d.listFiles() ?: emptyArray()).sumOf { it.length() }
-    return humanSize(b)
 }
 
 private fun cacheSizeText(): String {
@@ -972,68 +1143,84 @@ private fun cacheLines(): List<Pair<String, Long>> = listOf(
     L10n.s("在线阅读缓存", "Online reading cache") to (dirBytes("remote") + dirBytes("remote-blocks")),
     L10n.s("转换缓存", "Convert cache") to (dirBytes("convert") + dirBytes("accels") + dirBytes("txt")),
     L10n.s("临时文件", "Temp files") to dirBytes("zip"),
+    L10n.s("应用运行缓存", "App runtime cache") to runCacheSize(),
     L10n.s("封面缓存", "Cover cache") to dirBytes("covers"),
 )
+
+/** 应用运行缓存 = 缓存根目录散文件 + 各分类子目录之外的其余子目录（附图对齐安卓）。 */
+private fun runCacheSize(): Long {
+    val known = setOf("remote", "remote-blocks", "convert", "accels", "txt", "zip", "covers")
+    var n = 0L
+    for (f in AppPaths.cacheDir.listFiles() ?: emptyArray()) {
+        if (f.isDirectory && f.name in known) continue
+        n += dirSize(f)
+    }
+    return n
+}
 
 private fun dirSize(f: File): Long = if (f.isFile) f.length() else (f.listFiles() ?: emptyArray()).sumOf { dirSize(it) }
 
 private fun humanSize(b: Long): String =
     if (b >= 1024L * 1024) "%.2fMB".format(b / 1024f / 1024f) else "${b / 1024}KB"
 
-/** 软件说明弹框（v0.42.0 与安卓 P30 实测 22 行 1:1：版本头条/描述/Pro 卡片/开发者/更新日志/隐私政策/许可/反馈/邮箱/官网/fork 行）。 */
+/** 软件说明弹框（v0.54 对齐安卓 about_section：版本头条色底/描述/Pro 卡片/各行为 label 左 120dp + 值右）。 */
 @Composable
-private fun AboutDialog(onDismiss: () -> Unit) {
+fun AboutDialog(onDismiss: () -> Unit) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.width(480.dp).padding(vertical = 24.dp), color = UiTheme.p.panel, shape = RoundedCornerShape(12.dp)) {
-            Column(Modifier.padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                // 版本头条 + 应用描述
-                Text("HowReadPro: v" + AppInfo.VERSION, color = UiTheme.p.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            Column(Modifier.padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                // 版本头条（安卓 section6：主题色底白字满宽）+ 应用描述
+                Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(UiTheme.p.accent)
+                    .padding(horizontal = 10.dp, vertical = 6.dp)) {
+                    Text("HowReadPro: v" + AppInfo.VERSION, color = androidx.compose.ui.graphics.Color.White,
+                        fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                }
                 Text(L10n.s("一个专注于个人阅读体验的开源电子书阅读软件",
                         "An open-source ebook reader focused on personal reading experience"),
                     color = UiTheme.p.textSecondary, fontSize = 12.sp)
                 Spacer(Modifier.height(6.dp))
-                // Pro 卡片
-                Text(L10n.s("高级功能", "Pro features"), color = UiTheme.p.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                Text(L10n.s("Pro 已激活", "Pro unlocked"), color = UiTheme.p.accent, fontSize = 12.sp)
-                Text(L10n.s("解锁方式：本地 key\n购买时间：\n订单号后四位：", "Unlock: local key\nPurchased at:\nOrder tail:"),
-                    color = UiTheme.p.textFaintest, fontSize = 10.sp)
-                TextButton(onClick = { }, enabled = false) { Text(L10n.s("恢复购买", "Restore purchase"), fontSize = 12.sp) }
-                TextButton(onClick = { }, enabled = false) { Text(L10n.s("管理权益", "Manage entitlements"), fontSize = 12.sp) }
+                // Pro 卡片（安卓 proCardRoot：横行 + 激活态恢复/管理链接）
+                AboutRow(L10n.s("高级功能", "Pro features"), L10n.s("Pro 已激活", "Pro unlocked"), accent = true)
+                Text(L10n.s("解锁方式：本地 key · 购买时间： · 订单号后四位：",
+                        "Unlock: local key · Purchased at: · Order tail:"),
+                    color = UiTheme.p.textFaintest, fontSize = 10.sp, modifier = Modifier.padding(start = 120.dp))
+                Row(Modifier.padding(start = 120.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                    Text(L10n.s("恢复购买", "Restore purchase"), color = UiTheme.p.textFaintest, fontSize = 12.sp)
+                    Text(L10n.s("管理权益", "Manage entitlements"), color = UiTheme.p.textFaintest, fontSize = 12.sp)
+                }
                 Spacer(Modifier.height(6.dp))
-                // 开发者
-                Text(L10n.s("开发者", "Developer"), color = UiTheme.p.textFaint, fontSize = 12.sp)
-                Text("LeeStudio", color = UiTheme.p.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(6.dp))
-                // 更新日志
-                Text(L10n.s("更新日志", "What is new"), color = UiTheme.p.textFaint, fontSize = 12.sp)
-                Text("HowReadPro（好好读Pro） v" + AppInfo.VERSION, color = UiTheme.p.textPrimary, fontSize = 12.sp)
-                Spacer(Modifier.height(6.dp))
-                // 隐私政策
-                Text(L10n.s("隐私政策", "Privacy policy"), color = UiTheme.p.textFaint, fontSize = 12.sp)
-                LinkRow(L10n.s("HowReadPro 隐私政策", "HowReadPro privacy policy"), "https://github.com/380121850/howread")
-                Spacer(Modifier.height(6.dp))
-                // 许可
-                LinkRow(L10n.s("开放源代码许可", "Open source licence (GNU GPL v3.0)"), "https://github.com/380121850/howread")
-                LinkRow(L10n.s("第三方库许可", "Licenses for libraries"), "https://github.com/380121850/howread")
-                Spacer(Modifier.height(6.dp))
-                // 支持和问题反馈
-                Text(L10n.s("支持和问题反馈", "Support and feedback"), color = UiTheme.p.textFaint, fontSize = 12.sp)
-                LinkRow(L10n.s("HowReadPro 问题反馈", "HowReadPro issues"), "https://github.com/380121850/howread/issues")
-                Spacer(Modifier.height(6.dp))
-                // 邮箱
-                Text(L10n.s("邮箱", "Email"), color = UiTheme.p.textFaint, fontSize = 12.sp)
-                LinkRow("380121850@163.com", "mailto:380121850@163.com")
-                Spacer(Modifier.height(6.dp))
-                // 官网
-                Text(L10n.s("官网", "Website"), color = UiTheme.p.textFaint, fontSize = 12.sp)
-                LinkRow("HowReadPro", "https://howread.app")
-                Spacer(Modifier.height(6.dp))
+                AboutRow(L10n.s("开发者", "Developer"), "LeeStudio", bold = true)
+                AboutRow(L10n.s("更新日志", "What is new"), "HowReadPro（好好读Pro） v" + AppInfo.VERSION)
+                AboutRow(L10n.s("隐私政策", "Privacy policy"),
+                    L10n.s("HowReadPro 隐私政策", "HowReadPro privacy policy"), url = "https://github.com/380121850/howread")
+                AboutRow(L10n.s("开放源代码许可", "Open source licence (GNU GPL v3.0)"),
+                    L10n.s("第三方库许可", "Licenses for libraries"), url = "https://github.com/380121850/howread")
+                AboutRow(L10n.s("支持和问题反馈", "Support and feedback"),
+                    L10n.s("HowReadPro 问题反馈", "HowReadPro issues"), url = "https://github.com/380121850/howread/issues")
+                AboutRow(L10n.s("邮箱", "Email"), "380121850@163.com", url = "mailto:380121850@163.com")
+                AboutRow(L10n.s("官网", "Website"), "HowReadPro", url = "https://howread.app")
                 Text(L10n.s("This is a fork of Librera Reader", "This is a fork of Librera Reader"),
                     color = UiTheme.p.textFaintest, fontSize = 10.sp)
                 Spacer(Modifier.height(4.dp))
                 TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) { Text(L10n.s("确定", "OK")) }
             }
         }
+    }
+}
+
+/** 安卓 about_section 行：label 左 120dp + 值右（url 非空=下划线链接，点击系统浏览器）。 */
+@Composable
+private fun AboutRow(label: String, value: String, url: String = "", accent: Boolean = false, bold: Boolean = false) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = UiTheme.p.textFaint, fontSize = 12.sp, modifier = Modifier.width(120.dp))
+        val vm = if (url.isNotBlank()) Modifier.clickable {
+            runCatching { java.awt.Desktop.getDesktop().browse(java.net.URI(url)) }
+            TestLog.evt("about_link", url)
+        } else Modifier
+        Text(value, color = if (accent) UiTheme.p.accent else UiTheme.p.textPrimary,
+            fontSize = 12.sp, fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+            textDecoration = if (url.isNotBlank()) TextDecoration.Underline else null,
+            modifier = vm.weight(1f))
     }
 }
 
@@ -1049,82 +1236,9 @@ private fun LinkRow(text: String, url: String) {
     )
 }
 
-/** 朗读配置块（归入阅读配置；自 v0.29 平移）。 */
-@Composable
-private fun TtsBlock() {
-    var tts by remember { mutableStateOf(TtsPrefsStore.load()) }
-    var voices by remember { mutableStateOf<List<String>>(emptyList()) }
-    LaunchedEffect(Unit) {
-        voices = withContext(Dispatchers.IO) { TtsSpeaker.listVoices() }
-    }
-    fun upd(p: TtsPrefs) { tts = p; TtsPrefsStore.save(p) }
-    Text(L10n.s("朗读 · 语速 ${tts.rate}（-10 慢 ~ +10 快，0 常速）", "TTS · rate ${tts.rate}"),
-        color = UiTheme.p.textFaint, fontSize = 11.sp)
-    Slider(
-        value = tts.rate.toFloat(),
-        onValueChange = { tts = tts.copy(rate = it.toInt()) },
-        onValueChangeFinished = { upd(tts); TestLog.evt("tts_pref", "rate=${tts.rate}") },
-        valueRange = -10f..10f, steps = 19, modifier = Modifier.fillMaxWidth(),
-    )
-    Text(L10n.s("音量 ${tts.volume}", "Volume ${tts.volume}"), color = UiTheme.p.textFaint, fontSize = 11.sp)
-    Slider(
-        value = tts.volume.toFloat(),
-        onValueChange = { tts = tts.copy(volume = it.toInt()) },
-        onValueChangeFinished = { upd(tts); TestLog.evt("tts_pref", "volume=${tts.volume}") },
-        valueRange = 0f..100f, steps = 9, modifier = Modifier.fillMaxWidth(),
-    )
-    Text(L10n.s("段间停顿 ${tts.pauseMs} ms", "Pause ${tts.pauseMs} ms"), color = UiTheme.p.textFaint, fontSize = 11.sp)
-    Slider(
-        value = tts.pauseMs.toFloat(),
-        onValueChange = { tts = tts.copy(pauseMs = (it.toInt() / 250) * 250) },
-        onValueChangeFinished = { upd(tts); TestLog.evt("tts_pref", "pause=${tts.pauseMs}") },
-        valueRange = 0f..2000f, steps = 7, modifier = Modifier.fillMaxWidth(),
-    )
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.horizontalScroll(rememberScrollState())) {
-        Text(L10n.s("语音：", "Voice: "), color = UiTheme.p.textFaint, fontSize = 11.sp)
-        TextButton(onClick = { upd(tts.copy(voice = "")); TestLog.evt("tts_pref", "voice=auto") }) {
-            Text(L10n.s("自动", "Auto"), fontSize = 11.sp,
-                color = if (tts.voice.isEmpty()) UiTheme.p.accent else UiTheme.p.textTertiary,
-                fontWeight = if (tts.voice.isEmpty()) FontWeight.Bold else FontWeight.Normal)
-        }
-        for (v in voices) {
-            TextButton(onClick = { upd(tts.copy(voice = v)); TestLog.evt("tts_pref", "voice=" + v.take(40)) }) {
-                Text(v, fontSize = 11.sp, maxLines = 1,
-                    color = if (tts.voice == v) UiTheme.p.accent else UiTheme.p.textTertiary,
-                    fontWeight = if (tts.voice == v) FontWeight.Bold else FontWeight.Normal)
-            }
-        }
-    }
-    if (voices.isEmpty()) {
-        Text(L10n.s("未枚举到系统语音（仅 Windows 提供）。", "No system voices (Windows only)."),
-            color = UiTheme.p.textFaintest, fontSize = 10.sp)
-    }
-    // ---- 生词文本替换（v0.52.0 对齐安卓 app-TextReplacement + 开关）：朗读/导出前套用 ----
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(L10n.s("文本替换", "Text replace"), color = UiTheme.p.textFaint, fontSize = 11.sp,
-            modifier = Modifier.weight(1f))
-        TextButton(onClick = { upd(tts.copy(replaceEnabled = !tts.replaceEnabled)); TestLog.evt("tts_pref", "replace=" + !tts.replaceEnabled) }) {
-            Text(if (tts.replaceEnabled) L10n.s("开", "On") else L10n.s("关", "Off"), fontSize = 11.sp,
-                color = if (tts.replaceEnabled) UiTheme.p.accent else UiTheme.p.textTertiary,
-                fontWeight = if (tts.replaceEnabled) FontWeight.Bold else FontWeight.Normal)
-        }
-    }
-    androidx.compose.material3.OutlinedTextField(
-        value = tts.replacements,
-        onValueChange = { v -> tts = tts.copy(replacements = v) },
-        label = { Text(L10n.s("规则：每行一条 原文=>替换词（朗读/导出前生效）", "Rules: one per line, original=>replacement"), fontSize = 10.sp) },
-        maxLines = 5,
-        modifier = Modifier.fillMaxWidth(),
-    )
-    TextButton(onClick = {
-        upd(tts)
-        TestLog.evt("tts_pref", "replace_saved lines=" + tts.replacements.lines().count { it.contains("=>") })
-    }) { Text(L10n.s("保存规则", "Save rules"), fontSize = 11.sp, color = UiTheme.p.accent) }
-}
-
 /** WebDAV 同步对话框（v0.45.0 对齐安卓 dialog_webdav_sync：地址/账号/密码可编辑、独立于网上书库服务器）。 */
 @Composable
-private fun WebDavBlock() {
+private fun WebDavBlock(onClose: () -> Unit = {}) {
     var syncing by remember { mutableStateOf(false) }
     var syncMsg by remember { mutableStateOf("") }
     var testing by remember { mutableStateOf(false) }
@@ -1148,35 +1262,35 @@ private fun WebDavBlock() {
     }
     var user by remember { mutableStateOf(SyncPrefs.loadSyncUser("")) }
     var pass by remember { mutableStateOf(SyncPrefs.loadSyncPass("")) }
+    var syncDir by remember { mutableStateOf(SyncPrefs.loadSyncDir("/HowRead")) }
+    var dirDlg by remember { mutableStateOf(false) }
+    var polDlg by remember { mutableStateOf(false) }
+    var logDlg by remember { mutableStateOf(false) }
+    val POLICIES = listOf(
+        "newer" to L10n.s("较新优先（按修改时间）", "Newest wins (by time)"),
+        "local" to L10n.s("本地优先", "Local first"),
+        "server" to L10n.s("服务器优先", "Server first"),
+        "farther" to L10n.s("更靠前优先（按阅读进度）", "Farthest first"),
+    )
     fun commit() { SyncPrefs.saveSyncUrl(url); SyncPrefs.saveSyncUser(user); SyncPrefs.saveSyncPass(pass) }
-    fun buildSrc(): RemoteSource? = SyncPrefs.syncSource(url, user, pass)
+    fun buildSrc(): RemoteSource? = SyncPrefs.syncSource(url, user, pass, syncDir.trim('/').ifEmpty { "HowRead" })
 
     CheckRow(L10n.s("启用同步（阅读进度与书签）", "Enable sync (reading progress and bookmarks)"), enabledSync) { v ->
         enabledSync = v; LibPrefs.put("webdavSyncEnabled", v); TestLog.evt("pref_sync_enabled", "$v")
     }
-    var compat by remember { mutableStateOf(LibPrefs.bool("webdavSyncCompat", true)) }
-    CheckRow(L10n.s("与手机互通（安卓版格式，互相同步阅读进度与书签）", "Interoperate with the Android app (per-book progress and bookmarks)"), compat) { v ->
-        compat = v; LibPrefs.put("webdavSyncCompat", v); TestLog.evt("pref_sync_compat", "$v")
-    }
-    OutlinedTextField(
-        value = url, onValueChange = { url = it; commit() },
-        label = { Text(L10n.s("WebDAV 地址", "WebDAV URL")) }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedTextField(
-        value = user, onValueChange = { user = it; commit() },
-        label = { Text(L10n.s("账号", "Login")) }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedTextField(
-        value = pass, onValueChange = { pass = it; commit() },
-        label = { Text(L10n.s("密码", "Password")) }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-    )
+    CompactField(url, { url = it; commit() }, hint = L10n.s("WebDAV 地址（http(s)://主机[:端口]/路径）", "WebDAV URL"))
+    CompactField(user, { user = it; commit() }, hint = L10n.s("账号", "Login"))
+    CompactField(pass, { pass = it; commit() }, hint = L10n.s("密码", "Password"),
+        visual = androidx.compose.ui.text.input.PasswordVisualTransformation())
     var trustAll by remember { mutableStateOf(LibPrefs.bool("syncTrustAll", true)) }
     CheckRow(L10n.s("信任自签名证书", "Trust self-signed certificates"), trustAll) { v ->
         trustAll = v; LibPrefs.put("syncTrustAll", v); TestLog.evt("pref_sync_trust", "$v")
     }
-    StaticRow(L10n.s("同步路径", "Sync path"), "HowRead-sync-desktop.json")
-    StaticRow(L10n.s("进度冲突策略", "Conflict policy"), L10n.s("较新优先", "Newest wins"))
+    // v0.54 对齐安卓 dialog_webdav_sync 行序：同步目录/冲突策略为可点值行
+    KeyValRow(L10n.s("同步目录", "Sync folder"), syncDir) { dirDlg = true }
+    KeyValRow(L10n.s("进度冲突策略", "Conflict policy"),
+        POLICIES.firstOrNull { it.first == LibPrefs.str("webdavSyncPolicy", "newer") }?.second
+            ?: L10n.s("较新优先（按修改时间）", "Newest wins")) { polDlg = true }
     val intervals = listOf(
         0 to L10n.s("关", "Off"), 5 to L10n.s("5分钟", "5m"), 15 to L10n.s("15分钟", "15m"), 30 to L10n.s("30分钟", "30m"),
         60 to L10n.s("1小时", "1h"), 180 to L10n.s("3小时", "3h"), 360 to L10n.s("6小时", "6h"), 1440 to L10n.s("每天", "Daily"),
@@ -1184,6 +1298,7 @@ private fun WebDavBlock() {
     var intervalMin by remember { mutableStateOf(SyncPrefs.loadIntervalMin()) }
     KeyValRow(L10n.s("定时同步", "Sync interval"),
         (intervals.firstOrNull { it.first == intervalMin }?.second ?: ("$intervalMin" + L10n.s("分钟", "m")))) { intervalDlg = true }
+    // 测试连接/同步日志/立即同步（用户裁定：定时同步下一行，同一行）
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         TextButton(onClick = {
             if (testing) return@TextButton
@@ -1198,6 +1313,9 @@ private fun WebDavBlock() {
                 TestLog.evt("sync_test", "ok=" + r.isSuccess)
             }.apply { isDaemon = true }.start()
         }, enabled = !testing) { Text(if (testing) L10n.s("测试中…", "Testing…") else L10n.s("测试连接", "Test connection"), fontSize = 12.sp) }
+        TextButton(onClick = { logDlg = true; TestLog.evt("sync_log_open") }) {
+            Text(L10n.s("同步日志", "Sync log"), fontSize = 12.sp)
+        }
         Button(
             onClick = {
                 if (syncing) return@Button
@@ -1235,14 +1353,68 @@ private fun WebDavBlock() {
             enabled = !syncing,
         ) { Text(if (syncing) L10n.s("同步中…", "Syncing…") else L10n.s("立即同步", "Sync now")) }
     }
+    // 底部操作行（用户裁定：关闭/保存；保存=显式落盘后关闭对话框）
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = onClose) { Text(L10n.s("关闭", "Close"), fontSize = 12.sp, color = UiTheme.p.textTertiary) }
+        Spacer(Modifier.width(8.dp))
+        Button(onClick = {
+            commit()
+            TestLog.evt("sync_prefs_saved", "url=" + url.take(60))
+            onClose()
+        }, enabled = !syncing) { Text(L10n.s("保存", "Save")) }
+    }
+    // 测试连接的提示信息（用户裁定：关闭/保存按钮的下一行）
     if (testMsg.isNotEmpty()) Text(testMsg, color = UiTheme.p.textTertiary, fontSize = 12.sp)
-    Text(
-        "同步文件：服务器起始目录 HowRead-sync-desktop.json。合并规则：进度按时间新者胜；书签按 页+标题 去重、笔记互补；珍藏取并集。删除不会跨设备传播。",
-        color = UiTheme.p.textFaintest, fontSize = 11.sp,
-    )
-    Text(L10n.s("同步配置独立于「我的文件」里的 WebDAV 服务器（桌面 WebDAV 客户端默认接受自签名证书）。",
-            "Sync is independent of My Files servers (desktop WebDAV client accepts self-signed certs)."),
-        color = UiTheme.p.textFaintest, fontSize = 10.sp)
+    if (dirDlg) {
+        var dirInput by remember { mutableStateOf(syncDir) }
+        AlertDialog(
+            onDismissRequest = { dirDlg = false },
+            title = { Text(L10n.s("同步目录", "Sync folder"), fontSize = 15.sp) },
+            text = {
+                Column {
+                    Text(L10n.s("服务器上的同步根目录（阅读进度/书签/配置所在，默认 /HowRead，与手机一致）。",
+                            "Sync root folder on the server (default /HowRead, same as the phone)."),
+                        color = UiTheme.p.textTertiary, fontSize = 11.sp)
+                    OutlinedTextField(value = dirInput, onValueChange = { dirInput = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    syncDir = dirInput.trim().ifEmpty { "/HowRead" }
+                    SyncPrefs.saveSyncDir(syncDir)
+                    TestLog.evt("sync_dir", syncDir)
+                    dirDlg = false
+                }) { Text(L10n.s("保存", "Save"), color = UiTheme.p.accent) }
+            },
+            dismissButton = { TextButton(onClick = { dirDlg = false }) { Text(L10n.s("取消", "Cancel")) } },
+        )
+    }
+    if (polDlg) {
+        PickDialog(L10n.s("进度冲突策略", "Conflict policy"), POLICIES.map { it.second }, onDismiss = { polDlg = false }) { pick ->
+            val code = POLICIES.firstOrNull { it.second == pick }?.first ?: "newer"
+            LibPrefs.put("webdavSyncPolicy", code)
+            TestLog.evt("sync_policy", code)
+        }
+    }
+    if (logDlg) {
+        SimpleDialog(L10n.s("同步日志", "Sync log"), onDismiss = { logDlg = false }) {
+            // 检视修复：日志文件读 IO 移到后台协程，不卡打开动画
+            var logLines by remember { mutableStateOf(listOf(L10n.s("读取中…", "Loading…"))) }
+            LaunchedEffect(Unit) {
+                logLines = withContext(Dispatchers.IO) {
+                    runCatching {
+                        File(AppPaths.dataDir, "logs/hrtest.log").readText(Charsets.UTF_8)
+                            .lineSequence()
+                            .filter { it.contains("sync") || it.contains("global") || it.contains("field_merge") }
+                            .toList().takeLast(200)
+                    }.getOrDefault(listOf(L10n.s("（无日志）", "(no log)")))
+                }
+            }
+            Column(Modifier.height(320.dp).verticalScroll(rememberScrollState())) {
+                for (l in logLines) Text(l, fontSize = 10.sp, color = UiTheme.p.textTertiary)
+            }
+        }
+    }
     if (syncMsg.isNotEmpty()) {
         Text(syncMsg, color = UiTheme.p.textSecondary, fontSize = 12.sp)
     }
@@ -1258,7 +1430,7 @@ private fun WebDavBlock() {
 
 /** 备份与恢复块（自 v0.29 平移；文件对话框仍用 Swing 文件选择）。 */
 @Composable
-private fun BackupBlock() {
+private fun BackupBlock(onMigrate: () -> Unit = {}) {
     var backupMsg by remember { mutableStateOf("") }
     var restorePicking by remember { mutableStateOf(false) }
     if (restorePicking) {
@@ -1272,27 +1444,126 @@ private fun BackupBlock() {
             }
         }
     }
+    // 介绍行（安卓 backup_section 同款文案）
     Text(
-        "导出：把书库数据（阅读进度/书签/高亮/珍藏/统计）与全部配置打包为一个 zip；恢复：选择备份包，重启应用后生效。",
-        color = UiTheme.p.textFaint, fontSize = 12.sp,
+        L10n.s("将 HowRead 目录传输到另一台设备以迁移您的数据。", "Transfer the HowRead folder to another device to migrate your data."),
+        color = UiTheme.p.textSecondary, fontSize = 12.sp,
     )
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 6.dp)) {
-        Button(onClick = {
+    // 导入/导出/迁移（附图第二行，三个下划线链接）
+    Row(horizontalArrangement = Arrangement.spacedBy(18.dp), modifier = Modifier.padding(top = 4.dp)) {
+        TextButton(onClick = { restorePicking = true }) {
+            Text(L10n.s("导入", "Import"), fontSize = 13.sp, color = UiTheme.p.accent)
+        }
+        TextButton(onClick = {
             val fc = javax.swing.JFileChooser()
-            fc.dialogTitle = "导出备份"
+            fc.dialogTitle = L10n.s("导出备份", "Export backup")
             fc.selectedFile = java.io.File(System.getProperty("user.home"),
                 "HowRead-Backup-" + java.text.SimpleDateFormat("yyyyMMdd-HHmm").format(java.util.Date()) + ".zip")
             if (fc.showSaveDialog(null) == javax.swing.JFileChooser.APPROVE_OPTION) {
                 var f = fc.selectedFile
                 if (!f.name.lowercase().endsWith(".zip")) f = java.io.File(f.parentFile, f.name + ".zip")
                 backupMsg = runCatching { Backup.exportTo(f) }
-                    .getOrElse { "导出失败：" + it }
+                    .getOrElse { L10n.s("导出失败：", "Export failed: ") + it }
                 TestLog.evt("backup_export", f.name)
             }
-        }) { Text(L10n.s("导出备份…", "Export backup…")) }
-        OutlinedButton(onClick = { restorePicking = true }) { Text(L10n.s("从备份恢复…", "Restore from backup…")) }
+        }) { Text(L10n.s("导出", "Export"), fontSize = 13.sp, color = UiTheme.p.accent) }
+        TextButton(onClick = onMigrate) {
+            Text(L10n.s("迁移", "Migrate"), fontSize = 13.sp, color = UiTheme.p.accent)
+        }
     }
     if (backupMsg.isNotEmpty()) {
         Text(backupMsg, color = UiTheme.p.textSecondary, fontSize = 12.sp)
+    }
+}
+
+
+/**
+ * 配置文件（v0.55.0 对齐安卓 AppProfile：每个配置文件=一份独立数据目录）。
+ * 默认配置 = <软件根>\data（便携默认位）；其余配置文件在 <软件根>\profiles\<名称>\。
+ * 切换/新建 = 写 data-dir.txt 指向对应目录，重启后生效（安卓为保存后自动重启，桌面以提示代替）。
+ */
+object AppProfiles {
+    private const val RESET_MARK = ".hr_reset_defaults"
+
+    fun root(): File = File(AppPaths.rootDir, "profiles")
+
+    /** 默认配置的数据目录（与 AppPaths 默认解析一致）。 */
+    fun defaultDir(): File =
+        if (AppPaths.isWindows) File(AppPaths.rootDir, "data")
+        else File(System.getProperty("user.home"), ".howread")
+
+    /** 全部配置文件（默认配置在前，其余按名称排序）。 */
+    fun list(): List<Pair<String, File>> {
+        val out = mutableListOf(L10n.s("默认配置", "Default") to defaultDir())
+        val kids = runCatching { root().listFiles { f -> f.isDirectory } }.getOrNull() ?: emptyArray()
+        for (d in kids.sortedBy { it.name.lowercase() }) out += d.name to d
+        return out
+    }
+
+    /** 当前配置文件名（默认位=「默认配置」；profiles 下=目录名；其他自定义=目录名）。 */
+    fun currentName(): String {
+        val cur = runCatching { AppPaths.dataDir.canonicalPath }.getOrDefault("")
+        for ((n, d) in list()) {
+            if (runCatching { d.canonicalPath }.getOrDefault("#") == cur) return n
+        }
+        return runCatching { File(cur).name }.getOrDefault("")
+    }
+
+    /** 名称合法性：非空、不含 Windows 文件名非法字符、长度受限。 */
+    fun validName(s: String): Boolean =
+        s.isNotBlank() && s.length <= 60 && !s.contains(Regex("[\\\\/:*?\"<>|]"))
+
+    /** 新建配置文件（目录已存在或创建失败返 null）。 */
+    fun create(name: String): File? = runCatching {
+        val d = File(root(), name.trim())
+        if (d.exists() || !d.mkdirs()) null else d
+    }.getOrNull()
+
+    /** 切换配置文件：默认位=清除 data-dir.txt，其余=写入其路径。重启后生效。 */
+    fun switchTo(dir: File): Boolean =
+        if (dir == defaultDir()) AppPaths.clearDataDirOverride()
+        else AppPaths.changeDataDir(dir.absolutePath)
+
+    /** 恢复默认配置（安卓 reset_app_confirm 同语义）：落标记 → 尽力自动重启 → 退出；重启时 applyPendingReset 清理。 */
+    fun requestFactoryReset() {
+        runCatching { File(AppPaths.dataDir, RESET_MARK).createNewFile() }
+        TestLog.evt("factory_reset_mark")
+        runCatching {
+            if (AppPaths.isWindows) {
+                val exe = File(AppPaths.rootDir, "HowReadPro.exe")
+                if (exe.isFile) {
+                    Runtime.getRuntime().exec(
+                        arrayOf("cmd", "/c", "timeout /t 1 /nobreak >nul & start \"\" \"" + exe.canonicalPath + "\""),
+                        null, AppPaths.rootDir,
+                    )
+                }
+            }
+        }
+        kotlin.system.exitProcess(0)
+    }
+
+    /** 启动早期（任何 Db/偏好访问之前）：存在恢复标记则清空配置/索引/缓存。 */
+    fun applyPendingReset() {
+        val m = File(AppPaths.dataDir, RESET_MARK)
+        if (m.isFile) {
+            applyResetIn(AppPaths.dataDir)
+            runCatching { m.delete() }
+            TestLog.evt("factory_reset_applied")
+        }
+    }
+
+    /** 在指定数据目录执行出厂复位（配置 json/properties + 书籍索引 db + cache 全清；字体/下载/日志保留）。 */
+    fun applyResetIn(dir: File): Int {
+        var n = 0
+        val files = listOf(
+            "lib.properties", "ui.json", "reader.json", "ai.json", "sync.json", "tts.json", "lang.json",
+            "howread.db", "howread.db-wal", "howread.db-shm", "howread.db-journal",
+        )
+        for (nm in files) if (File(dir, nm).delete()) n++
+        val cache = File(dir, "cache")
+        for (f in cache.listFiles() ?: emptyArray()) {
+            if (f.isDirectory) { if (f.deleteRecursively()) n++ } else if (f.delete()) n++
+        }
+        return n
     }
 }

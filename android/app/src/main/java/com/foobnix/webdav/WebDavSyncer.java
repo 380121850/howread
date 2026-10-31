@@ -222,9 +222,20 @@ public class WebDavSyncer {
                 if (listener != null) {
                     main.post(() -> listener.onStep("sync"));
                 }
-                final SyncResult result = doSync(c);
+                SyncResult result;
+                try {
+                    result = doSync(c);
+                } catch (Throwable syncError) {
+                    // a background sync must NEVER take the process down:
+                    // any Error escaping doSync's catch(Exception) used to
+                    // kill the app (okhttp-digest NoSuchMethodError, 12S)
+                    LOG.e(syncError);
+                    result = new SyncResult();
+                    result.error = "sync_failed: " + syncError;
+                }
+                final SyncResult finalResult = result;
                 if (listener != null) {
-                    main.post(() -> listener.onFinish(result));
+                    main.post(() -> listener.onFinish(finalResult));
                 }
             } finally {
                 syncingNow = false;

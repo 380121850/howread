@@ -38,6 +38,8 @@ fun main(args: Array<String>) {
     }
     // 数据目录解析+旧位置迁移（必须在任何 Db/偏好访问之前；v0.28.0 便携化）
     howread.core.AppPaths.init()
+    // 恢复默认配置标记（v0.55.0）：确认复位后程序已退出，重启在最早处清空配置/索引/缓存
+    AppProfiles.applyPendingReset()
     // 崩溃留痕（对齐安卓 crash.txt 全渠道留痕）：未捕获异常先落 data\logs\crash.txt，再走原处理器
     val prevUEH = Thread.getDefaultUncaughtExceptionHandler()
     Thread.setDefaultUncaughtExceptionHandler { t, e ->
@@ -121,7 +123,7 @@ fun main(args: Array<String>) {
             Window(
                 onCloseRequest = { appState.showAiConfig = false },
                 title = L10n.s("HowReadPro - AI 大模型配置", "HowReadPro - AI Setup"),
-                state = rememberWindowState(width = 620.dp, height = 680.dp),
+                state = rememberWindowState(width = 560.dp, height = 660.dp),
             ) {
                 MaterialTheme(colorScheme = if (UiTheme.dark) darkColorScheme() else lightColorScheme()) {
                     AiConfigScreen(onClose = { appState.showAiConfig = false })

@@ -22,13 +22,18 @@ class BlockCacheStore private constructor(
     private val blockSize: Int,
     private val fetcher: (Long, Int) -> ByteArray?,
     private val memLimit: Long,
+    private val windowBeforePct: Int = 20,
+    private val windowAfterPct: Int = 30,
 ) {
     private val dir = File(AppPaths.cacheDir, "remote-blocks/" + key).apply { mkdirs() }
     private val dataFile = File(dir, "data.bin")
     private val flagFile = File(dir, "blocks.bin")
     private val metaFile = File(dir, "meta.json")
     private val blockCount = (((size + blockSize - 1) / blockSize).toInt()).coerceAtLeast(1)
-    private val depth = (memLimit / blockSize).toInt().coerceAtLeast(2)   // P2 窗口深度（块数）
+    private val depth = (memLimit / blockSize).toInt().coerceAtLeast(2)   // P2 窗口总深度（块数）
+    // v0.54 阅读位置前后非对称窗口（安卓 remoteWindowBefore/AfterPct 同款：默认 前20%/后30%）
+    private val depthFwd: Int = (depth.toLong() * windowAfterPct / (windowAfterPct + windowBeforePct)).toInt().coerceAtLeast(1)
+    private val depthBack: Int = (depth - depthFwd).coerceAtLeast(1)
     private val flags = ByteArray(blockCount)
     private val inFlight = HashSet<Int>()
     private val mem = object : LinkedHashMap<Int, ByteArray>(16, 0.75f, true) {
@@ -56,6 +61,38 @@ class BlockCacheStore private constructor(
     @Volatile private var bgDead = false   // 后台取块曾失败：不再重生 worker（前台读不受影响，重开新会话即复位）
 
     companion object {
+        /** v0.54 在线缓存上限（MB，0=不限）；应用在打开远程书/保存设置时设置。 */
+        @Volatile var capMaxMB: Long = 0L
+
+        /** 检视修复：活跃会话的 key 集——LRU 回收永不触碰正在阅读书的缓存目录（flags 内存态与盘一致性依赖它）。 */
+        val activeKeys = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+
+        private val capTick = java.util.concurrent.atomic.AtomicInteger(0)
+
+        /** remote-blocks 总占用字节。 */
+        fun totalBytes(): Long =
+            java.io.File(AppPaths.cacheDir, "remote-blocks").listFiles()
+                ?.sumOf { d -> d.walkTopDown().filter { it.isFile }.sumOf { it.length() } } ?: 0L
+
+        /** 超限回收：按书目录最近修改时间从旧到新整目录删除（安卓 remoteCacheMaxMB 同语义）。 */
+        fun enforceCap(maxMB: Long) {
+            if (maxMB <= 0L) return
+            val root = java.io.File(AppPaths.cacheDir, "remote-blocks")
+            val dirs = root.listFiles() ?: return
+            val limit = maxMB * 1024L * 1024L
+            var total = dirs.sumOf { d -> d.walkTopDown().filter { it.isFile }.sumOf { it.length() } }
+            if (total <= limit) return
+            for (d in dirs.sortedBy { it.lastModified() }) {
+                if (total <= limit) break
+                if (d.name in activeKeys) continue   // 检视修复：正在阅读的书不回收
+                val sz = d.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+                if (runCatching { d.deleteRecursively() }.getOrDefault(false)) {
+                    total -= sz
+                    TestLog.evt("block_cap_evict", "key=" + d.name + " freed=" + sz)
+                }
+            }
+        }
+
         private val PAGE_FMTS = setOf("pdf", "cbz", "cbr", "xps", "djvu")
 
         /** 缓存目录 key（cache/remote-blocks/<key>/）；resolve 惰性回收晋升后的块缓存目录时复算用。 */
@@ -64,8 +101,13 @@ class BlockCacheStore private constructor(
             return Integer.toHexString(path.hashCode()) + "-" + size + "-" + block
         }
 
-        fun open(path: String, size: Long, ext: String, fetcher: (Long, Int) -> ByteArray?, memLimit: Long): BlockCacheStore =
-            BlockCacheStore(cacheKey(path, size, ext), size, if (ext in PAGE_FMTS) 64 * 1024 else 1024 * 1024, fetcher, memLimit)
+        fun open(path: String, size: Long, ext: String, fetcher: (Long, Int) -> ByteArray?, memLimit: Long,
+                 windowBeforePct: Int = 20, windowAfterPct: Int = 30): BlockCacheStore {
+            val s = BlockCacheStore(cacheKey(path, size, ext), size, if (ext in PAGE_FMTS) 64 * 1024 else 1024 * 1024,
+                fetcher, memLimit, windowBeforePct, windowAfterPct)
+            activeKeys.add(s.key)
+            return s
+        }
 
         /** 免开会话查询块缓存百分比（v0.36.0 书库网络书角标）。目录缺失/尺寸不符/块位图不完整 = -1（未知）。 */
         fun cachedPercent(path: String, size: Long, ext: String): Int {
@@ -154,6 +196,7 @@ class BlockCacheStore private constructor(
     /** 会话关闭（文档关闭后调用）：停预取；已缓存块此前已随写落盘。 */
     fun close() {
         closed = true
+        activeKeys.remove(key)
         synchronized(wake) { wake.notifyAll() }
     }
 
@@ -171,8 +214,8 @@ class BlockCacheStore private constructor(
         while (!closed && !fullyCached) {
             val t = windowAt.get()
             if (t >= 0) {
-                var i = (t - 1).coerceAtLeast(0)
-                val end = minOf(blockCount, t + depth)
+                var i = (t - depthBack).coerceAtLeast(0)
+                val end = minOf(blockCount, t + depthFwd)
                 while (i < end && !closed) {
                     val now = windowAt.get()
                     if (now >= 0 && now != t) break   // 新窗口插队
@@ -244,6 +287,7 @@ class BlockCacheStore private constructor(
             persist()
             got
         }
+        if (capTick.incrementAndGet() % 24 == 0) runCatching { enforceCap(capMaxMB) }
         onCacheUpdate?.let { it() }
         return res
     }

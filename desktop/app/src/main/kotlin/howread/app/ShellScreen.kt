@@ -18,12 +18,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocalLibrary
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
@@ -32,7 +35,11 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.ComposeWindow
@@ -46,7 +53,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import howread.core.AppInfo
 import howread.core.Quotes
 import howread.core.TestLog
 import howread.core.data.Db
@@ -54,6 +60,8 @@ import howread.core.sync.SyncEngine
 import howread.core.sync.SyncPrefs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.withContext
 
 private fun mainTabIcon(t: MainTab): ImageVector = when (t) {
@@ -102,7 +110,8 @@ fun ShellScreen(appState: AppState, window: ComposeWindow) {
                     if (interval <= 0) return@runCatching
                     if (System.currentTimeMillis() - SyncPrefs.loadLastSyncAt() < interval * 60_000L) return@runCatching
                     val src = SyncPrefs.syncSource(
-                        SyncPrefs.loadSyncUrl(""), SyncPrefs.loadSyncUser(""), SyncPrefs.loadSyncPass("")
+                        SyncPrefs.loadSyncUrl(""), SyncPrefs.loadSyncUser(""), SyncPrefs.loadSyncPass(""),
+                        SyncPrefs.loadSyncDir("/HowRead")
                     ) ?: return@runCatching
                     withContext(Dispatchers.IO) {
                         if (LibPrefs.bool("webdavSyncCompat", true)) {
@@ -118,6 +127,20 @@ fun ShellScreen(appState: AppState, window: ComposeWindow) {
                     }
                 }
             }
+        }
+        // 侧栏底部「软件说明」弹窗（v0.55.0 侧栏底部=软件说明+夜间模式，取代版本号行）
+        var sideAboutOpen by remember { mutableStateOf(false) }
+        if (sideAboutOpen) AboutDialog(onDismiss = { sideAboutOpen = false })
+        // 记住上次的搜索（v0.56 补持久化半边：AppState 启动时回填 lastQuery，这里把搜索词落盘）
+        LaunchedEffect(Unit) {
+            snapshotFlow { appState.query }
+                .drop(1)
+                .collectLatest { q ->
+                    if (!LibPrefs.bool("rememberSearch", false)) return@collectLatest
+                    delay(600)
+                    LibPrefs.put("lastQuery", q)
+                    TestLog.evt("last_query_save", q.take(40))
+                }
         }
         // 书籍打开：阅读器直接占据主窗口（不另开窗口）；关闭/Esc 返回原页面
         val rb = appState.readerBook
@@ -206,10 +229,19 @@ fun ShellScreen(appState: AppState, window: ComposeWindow) {
                 if (appState.scanning) {
                     Text(L10n.s("扫描书库中…", "Scanning…"), color = UiTheme.p.textFaint, fontSize = 11.sp, modifier = Modifier.padding(start = 12.dp, bottom = 4.dp))
                 }
-                Text(
-                    "v" + AppInfo.VERSION, color = UiTheme.p.textFaintest, fontSize = 11.sp,
-                    modifier = Modifier.padding(start = 12.dp),
-                )
+                // 侧栏底部两功能（v0.55.0 对齐安卓抽屉底部：软件说明 + 夜间模式，不再显示版本号）
+                SideItem(L10n.s("软件说明", "About"), Icons.Filled.Info, false) {
+                    TestLog.evt("side_about")
+                    sideAboutOpen = true
+                }
+                SideItem(
+                    if (UiTheme.dark) L10n.s("白天模式", "Day mode") else L10n.s("夜间模式", "Night mode"),
+                    if (UiTheme.dark) Icons.Filled.WbSunny else Icons.Filled.DarkMode,
+                    false,
+                ) {
+                    TestLog.evt("side_night", if (UiTheme.dark) "to_day" else "to_night")
+                    UiTheme.applyDark(!UiTheme.dark)
+                }
             }
 
             // ---- 内容区 + 底部标签栏 ----
@@ -226,7 +258,7 @@ fun ShellScreen(appState: AppState, window: ComposeWindow) {
                         appState.mainTab == MainTab.PREFS -> PrefsScreen(appState, window)
                     }
                 }
-                // 底部标签栏（图标 + 文字，安卓同款）
+                // 底部标签栏（图标 + 文字，安卓同款）——用户裁定保留（2026-10-31）
                 Row(Modifier.fillMaxWidth().height(56.dp).background(UiTheme.p.panel)) {
                     for (t in MainTab.entries) {
                         val active = appState.mainTab == t && appState.extra == ExtraContent.NONE

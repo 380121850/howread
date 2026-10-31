@@ -372,10 +372,39 @@ txtchunk_open_document_with_stream(fz_context *ctx, fz_stream *file)
         for (k = 0; k < doc->nchapters; k++)
         {
             int64_t left;
-            doc->chapters[k].off = (int64_t)k * TXTCHUNK_SIZE;
-            left = size - doc->chapters[k].off;
+            int64_t off = (int64_t)k * TXTCHUNK_SIZE;
+            if (k > 0 && !doc->utf16_bom)
+            {
+                /* HowRead: back the chunk start up to a UTF-8 character
+                 * boundary (at most 3 continuation bytes). A fixed-grid start
+                 * inside a multi-byte sequence makes the per-chunk encoding
+                 * sniff fail and the whole chunk would be rendered as
+                 * Latin-1 mojibake. */
+                int back = 0;
+                while (back < 3)
+                {
+                    int64_t p = off - back;
+                    int pc;
+                    if (p <= 0)
+                        break;
+                    fz_seek(ctx, file, p, 0);
+                    pc = fz_read_byte(ctx, file);
+                    if (pc == EOF || (pc & 0xC0) != 0x80)
+                        break;
+                    back++;
+                }
+                off -= back;
+            }
+            doc->chapters[k].off = off;
+            left = size - off;
             doc->chapters[k].len = left < TXTCHUNK_SIZE ? left : TXTCHUNK_SIZE;
             doc->chapters[k].pages = -1;
+        }
+        /* HowRead: chunk k covers exactly [off_k, off_{k+1}) so the
+         * backed-off starts leave no gaps between chunks. */
+        for (k = 0; k + 1 < doc->nchapters; k++)
+        {
+            doc->chapters[k].len = doc->chapters[k+1].off - doc->chapters[k].off;
         }
     }
     fz_catch(ctx)

@@ -134,7 +134,7 @@ class AppState {
         if (scanning) return
         scanning = true
         Thread {
-            Scanner.scanAll(LibPrefs.bool("ignoreNomedia", true))
+            Scanner.scanAll(LibPrefs.bool("ignoreNomedia", true), LibPrefs.bool("useCalibreOpf", true))
             SwingUtilities.invokeLater {
                 reloadLibrary()
                 scanning = false
@@ -146,7 +146,7 @@ class AppState {
         if (LibPrefs.bool("openAutoAdd", true)) {
             val f = File(path)
             if (f.isFile && howread.core.library.Scanner.isBookFile(path)) {
-                runCatching { Db.upsertFileMeta(f.absolutePath, f.nameWithoutExtension, f.length(), f.lastModified()) }
+                runCatching { Db.upsertFileMeta(f.absolutePath, Scanner.bookTitle(f, LibPrefs.bool("useCalibreOpf", true)), f.length(), f.lastModified()) }
             }
         }
         Db.markRecent(path)

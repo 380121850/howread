@@ -256,14 +256,19 @@ object SyncPrefs {
         runCatching { JSONObject(file.readText(Charsets.UTF_8)).optString("syncPass", default) }.getOrDefault(default)
     fun saveSyncPass(v: String) = edit { it.put("syncPass", v) }
 
+    /** v0.54 同步目录（服务器上的同步根，默认 /HowRead，对齐安卓 dialog_webdav_sync）。 */
+    fun loadSyncDir(default: String): String =
+        runCatching { JSONObject(file.readText(Charsets.UTF_8)).optString("syncDir", default) }.getOrDefault(default)
+    fun saveSyncDir(v: String) = edit { it.put("syncDir", v) }
+
     /** 由地址/账号/密码构建同步客户端（http(s)://host[:port]/path → RemoteSource）；解析失败返回 null。 */
-    fun syncSource(url: String, user: String, pass: String): RemoteSource? {
+    fun syncSource(url: String, user: String, pass: String, dir: String = "HowRead"): RemoteSource? {
         val u = runCatching { java.net.URI(url.trim()) }.getOrNull() ?: return null
         val scheme = u.scheme?.lowercase() ?: return null
         if (scheme != "http" && scheme != "https") return null
         val host = u.host ?: return null
         val port = if (u.port > 0) u.port else if (scheme == "https") 443 else 80
-        val path = (u.path ?: "").trim('/')
-        return RemoteSource(0L, "WEBDAV", "sync", host, port, path, user, pass)
+        // v0.54 同步目录独立可配（不再兼用 url 路径）；空回退 HowRead
+        return RemoteSource(0L, "WEBDAV", "sync", host, port, dir.trim('/').ifEmpty { "HowRead" }, user, pass)
     }
 }
