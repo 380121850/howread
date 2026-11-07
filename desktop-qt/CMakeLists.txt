@@ -1,0 +1,18 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(HowReadQt LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_AUTOMOC ON)
+# Qt5/Qt6 双兼容：本机 MinGW 装 Qt6（M0 通道），MXE 交叉是 Qt5.15 静态（服务器通道）。
+# 两边都能编；应用代码按 Qt5.15 基线书写，Qt6 下同样可用。
+add_subdirectory(engine-bridge)
+find_package(Qt6 QUIET COMPONENTS Gui Widgets Sql Network)
+if (Qt6_FOUND)
+    set(HR_QTVER "6")
+    find_package(Qt6 REQUIRED COMPONENTS Gui Widgets Sql Network)
+else()
+    find_package(Qt5 REQUIRED COMPONENTS Gui Widgets Sql Network)
+    set(HR_QTVER "5")
+endif()
+message(STATUS "HowReadQt: using Qt${HR_QTVER}")
+add_subdirectory(qtprobe)
+add_subdirectory(app)

@@ -7,7 +7,8 @@ import java.nio.file.Files
 import java.nio.file.Paths
 
 object Scanner {
-    val BOOK_EXTS = setOf("pdf", "epub", "mobi", "azw", "azw3", "prc", "fb2", "txt", "cbz", "cbr", "xps", "html", "htm", "svg", "docx", "doc", "rtf", "odt", "zip", "djvu")
+    // v0.58 +6：md（TXT 通道）/pdb（引擎 mobi_extensions）/tif/tiff（引擎 muimg）/mht/mhtml（MhtConvert）
+    val BOOK_EXTS = setOf("pdf", "epub", "mobi", "azw", "azw3", "prc", "fb2", "txt", "md", "cbz", "cbr", "xps", "html", "htm", "svg", "docx", "doc", "rtf", "odt", "zip", "djvu", "pdb", "tif", "tiff", "mht", "mhtml")
 
     fun isBookFile(path: String): Boolean =
         path.substringAfterLast('.', "").lowercase() in BOOK_EXTS && ScanPrefs.enabled(path)

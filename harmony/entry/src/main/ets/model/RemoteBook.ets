@@ -257,12 +257,33 @@ export async function sha256Hex(input: string): Promise<string> {
 
 /* ---- Format tiers (Android RemoteBook.isDirectOpen / isHeavyFormat) ---- */
 
-const DIRECT_OPEN_EXTS: string[] = ['pdf', 'epub', 'cbz', 'xps', 'oxps'];
-const SIMPLE_FETCH_EXTS: string[] = ['txt', 'html', 'htm', 'fb2', 'rtf'];
+/* 0.9.25 P0-1 (report 2026-11-05 section six): txt streams directly - the
+ * engine txt handler opens the remote fz_stream INCREMENTALLY (txt-chunk-doc
+ * keeps the stream and reads 256KB chunk by chunk, GBK transcoding included),
+ * so a remote TXT shows its first page without fetching the whole book
+ * (Android round-12 parity). fb2/html/mobi stay fetch-then-open: their
+ * handlers slurp the stream whole (fz_read_all), streaming buys nothing. */
+const DIRECT_OPEN_EXTS: string[] = ['pdf', 'epub', 'txt', 'cbz', 'xps', 'oxps'];
+const SIMPLE_FETCH_EXTS: string[] = ['html', 'htm', 'fb2', 'rtf'];
 /** heavy formats: whole-book download only (online parse cost too high) */
 const HEAVY_EXTS: string[] = ['mobi', 'azw', 'azw3', 'prc', 'djvu', 'cbr', 'doc', 'docx'];
 /** page-image formats use 1MB blocks (Android RemoteBookSession.isPageFormat) */
 const PAGE_FORMAT_EXTS: string[] = ['pdf', 'cbz', 'xps', 'oxps', 'djvu'];
+
+/* 0.9.25 P0-4: formats the engine cannot open in the HarmonyOS build - a
+ * whole-book download would end on an un-openable file (djvu/cbr never had
+ * a handler; azw3 has no KF8 branch; legacy .doc has no Word handler and
+ * openConverted() only covers docx/rtf/odt; azw device-probed 0.9.25:
+ * seeded local open -> book_open_fail err=1, while prc/mobi open fine).
+ * Remote clicks now hint first and offer a local-only download. */
+/* P2-12 (0.9.37): djvu left the list - the engine opens DjVu through
+ * djvulibre (HR_DJVU handler); remote clicks take the HEAVY
+ * download-then-open flow and the local open succeeds. */
+const ENGINE_UNSUPPORTED_EXTS: string[] = ['azw3', 'azw', 'cbr', 'doc'];
+
+export function isEngineUnsupportedExt(ext: string): boolean {
+  return ENGINE_UNSUPPORTED_EXTS.indexOf(ext) >= 0;
+}
 
 export function fileExtOf(name: string): string {
   const dot: number = name.lastIndexOf('.');
@@ -830,6 +851,9 @@ export class BlockCacheStore {
   private mem: Map<number, Uint8Array> = new Map(); /* insertion order = LRU order */
   private memBytes = 0;
   private dataFd: number = -1;
+  /* 0.9.27 P2-15: crc.bin fd, one LE u32 per block (old caches lack the
+   * file entirely - checksumming is skipped until blocks get rewritten) */
+  private crcFd: number = -1;
   private inflight: Map<number, Promise<ArrayBuffer>> = new Map();
 
   constructor(ctx: Context, cacheKey: string) {
@@ -999,11 +1023,50 @@ export class BlockCacheStore {
     try {
       const fd = await this.openDataFd();
       fs.writeSync(fd, data, { offset: bi * this.meta.blockSize });
+      /* 0.9.27 P2-15: record the block checksum (best effort) */
+      try {
+        const cfd = await this.openCrcFd();
+        const cb = new ArrayBuffer(4);
+        new DataView(cb).setUint32(0, crc32Of(new Uint8Array(data)), true);
+        fs.writeSync(cfd, cb, { offset: bi * 4 });
+      } catch (e) { /* checksums are optional */ }
       if (bi < this.blockCount && this.bitmap[bi] !== 1) {
         this.bitmap[bi] = 1;
         await this.persistBitmap();
       }
     } catch (e) { /* ignore */ }
+  }
+
+  private async openCrcFd(): Promise<number> {
+    if (this.crcFd < 0) {
+      this.crcFd = fs.openSync(this.dir + '/crc.bin',
+        fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE).fd;
+    }
+    return this.crcFd;
+  }
+
+  /** 0.9.27 P2-15: true when the on-disk block matches its recorded CRC
+   * (or when no checksum is recorded - legacy caches stay readable). */
+  private crcMatches(bi: number, data: ArrayBuffer): boolean {
+    try {
+      if (!fs.accessSync(this.dir + '/crc.bin')) {
+        return true;
+      }
+      const st = fs.statSync(this.dir + '/crc.bin');
+      if (st.size < (bi + 1) * 4) {
+        return true; /* no record for this block yet */
+      }
+      const cb = new ArrayBuffer(4);
+      const fd: number = fs.openSync(this.dir + '/crc.bin', fs.OpenMode.READ_ONLY).fd;
+      try {
+        fs.readSync(fd, cb, { offset: bi * 4 });
+      } finally {
+        fs.closeSync(fd);
+      }
+      return new DataView(cb).getUint32(0, true) === crc32Of(new Uint8Array(data));
+    } catch (e) {
+      return true; /* checksum housekeeping must not break reads */
+    }
   }
 
   /** Assemble [offset, offset+len) from mem/disk/remote; caches missing blocks. */
@@ -1041,6 +1104,12 @@ export class BlockCacheStore {
     }
     const p = (async (): Promise<ArrayBuffer> => {
       let data: ArrayBuffer | null = await this.diskReadBlock(bi);
+      if (data !== null && !this.crcMatches(bi, data)) {
+        /* 0.9.27 P2-15: corrupt block on disk - drop and re-fetch once */
+        this.bitmap[bi] = 0;
+        await this.persistBitmap();
+        data = null;
+      }
       if (data === null) {
         const bs = this.meta.blockSize;
         const off = bi * bs;
@@ -1061,6 +1130,24 @@ export class BlockCacheStore {
     fetcher: (off: number, want: number) => Promise<ArrayBuffer>): Promise<void> {
     let done = 0;
     for (let bi = from; bi < this.blockCount && done < depth; bi++) {
+      if (this.hasBlock(bi) || this.inflight.has(bi)) {
+        continue;
+      }
+      done++;
+      try {
+        await this.ensureBlock(bi, fetcher);
+      } catch (e) {
+        return; /* prefetch failures are tolerated */
+      }
+    }
+  }
+
+  /** 0.9.26: backward twin of prefetchAhead (page turns toward the book
+   * start). */
+  async prefetchBehind(end: number, depth: number,
+    fetcher: (off: number, want: number) => Promise<ArrayBuffer>): Promise<void> {
+    let done = 0;
+    for (let bi = Math.min(end, this.blockCount - 1); bi >= 0 && done < depth; bi--) {
       if (this.hasBlock(bi) || this.inflight.has(bi)) {
         continue;
       }
@@ -1097,6 +1184,12 @@ export class BlockCacheStore {
       }
       onProgress(Math.round((bi + 1) * 100 / this.blockCount));
     }
+    /* P1-9 (0.9.35): blocks that were already cached before the filler ran
+     * are skipped without reporting, so a tiny single-block book (or any
+     * book whose read-through completed it) never delivered p>=100 - the
+     * whole-book-cached toast never showed and the pagemap background
+     * convergence never fired. Report 100 exactly when fullyCached flips. */
+    onProgress(100);
     this.meta.fullyCached = true;
     await this.flushMeta();
   }
@@ -1121,6 +1214,12 @@ export class BlockCacheStore {
         fs.closeSync(this.dataFd);
       } catch (e) { /* ignore */ }
       this.dataFd = -1;
+    }
+    if (this.crcFd >= 0) {
+      try {
+        fs.closeSync(this.crcFd);
+      } catch (e) { /* ignore */ }
+      this.crcFd = -1;
     }
   }
 }
@@ -1254,8 +1353,53 @@ export class RemoteSession {
 
   /** Dispatcher entry for the native stream bridge. */
   async readAt(offset: number, len: number): Promise<ArrayBuffer> {
-    return this.store.readAt(offset, len, (off: number, want: number): Promise<ArrayBuffer> => {
-      return this.source.readAt(off, want);
+    const buf: ArrayBuffer = await this.store.readAt(offset, len,
+      (off: number, want: number): Promise<ArrayBuffer> => {
+        return this.source.readAt(off, want);
+      });
+    /* 0.9.25 P0-3 (Android foreground-read prefetch parity): after every
+     * bridge read, nudge the blocks ahead of the engine's cursor. The
+     * prefetchBusy gate serializes, the metered gate honors wifi-only. */
+    this.lastBridgedBlock = Math.floor(offset / this.meta.blockSize);
+    this.prefetchAfter(this.lastBridgedBlock);
+    return buf;
+  }
+
+  /* 0.9.26: last block the engine asked for through the bridge - the
+   * anchor for page-turn direction prefetch. */
+  private lastBridgedBlock: number = 0;
+
+  /** 0.9.26 P0-3 tail (Android direction-aware prefetch): on a page turn,
+   * nudge the window toward the reading direction. Forward turns let the
+   * bridged reads drive (their prefetch already runs ahead); backward
+   * turns pull the blocks behind the cursor that the memory LRU may have
+   * evicted. */
+  prefetchForPageTurn(dir: number): void {
+    if (this.closed) {
+      return;
+    }
+    if (dir < 0) {
+      this.prefetchBackward();
+    } else {
+      this.prefetchAfter(this.lastBridgedBlock);
+    }
+  }
+
+  private prefetchBackward(): void {
+    if (this.closed || this.prefetchBusy) {
+      return;
+    }
+    if (this.settings.prefetchWifiOnly && this.metered) {
+      return;
+    }
+    const ext: string = fileExtOf(this.uri.substring(this.uri.lastIndexOf('/') + 1));
+    const depth: number = isPageFormatExt(ext) ? 4 : 3;
+    this.prefetchBusy = true;
+    this.store.prefetchBehind(this.lastBridgedBlock - 1, depth,
+      (off: number, want: number): Promise<ArrayBuffer> => {
+        return this.source.readAt(off, want);
+      }).finally(() => {
+      this.prefetchBusy = false;
     });
   }
 
@@ -1269,7 +1413,9 @@ export class RemoteSession {
       return;
     }
     const ext: string = fileExtOf(this.uri.substring(this.uri.lastIndexOf('/') + 1));
-    const depth: number = isPageFormatExt(ext) ? 32 : 3;
+    /* 0.9.25: page-format lookahead 32 -> 4: with 1MB blocks, 32 blocks
+     * was a 32MB lookahead; the Android window is ~4MB */
+    const depth: number = isPageFormatExt(ext) ? 4 : 3;
     this.prefetchBusy = true;
     this.store.prefetchAhead(lastBlock + 1, depth, (off: number, want: number): Promise<ArrayBuffer> => {
       return this.source.readAt(off, want);
@@ -1322,6 +1468,236 @@ export class RemoteSession {
     try {
       this.source.close();
     } catch (e) { /* ignore */ }
+    /* 0.9.25 P0-3: release the eviction pin taken when the reader opened */
+    pinnedCacheKeys.delete(this.cacheKey);
+  }
+}
+
+/* ---- 0.9.25 P0-3: remote cache quota (Android LRU byte-eviction parity).
+ * remoteCacheMaxMB existed in settings since 0.9.6 with NO consumer: the
+ * value only reached a session config field nobody read, so the Remote cache
+ * grew unbounded until a manual "clear". ---- */
+
+/* Books currently opened by the user: eviction never drops them (Android
+ * BlockCacheStore open-session pinKey). */
+const pinnedCacheKeys: Set<string> = new Set();
+
+export function pinRemoteCacheKey(key: string): void {
+  pinnedCacheKeys.add(key);
+}
+
+interface CacheDirInfo {
+  dir: string;
+  key: string;
+  size: number;
+  mtime: number;
+}
+
+/* ---- 0.9.27 P2-15: per-block CRC32 (Android crc.bin parity) ---- */
+const CRC32_TABLE: Uint32Array = buildCrc32Table();
+
+function buildCrc32Table(): Uint32Array {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c: number = n;
+    for (let k = 0; k < 8; k++) {
+      c = (c & 1) !== 0 ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    t[n] = c >>> 0;
+  }
+  return t;
+}
+
+function crc32Of(u8: Uint8Array): number {
+  let c: number = 0xFFFFFFFF;
+  for (let i = 0; i < u8.length; i++) {
+    c = CRC32_TABLE[(c ^ u8[i]) & 0xFF] ^ (c >>> 8);
+  }
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+/** 0.9.29 P0-1 tail: rename a downloaded file whose content contradicts
+ * a checkable extension (a hostile variant that survived the download).
+ * Today: a .pdf that is really a zip container becomes .epub - the common
+ * hostile case (epub itself is a zip, so PK alone cannot separate cbz/xps). */
+export function fixHostileExt(p: string, ext: string): string {
+  try {
+    if (ext !== 'pdf') {
+      return p;
+    }
+    const file = fs.openSync(p, fs.OpenMode.READ_ONLY);
+    const head: ArrayBuffer = new ArrayBuffer(8);
+    try {
+      fs.readSync(file.fd, head);
+    } finally {
+      fs.closeSync(file);
+    }
+    const u8: Uint8Array = new Uint8Array(head);
+    if (u8.length >= 2 && u8[0] === 0x50 && u8[1] === 0x4B) {
+      const np: string = p.substring(0, p.lastIndexOf('.')) + '.epub';
+      try {
+        fs.unlinkSync(np);
+      } catch (e) { /* none */ }
+      fs.renameSync(p, np);
+      console.info('[RemoteBook] hostile variant renamed to epub');
+      return np;
+    }
+  } catch (e) { /* keep the original name on any trouble */ }
+  return p;
+}
+
+/** 0.9.27 helper: read a small text file ('' if absent). */
+export function readSmallTextFile(p: string): string {
+  try {
+    if (!fs.accessSync(p)) {
+      return '';
+    }
+    const file = fs.openSync(p, fs.OpenMode.READ_ONLY);
+    try {
+      const st = fs.statSync(p);
+      const buf = new ArrayBuffer(st.size);
+      fs.readSync(file.fd, buf);
+      const dec = util.TextDecoder.create('utf-8');
+      return dec.decodeToString(new Uint8Array(buf));
+    } finally {
+      fs.closeSync(file);
+    }
+  } catch (e) {
+    return '';
+  }
+}
+
+/** 0.9.27 helper: write a small text file (TRUNC), creating parents. */
+export function writeSmallTextFile(p: string, content: string): void {
+  const dir: string = p.substring(0, p.lastIndexOf('/'));
+  try {
+    fs.mkdirSync(dir, true);
+  } catch (e) { /* exists */ }
+  const f = fs.openSync(p, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+  try {
+    fs.writeSync(f.fd, content);
+  } finally {
+    fs.closeSync(f);
+  }
+}
+
+/** 0.9.27 helper: keep only the newest `keep` files in dir (LRU by mtime). */
+export function trimOldestFiles(dir: string, keep: number): void {
+  try {
+    if (!fs.accessSync(dir)) {
+      return;
+    }
+    const names: string[] = fs.listFileSync(dir);
+    const items: FileInfo[] = [];
+    for (let i = 0; i < names.length; i++) {
+      try {
+        const st = fs.statSync(dir + '/' + names[i]);
+        if (!st.isDirectory()) {
+          items.push({ name: names[i], mtime: st.mtime * 1000 });
+        }
+      } catch (e) { /* gone */ }
+    }
+    if (items.length <= keep) {
+      return;
+    }
+    items.sort((a: FileInfo, b: FileInfo): number => a.mtime - b.mtime);
+    for (let i = 0; i < items.length - keep; i++) {
+      try {
+        fs.unlinkSync(dir + '/' + items[i].name);
+      } catch (e) { /* fine */ }
+    }
+  } catch (e) { /* best effort */ }
+}
+
+interface FileInfo {
+  name: string;
+  mtime: number;
+}
+
+/** 0.9.26 P0-1 tail: magic-vs-extension sanity for direct-open formats.
+ * Returns true when the head bytes match the extension (or cannot be
+ * checked - callers open as usual and the engine error path reports it). */
+export async function checkRemoteMagic(ext: string,
+  read: (off: number, want: number) => Promise<ArrayBuffer>): Promise<boolean> {
+  try {
+    const head: ArrayBuffer = await read(0, 8);
+    const u8: Uint8Array = new Uint8Array(head);
+    if (u8.length < 4) {
+      return true;
+    }
+    if (ext === 'pdf') {
+      return u8[0] === 0x25 && u8[1] === 0x50 && u8[2] === 0x44 && u8[3] === 0x46; /* %PDF */
+    }
+    if (ext === 'epub' || ext === 'cbz' || ext === 'xps' || ext === 'oxps') {
+      return u8[0] === 0x50 && u8[1] === 0x4B; /* PK zip container */
+    }
+    return true; /* plain text and friends have no reliable magic */
+  } catch (e) {
+    return true; /* head read failed: let the normal open path report it */
+  }
+}
+
+/** Best-effort: drop whole book-cache dirs under filesDir/Remote, oldest
+ *  data.bin first, until the total fits maxMB (<=0 = unlimited). The 'books'
+ *  materialize folder and pinned/opened books are never touched. Never
+ *  throws - quota housekeeping must not break a book open. */
+export async function enforceRemoteCacheQuota(ctx: Context, maxMB: number, pinKey: string): Promise<void> {
+  try {
+    if (maxMB <= 0) {
+      return;
+    }
+    const root: string = remoteRoot(ctx);
+    if (!fs.accessSync(root)) {
+      return;
+    }
+    const limit: number = maxMB * 1024 * 1024;
+    const names: string[] = fs.listFileSync(root);
+    const dirs: CacheDirInfo[] = [];
+    let total: number = 0;
+    for (let i = 0; i < names.length; i++) {
+      if (names[i] === 'books') {
+        continue;
+      }
+      const key: string = names[i];
+      const dataPath: string = root + '/' + key + '/data.bin';
+      try {
+        const st = fs.statSync(dataPath);
+        if (st.isDirectory()) {
+          continue;
+        }
+        dirs.push({ dir: root + '/' + key, key: key, size: st.size, mtime: st.mtime * 1000 });
+        total += st.size;
+      } catch (e) {
+        continue; /* no data.bin: nothing worth evicting */
+      }
+    }
+    if (total <= limit) {
+      return;
+    }
+    dirs.sort((a: CacheDirInfo, b: CacheDirInfo): number => {
+      return a.mtime - b.mtime;
+    });
+    for (let i = 0; i < dirs.length && total > limit; i++) {
+      const d: CacheDirInfo = dirs[i];
+      if (d.key === pinKey || pinnedCacheKeys.has(d.key)) {
+        continue;
+      }
+      try {
+        /* this SDK's rmdirSync has no recursion flag; book cache dirs hold
+         * only flat files (meta.json/data.bin/blocks.bin/pagemap.bin) */
+        const names: string[] = fs.listFileSync(d.dir);
+        for (let j = 0; j < names.length; j++) {
+          try {
+            fs.unlinkSync(d.dir + '/' + names[j]);
+          } catch (e) { /* entry already gone */ }
+        }
+        fs.rmdirSync(d.dir);
+        total -= d.size;
+        console.info(`[RemoteBook] cache quota evicted ${d.key} (${d.size} bytes)`);
+      } catch (e) { /* dir in use - skip */ }
+    }
+  } catch (e) {
+    console.warn('[RemoteBook] cache quota enforcement failed');
   }
 }
 

@@ -29,12 +29,14 @@ class BlockCacheStore private constructor(
     private val dataFile = File(dir, "data.bin")
     private val flagFile = File(dir, "blocks.bin")
     private val metaFile = File(dir, "meta.json")
+    private val crcFile = File(dir, "crc.bin")   // v0.58 每块 CRC32（LE u32；0=未知不过检）
     private val blockCount = (((size + blockSize - 1) / blockSize).toInt()).coerceAtLeast(1)
     private val depth = (memLimit / blockSize).toInt().coerceAtLeast(2)   // P2 窗口总深度（块数）
     // v0.54 阅读位置前后非对称窗口（安卓 remoteWindowBefore/AfterPct 同款：默认 前20%/后30%）
     private val depthFwd: Int = (depth.toLong() * windowAfterPct / (windowAfterPct + windowBeforePct)).toInt().coerceAtLeast(1)
     private val depthBack: Int = (depth - depthFwd).coerceAtLeast(1)
     private val flags = ByteArray(blockCount)
+    private val crcs = IntArray(blockCount)
     private val inFlight = HashSet<Int>()
     private val mem = object : LinkedHashMap<Int, ByteArray>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, ByteArray>): Boolean =
@@ -69,6 +71,9 @@ class BlockCacheStore private constructor(
 
         private val capTick = java.util.concurrent.atomic.AtomicInteger(0)
 
+        private fun crc32Of(b: ByteArray): Int =
+            java.util.zip.CRC32().apply { update(b) }.value.toInt()
+
         /** remote-blocks 总占用字节。 */
         fun totalBytes(): Long =
             java.io.File(AppPaths.cacheDir, "remote-blocks").listFiles()
@@ -93,7 +98,8 @@ class BlockCacheStore private constructor(
             }
         }
 
-        private val PAGE_FMTS = setOf("pdf", "cbz", "cbr", "xps", "djvu")
+        // v0.58：tif/tiff 为页面格式（图片文档离散小读），与 pdf/cbz 同 64KB 块
+        private val PAGE_FMTS = setOf("pdf", "cbz", "cbr", "xps", "djvu", "tif", "tiff")
 
         /** 缓存目录 key（cache/remote-blocks/<key>/）；resolve 惰性回收晋升后的块缓存目录时复算用。 */
         fun cacheKey(path: String, size: Long, ext: String): String {
@@ -135,18 +141,25 @@ class BlockCacheStore private constructor(
     /** 块缓存目录（晋升整本后惰性回收用）。 */
     fun cacheDir(): File = dir
 
-    private fun expectedMeta(): String = "size=$size block=$blockSize"
+    // v0.58 token 加 crc=1：旧格式目录（无 CRC）按不匹配整目录重建，cachedPercent 的散 token 解析天然兼容
+    private fun expectedMeta(): String = "size=$size block=$blockSize crc=1"
 
     private fun loadState() {
         runCatching {
             if (metaFile.isFile && metaFile.readText() == expectedMeta() && flagFile.isFile &&
-                flagFile.length() >= blockCount
+                flagFile.length() >= blockCount && crcFile.isFile && crcFile.length() >= blockCount * 4L
             ) {
                 val f = flagFile.readBytes()
                 System.arraycopy(f, 0, flags, 0, blockCount)
+                val cb = crcFile.readBytes()
+                for (i in 0 until blockCount) {
+                    val o = i * 4
+                    crcs[i] = (cb[o].toInt() and 0xFF) or ((cb[o + 1].toInt() and 0xFF) shl 8) or
+                        ((cb[o + 2].toInt() and 0xFF) shl 16) or ((cb[o + 3].toInt() and 0xFF) shl 24)
+                }
                 fullyCached = flags.all { it == 1.toByte() }
             } else {
-                dataFile.delete(); flagFile.delete(); metaFile.delete()
+                dataFile.delete(); flagFile.delete(); metaFile.delete(); crcFile.delete()
             }
         }
     }
@@ -299,7 +312,12 @@ class BlockCacheStore private constructor(
             r.seek(idx.toLong() * blockSize)
             r.readFully(out)
         }
-        out
+        // v0.58 CRC 校验（安卓 bitmap+crc / Qt v0.105 同语义）：盘上坏块当场判失效，上层按缺块重取自愈
+        val c = crcs[idx]
+        if (c != 0 && crc32Of(out) != c) {
+            TestLog.evt("block_crc_bad", "key=$key idx=$idx")
+            null
+        } else out
     } catch (_: Exception) {
         null
     }
@@ -309,6 +327,14 @@ class BlockCacheStore private constructor(
             RandomAccessFile(dataFile, "rw").use { r ->
                 r.seek(idx.toLong() * blockSize)
                 r.write(data)
+            }
+            crcs[idx] = crc32Of(data)
+            RandomAccessFile(crcFile, "rw").use { r ->
+                r.seek(idx.toLong() * 4L)
+                val v = crcs[idx]
+                r.write(byteArrayOf(
+                    (v and 0xFF).toByte(), ((v shr 8) and 0xFF).toByte(),
+                    ((v shr 16) and 0xFF).toByte(), ((v shr 24) and 0xFF).toByte()))
             }
         }
     }

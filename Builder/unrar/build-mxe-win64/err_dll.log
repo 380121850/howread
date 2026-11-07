@@ -1,0 +1,22 @@
+In file included from ../rar.hpp:6,
+                 from ../dll.cpp:1:
+../os.hpp:39:9: warning: 'WINVER' redefined
+   39 | #define WINVER _WIN32_WINNT_WINXP
+      |         ^~~~~~
+In file included from /docker/opt/mxe/usr/x86_64-w64-mingw32.static/include/windows.h:10,
+                 from /tmp/unrarshim/unrar_prelude.h:3,
+                 from <command-line>:
+/docker/opt/mxe/usr/x86_64-w64-mingw32.static/include/sdkddkver.h:194:9: note: this is the location of the previous definition
+  194 | #define WINVER _WIN32_WINNT
+      |         ^~~~~~
+../os.hpp:40:9: warning: '_WIN32_WINNT' redefined
+   40 | #define _WIN32_WINNT _WIN32_WINNT_WINXP
+      |         ^~~~~~~~~~~~
+In file included from /docker/opt/mxe/usr/x86_64-w64-mingw32.static/include/windows.h:9:
+/docker/opt/mxe/usr/x86_64-w64-mingw32.static/include/_mingw.h:256:9: note: this is the location of the previous definition
+  256 | #define _WIN32_WINNT 0x0601
+      |         ^~~~~~~~~~~~
+../os.hpp:43:9: warning: 'RAR_SMP' redefined
+   43 | #define RAR_SMP
+      |         ^~~~~~~
+<command-line>: note: this is the location of the previous definition

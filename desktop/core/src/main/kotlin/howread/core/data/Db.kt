@@ -175,13 +175,14 @@ object Db {
     /** 远程源定向裁剪（v0.47 检视修复）：源上已删除/改名的登记书移出书库及进度/书签/批注。 */
     @Synchronized fun pruneRemoteSource(srcId: Long, keepRel: Set<String>): Int {
         val prefix = "remote://" + srcId + "/"
+        val keep = keepRel.map { it.trim('/') }.toSet()   // v0.58：双保险归一化（旧调用方可能传带斜杠 rel）
         val gone = ArrayList<String>()
         conn.createStatement().executeQuery(
             "SELECT path FROM file_meta WHERE path LIKE '" + prefix.replace("'", "''") + "%'"
         ).use { rs ->
             while (rs.next()) {
                 val p = rs.getString(1)
-                if (p.removePrefix(prefix) !in keepRel) gone.add(p)
+                if (p.removePrefix(prefix).trim('/') !in keep) gone.add(p)
             }
         }
         if (gone.isEmpty()) return 0
@@ -720,6 +721,13 @@ object Db {
         conn.prepareStatement("SELECT size FROM file_meta WHERE path=?").use { ps ->
             ps.setString(1, path)
             ps.executeQuery().use { rs -> if (rs.next()) rs.getLong(1) else -1L }
+        }
+
+    /** 登记时记录的服务器端修改时间（v0.58 远程缓存版本标记用；未登记/无时间源返回 0）。 */
+    @Synchronized fun bookMtime(path: String): Long =
+        conn.prepareStatement("SELECT mtime FROM file_meta WHERE path=?").use { ps ->
+            ps.setString(1, path)
+            ps.executeQuery().use { rs -> if (rs.next()) rs.getLong(1) else 0L }
         }
 
     // ---- 持久高亮（划词保存，页坐标四边形序列化） ----

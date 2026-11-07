@@ -25,12 +25,13 @@ import picker from '@ohos.file.picker';
 import pasteboard from '@ohos.pasteboard';
 import common from '@ohos.app.ability.common';
 import { tlog } from '../model/TestLog';
+import { OpenPrefetch, OpenPrefetchEntry } from '../model/OpenPrefetch';
 import inputConsumer from '@ohos.multimodalInput.inputConsumer';
 import mmiKeyEvent from '@ohos.multimodalInput.keyEvent';
 import { systemShare } from '@kit.ShareKit';
 import { importUriToSandbox } from '../model/FileImport';
 import {
-  version, openDocument, pageCount, renderPageAsync, closeDocument, getToc, getPageSize,
+  version, openDocument, pageCount, renderPageAsync, closeDocument, getToc, getPageSize, saveAccelerator,
   searchText, searchDocument, getText, getAnnotations, addHighlight, addInkStroke, deleteAnnotation, saveDocument,
   addMarkupAnnotation, addTextNote,
   layoutDocument, isReflowable, getDocumentInfo, getTextRects, loadFont,
@@ -55,7 +56,16 @@ import {
   RemoteSession, RemoteFileSource, WebDavFileSource, SmbFileSource, SftpFileSource,
   loadRemoteCacheSettings, parseRemoteUri, resolveWebDavServer, resolveSmbServer, resolveSftpServer,
   fileExtOf, isDirectOpenExt, isPageFormatExt, mobiIsEncrypted, sha256Hex,
-  BlockCacheStore, RemoteProbe, readPageTreeSidecar, writePageTreeSidecar, PageTreeSidecar,  materializeBook } from '../model/RemoteBook';
+  BlockCacheStore, RemoteProbe, readPageTreeSidecar, writePageTreeSidecar, PageTreeSidecar,  materializeBook,
+  pinRemoteCacheKey, enforceRemoteCacheQuota, readSmallTextFile, writeSmallTextFile,
+  trimOldestFiles } from '../model/RemoteBook';
+
+/* 0.9.33 P2-11: one imported user font (filesDir/fonts copy of a picked
+ * TTF/OTF/TTC). Applied through the engine @font-face channel (buildCss). */
+interface UserFontRec {
+  name: string;
+  path: string;
+}
 
 const LEFT_ZONE_RATIO: number = 0.3;
 const RIGHT_ZONE_RATIO: number = 0.3;
@@ -131,13 +141,15 @@ class PageDataSource implements IDataSource {
     return this.docHandle;
   }
 
-  openDoc(path: string, lazyCount: boolean = false): void {
+  openDoc(path: string, lazyCount: boolean = false, accelPath: string = ''): void {
     try {
       this.docPath = path;
       if (this.docHandle !== undefined) {
         try { closeDocument(this.docHandle); } catch (_e) {}
       }
-      this.docHandle = openDocument(path);
+      /* 0.9.27 P1-5: accelerated open when the caller supplied an
+       * accelerator path (falls back inside the binding if it is stale) */
+      this.docHandle = openDocument(path, accelPath.length > 0 ? accelPath : undefined);
       /* 0.9.16 staged open: lazyCount skips the (possibly huge) full page
        * count here; the caller grows the page list progressively instead. */
       const total: number = lazyCount ? 0 : pageCount(this.docHandle);
@@ -146,6 +158,20 @@ class PageDataSource implements IDataSource {
       console.error('[Reader] Failed to open document');
       throw e as Error;
     }
+  }
+
+  /** 0.9.34 P2-14: adopt a handle already opened on a worker thread
+   * (OpenPrefetch). Mirrors openDoc bookkeeping minus the open cost; the page
+   * count starts at 0 and grows through the same staged layout that a
+   * lazyCount openDoc would drive. */
+  adoptDoc(path: string, handle: ESObject): void {
+    this.docPath = path;
+    if (this.docHandle !== undefined) {
+      try { closeDocument(this.docHandle); } catch (_e) {}
+    }
+    this.docHandle = handle;
+    this.setPageCount(0);
+    console.info(`[Reader] Adopted prefetched open: ${path}`);
   }
 
   /** Replace the page index array and notify the views (0.9.16). */
@@ -190,11 +216,12 @@ class PageDataSource implements IDataSource {
     return this.pageIndices.length;
   }
 
-  getData(index: number): string {
+  getData(index: number): number {
+    /* P2-17 (0.9.36): LazyForEach item payload is the page index itself. */
     if (index < 0 || index >= this.pageIndices.length) {
-      return '0';
+      return 0;
     }
-    return String(this.pageIndices[index]);
+    return this.pageIndices[index];
   }
 
   registerDataChangeListener(listener: DataChangeListener): void {
@@ -222,25 +249,40 @@ struct PageRenderer {
   pageIndex: number = 0;
   dataSource: PageDataSource = new PageDataSource();
   cropRect: CropRect | undefined = undefined;
-  searchHits: TextRect[] = [];
-  annotations: AnnotationInfo[] = [];
-  selPreview: TextRect[] = [];
+  /* P2-17 (0.9.36): LazyForEach items are created once; only alive cells
+   * receive prop updates. Scoped overlays are handed over in full and
+   * filtered inside (pageIndex === currentPage / searchHitPage). */
+  @Prop @Watch('onBiChanged') currentPage: number = -1;
+  @Prop searchHitPage: number = -1;
+  @Prop searchHits: TextRect[] = [];
+  @Prop annotations: AnnotationInfo[] = [];
+  @Prop selPreview: TextRect[] = [];
   /* 0.9.20: PDF bilingual overlays (Android PdfBilingualPageDraw parity).
-   * rects are normalized to the full page; text blocks are laid over the page
-   * image so they move and zoom with the page naturally. */
-  @Prop biOverlays: BiOverlay[] = [];
-  @Prop biMode: number = PDF_TRANS_REFLOW;
+   * rects are normalized to the full page. P2-10 (0.9.36): the translation
+   * text is drawn INTO the page bitmap at composition time (it moves, zooms,
+   * rotates and exports with the page by construction); the ArkUI overlay in
+   * build() remains only as a device fallback if canvas compositing fails. */
+  @Prop @Watch('onBiChanged') biOverlays: BiOverlay[] = [];
+  @Prop @Watch('onBiChanged') biMode: number = PDF_TRANS_REFLOW;
+  private compositeFailed: boolean = false;
+  private composited: boolean = false;
+  private baseData: ArrayBuffer | undefined = undefined;
+  private baseW: number = 0;
+  private baseH: number = 0;
+  private viewW: number = 0;
   @Prop biFlash: TextRect[] = [];
   onBiBadge: (idx: number) => void = (idx: number): void => {};
   onPageArea: (x: number, y: number, w: number, h: number) => void =
     (x: number, y: number, w: number, h: number): void => {};
+  /* 0.9.34 P2-14: first-render callback (releases the parent's paint gate) */
+  onRendered: (page: number, ok: boolean) => void = (p: number, ok: boolean): void => {};
   @State pixelMap: image.PixelMap | undefined = undefined;
   @State isLoading: boolean = true;
   @State errorText: string = '';
   @State renderW: number = 1;
   @State renderH: number = 1;
   /* Round 5: contrast 0..100, 50 = neutral (colorFilter on the page image) */
-  contrastLevel: number = 50;
+  @Prop contrastLevel: number = 50;
   /* Night/day fix: invert is pushed from the parent so a theme change re-renders.
    * (the flag alone only affects future renders — this page was rendered before
    *  async initSettings applied the stored theme on cold open) */
@@ -252,6 +294,142 @@ struct PageRenderer {
 
   onInvertChanged(): void {
     this.loadData();
+  }
+
+  /* P2-17 (0.9.36): scoped views of the full overlay arrays. */
+  private hitsOf(): TextRect[] {
+    return this.pageIndex === this.searchHitPage ? this.searchHits : [];
+  }
+
+  private annsOf(): AnnotationInfo[] {
+    return this.pageIndex === this.currentPage ? this.annotations : [];
+  }
+
+  private selsOf(): TextRect[] {
+    return this.pageIndex === this.currentPage ? this.selPreview : [];
+  }
+
+  private flashesOf(): TextRect[] {
+    return this.pageIndex === this.currentPage ? this.biFlash : [];
+  }
+
+  private oversOf(): BiOverlay[] {
+    return this.pageIndex === this.currentPage ? this.biOverlays : [];
+  }
+
+  /* P2-10 (0.9.36): translation overlays that belong in the bitmap. */
+  private oversToPaint(): BiOverlay[] {
+    if (this.biMode !== PDF_TRANS_REFLOW && this.biMode !== PDF_TRANS_REPLACE) {
+      return [];
+    }
+    return this.oversOf();
+  }
+
+  /* P2-10 (0.9.36): translation data/mode/scope changed after the render -
+   * recomposite from the retained bitmap, or revert to the plain page. */
+  private onBiChanged(): void {
+    if (this.baseData === undefined) {
+      return;
+    }
+    const overs: BiOverlay[] = this.oversToPaint();
+    if (overs.length > 0) {
+      this.compositeTranslation(this.baseData, overs, this.baseW, this.baseH)
+        .then((pm: image.PixelMap) => {
+          this.composited = true;
+          this.pixelMap = pm;
+          this.renderW = this.baseW;
+          this.renderH = this.baseH;
+        })
+        .catch((e: Error) => {
+          console.warn('[Reader] bi recomposite failed: ' + e.message);
+          this.compositeFailed = true;
+        });
+    } else if (this.composited) {
+      this.composited = false;
+      const opts: image.InitializationOptions = {
+        size: { width: this.baseW, height: this.baseH },
+        pixelFormat: image.PixelMapFormat.RGBA_8888
+      };
+      image.createPixelMap(this.baseData, opts).then((pm: image.PixelMap) => {
+        this.pixelMap = pm;
+      }).catch((_e: Error) => {});
+    }
+  }
+
+  /* P2-10 (0.9.36): bake the translation cards into the page bitmap with an
+   * offscreen canvas. Styling mirrors the ArkUI overlay it replaces. */
+  private async compositeTranslation(data: ArrayBuffer, overs: BiOverlay[],
+    w: number, h: number): Promise<image.PixelMap> {
+    const opts: image.InitializationOptions = {
+      size: { width: w, height: h },
+      pixelFormat: image.PixelMapFormat.RGBA_8888
+    };
+    const base: image.PixelMap = await image.createPixelMap(data, opts);
+    const canvas: OffscreenCanvas = new OffscreenCanvas(w, h);
+    const ctx = canvas.getContext('2d') as OffscreenCanvasRenderingContext2D;
+    ctx.drawImage(base, 0, 0, w, h);
+    /* bitmap px per vp: the overlay text sizes were vp-based over the view */
+    const scale: number = this.viewW > 0 ? w / this.viewW : 2;
+    for (const ov of overs) {
+      const x: number = ov.x0 * w;
+      const y: number = ov.y0 * h;
+      const bw: number = (ov.x1 - ov.x0) * w;
+      const bh: number = (ov.y1 - ov.y0) * h;
+      ctx.fillStyle = this.nightInvert ? '#121212' : '#ffffff';
+      ctx.fillRect(x, y, bw, bh);
+      let pad: number = 2 * scale;
+      if (this.biMode === PDF_TRANS_REFLOW) {
+        ctx.fillStyle = '#1565C0';
+        ctx.fillRect(x, y, Math.max(1, 2 * scale), bh);
+        pad += 2 * scale;
+      }
+      ctx.textBaseline = 'top';
+      let ty: number = y + 2 * scale;
+      if (this.biMode === PDF_TRANS_REFLOW) {
+        const srcPx: number = Math.max(8, Math.round(9 * scale));
+        ctx.fillStyle = this.nightInvert ? '#8a8a8a' : '#9e9e9e';
+        ctx.font = `${srcPx}px sans-serif`;
+        ty = this.drawWrapped(ctx, ov.src, x + pad, ty, x + bw - pad, bh + y,
+          srcPx * 1.25, 2);
+      }
+      const dstPx: number = Math.max(10, Math.round(13 * scale));
+      ctx.fillStyle = this.nightInvert ? '#e0e0e0'
+        : (this.biMode === PDF_TRANS_REPLACE ? '#222222' : '#1565C0');
+      ctx.font = `${dstPx}px sans-serif`;
+      this.drawWrapped(ctx, ov.dst, x + 2 * scale, ty, x + bw - 2 * scale, bh + y,
+        dstPx * 1.25, 8);
+    }
+    const shot = ctx.getImageData(0, 0, w, h);
+    const buf: ArrayBuffer = shot.data.buffer as ArrayBuffer;
+    return await image.createPixelMap(buf, opts);
+  }
+
+  /* Greedy char-wrap for canvas text; returns the y after the last line. */
+  private drawWrapped(ctx: OffscreenCanvasRenderingContext2D, text: string,
+    x: number, y: number, right: number, bottom: number, lineH: number,
+    maxLines: number): number {
+    let line: string = '';
+    let ty: number = y;
+    let lines: number = 0;
+    for (const ch of text) {
+      const test: string = line + ch;
+      if (ctx.measureText(test).width > right - x && line.length > 0) {
+        ctx.fillText(line, x, ty);
+        lines++;
+        ty += lineH;
+        if (lines >= maxLines || ty + lineH > bottom) {
+          return ty;
+        }
+        line = ch;
+      } else {
+        line = test;
+      }
+    }
+    if (line.length > 0 && lines < maxLines && ty < bottom) {
+      ctx.fillText(line, x, ty);
+      ty += lineH;
+    }
+    return ty;
   }
 
   async loadData(retryDepth: number = 0): Promise<void> {
@@ -270,13 +448,19 @@ struct PageRenderer {
         }
       } catch (rendErr) {
         const rendMsg: string = rendErr instanceof Error ? rendErr.message : String(rendErr);
-        if (rendMsg.indexOf('CANCELLED') >= 0 && retryDepth < 2) {
+        if (rendMsg.indexOf('CANCELLED') >= 0 && retryDepth < 8) {
           /* Native backlog cap: a newer page turn superseded this render.
            * Keep the loading state and retry quietly - the churn has settled
-           * by the time the retry runs (stability fix, 2026-09-21). */
+           * by the time the retry runs (stability fix, 2026-09-21).
+           * 2026-11-05: the settle-epoch remap storm on staged chunked books
+           * (measured: GBK 5MB txt, ~4s of cancellations) exceeded the old
+           * 2-retry cap and left the visible page stuck on 'Render error'
+           * while sibling cells rendered the very same page fine.
+           * CANCELLED is always supersession, never a real failure: back off
+           * 250->1500ms and allow a longer quiet chain before surfacing it. */
           setTimeout(() => {
             this.loadData(retryDepth + 1);
-          }, 250);
+          }, Math.min(250 + 250 * retryDepth, 1500));
           return;
         }
         throw rendErr as Error;
@@ -285,7 +469,27 @@ struct PageRenderer {
         size: { width: renderResult.width, height: renderResult.height },
         pixelFormat: image.PixelMapFormat.RGBA_8888
       };
-      this.pixelMap = await image.createPixelMap(renderResult.data, opts);
+      /* P2-10 (0.9.36): keep the raw bitmap around so a translation that
+       * arrives after the render (or a mode/scope change) can recomposite
+       * without hitting the engine again. */
+      this.baseData = renderResult.data;
+      this.baseW = renderResult.width;
+      this.baseH = renderResult.height;
+      const overs: BiOverlay[] = this.oversToPaint();
+      let composed: image.PixelMap | undefined = undefined;
+      if (overs.length > 0) {
+        try {
+          composed = await this.compositeTranslation(renderResult.data, overs,
+            renderResult.width, renderResult.height);
+          this.composited = true;
+        } catch (e) {
+          const em: string = e instanceof Error ? e.message : String(e);
+          console.warn(`[Reader] bi composite failed: ${em}`);
+          this.compositeFailed = true;
+        }
+      }
+      this.pixelMap = composed !== undefined ? composed
+        : await image.createPixelMap(renderResult.data, opts);
       if (this.pageIndex === 0) {
         tlog('bench_first_frame', 'ms=' + (Date.now() - benchD0));
       }
@@ -299,6 +503,7 @@ struct PageRenderer {
       console.error(`[Reader] Page ${this.pageIndex} render failed: ${msg}`);
     } finally {
       this.isLoading = false;
+      this.onRendered(this.pageIndex, this.errorText.length === 0);
     }
   }
 
@@ -323,7 +528,7 @@ struct PageRenderer {
             .borderRadius(2)
             .colorFilter(new ColorFilter(contrastMatrix(this.contrastLevel)))
           /* search hit highlights (yellow) */
-          ForEach(this.searchHits, (hit: TextRect) => {
+          ForEach(this.hitsOf(), (hit: TextRect) => {
             Column()
               .width(`${(hit.x1 - hit.x0) * 100}%`)
               .height(`${(hit.y1 - hit.y0) * 100}%`)
@@ -332,7 +537,7 @@ struct PageRenderer {
           }, (hit: TextRect, idx: number) => `hit_${idx}_${hit.x0}`)
 
           /* annotation overlays per type (Phase 9: underline/strikeout/squiggly/text) */
-          ForEach(this.annotations, (ann: AnnotationInfo) => {
+          ForEach(this.annsOf(), (ann: AnnotationInfo) => {
             if (ann.type === 'highlight') {
               Column()
                 .width(`${(ann.x1 - ann.x0) * 100}%`)
@@ -376,7 +581,7 @@ struct PageRenderer {
           }, (ann: AnnotationInfo, idx: number) => `ann_${idx}_${ann.type}_${ann.x0}`)
 
           /* Phase 9: live selection preview (translucent blue) */
-          ForEach(this.selPreview, (rect: TextRect, idx: number) => {
+          ForEach(this.selsOf(), (rect: TextRect, idx: number) => {
             Column()
               .width(`${(rect.x1 - rect.x0) * 100}%`)
               .height(`${(rect.y1 - rect.y0) * 100}%`)
@@ -385,7 +590,7 @@ struct PageRenderer {
           }, (rect: TextRect, idx: number) => `sel_${idx}_${rect.x0}_${rect.y0}`)
 
           /* 0.9.20: tap-to-locate flash (panel mode) */
-          ForEach(this.biFlash, (fr: TextRect, idx: number) => {
+          ForEach(this.flashesOf(), (fr: TextRect, idx: number) => {
             Column()
               .width(`${(fr.x1 - fr.x0) * 100}%`)
               .height(`${(fr.y1 - fr.y0) * 100}%`)
@@ -397,8 +602,11 @@ struct PageRenderer {
 
           /* 0.9.20: bilingual reflow / in-place replace — text laid over the
            * page image; it moves and zooms with the page naturally */
-          if (this.biMode === PDF_TRANS_REFLOW || this.biMode === PDF_TRANS_REPLACE) {
-            ForEach(this.biOverlays, (ov: BiOverlay) => {
+          if (this.compositeFailed && (this.biMode === PDF_TRANS_REFLOW
+            || this.biMode === PDF_TRANS_REPLACE)) {
+            /* P2-10 (0.9.36): the translation is normally baked into the page
+             * bitmap; this overlay renders only if compositing failed. */
+            ForEach(this.oversOf(), (ov: BiOverlay) => {
               Column({ space: 2 }) {
                 if (this.biMode === PDF_TRANS_REFLOW) {
                   Text(ov.src)
@@ -451,6 +659,7 @@ struct PageRenderer {
         const py: number = typeof gp.y === 'number' ? gp.y : 0;
         const pw: number = typeof n.width === 'number' ? n.width : 0;
         const ph: number = typeof n.height === 'number' ? n.height : 0;
+        this.viewW = pw; /* P2-10 (0.9.36): bitmap-px-per-vp for canvas fonts */
         this.onPageArea(px, py, pw, ph);
       } catch (e) { /* geometry report is best-effort */ }
     })
@@ -462,7 +671,9 @@ struct PageRenderer {
  */
 @Component
 struct TocPanel {
-  @State tocEntries: TocEntry[] = [];
+  /* 0.9.33: parent-owned entries (was a dead local @State that
+   * never got filled - panel always showed 无目录) */
+  @Prop tocEntries: TocEntry[] = [];
   onJumpPage: (page: number) => void = () => {};
 
   aboutToAppear(): void {
@@ -793,6 +1004,11 @@ struct Reader {
   @State textIndent: number = 2;
   @State dropCapEnabled: boolean = false;
   @State fontFamilyIdx: number = 0; /* 0=default,1=serif,2=sans-serif,3=monospace */
+  /* 0.9.33 P2-11: user fonts (applied via @font-face; empty = built-ins) */
+  @State userFontPath: string = '';
+  @State userFontName: string = '';
+  @State userFontList: string = '[]';
+  @State userFonts: UserFontRec[] = [];
   @State cropEnabled: boolean = false; /* H6: 10% margin trim */
 
   // ---- Sprint I: Advanced reading features ----
@@ -824,10 +1040,27 @@ struct Reader {
   // ---- Round 8: remote (online cache reading) ----
   @State isRemote: boolean = false;           /* docPath is a remote:// streamed book */
   @State remoteOpening: boolean = false;      /* streaming open in progress */
+  @State firstPaintArmed: boolean = false;      /* 0.9.34 P2-14: first-paint gate overlay */
+  private firstPaintTimer: number = -1;
+  /* 0.9.25 P0-3: P3 filler progress for the bottom banner (-1 = idle) */
+  @State remoteFillPercent: number = -1;
+  /* 0.9.26 P0-1 tail: "whole book cached, readable offline" fires once */
+  private offlineHintShown: boolean = false;
+  /* 0.9.27 P1-8: remote TOC cache key (uri#size#versionTag), set at open */
+  private remoteTocKey: string = '';
   @State remoteOpenMsg: string = '';          /* open progress text */
   private remoteUri: string = '';
   private remoteReaderId: number = -1;
   private remoteSession: RemoteSession | undefined = undefined;
+  /* P1-9 (0.9.35): pagemap convergence intent for a streaming remote pdf
+   * opened without a sidecar; fires once the background block filler has
+   * cached the whole book, so op13's page-tree walk is all cache hits. */
+  private pmConvArmed: boolean = false;
+  private pmConvFired: boolean = false;
+  private pmConvHandle: number = -1;
+  private pmConvKey: string = '';
+  private pmConvSize: number = 0;
+  private pmConvTag: string = '';
   /* 0.9.16 staged open: bump to cancel the running phase2 layout loop */
   private stageGen: number = 0;
 
@@ -910,6 +1143,7 @@ struct Reader {
       } else {
         probe = await session.open();
       }
+      this.remoteTocKey = `${uri}#${probe.size}#${probe.versionTag}`;
       this.remoteSession = session;
       this.remoteReaderId = registerRemoteReader((seq: number, offset: number, len: number) => {
         session.readAt(offset, len).then((buf: ArrayBuffer) => {
@@ -923,11 +1157,75 @@ struct Reader {
       const ext: string = fileExtOf(parts.fileUrl);
       const magic: string = isDirectOpenExt(ext) ? ext : (isPageFormatExt(ext) ? ext : '');
       const css: string = `body{margin:${Math.round(this.pageMargin)}pt;line-height:${this.lineHeight.toFixed(2)}}`;
+      /* 0.9.25 P0-3: the cap that existed in settings since 0.9.6 without a
+       * consumer - enforce it now that this book's cache is hot, pinning the
+       * book being opened */
+      pinRemoteCacheKey(cacheKey);
+      enforceRemoteCacheQuota(ctx, settings.cacheMaxMB, cacheKey).catch((e: Error): void => {
+        console.warn('[Reader] cache quota failed: ' + e.message);
+      });
+      /* 0.9.25 P0-2 remote lazy layout (Android remote fast-open parity):
+       * lazy=true defers the open-time count+layout for reflow docs -
+       * fz_count_pages over a stream lays out the WHOLE book before the
+       * first frame. meta comes back pageCount=-1 and the staged block
+       * below counts the first window via docOp(15) - the exact local
+       * openDoc model. Fixed-format docs keep the cheap full count. */
       const res: ESObject = await openDocumentRemoteAsync(this.remoteReaderId, magic, probe.size, true,
-        REFLOW_W, REFLOW_H, this.fontSize, css);
+        REFLOW_W, REFLOW_H, this.fontSize, css, true);
       const rec: Record<string, ESObject> = res as Record<string, ESObject>;
       const meta: Record<string, ESObject> = JSON.parse(String(rec['meta'])) as Record<string, ESObject>;
-      const total: number = Number(meta['pageCount']);
+      let total: number = Number(meta['pageCount']);
+      const reflowNow: boolean = meta['isReflow'] === true;
+      if (total < 0 && reflowNow) {
+        /* staged remote open: first window + shared phase2 (+400/round) and
+         * the settle epoch machinery already used by the local path */
+        this.dataSource.adoptRemote(rec['handle'], 0);
+        if (meta['needsPassword'] === true) {
+          this.showPwd = true;
+        }
+        session.onFillerProgress = (p: number): void => {
+          this.remoteFillPercent = p >= 100 ? -1 : p;
+          if (p >= 100 && !this.offlineHintShown) {
+            this.offlineHintShown = true;
+            promptAction.showToast({ message: '整本已缓存，离线也可阅读' });
+          }
+        };
+        session.maybeStartFiller();
+        /* 0.9.33 P2-11: full typography css (incl. user font) before the
+         * staged count - the open css only carried margin/line-height */
+        try {
+          await this.docOp(16, 0, 0, 0, this.buildCss());
+        } catch (_e) { /* best effort */ }
+        const gen: number = ++this.stageGen;
+        const target: number = Math.max(0, this.currentPage);
+        this.layoutComplete = false;
+        const prog: string | undefined = await this.docOp(15, REFLOW_W, REFLOW_H, this.fontSize,
+          String(target + 400));
+        const n1: number = parseInt(prog === undefined ? '-1' : prog);
+        tlog('bench_stage1', 'remote=1 n1=' + n1 + ' from=' + target);
+        if (n1 >= 0) {
+          this.totalPages = n1;
+          this.dataSource.setPageCount(n1);
+          this.rebuildPageList();
+          this.currentPage = Math.min(this.currentPage, Math.max(0, n1 - 1));
+          this.loadBookmarks();
+          this.refreshAnnotations();
+          this.remoteOpening = false;
+          this.openSettled = true;
+          tlog('book_open_done', 'remote=1 pages=' + n1 + ' staged=1');
+          console.info(`[Reader] Remote doc opened (staged): ${n1} pages`);
+          this.landOnRestoredPage();
+          this.stagedOpen = true;
+          this.startPhaseTwo(gen);
+          return;
+        }
+        /* no chapter support (odd reflow doc): one full layout+count */
+        const full: string | undefined = await this.docOp(3, REFLOW_W, REFLOW_H, this.fontSize, css);
+        const nf: number = parseInt(full === undefined ? '-1' : full);
+        console.info(`[Reader] Remote staged fallback full count: ${nf}`);
+        total = nf >= 0 ? nf : 0;
+        this.loadToc();
+      }
       this.dataSource.adoptRemote(rec['handle'], total);
       /* 2026-09-20 port: persisted page-tree map (Android MuPdfDocument parity).
        * A matching sidecar re-opens a cached remote pdf with zero page-tree
@@ -955,6 +1253,19 @@ struct Reader {
             } else {
               console.info('[Reader] pagemap build: engine returned no map');
             }
+          } else {
+            /* P1-9 (0.9.35): streaming pdf without a pagemap sidecar - arm
+             * background convergence: when the block filler finishes caching
+             * the whole book, op13's one page-tree walk is all cache hits
+             * (sub-second even for 1000-page books) and the full nums+sizes
+             * map is persisted, so the NEXT open of this book skips all
+             * tree traffic (Android lazy-sizes convergence parity). */
+            this.pmConvArmed = true;
+            this.pmConvFired = false;
+            this.pmConvHandle = pmHandle;
+            this.pmConvKey = cacheKey;
+            this.pmConvSize = probe.size;
+            this.pmConvTag = pmTag;
           }
         }).catch((err: Error) => {
           console.error(`[Reader] pagemap flow failed: ${err.message}`);
@@ -973,7 +1284,18 @@ struct Reader {
       this.tocEntries = (tocArr !== undefined && tocArr !== null) ? tocArr as TocEntry[] : [];
       this.loadBookmarks();
       this.refreshAnnotations();
-      /* P3: whole-book background fill for small books */
+      /* P3: whole-book background fill for small books. 0.9.25 P0-3: show
+       * the filler progress in the bottom banner (Android parity) */
+      session.onFillerProgress = (p: number): void => {
+        this.remoteFillPercent = p >= 100 ? -1 : p;
+        if (p >= 100 && !this.offlineHintShown) {
+          this.offlineHintShown = true;
+          promptAction.showToast({ message: '整本已缓存，离线也可阅读' });
+        }
+        if (p >= 100) {
+          this.maybeConvergePagemap(); /* P1-9 (0.9.35) */
+        }
+      };
       session.maybeStartFiller();
       console.info(`[Reader] Remote doc opened: ${total} pages, reflow=${this.isReflow}, size=${probe.size}`);
     } catch (e) {
@@ -1059,6 +1381,33 @@ struct Reader {
     }
   }
 
+  /** 0.9.34 P2-14 (Android FirstPaintGate parity): a solid branded opening
+   * screen until the first page has actually rendered, so a fresh open never
+   * flashes a blank page area. A hard 12s cap releases the gate no matter
+   * what, so a slow open can never wedge the reader. */
+  private armFirstPaint(): void {
+    this.firstPaintArmed = true;
+    if (this.firstPaintTimer !== -1) {
+      clearTimeout(this.firstPaintTimer);
+    }
+    this.firstPaintTimer = setTimeout(() => {
+      this.releaseFirstPaint('cap');
+    }, 12000);
+    tlog('first_paint_arm', 'doc=' + this.documentPath.substring(this.documentPath.lastIndexOf('/') + 1));
+  }
+
+  private releaseFirstPaint(reason: string): void {
+    if (!this.firstPaintArmed) {
+      return;
+    }
+    this.firstPaintArmed = false;
+    if (this.firstPaintTimer !== -1) {
+      clearTimeout(this.firstPaintTimer);
+      this.firstPaintTimer = -1;
+    }
+    tlog('first_paint_release', 'reason=' + reason);
+  }
+
   /** Load persisted settings and apply them to the runtime state. */
   private async initSettings(ctx: Context): Promise<void> {
     const s: ReaderSettings = await loadSettings(ctx);
@@ -1107,6 +1456,17 @@ struct Reader {
     this.fontSize = s.fontSize;
     this.lineHeight = s.lineHeight;
     this.pageMargin = s.margin;
+    /* 0.9.33 P2-11: font family + user font readback (fontFamily was
+     * persisted but never applied on load before this) */
+    {
+      const fams: string[] = ['default', 'serif', 'sans-serif', 'monospace'];
+      const fi: number = fams.indexOf(s.fontFamily);
+      this.fontFamilyIdx = fi >= 0 ? fi : 0;
+      this.userFontPath = typeof s.userFontPath === 'string' ? s.userFontPath : '';
+      this.userFontName = typeof s.userFontName === 'string' ? s.userFontName : '';
+      this.userFontList = typeof s.userFontList === 'string' ? s.userFontList : '[]';
+      this.refreshUserFonts();
+    }
     this.blueLightFilter = s.blueLightFilter;
     this.bgImagePath = s.bgImagePath;
     /* Round 9: tap-zone actions from the gesture panel (unified codes);
@@ -1182,6 +1542,9 @@ struct Reader {
       textIndent: this.textIndent,
       dropCapEnabled: this.dropCapEnabled,
       fontFamily: ['default', 'serif', 'sans-serif', 'monospace'][this.fontFamilyIdx],
+      userFontPath: this.userFontPath,
+      userFontName: this.userFontName,
+      userFontList: this.userFontList,
       flipAnimation: cur.flipAnimation,
       tabPositionTop: cur.tabPositionTop,
       showTopBarInfo: this.showTopBarInfo,
@@ -1264,7 +1627,14 @@ struct Reader {
   private setTheme(t: number): void {
     this.theme = t;
     this.nightMode = t === 1 || t === 2;
-    this.dataSource.setInvert(this.nightMode);
+    if (this.isReflow && !this.isRemote) {
+      /* 0.9.34 P2-13: local reflowables re-tint through user CSS (crisp text
+       * on the real background color) instead of pixel inversion. */
+      this.dataSource.setInvert(false);
+      this.applyReflow();
+    } else {
+      this.dataSource.setInvert(this.nightMode);
+    }
     this.persistSettings();
     console.info(`[Reader] Theme: ${THEME_NAMES[t]}`);
   }
@@ -1329,6 +1699,7 @@ struct Reader {
         this.onPageChanged(this.currentPage);
         this.loadToc();
         this.persistSettings();
+        this.saveAccel(); /* 0.9.27: the new era's accelerator replaces the old */
         /* 0.9.23 (Android 10-09 parity): a typography change re-lays out the
          * whole book - settle the archived progress entry to the new era
          * immediately, so the absolute page (valid in the new geometry) is
@@ -1371,11 +1742,13 @@ struct Reader {
     const ext: string = fileExtOf(src);
     try {
       const html: string = await convertToHtml(getContext(this), src, ext);
+      tlog('convert_ok', 'ext=' + ext + ' out=' + html.substring(html.lastIndexOf('/') + 1));
       this.logicalPath = src;
       this.documentPath = html;
       this.initReader();
     } catch (e) {
       const msg: string = e instanceof Error ? e.message : String(e);
+      tlog('convert_fail', 'ext=' + ext + ' err=' + msg.substring(0, 180));
       console.error(`[Reader] ${ext} convert failed: ${msg}`);
       promptAction.showToast({ message: `文档转换失败：${msg}` });
       router.back();
@@ -1390,8 +1763,29 @@ struct Reader {
     const benchT0: number = Date.now();
     const gen: number = ++this.stageGen;
     try {
-      this.dataSource.openDoc(this.documentPath, true);
-      tlog('bench_open_doc', 'ms=' + (Date.now() - benchT0));
+      /* 0.9.27 P1-5: reuse a persisted accelerator when one matches this
+       * file AND the current typography (the key is salted with both) */
+      let useAccel: string = '';
+      const ap: string = this.accelPathOf(this.documentPath);
+      if (ap.length > 0) {
+        try {
+          if (fs.accessSync(ap)) {
+            useAccel = ap;
+          }
+        } catch (e) { /* none yet */ }
+      }
+      /* 0.9.34 P2-14: adopt a worker-prefetched open (Index tap -> Reader init
+       * gap; Android OpenPrefetch parity). A stale or missed entry falls
+       * through to the plain sync open below. */
+      const pf: OpenPrefetchEntry | null = OpenPrefetch.take(this.documentPath);
+      if (pf !== null) {
+        this.dataSource.adoptDoc(this.documentPath, pf.handle);
+        tlog('prefetch_adopt', 'ms=' + (Date.now() - benchT0) + ' reflow=' + pf.isReflow);
+      } else {
+        this.dataSource.openDoc(this.documentPath, true, useAccel);
+        tlog('bench_open_doc', 'ms=' + (Date.now() - benchT0));
+      }
+      this.armFirstPaint();
       const handle: ESObject | undefined = this.dataSource.getDocHandle();
       /* Round 6: encrypted document? ask for the password before rendering */
       if (handle !== undefined) {
@@ -1437,6 +1831,12 @@ struct Reader {
        * page that must be shown - counting only the head 400 clamped deep
        * positions back into the first window and lost the reader's place
        * on reopen. */
+      /* 0.9.33 P2-11/P1-6: the staged path never applied the typography
+       * css (openDocument makes a fresh context per book; op15 has no css
+       * channel) - set it before the first chunk parses. */
+      try {
+        await this.docOp(16, 0, 0, 0, this.buildCss());
+      } catch (_e) { /* best effort */ }
       const target: number = Math.max(0, this.currentPage);
       this.layoutComplete = false; /* the count below is a window, not the era total */
       const prog = await this.docOp(15, REFLOW_W, REFLOW_H, this.fontSize, String(target + 400));
@@ -1460,6 +1860,9 @@ struct Reader {
         this.finishReaderOpen();
         return;
       }
+      /* 0.9.34 P2-13: the staged path applies the palette through user CSS
+       * (op16 buildCss) - keep the pixmap invert off for local reflowables. */
+      this.dataSource.setInvert(false);
       this.totalPages = n1;
       this.dataSource.setPageCount(n1);
       tlog('bench_pagelist', 'ms=' + (Date.now() - benchT0) + ' total=' + this.totalPages);
@@ -1512,6 +1915,66 @@ struct Reader {
     this.reflowVersion++;
   }
 
+  /* 0.9.27 P1-5: accelerator file for this document (Android Temp/accel
+   * parity). Key = path#size#mtime plus the typography settings, so a
+   * re-layout with different parameters never hits a stale layout cache. */
+  private accelPathOf(p: string): string {
+    try {
+      const st = fs.statSync(p);
+      const key: string = `${p}#${st.size}#${Math.floor(st.mtime)}#${this.fontSize}#${this.lineHeight.toFixed(2)}#${Math.round(this.pageMargin)}`;
+      return getContext(this).cacheDir + '/accels/' + sha256Hex(key) + '.accel';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  /** 0.9.27 P1-5: persist the layout accelerator once counting is done. */
+  private saveAccel(): void {
+    const handle: ESObject | undefined = this.dataSource.getDocHandle();
+    if (handle === undefined || this.isRemote) {
+      return;
+    }
+    const ap: string = this.accelPathOf(this.documentPath);
+    if (ap.length === 0) {
+      return;
+    }
+    setTimeout(() => {
+      try {
+        /* 0.9.32: the accels dir must exist - fz_save_accelerator fails on
+         * a missing parent (the desktop round's rc=-3 lesson) */
+        const dir: string = getContext(this).cacheDir + '/accels';
+        try {
+          if (!fs.accessSync(dir)) {
+            fs.mkdirSync(dir, true);
+          }
+        } catch (e) {
+          fs.mkdirSync(dir, true);
+        }
+        saveAccelerator(handle, ap);
+        trimOldestFiles(dir, 8);
+        tlog('accel_saved', '1');
+      } catch (e) { /* best effort */ }
+    }, 50);
+  }
+
+  /* 0.9.27 P1-8: serialized TOC cache (Android TOC LRU 50 parity). */
+  private async tocCachePath(): Promise<string> {
+    let base: string = '';
+    if (this.isRemote) {
+      base = this.remoteTocKey;
+    } else {
+      try {
+        const st = fs.statSync(this.documentPath);
+        base = `${this.documentPath}#${st.size}#${Math.floor(st.mtime)}`;
+      } catch (e) { /* uncacheable */ }
+    }
+    if (base.length === 0) {
+      return '';
+    }
+    const hex: string = await sha256Hex(base);
+    return getContext(this).cacheDir + '/toc/' + hex + '.json';
+  }
+
   /** Common tail of the open flow (0.9.15 first-frame priority kept). */
   private finishReaderOpen(): void {
     this.openSettled = true;
@@ -1521,6 +1984,7 @@ struct Reader {
     this.loadToc();
     this.loadBookmarks();
     this.refreshAnnotations();
+    this.saveAccel();
     tlog('book_open_done', 'pages=' + this.totalPages);
   }
 
@@ -1559,12 +2023,28 @@ struct Reader {
     this.layoutComplete = true;
     this.settleProgressEpoch(total);
     this.loadToc();
+    this.saveAccel();
   }
 
   private async loadToc(): Promise<void> {
     try {
       const handle: ESObject | undefined = this.dataSource.getDocHandle();
       if (handle !== undefined) {
+        /* 0.9.27 P1-8: serialized TOC cache first - remote outlines run a
+         * layout in the engine and big books take seconds; the cache key
+         * covers the file identity so a changed book re-loads live. */
+        const ck: string = await this.tocCachePath();
+        if (ck.length > 0) {
+          const cached: string = readSmallTextFile(ck);
+          if (cached.length > 0) {
+            try {
+              this.tocEntries = JSON.parse(cached) as TocEntry[];
+              console.info(`[Reader] TOC cache hit: ${this.tocEntries.length} entries`);
+              tlog('toc_loaded', 'entries=' + this.tocEntries.length + ' cached=1');
+              return;
+            } catch (e) { /* corrupt entry: fall through to the live load */ }
+          }
+        }
         if (this.isRemote || this.stagedOpen) {
           /* async docOp: the chunked-fb2 outline lays out chunks in the
            * engine - keep that off the JS/main thread (appfreeze fix) */
@@ -1575,6 +2055,12 @@ struct Reader {
         }
         console.info(`[Reader] TOC loaded: ${this.tocEntries.length} entries`);
         tlog('toc_loaded', 'entries=' + this.tocEntries.length);
+        if (ck.length > 0 && this.tocEntries.length > 0) {
+          try {
+            writeSmallTextFile(ck, JSON.stringify(this.tocEntries));
+            trimOldestFiles(getContext(this).cacheDir + '/toc', 50);
+          } catch (e) { /* best effort */ }
+        }
       }
     } catch (e) {
       console.info('[Reader] No TOC available');
@@ -1591,6 +2077,37 @@ struct Reader {
     } catch (e) {
       console.warn('[Reader] test.pdf already exists or extract failed');
     }
+  }
+
+  /** P1-9 (0.9.35): one background page-tree walk for a streaming remote
+   * pdf whose pagemap sidecar is still missing. Runs when the block filler
+   * has cached the whole book, so op13's lazy-tree finish reads only local
+   * cache hits; the full nums+sizes map is persisted for walk-free re-opens. */
+  private maybeConvergePagemap(): void {
+    if (!this.pmConvArmed || this.pmConvFired) {
+      return;
+    }
+    this.pmConvFired = true;
+    const handle: number = this.pmConvHandle;
+    const key: string = this.pmConvKey;
+    const size: number = this.pmConvSize;
+    const tag: string = this.pmConvTag;
+    docOpAsync(handle, 13).then((raw: string) => {
+      const j: Record<string, ESObject> = JSON.parse(raw) as Record<string, ESObject>;
+      const nums: ESObject = j['nums'];
+      if (nums !== null && nums !== undefined && nums.length > 0) {
+        const sizes: ESObject = j['sizes'];
+        const ctx = getContext(this);
+        writePageTreeSidecar(ctx, key, size, tag,
+          nums as number[], sizes !== null && sizes !== undefined ? sizes as number[] : []);
+        tlog('pagemap_converged', 'pages=' + nums.length);
+        console.info(`[Reader] pagemap converged (streaming): ${nums.length} pages`);
+      } else {
+        console.info('[Reader] pagemap converge: engine returned no map');
+      }
+    }).catch((err: Error) => {
+      console.warn('[Reader] pagemap converge failed: ' + err.message);
+    });
   }
 
   aboutToDisappear(): void {
@@ -1688,6 +2205,10 @@ struct Reader {
     tlog('page_change_done', 'page=' + (index + 1) + ' of=' + this.totalPages);
     /* Phase 3: count a flipped page only when the page actually changed */
     if (prevPage !== index) {
+      /* 0.9.26 P0-3 tail: direction-aware remote prefetch */
+      if (this.remoteSession !== undefined) {
+        this.remoteSession.prefetchForPageTurn(index > prevPage ? 1 : -1);
+      }
       try {
         recordPagesRead(getContext(this), 1).catch((e: Error) => {
         });
@@ -1775,7 +2296,13 @@ struct Reader {
   private toggleNightMode(): void {
     this.nightMode = !this.nightMode;
     this.theme = this.nightMode ? 1 : 0;
-    this.dataSource.setInvert(this.nightMode);
+    if (this.isReflow && !this.isRemote) {
+      /* 0.9.34 P2-13: re-tint via user CSS + re-layout instead of invert */
+      this.dataSource.setInvert(false);
+      this.applyReflow();
+    } else {
+      this.dataSource.setInvert(this.nightMode);
+    }
     this.persistSettings();
     console.info(`[Reader] Night mode: ${this.nightMode ? 'ON' : 'OFF'} (theme=${THEME_NAMES[this.theme]})`);
   }
@@ -2964,14 +3491,151 @@ struct Reader {
 
   /** Apply typography settings to reflowable documents (sprint H4/H5). */
   /** Sprint L: unified CSS builder (replaces divergent inline strings). */
+  /* ---- 0.9.33 P2-11: user fonts ---- */
+
+  /** Re-read the imported-font list, dropping entries whose file is gone. */
+  private refreshUserFonts(): void {
+    let list: UserFontRec[] = [];
+    try {
+      list = JSON.parse(this.userFontList) as UserFontRec[];
+    } catch (e) {
+      list = [];
+    }
+    const keep: UserFontRec[] = [];
+    for (const f of list) {
+      let alive = false;
+      try {
+        alive = fs.accessSync(f.path) === true;
+      } catch (e) {
+        alive = false;
+      }
+      if (alive) {
+        keep.push(f);
+      }
+    }
+    this.userFonts = keep;
+    if (this.userFontPath.length > 0) {
+      let found = false;
+      for (const f of keep) {
+        if (f.path === this.userFontPath) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        this.userFontPath = '';
+        this.userFontName = '';
+      }
+    }
+  }
+
+  /** Import a font file through the system picker into filesDir/fonts. */
+  private async importUserFont(): Promise<void> {
+    try {
+      const ctx = getContext(this);
+      let documentPicker = new picker.DocumentViewPicker(ctx);
+      let options: picker.DocumentSelectOptions = {
+        fileSuffixFilters: ['TTF|ttf', 'OTF|otf', 'TTC|ttc'],
+        maxSelectNumber: 1
+      };
+      const uris: Array<string> = await documentPicker.select(options);
+      if (uris.length === 0) {
+        return;
+      }
+      const tmp: string = importUriToSandbox(ctx, uris[0]);
+      if (tmp.length === 0) {
+        promptAction.showToast({ message: '字体导入失败' });
+        return;
+      }
+      let base: string = tmp.substring(tmp.lastIndexOf('/') + 1);
+      const dot: number = base.lastIndexOf('.');
+      if (dot > 0) {
+        base = base.substring(0, dot);
+      }
+      base = base.replace(/[^0-9A-Za-z_-]/g, '_');
+      if (base.length === 0) {
+        base = 'font';
+      }
+      const dir: string = ctx.filesDir + '/fonts';
+      try {
+        fs.mkdirSync(dir, true);
+      } catch (e) { /* exists */ }
+      const dest: string = dir + '/' + base + '.ttf';
+      /* copy out of cacheDir: the system may purge cache at any time */
+      const srcFile: fs.File = fs.openSync(tmp, fs.OpenMode.READ_ONLY);
+      const st: fs.Stat = fs.statSync(srcFile.fd);
+      const buf: ArrayBuffer = new ArrayBuffer(st.size);
+      fs.readSync(srcFile.fd, buf);
+      fs.closeSync(srcFile);
+      const outFile: fs.File = fs.openSync(dest,
+        fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      try {
+        fs.writeSync(outFile.fd, buf);
+      } finally {
+        fs.closeSync(outFile);
+      }
+      try {
+        fs.unlinkSync(tmp);
+      } catch (e) { /* best effort */ }
+      let list: UserFontRec[] = [];
+      try {
+        list = JSON.parse(this.userFontList) as UserFontRec[];
+      } catch (e) {
+        list = [];
+      }
+      let dup = false;
+      for (const f of list) {
+        if (f.path === dest) {
+          dup = true;
+          break;
+        }
+      }
+      if (!dup) {
+        const rec: UserFontRec = { name: base, path: dest };
+        list.push(rec);
+        this.userFontList = JSON.stringify(list);
+      }
+      this.userFontPath = dest;
+      this.userFontName = base;
+      this.refreshUserFonts();
+      this.applyTypography();
+      this.persistSettings();
+      promptAction.showToast({ message: '字体已导入：' + base });
+    } catch (e) {
+      console.error('[Reader] importUserFont failed');
+    }
+  }
+
+  /** Activate an imported font (re-parse picks it up via the css change). */
+  private selectUserFont(f: UserFontRec): void {
+    if (this.userFontPath === f.path) {
+      return;
+    }
+    this.userFontPath = f.path;
+    this.userFontName = f.name;
+    this.applyTypography();
+    this.persistSettings();
+  }
+
   private buildCss(): string {
     const m = Math.round(this.pageMargin);
     const alignNames: string[] = ['left', 'center', 'right', 'justify'];
     const fontFamilies: string[] = ['inherit', 'serif', 'sans-serif', 'monospace'];
-    let css = `body { margin: ${m}pt;`;
-    css += ` line-height: ${this.lineHeight.toFixed(2)};`;
-    css += ` text-align: ${alignNames[this.textAlign]};`;
-    css += ` font-family: ${fontFamilies[this.fontFamilyIdx]};`;
+    let css = '';
+    if (this.userFontPath.length > 0) {
+      /* 0.9.33 P2-11: the engine resolves the font file itself
+       * (fz_add_css_font_face falls back to fz_read_file on the raw src) */
+      css += `@font-face { font-family: 'custom'; src: url('${this.userFontPath}'); }`;
+      css += ` body { margin: ${m}pt;`;
+      css += ` line-height: ${this.lineHeight.toFixed(2)};`;
+      css += ` text-align: ${alignNames[this.textAlign]};`;
+      css += ` font-family: 'custom', serif;`;
+    } else {
+      css += `body { margin: ${m}pt;`;
+      css += ` line-height: ${this.lineHeight.toFixed(2)};`;
+      css += ` text-align: ${alignNames[this.textAlign]};`;
+      css += ` font-family: ${fontFamilies[this.fontFamilyIdx]};`;
+    }
     if (this.hyphenationEnabled) {
       css += ` hyphens: auto;`;
     }
@@ -2979,6 +3643,22 @@ struct Reader {
     css += ` p { margin-top: 0; margin-bottom: ${this.paragraphSpacing}px; text-indent: ${this.textIndent}em; }`;
     if (this.dropCapEnabled) {
       css += ` .dropcap::first-letter, p:first-of-type::first-letter { font-size: 2.5em; float: left; line-height: 0.8; margin-right: 4px; }`;
+    }
+    /* 0.9.34 P2-13 (Android MagicHelper parity): night/ink palettes for LOCAL
+     * reflowable docs are injected as user CSS so the engine paints the real
+     * background + text colors instead of the reader inverting the pixmap
+     * (which blurs glyphs). Remote reflow keeps the invert path. */
+    if (this.isReflow && !this.isRemote) {
+      if (this.nightMode) {
+        const bg: string = this.theme === 2 ? '#000000' : '#101010';
+        const fg: string = this.theme === 2 ? '#b0b0b0' : '#d0d0d0';
+        css += `html { background-color: ${bg} !important; }`;
+        css += `body { background-color: ${bg} !important; color: ${fg} !important; }`;
+        css += `a { color: #7aa2ff !important; }`;
+      } else if (this.theme === 3) {
+        css += `html { background-color: #eaddc3 !important; }`;
+        css += `body { background-color: #eaddc3 !important; color: #2a2118 !important; }`;
+      }
     }
     return css;
   }
@@ -3570,6 +4250,7 @@ struct Reader {
   private async swapDoc(newPath: string): Promise<void> {
     try {
       this.dataSource.openDoc(newPath);
+      this.armFirstPaint();
     } catch (e) {
       console.error('[Reader] swapDoc open failed: ' + String(e));
       promptAction.showToast({ message: $r('app.string.trans_bi_open_failed') });
@@ -4655,7 +5336,11 @@ struct Reader {
           /* Horizontal Swiper mode */
           Stack() {
             Swiper(this.swiperCtrl) {
-              ForEach(this.pageList, (pageIdx: number) => {
+              /* P2-17 (0.9.36): LazyForEach over the page data source - page
+               * components exist only for the visible+cached window (the
+               * 4696-page book measured ~294MB RSS with the eager ForEach)
+               * and alive cells follow updates through @Prop. */
+              LazyForEach(this.dataSource, (pageIdx: number) => {
                 if (this.pageMode === 1) {
                   /* double-page: each swiper page shows a pair */
                   DoublePageRenderer({ pageIndex: pageIdx, dataSource: this.dataSource, nightInvert: this.nightMode })
@@ -4665,6 +5350,7 @@ struct Reader {
                     PageRenderer({
                       pageIndex: pageIdx,
                       dataSource: this.dataSource,
+                      onRendered: (p: number, ok: boolean): void => { this.releaseFirstPaint('render'); },
                       cropRect: SPLIT_LEFT,
                       contrastLevel: this.contrastLevel,
                       nightInvert: this.nightMode
@@ -4672,6 +5358,7 @@ struct Reader {
                     PageRenderer({
                       pageIndex: pageIdx,
                       dataSource: this.dataSource,
+                      onRendered: (p: number, ok: boolean): void => { this.releaseFirstPaint('render'); },
                       cropRect: SPLIT_RIGHT,
                       contrastLevel: this.contrastLevel,
                       nightInvert: this.nightMode
@@ -4682,18 +5369,21 @@ struct Reader {
                   PageRenderer({
                     pageIndex: pageIdx,
                     dataSource: this.dataSource,
-                    searchHits: pageIdx === this.searchHitPage ? this.searchHits : [],
-                    biOverlays: pageIdx === this.currentPage ? this.pdfBiParas : [],
+                    currentPage: this.currentPage,
+                    searchHitPage: this.searchHitPage,
+                    onRendered: (p: number, ok: boolean): void => { this.releaseFirstPaint('render'); },
+                    searchHits: this.searchHits,
+                    biOverlays: this.pdfBiParas,
                     biMode: this.pdfBiMode,
-                    biFlash: pageIdx === this.currentPage ? this.pdfBiFlash : [],
+                    biFlash: this.pdfBiFlash,
                     onBiBadge: (bidx: number): void => {
                       this.showPdfBadgeCard(bidx);
                     },
                     onPageArea: (x: number, y: number, w: number, h: number): void => {
                       this.pdfPageArea = [x, y, x + w, y + h];
                     },
-                    annotations: pageIdx === this.currentPage ? this.annotations : [],
-                    selPreview: pageIdx === this.currentPage ? this.selPreview : [],
+                    annotations: this.annotations,
+                    selPreview: this.selPreview,
                     contrastLevel: this.contrastLevel,
                     nightInvert: this.nightMode
                   })
@@ -4853,16 +5543,19 @@ struct Reader {
           /* Vertical continuous scroll mode + Round 6 fast-scroll rail */
           Stack({ alignContent: Alignment.End }) {
             List({ scroller: this.vScroller }) {
-              ForEach(this.pageList, (pageIdx: number) => {
+              /* P2-17 (0.9.36): LazyForEach (see the Swiper note). */
+              LazyForEach(this.dataSource, (pageIdx: number) => {
                 ListItem() {
                   PageRenderer({
                     pageIndex: pageIdx,
                     dataSource: this.dataSource,
+                    currentPage: this.currentPage,
+                    onRendered: (p: number, ok: boolean): void => { this.releaseFirstPaint('render'); },
                     contrastLevel: this.contrastLevel,
                     nightInvert: this.nightMode,
-                    biOverlays: pageIdx === this.currentPage ? this.pdfBiParas : [],
+                    biOverlays: this.pdfBiParas,
                     biMode: this.pdfBiMode,
-                    biFlash: pageIdx === this.currentPage ? this.pdfBiFlash : [],
+                    biFlash: this.pdfBiFlash,
                     onBiBadge: (bidx: number): void => {
                       this.showPdfBadgeCard(bidx);
                     },
@@ -4957,6 +5650,15 @@ struct Reader {
           })
         }
 
+        /* 0.9.25 P0-3: whole-book cache progress banner (Android remote
+         * progress banner) - visible while the P3 filler runs */
+        if (this.isRemote && this.remoteFillPercent >= 0 && this.remoteFillPercent < 100) {
+          Row() {
+            Text(`后台缓存 ${this.remoteFillPercent}%`)
+              .fontSize(11).fontColor('#b0bec5')
+          }
+          .width('100%').height(20).justifyContent(FlexAlign.Center)
+        }
         /* 0.9.23 (Android 10-10 parity): the page seek row moved ABOVE the
          * icon row (document_footer.xml order). */
         Row({ space: 10 }) {
@@ -5561,6 +6263,7 @@ struct Reader {
                 .backgroundColor('#ff7043').fontColor(Color.White)
                 .onClick(() => {
                   this.showMenu = false;
+                  this.refreshUserFonts();
                   this.showTypographyPanel = true;
                   console.info('[Reader] Typography panel opened');
                 })
@@ -5856,22 +6559,42 @@ struct Reader {
                     .height(28).fontSize(11).layoutWeight(1)
                     .backgroundColor(this.fontFamilyIdx === 0 ? '#2a7' : '#e0e0e0')
                     .fontColor(this.fontFamilyIdx === 0 ? Color.White : '#333')
-                    .onClick(() => { this.fontFamilyIdx = 0; this.applyTypography(); })
+                    .onClick(() => { this.fontFamilyIdx = 0; this.userFontPath = ''; this.userFontName = ''; this.applyTypography(); this.persistSettings(); })
                   Button($r('app.string.font_serif'))
                     .height(28).fontSize(11).layoutWeight(1).margin({ left: 4 })
                     .backgroundColor(this.fontFamilyIdx === 1 ? '#2a7' : '#e0e0e0')
                     .fontColor(this.fontFamilyIdx === 1 ? Color.White : '#333')
-                    .onClick(() => { this.fontFamilyIdx = 1; this.applyTypography(); })
+                    .onClick(() => { this.fontFamilyIdx = 1; this.userFontPath = ''; this.userFontName = ''; this.applyTypography(); this.persistSettings(); })
                   Button($r('app.string.font_sans'))
                     .height(28).fontSize(11).layoutWeight(1).margin({ left: 4 })
                     .backgroundColor(this.fontFamilyIdx === 2 ? '#2a7' : '#e0e0e0')
                     .fontColor(this.fontFamilyIdx === 2 ? Color.White : '#333')
-                    .onClick(() => { this.fontFamilyIdx = 2; this.applyTypography(); })
+                    .onClick(() => { this.fontFamilyIdx = 2; this.userFontPath = ''; this.userFontName = ''; this.applyTypography(); this.persistSettings(); })
                   Button($r('app.string.font_mono'))
                     .height(28).fontSize(11).layoutWeight(1).margin({ left: 4 })
                     .backgroundColor(this.fontFamilyIdx === 3 ? '#2a7' : '#e0e0e0')
                     .fontColor(this.fontFamilyIdx === 3 ? Color.White : '#333')
-                    .onClick(() => { this.fontFamilyIdx = 3; this.applyTypography(); })
+                    .onClick(() => { this.fontFamilyIdx = 3; this.userFontPath = ''; this.userFontName = ''; this.applyTypography(); this.persistSettings(); })
+                }.width('90%').margin({ top: 8 })
+
+                /* 0.9.33 P2-11: imported user fonts (+ = pick a TTF/OTF/TTC) */
+                Row() {
+                  Text('').fontSize(12).width(50)
+                  Scroll() {
+                    Row() {
+                      ForEach(this.userFonts, (f: UserFontRec) => {
+                        Button(f.name)
+                          .height(28).fontSize(11).margin({ right: 4 })
+                          .backgroundColor(this.userFontName === f.name ? '#2a7' : '#e0e0e0')
+                          .fontColor(this.userFontName === f.name ? Color.White : '#333')
+                          .onClick(() => { this.selectUserFont(f); })
+                      }, (f: UserFontRec) => f.path)
+                      Button('+')
+                        .height(28).fontSize(13).padding({ left: 12, right: 12 })
+                        .backgroundColor('#e0e0e0').fontColor('#333')
+                        .onClick(() => { this.importUserFont(); })
+                    }
+                  }.layoutWeight(1).scrollBar(BarState.Off)
                 }.width('90%').margin({ top: 8 })
               Button($r('app.string.common_done'))
                 .fontSize(13).height(34)
@@ -5945,6 +6668,7 @@ struct Reader {
             })
 
           TocPanel({
+            tocEntries: this.tocEntries,
             onJumpPage: (page: number) => {
               this.pushPageHistory();
               this.currentPage = page;
@@ -6621,6 +7345,19 @@ struct Reader {
         .justifyContent(FlexAlign.Center)
         .width('100%').height('100%')
         .backgroundColor('#96000000')
+      }
+      /* 0.9.34 P2-14: first-paint gate (Android FirstPaintGate parity) - solid
+       * opening screen until the first page has actually rendered. */
+      if (this.firstPaintArmed) {
+        Column({ space: 12 }) {
+          Progress({ value: 40, total: 100 })
+            .width(46).height(46).color(this.thm())
+          Text($r('app.string.common_loading'))
+            .fontSize(13).fontColor(this.nightMode ? '#d0d0d0' : '#5a5a5a')
+        }
+        .justifyContent(FlexAlign.Center)
+        .width('100%').height('100%')
+        .backgroundColor(this.nightMode ? '#121212' : '#fafafa')
       }
     }
     .width('100%')

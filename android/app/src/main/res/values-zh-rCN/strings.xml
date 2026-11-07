@@ -769,7 +769,7 @@
    <string name="moon_home">首页</string>
    <string name="moon_home_recent">最近阅读</string>
    <string name="moon_home_favorites">我的珍藏</string>
-   <string name="moon_home_files">我的文件</string>
+   <string name="moon_home_files">我的书库</string>
    <string name="moon_home_net">网上书库</string>
    <string name="moon_file_dropbox">[Dropbox]</string>
    <string name="moon_file_gdrive">[Gdrive]</string>
@@ -782,7 +782,7 @@
    <string name="moon_stat_today">今日阅读</string>
    <string name="moon_stat_speed">阅读速度（页/分）</string>
    <string name="moon_monthly_title">每月阅读时间（近12个月）</string>
-   <string name="moon_my_files">我的文件</string>
+   <string name="moon_my_files">我的书库</string>
    <string name="moon_range_week">近1周</string>
    <string name="moon_range_month">近1月</string>
    <string name="moon_range_year">近1年</string>
@@ -805,7 +805,7 @@
    <string name="webdav_sync_state_off">关闭</string>
    <string name="webdav_sync_server">服务器</string>
    <string name="webdav_sync_no_server">未选择服务器</string>
-   <string name="webdav_sync_add_server_hint">请先在“我的文件”页添加 WebDAV 服务器</string>
+   <string name="webdav_sync_add_server_hint">请先在“我的书库”页添加 WebDAV 服务器</string>
    <string name="webdav_sync_now">立即同步</string>
    <string name="webdav_syncing">正在同步…</string>
    <string name="webdav_sync_last">上次同步：%s</string>
@@ -828,7 +828,7 @@
    <string name="webdav_sync_interval_180">每 3 小时</string>
    <string name="webdav_sync_interval_360">每 6 小时</string>
    <string name="webdav_sync_interval_1440">每 1 天</string>
-   <string name="webdav_sync_independent">与“我的文件”中的 WebDAV 服务器相互独立</string>
+   <string name="webdav_sync_independent">与“我的书库”中的 WebDAV 服务器相互独立</string>
    <string name="webdav_sync_log">同步日志</string>
    <string name="webdav_sync_log_empty">暂无同步变更记录</string>
    <string name="webdav_sync_remote_dir">同步路径</string>

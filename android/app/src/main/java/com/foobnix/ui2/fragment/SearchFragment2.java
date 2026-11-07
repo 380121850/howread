@@ -114,7 +114,7 @@ public class SearchFragment2 extends UIFragment<FileMeta> {
 
     public static final String EMPTY_ID = "\u00A0";
     public static final Pair<Integer, Integer> PAIR =
-            new Pair<Integer, Integer>(R.string.library, R.drawable.glyphicons_589_book_open);
+            new Pair<Integer, Integer>(R.string.shelf, R.drawable.glyphicons_589_book_open);
     private static final String CMD_KEYCODE = "@@keycode_config";
     private static final String CMD_EDIT_AUTO_COMPLETE = "@@edit_autocomple";
     private static final String CMD_MARGIN = "@@keycode_margin";

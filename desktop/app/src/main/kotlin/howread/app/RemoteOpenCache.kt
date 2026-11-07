@@ -5,7 +5,10 @@ import howread.core.TestLog
 import howread.core.data.Db
 import howread.core.remote.BlockCacheStore
 import howread.core.remote.RemoteClients
+import howread.core.model.RemoteSource
 import howread.core.remote.downloadTo
+import howread.core.remote.readVtag
+import howread.core.remote.writeVtag
 import java.io.File
 
 /**
@@ -16,6 +19,10 @@ import java.io.File
  *   无需整本下载即可打开；MuPDF 读到哪块取哪块，P2 窗口自动跟住阅读位置前后，P3 后台补齐整书。
  */
 object RemoteOpenCache {
+
+    /** v0.58 并发认领：同一路径同时只允许一个 resolve（两个 .part 下载互踩会产出过尺寸校验的坏文件）。 */
+    private val claims = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
     sealed class Resolution {
         data class Local(val file: String) : Resolution()
 
@@ -71,7 +78,18 @@ object RemoteOpenCache {
         val (id, rel) = parse(path) ?: return false
         val dest = cacheFile(id, rel)
         val exp = Db.bookSize(path)
-        return dest.isFile && (exp <= 0 || dest.length() == exp)
+        if (!dest.isFile) return false
+        if (exp > 0 && dest.length() != exp) return false
+        return vtagMatch(dest, path)
+    }
+
+    /** v0.58 版本标记核对（安卓 cache-first versionTag 同语义）：登记 mtime 未见变化=命中；
+     *  无标记（旧缓存迁移/OPDS 无时间源）=维持 v0.57 尺寸口径放行。 */
+    private fun vtagMatch(dest: File, path: String): Boolean {
+        val rm = Db.bookMtime(path)
+        if (rm <= 0L) return true
+        val v = readVtag(dest)
+        return v <= 0L || v == rm
     }
 
     /** 远程书缓存百分比（v0.36.0 书库角标）：整本已缓存=100；块缓存中=按块计；无缓存/大小未知=-1（不显示）。 */
@@ -82,8 +100,30 @@ object RemoteOpenCache {
         return BlockCacheStore.cachedPercent(path, exp, path.substringAfterLast('.', "").lowercase())
     }
 
-    /** 解析远程书打开方式（IO 线程调用）；onMsg 汇报进度文本。失败返回 null。 */
+    /** 解析远程书打开方式（IO 线程调用）；onMsg 汇报进度文本。失败返回 null。
+     *  v0.58：并发认领锁（同书并发打开不再双双下载写坏 .part）；versionTag（重扫发现登记 mtime
+     *  变化自动失效重下）；azw3/mobi 家族大书不流式直开——自动整本下载走本地转换链（对齐安卓
+     *  isDirectOpen 分级：本地同书 >8MB 走 mobitool→EPUB，远程却单章整书排版是慢路径）。 */
     fun resolve(path: String, onMsg: (String) -> Unit): Resolution? {
+        val t0 = System.currentTimeMillis()
+        var claimed = false
+        while (true) {
+            if (claims.putIfAbsent(path, t0) == null) { claimed = true; break }
+            if (System.currentTimeMillis() - t0 > 300_000L) {
+                onMsg("另一任务正在处理同一本书，请稍后重试")
+                return null
+            }
+            onMsg("等待另一任务完成…")
+            Thread.sleep(800)
+        }
+        try {
+            return resolveLocked(path, onMsg, t0)
+        } finally {
+            if (claimed) claims.remove(path)
+        }
+    }
+
+    private fun resolveLocked(path: String, onMsg: (String) -> Unit, t0: Long): Resolution? {
         val (srcId, rel) = parse(path) ?: return null
         val src = Db.listRemoteSources().firstOrNull { it.id == srcId }
         if (src == null) {
@@ -94,8 +134,8 @@ object RemoteOpenCache {
         val exp = Db.bookSize(path)
         val ext = rel.substringAfterLast('.', "").lowercase()
 
-        // 已整本简单缓存 → 秒开（若同名块缓存目录还在=晋升前遗留，惰性回收）
-        if (dest.isFile && (exp <= 0 || dest.length() == exp)) {
+        // 已整本简单缓存 → 秒开（versionTag 失配=服务器已换文件 → 视为未命中重下；块目录惰性回收）
+        if (dest.isFile && (exp <= 0 || dest.length() == exp) && vtagMatch(dest, path)) {
             runCatching {
                 val key = BlockCacheStore.cacheKey(path, exp, ext)
                 val bd = File(AppPaths.cacheDir, "remote-blocks/" + key)
@@ -111,61 +151,20 @@ object RemoteOpenCache {
         BlockCacheStore.capMaxMB = capMB()
         runCatching { BlockCacheStore.enforceCap(capMB()) }
         dest.parentFile?.mkdirs()
-        val t0 = System.currentTimeMillis()
 
-        // 小书（≤ 窗口阈值）或大小未知：整本缓存（.part→rename 完整落定）；
-        // djvu 不经 mupdf 流入口（引擎内 libdjvu 桥 v0.46.0），恒整本缓存。
-        if (exp in 1..wholeBookBytes() || exp <= 0 || ext == "djvu") {   // v0.54 阈值=整本缓存阈值（安卓同键）
-            onMsg("正在缓存 0%")
-            val c = RemoteClients.create(src)
-            try {
-                var last = 0L
-                c.downloadTo(rel, dest) { done, _ ->
-                    val now = System.currentTimeMillis()
-                    if (now - last > 400) {
-                        last = now
-                        onMsg("正在缓存 " + done / 1024 + "KB")
-                    }
-                }
-                TestLog.evt("remote_cache_done", "ms=" + (System.currentTimeMillis() - t0) + " size=" + dest.length())
-                onMsg("缓存完成")
-                return Resolution.Local(dest.absolutePath)
-            } catch (t: Throwable) {
-                if (t is kotlinx.coroutines.CancellationException) throw t   // 检视修复：取消不被当"缓存失败"
-                TestLog.evt("remote_cache_fail", "rel=$rel err=$t")
-                onMsg("缓存失败：" + (t.message ?: t.toString()))
-                runCatching { dest.delete() }
-                return null
-            } finally {
-                runCatching { c.close() }
-            }
+        // v0.58 对齐安卓传输分级：azw3 任意大小、mobi/azw/prc/pdb >8MB 不走流式直开——
+        // 自动整本下载后经 openablePath 进本地转换链（Azw3Convert→EPUB→accel）
+        if (ext == "azw3" || (ext in setOf("mobi", "azw", "prc", "pdb") && exp > 8L * 1024 * 1024)) {
+            return wholeDownload(src, rel, dest, path, exp, "remote_family_dl", onMsg, t0)
         }
-
+        // 小书（≤ 整本阈值）或大小未知：整本缓存（.part→rename 完整落定）；
+        // djvu 不经 mupdf 流入口（引擎内 libdjvu 桥 v0.46.0），恒整本缓存。
+        if (exp in 1..wholeBookBytes() || exp <= 0 || ext == "djvu") {
+            return wholeDownload(src, rel, dest, path, exp, "remote_cache_done", onMsg, t0)
+        }
         // v0.54「点击远程书在线阅读」关闭时：大书也先整本下载完成再打开（安卓 remoteOnlineFirst=false 同语义）
         if (!LibPrefs.bool("remoteOnlineFirst", true)) {
-            onMsg(L10n.s("正在下载整本…", "Downloading whole book…"))
-            val c2 = RemoteClients.create(src)
-            try {
-                var last = 0L
-                c2.downloadTo(rel, dest) { done, _ ->
-                    val now = System.currentTimeMillis()
-                    if (now - last > 400) {
-                        last = now
-                        onMsg(L10n.s("正在下载整本…", "Downloading…") + " " + done * 100 / exp.coerceAtLeast(1) + "%")
-                    }
-                }
-                TestLog.evt("remote_whole_dl", "ms=" + (System.currentTimeMillis() - t0) + " size=" + dest.length())
-                onMsg(L10n.s("下载完成", "Download complete"))
-                return Resolution.Local(dest.absolutePath)
-            } catch (t2: Throwable) {
-                if (t2 is kotlinx.coroutines.CancellationException) throw t2
-                TestLog.evt("remote_whole_dl_fail", "rel=$rel err=$t2")
-                onMsg(L10n.s("下载失败：", "Download failed: ") + (t2.message ?: t2.toString()))
-                runCatching { dest.delete() }
-                return null
-            } finally {
-                runCatching { c2.close() }
-            }
+            return wholeDownload(src, rel, dest, path, exp, "remote_whole_dl", onMsg, t0)
         }
 
         // 大书：块缓存流式打开（v0.34.0）——任意格式按需取块，magic=纯文件名（安卓 magicFor 同思路）
@@ -230,7 +229,7 @@ object RemoteOpenCache {
             // 整书补齐完成（persist 锁内触发）——开线程晋升为整本缓存（重开即 Local+accel）
             Thread {
                 try {
-                    promote(session, dest, exp)
+                    promote(session, dest, exp, path)
                 } catch (t: Throwable) {
                     TestLog.evt("remote_cache_promote_fail", "rel=$rel err=$t")
                 }
@@ -243,8 +242,43 @@ object RemoteOpenCache {
         }
     }
 
-    /** 晋升：把块缓存拼成整本缓存文件（.part→rename 完整落定）。 */
-    private fun promote(session: BlockCacheStore, dest: File, size: Long) {
+    /** 整本下载（三处分支共用）：.part→rename 落定 + 版本标记侧车。 */
+    private fun wholeDownload(
+        src: RemoteSource, rel: String, dest: File, path: String, exp: Long,
+        evt: String, onMsg: (String) -> Unit, t0: Long,
+    ): Resolution? {
+        onMsg(if (evt == "remote_whole_dl") L10n.s("正在下载整本…", "Downloading whole book…") else "正在缓存 0%")
+        val c = RemoteClients.create(src)
+        try {
+            var last = 0L
+            c.downloadTo(rel, dest, Db.bookMtime(path)) { done, _ ->
+                val now = System.currentTimeMillis()
+                if (now - last > 400) {
+                    last = now
+                    onMsg(
+                        if (evt == "remote_whole_dl" && exp > 0) {
+                            L10n.s("正在下载整本…", "Downloading…") + " " + done * 100 / exp + "%"
+                        } else "正在缓存 " + done / 1024 + "KB"
+                    )
+                }
+            }
+            TestLog.evt(evt, "ms=" + (System.currentTimeMillis() - t0) + " size=" + dest.length())
+            onMsg(if (evt == "remote_whole_dl") L10n.s("下载完成", "Download complete") else "缓存完成")
+            return Resolution.Local(dest.absolutePath)
+        } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t   // 取消不被当"下载失败"
+            TestLog.evt(evt + "_fail", "rel=$rel err=$t")
+            onMsg((if (evt == "remote_whole_dl") L10n.s("下载失败：", "Download failed: ") else "缓存失败：") +
+                (t.message ?: t.toString()))
+            runCatching { dest.delete() }
+            return null
+        } finally {
+            runCatching { c.close() }
+        }
+    }
+
+    /** 晋升：把块缓存拼成整本缓存文件（.part→rename 完整落定）。v0.58：产物同样带版本标记。 */
+    private fun promote(session: BlockCacheStore, dest: File, size: Long, path: String) {
         if (dest.isFile && dest.length() == size) return
         dest.parentFile?.mkdirs()
         val tmp = File(dest.absolutePath + ".part")
@@ -269,6 +303,7 @@ object RemoteOpenCache {
             TestLog.evt("remote_cache_promote_fail", "rename failed")
             return
         }
+        writeVtag(dest, Db.bookMtime(path))   // v0.58：晋升产物带版本标记（重扫发现服务器变化即失效）
         TestLog.evt("remote_cache_promoted", "size=" + dest.length())
     }
 }

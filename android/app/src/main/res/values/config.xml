@@ -3,7 +3,8 @@
     <string name="app_name">HowRead</string>
     <string name="app_name_pro" translatable="false">HowReadPro</string>
 
-	<string name="my_email" translatable="false">380121850@163.com</string>
+	<string name="my_email" translatable="false">leestudio_support@163.com</string>
+	<string name="my_email_display" translatable="false">leestudio_support</string>
 	<string name="my_site" translatable="false">https://380121850.github.io/howread/</string>
 	<string name="privacy_policy_url" translatable="false">https://380121850.github.io/howread/PrivacyPolicy/zh.html</string>
 

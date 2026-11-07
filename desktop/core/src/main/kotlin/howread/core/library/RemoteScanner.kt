@@ -41,8 +41,8 @@ object RemoteScanner {
                     }
                     if (!Scanner.isBookFile(e.name)) continue
                     val title = e.name.substringBeforeLast('.', e.name)
-                    Db.upsertFileMeta(remotePath(s, e.relPath), title, e.size, 0L)
-                    keep.add(e.relPath)
+                    Db.upsertFileMeta(remotePath(s, e.relPath), title, e.size, e.mtime)
+                    keep.add(e.relPath.trim('/'))   // v0.58：与登记 rel 口径一致（joinRel 空基目录会留前导斜杠，prune 对比须同形）
                     n++
                 }
             }

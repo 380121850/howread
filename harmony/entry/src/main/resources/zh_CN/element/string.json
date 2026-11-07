@@ -10,7 +10,7 @@
     },
     {
       "name": "tab_library",
-      "value": "书库"
+      "value": "书架"
     },
     {
       "name": "drawer_library",
@@ -18,7 +18,7 @@
     },
     {
       "name": "tab_my_files",
-      "value": "我的文件"
+      "value": "我的书库"
     },
     {
       "name": "tab_prefs",
@@ -1558,7 +1558,7 @@
     },
     {
       "name": "sync_independent",
-      "value": "与“我的文件”中的 WebDAV 服务器相互独立"
+      "value": "与“我的书库”中的 WebDAV 服务器相互独立"
     },
     {
       "name": "sync_interval",
@@ -2267,6 +2267,10 @@
     {
       "name": "trans_mode_replace",
       "value": "原位替换"
+    },
+    {
+      "name": "lib_folder_seed",
+      "value": "书库"
     }
   ]
 }

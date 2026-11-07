@@ -1,5 +1,6 @@
 import fs from '@ohos.file.fs';
 import zlib from '@ohos.zlib';
+import { zipDir } from './Bilingual';
 import util from '@ohos.util';
 
 /**
@@ -61,6 +62,34 @@ function writeTextFile(path: string, content: string): void {
   }
 }
 
+/** 0.9.27 P1-7: first attribute value of `name` inside an xml tag blob. */
+function extractAttr(s: string, name: string): string {
+  const k: string = name + '="';
+  const i: number = s.indexOf(k);
+  if (i < 0) {
+    return '';
+  }
+  const j: number = s.indexOf('"', i + k.length);
+  return j > i ? s.substring(i + k.length, j) : '';
+}
+
+/** 0.9.27 P1-7: docx relationship map Id -> package-relative Target. */
+function parseDocxRels(xml: string): Record<string, string> {
+  const map: Record<string, string> = {};
+  const re = /<Relationship\b[^>]*>/g;
+  let m = re.exec(xml);
+  while (m !== null) {
+    const tag: string = m[0];
+    const id: string = extractAttr(tag, 'Id');
+    const target: string = extractAttr(tag, 'Target');
+    if (id.length > 0 && target.length > 0) {
+      map[id] = target;
+    }
+    m = re.exec(xml);
+  }
+  return map;
+}
+
 function wrapHtml(body: string): string {
   /* empty title: MuPDF's html handler renders the <title> text into the body */
   return '<html><head><meta charset="utf-8"><title></title></head><body>' + body + '</body></html>';
@@ -70,8 +99,9 @@ function wrapHtml(body: string): string {
 /* DOCX: unzip with @ohos.zlib, scan word/document.xml for paragraphs  */
 /* ------------------------------------------------------------------ */
 
-/** Pull the text of one <w:t ...>...</w:t> run starting at tagOpen index. */
-function scanDocxXml(xml: string): string {
+/** Scan document.xml paragraphs; 0.9.27 P1-7: inline images for
+ * <w:drawing>/<w:pict> via the rels map (img src relative to index.html). */
+function scanDocxXml(xml: string, rels: Record<string, string>): string {
   let out: string = '';
   let bold: number = 0;
   let italic: number = 0;
@@ -117,6 +147,26 @@ function scanDocxXml(xml: string): string {
       out += '<br/>';
     } else if (tag === 'w:tab' || tag.startsWith('w:tab/') || tag.startsWith('w:tab ')) {
       out += ' ';
+    } else if (tag.startsWith('w:drawing') || tag.startsWith('w:pict')) {
+      if (!tag.endsWith('/')) {
+        const closeTag: string = tag.startsWith('w:drawing') ? '</w:drawing>' : '</w:pict>';
+        const close: number = xml.indexOf(closeTag, gt);
+        if (close > 0) {
+          const seg: string = xml.substring(lt, close + closeTag.length);
+          let rid: string = extractAttr(seg, 'r:embed');
+          if (rid.length === 0) {
+            rid = extractAttr(seg, 'r:id');
+          }
+          const target: string = rid.length > 0 ? (rels[rid] ?? '') : '';
+          if (target.length > 0) {
+            /* rels targets are relative to word/ (or absolute in-package) */
+            const srcRef: string = target.startsWith('/') ? 'unzip' + target : 'unzip/word/' + target;
+            out += '<img src="' + htmlEscape(srcRef) + '">';
+          }
+          i = close + closeTag.length;
+          continue;
+        }
+      }
     } else if (tag.startsWith('w:t') && !tag.startsWith('w:tbl') && !tag.startsWith('w:tc')) {
       /* find the matching close and take the raw text */
       const close: number = xml.indexOf('</w:t>', gt);
@@ -157,29 +207,34 @@ function scanDocxXml(xml: string): string {
 }
 
 async function convertDocx(ctx: Context, src: string, key: string, outPath: string): Promise<string> {
-  const workDir: string = ctx.cacheDir + '/converted/unzip_' + key;
+  /* 0.9.31 P1-7: the unzip tree IS the media store, mirrored into the EPUB
+   * container's OEBPS/ - index.html references images inside it relatively,
+   * so it must survive the conversion. */
+  const workDir: string = ctx.cacheDir + '/converted/' + key + '/OEBPS/unzip';
   try {
     fs.mkdirSync(workDir, true);
   } catch (e) {
     /* already exists */
   }
-  await zlib.decompressFile(src, workDir);
+  try {
+    await zlib.decompressFile(src, workDir);
+  } catch (e) {
+    throw new Error('unzip: ' + (e instanceof Error ? e.message : String(e)));
+  }
   const xmlPath: string = workDir + '/word/document.xml';
   const xml: string = readTextFile(xmlPath);
+  let rels: Record<string, string> = {};
+  try {
+    rels = parseDocxRels(readTextFile(workDir + '/word/_rels/document.xml.rels'));
+  } catch (e) { /* no rels: images will be dropped by scan */ }
   /* find the document body (skip headers/footers references) */
   const bodyStart: number = xml.indexOf('<w:body>');
   const xmlBody: string = bodyStart >= 0 ? xml.substring(bodyStart) : xml;
-  const paras: string = scanDocxXml(xmlBody);
-  writeTextFile(outPath, wrapHtml(paras.length > 0 ? paras : '<p>(empty document)</p>'));
-  /* best-effort cleanup of the unzipped tree */
+  const paras: string = scanDocxXml(xmlBody, rels);
   try {
-    fs.unlinkSync(xmlPath);
-    fs.rmdirSync(workDir + '/word');
-    fs.rmdirSync(workDir + '/_rels');
-    fs.rmdirSync(workDir + '/docProps');
-    fs.rmdirSync(workDir);
+    writeTextFile(outPath, wrapHtml(paras.length > 0 ? paras : '<p>(empty document)</p>'));
   } catch (e) {
-    /* cacheDir is system-managed; leftovers are harmless */
+    throw new Error('write html: ' + (e instanceof Error ? e.message : String(e)));
   }
   return outPath;
 }
@@ -394,7 +449,13 @@ export async function convertToHtml(ctx: Context, srcPath: string, ext: string):
   } catch (e) {
     /* exists */
   }
-  const outPath: string = dir + '/' + key + '.html';
+  /* 0.9.31 P1-7: the html engine resolves <img> only inside a zip archive
+   * (fz_parse_html5 takes an fz_archive) - the product ships as a minimal
+   * EPUB container mirroring OEBPS/ (index.html + media tree). The old
+   * flat/side-file caches are simply never hit again. */
+  const outDir: string = dir + '/' + key;
+  const oebps: string = outDir + '/OEBPS';
+  const outPath: string = outDir + '/book.epub';
   try {
     if (fs.statSync(outPath).size > 0) {
       console.info(`[DocConvert] cache hit: ${outPath}`);
@@ -403,16 +464,39 @@ export async function convertToHtml(ctx: Context, srcPath: string, ext: string):
   } catch (e) {
     /* not cached yet */
   }
+  try {
+    fs.rmdirSync(outDir);
+  } catch (e) { /* fresh rebuild below */ }
+  fs.mkdirSync(outDir, true);
+  fs.mkdirSync(oebps, true);
+  const htmlPath: string = oebps + '/index.html';
   if (ext === 'docx') {
-    return await convertDocx(ctx, srcPath, key, outPath);
+    await convertDocx(ctx, srcPath, key, htmlPath);
+  } else if (ext === 'rtf') {
+    convertRtf(readTextFile(srcPath), key, htmlPath);
+  } else if (ext === 'odt') {
+    await convertOdt(ctx, srcPath, key, htmlPath);
+  } else {
+    throw new Error('unsupported ext: ' + ext);
   }
-  if (ext === 'rtf') {
-    return convertRtf(readTextFile(srcPath), key, outPath);
-  }
-  if (ext === 'odt') {
-    return await convertOdt(ctx, srcPath, key, outPath);
-  }
-  throw new Error('unsupported ext: ' + ext);
+  /* container scaffolding (zipDir writes mimetype first) */
+  writeTextFile(outDir + '/mimetype', 'application/epub+zip');
+  fs.mkdirSync(outDir + '/META-INF', true);
+  writeTextFile(outDir + '/META-INF/container.xml',
+    '<?xml version="1.0"?>\n<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">' +
+    '<rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>' +
+    '</rootfiles></container>');
+  writeTextFile(oebps + '/content.opf',
+    '<?xml version="1.0"?>\n<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">' +
+    '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">' +
+    '<dc:identifier id="uid">urn:howread:docconv-' + key + '</dc:identifier>' +
+    '<dc:title>doc</dc:title>' +
+    '<meta property="dcterms:modified">2020-01-01T00:00:00Z</meta></metadata>' +
+    '<manifest><item id="c" href="index.html" media-type="application/xhtml+xml"/></manifest>' +
+    '<spine><itemref idref="c"/></spine></package>');
+  zipDir(outDir, outPath);
+  console.info(`[DocConvert] epub container written: ${outPath}`);
+  return outPath;
 }
 
 /**
@@ -420,7 +504,9 @@ export async function convertToHtml(ctx: Context, srcPath: string, ext: string):
  * carries the body as <text:p> paragraphs; unzip, extract and wrap them.
  */
 async function convertOdt(ctx: Context, src: string, key: string, outPath: string): Promise<string> {
-  const dir = ctx.cacheDir + '/converted/odt_' + key;
+  /* 0.9.31 P1-7: unzip into OEBPS - content.xml and Pictures/ sit beside
+   * index.html so <img src="Pictures/.."> resolves; the tree stays. */
+  const dir: string = outPath.substring(0, outPath.lastIndexOf('/'));
   try {
     fs.rmdirSync(dir);
   } catch (e) {
@@ -437,16 +523,23 @@ async function convertOdt(ctx: Context, src: string, key: string, outPath: strin
     let seg = m[1] === undefined ? '' : m[1];
     seg = seg.replace(/<text:span[^>]*>/g, '').replace(/<\/text:span>/g, '')
       .replace(/<text:s\/>/g, ' ').replace(/<text:tab\/>/g, '\t');
+    /* keep images: park <img> tags behind placeholders so the generic
+     * tag-strip below cannot eat them */
+    const imgs: string[] = [];
+    seg = seg.replace(/<draw:image[^>]*xlink:href="([^"]+)"[^>]*\/>?/g,
+      (mm: string, href: string): string => {
+        imgs.push('<img src="' + href.replace(/^\//, '') + '">');
+        return '\u0001' + (imgs.length - 1) + '\u0001';
+      });
     const text = seg.replace(/<[^>]*>/g, '').trim();
-    if (text.length > 0) {
-      body += '<p>' + text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</p>\n';
+    if (text.length > 0 || imgs.length > 0) {
+      let line: string = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      line = line.replace(/\u0001(\d+)\u0001/g, (mm2: string, idx: string): string => {
+        return imgs[parseInt(idx)] ?? '';
+      });
+      body += '<p>' + line + '</p>\n';
     }
     m = re.exec(xml);
-  }
-  try {
-    fs.rmdirSync(dir);
-  } catch (e) {
-    /* best effort */
   }
   if (body.length === 0) {
     throw new Error('odt: no paragraphs found');

@@ -234,7 +234,7 @@
             style="@style/textLink"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/my_email" />
+            android:text="@string/my_email_display" />
     </LinearLayout>
 
     <LinearLayout

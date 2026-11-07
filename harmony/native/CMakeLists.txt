@@ -5,10 +5,82 @@ project("mupdf_harmony")
 set(CMAKE_VERBOSE_MAKEFILE OFF)
 set(CMAKE_CXX_STANDARD 11)
 
+# 0.9.24: HarmonyOS has no user-font feature - compile out the
+# desktop hook (html-font.c) so font lookups keep the pre-hook path.
+add_compile_definitions(HR_NO_USER_FONTS)
+# 0.9.34 P2-13: htdoc re-parses on user-css change (night mode re-tint for
+# html/xhtml). Harmony-only; Android compiles the same html-doc.c without this
+# define and keeps upstream behavior.
+add_compile_definitions(HR_CSS_REPARSE)
+# 0.9.37 P2-12: DjVu via djvulibre (ddjvu C API) as an fz_document handler.
+# Harmony-only; Android keeps its ebookdroid djvu stack and compiles this
+# tree without the macro (handler body + registration compile out).
+add_compile_definitions(HR_DJVU)
+
 # MuPDF source tree shared with the Android build (Builder/mupdf-1.23.7)
 set(MUPDF_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../Builder/mupdf-1.23.7")
 # libwebp lives outside the mupdf tree (used by mupdf's load-webp.c for WebP images)
 set(WEBP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../Builder/jni/libwebp-1.3.2")
+# libdjvu (P2-12 0.9.37): djvulibre 3.5.28 decode + the HowRead fz_document handler
+set(DJVU_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../Builder/jni/libdjvu-3.5.28")
+set(DJVU_SRC
+        "${MUPDF_ROOT}/source/fitz/howread-djvu-doc.c"
+        "${DJVU_ROOT}/src/Arrays.cpp"
+        "${DJVU_ROOT}/src/BSByteStream.cpp"
+        "${DJVU_ROOT}/src/BSEncodeByteStream.cpp"
+        "${DJVU_ROOT}/src/ByteStream.cpp"
+        "${DJVU_ROOT}/src/DataPool.cpp"
+        "${DJVU_ROOT}/src/DjVmDir.cpp"
+        "${DJVU_ROOT}/src/DjVmDir0.cpp"
+        "${DJVU_ROOT}/src/DjVmDoc.cpp"
+        "${DJVU_ROOT}/src/DjVmNav.cpp"
+        "${DJVU_ROOT}/src/DjVuAnno.cpp"
+        "${DJVU_ROOT}/src/DjVuDocument.cpp"
+        "${DJVU_ROOT}/src/DjVuDumpHelper.cpp"
+        "${DJVU_ROOT}/src/DjVuErrorList.cpp"
+        "${DJVU_ROOT}/src/DjVuFile.cpp"
+        "${DJVU_ROOT}/src/DjVuFileCache.cpp"
+        "${DJVU_ROOT}/src/DjVuGlobal.cpp"
+        "${DJVU_ROOT}/src/DjVuGlobalMemory.cpp"
+        "${DJVU_ROOT}/src/DjVuImage.cpp"
+        "${DJVU_ROOT}/src/DjVuInfo.cpp"
+        "${DJVU_ROOT}/src/DjVuMessage.cpp"
+        "${DJVU_ROOT}/src/DjVuMessageLite.cpp"
+        "${DJVU_ROOT}/src/DjVuNavDir.cpp"
+        "${DJVU_ROOT}/src/DjVuPalette.cpp"
+        "${DJVU_ROOT}/src/DjVuPort.cpp"
+        "${DJVU_ROOT}/src/DjVuText.cpp"
+        "${DJVU_ROOT}/src/DjVuToPS.cpp"
+        "${DJVU_ROOT}/src/GBitmap.cpp"
+        "${DJVU_ROOT}/src/GContainer.cpp"
+        "${DJVU_ROOT}/src/GException.cpp"
+        "${DJVU_ROOT}/src/GIFFManager.cpp"
+        "${DJVU_ROOT}/src/GMapAreas.cpp"
+        "${DJVU_ROOT}/src/GOS.cpp"
+        "${DJVU_ROOT}/src/GPixmap.cpp"
+        "${DJVU_ROOT}/src/GRect.cpp"
+        "${DJVU_ROOT}/src/GScaler.cpp"
+        "${DJVU_ROOT}/src/GSmartPointer.cpp"
+        "${DJVU_ROOT}/src/GString.cpp"
+        "${DJVU_ROOT}/src/GThreads.cpp"
+        "${DJVU_ROOT}/src/GURL.cpp"
+        "${DJVU_ROOT}/src/GUnicode.cpp"
+        "${DJVU_ROOT}/src/IFFByteStream.cpp"
+        "${DJVU_ROOT}/src/IW44Image.cpp"
+        "${DJVU_ROOT}/src/IW44EncodeCodec.cpp"
+        "${DJVU_ROOT}/src/JB2Image.cpp"
+        "${DJVU_ROOT}/src/JPEGDecoder.cpp"
+        "${DJVU_ROOT}/src/MMRDecoder.cpp"
+        "${DJVU_ROOT}/src/MMX.cpp"
+        "${DJVU_ROOT}/src/UnicodeByteStream.cpp"
+        "${DJVU_ROOT}/src/XMLParser.cpp"
+        "${DJVU_ROOT}/src/XMLTags.cpp"
+        "${DJVU_ROOT}/src/ZPCodec.cpp"
+        "${DJVU_ROOT}/src/atomic.cpp"
+        "${DJVU_ROOT}/src/debug.cpp"
+        "${DJVU_ROOT}/src/ddjvuapi.cpp"
+        "${DJVU_ROOT}/src/miniexp.cpp"
+)
 
 set(CORE_SRC
         "${MUPDF_ROOT}/source/fitz/archive.c"
@@ -207,6 +279,8 @@ set(CORE_SRC
         "${MUPDF_ROOT}/source/html/html-layout.c"
         "${MUPDF_ROOT}/source/html/html-outline.c"
         "${MUPDF_ROOT}/source/html/html-parse.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/hr_user_fonts_stub.c"
+        "${MUPDF_ROOT}/source/html/mobi-chunk-doc.c"
         "${MUPDF_ROOT}/source/html/mobi.c"
         "${MUPDF_ROOT}/source/html/story-writer.c"
         "${MUPDF_ROOT}/source/html/txt-chunk-doc.c"
@@ -670,7 +744,12 @@ set(CORE_SRC
 #  - dropped JAVA_HOME includes (no JDK headers needed)
 #  - dropped HAVE_LIBCRYPTO (no OpenSSL in OHOS native sysroot; pdf-signature falls back to stubs)
 
-add_library(mupdf SHARED ${CORE_SRC})
+add_library(mupdf SHARED ${CORE_SRC} ${DJVU_SRC})
+
+# djvulibre needs exceptions/RTTI and its config.h; keep the flags scoped to
+# its own sources so the rest of the target keeps the current settings.
+set_source_files_properties(${DJVU_SRC} PROPERTIES COMPILE_OPTIONS
+        "-fexceptions;-frtti;-DHAVE_CONFIG_H;-DHR_DJVU_THREADS")
 
 target_include_directories(mupdf PUBLIC
         "${MUPDF_ROOT}/thirdparty/freetype/include"
@@ -690,6 +769,7 @@ target_include_directories(mupdf PUBLIC
         "${MUPDF_ROOT}/include"
         "${WEBP_ROOT}"
         "${WEBP_ROOT}/src"
+        "${DJVU_ROOT}/src"
 )
 
 target_compile_definitions(mupdf PUBLIC

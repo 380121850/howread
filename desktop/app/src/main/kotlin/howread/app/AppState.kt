@@ -143,6 +143,7 @@ class AppState {
     }
 
     fun open(path: String) {
+        ConvCacheTrim.trim()   // v0.58 转换/封面缓存帽（十分钟一窗，开书路径零负担）
         if (LibPrefs.bool("openAutoAdd", true)) {
             val f = File(path)
             if (f.isFile && howread.core.library.Scanner.isBookFile(path)) {
@@ -156,6 +157,7 @@ class AppState {
 
     /** 打开并直接落到指定页（书签/笔记跳转）。 */
     fun openAt(path: String, page: Int) {
+        ConvCacheTrim.trim()
         Db.markRecent(path)
         readerBook = ReaderBook(path, File(path).name, page)
         reloadLibrary()

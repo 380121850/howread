@@ -7,7 +7,9 @@ data class RemoteEntry(val name: String, val isDir: Boolean, val size: Long, val
     /** OPDS 条目封面缩略图绝对 URL（其它协议留空）。 */
     val coverUrl: String = "",
     /** OPDS 条目摘要（HTML 剥离后截断；其它协议留空）。 */
-    val summary: String = "")
+    val summary: String = "",
+    /** 服务器端修改时间（毫秒；v0.58 远程缓存版本标记用，OPDS 等无时间源时为 0）。 */
+    val mtime: Long = 0)
 
 interface RemoteClient : AutoCloseable {
     /** 列目录（relPath 相对起始目录，空串=起始目录）。 */
@@ -100,7 +102,7 @@ internal fun encodeUrlPath(p: String): String =
 
 /** 下载到本地文件（原子：先写 <dest>.part，成功后替换；中断不留半截文件），
  *  onProgress(已读字节, 总字节)。 */
-fun RemoteClient.downloadTo(relPath: String, dest: java.io.File, onProgress: (Long, Long) -> Unit = { _, _ -> }) {
+fun RemoteClient.downloadTo(relPath: String, dest: java.io.File, mtime: Long = 0L, onProgress: (Long, Long) -> Unit = { _, _ -> }) {
     dest.parentFile?.mkdirs()
     val tmp = java.io.File(dest.parentFile, dest.name + ".part")
     if (tmp.exists()) tmp.delete()
@@ -120,8 +122,25 @@ fun RemoteClient.downloadTo(relPath: String, dest: java.io.File, onProgress: (Lo
         }
         if (dest.exists()) dest.delete()
         if (!tmp.renameTo(dest)) throw java.io.IOException("rename failed: " + dest)
+        writeVtag(dest, mtime)   // v0.58 版本标记：重扫发现登记 mtime 变化后，下次打开自动失效重下
     } catch (e: Exception) {
         tmp.delete()
         throw e
     }
 }
+
+/** v0.58 远程缓存版本标记侧车（<dest>.vtag，安卓 cache-first versionTag 同语义）：
+ *  登记时记录的 mtime（重扫由服务器回填）与落盘时写入的标记对比——同尺寸换文件自动失效重下。
+ *  mtime<=0（OPDS/未登记）不写标记、视为匹配（维持 v0.57 尺寸口径）。 */
+fun vtagFileOf(dest: java.io.File): java.io.File = java.io.File(dest.parentFile, dest.name + ".vtag")
+
+fun writeVtag(dest: java.io.File, mtime: Long) {
+    val f = vtagFileOf(dest)
+    if (mtime <= 0L) { runCatching { f.delete() }; return }
+    runCatching { f.writeText("mtime=" + mtime, Charsets.UTF_8) }
+}
+
+fun readVtag(dest: java.io.File): Long = runCatching {
+    vtagFileOf(dest).takeIf { it.isFile }?.readText(Charsets.UTF_8)?.trim()
+        ?.removePrefix("mtime=")?.trim()?.toLongOrNull() ?: 0L
+}.getOrDefault(0L)

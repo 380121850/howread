@@ -495,11 +495,30 @@ fun ReaderScreen(path: String, initialPage: Int = -1, onClose: () -> Unit, onOpe
 
 
     // ---- 侧板数据 ----
+    // v0.58 侧车缓存键：目录页码/章页数都随排版几何与 CSS 变化，键必须带全套排版签名
+    fun layoutSigKey(prefix: String): String {
+        val f = File(path)
+        val sz = if (f.isFile) f.length() else runCatching { Db.bookSize(path) }.getOrDefault(0L)
+        val tp = if (viewMode == ViewMode.PAGE && twoPage) 1 else 0
+        val sig = "$viewportW|$viewportH|$fontScale|$tp|${prefs.lineHeight}|${prefs.align}|${prefs.textIndent}" +
+            "|${prefs.paraSpacing}|${prefs.maxChars}|${prefs.useDocumentCss}|${prefs.family}"
+        return Integer.toHexString((prefix + "#" + path + "#" + sz + "#" + sig).hashCode())
+    }
+    fun tocKey(): String = layoutSigKey("toc")
+    fun pagemapKey(): String = layoutSigKey("pm")
     var toc by remember(path) { mutableStateOf<List<TocEntry>>(emptyList()) }
     LaunchedEffect(panel, doc) {
         if (panel == Panel.TOC && toc.isEmpty()) {
-            toc = withContext(Dispatchers.Default) { runCatching { doc?.outline() }.getOrNull().orEmpty() }
-            TestLog.evt("toc_loaded", "n=${toc.size}")
+            val hit = withContext(Dispatchers.Default) { TocCache.load(tocKey()) }
+            if (hit != null) {
+                toc = hit
+                TestLog.evt("toc_cache_hit", "n=${hit.size}")
+            }
+            if (toc.isEmpty()) {
+                toc = withContext(Dispatchers.Default) { runCatching { doc?.outline() }.getOrNull().orEmpty() }
+                TestLog.evt("toc_loaded", "n=${toc.size}")
+                if (toc.isNotEmpty()) withContext(Dispatchers.Default) { TocCache.save(tocKey(), toc) }
+            }
         }
     }
 
@@ -650,19 +669,43 @@ fun ReaderScreen(path: String, initialPage: Int = -1, onClose: () -> Unit, onOpe
                     layoutReady = true
                     layoutRev++   // 排版纪元前移：位图缓存/渲染键随之失效（翻页模式字号等改动立即生效的关键）
                     TestLog.evt("layout_ready", "w=$w em=$em ms=" + (System.currentTimeMillis() - t0))
-                    // 渐进页数：16 章一批计（批间释放引擎锁，渲染插队上限约一批），批量发布避免高频重组
+                    // 渐进页数：16 章一批计（批间释放引擎锁，渲染插队上限约一批），批量发布避免高频重组；
+                    // v0.58 流式远程书页数侧车：流式文档无 accel，重开免重付全页计数（键含排版签名）
+                    val pmKey = if (docEnginePath.isEmpty()) pagemapKey() else null
                     var acc = 0
-                    val nc = withContext(Dispatchers.Default) { runCatching { d.countChapters() }.getOrDefault(1) }
-                    var ci = 0
-                    while (ci < nc) {
-                        val batch = minOf(16, nc - ci)
-                        acc += withContext(Dispatchers.Default) {
-                            var t = 0
-                            for (k in ci until ci + batch) t += runCatching { d.countPagesOf(k) }.getOrDefault(0)
-                            t
+                    var nc = 0
+                    if (pmKey != null) {
+                        val hit = withContext(Dispatchers.Default) { PagemapCache.load(pmKey) }
+                        if (hit != null && hit.sum() > 0) {
+                            acc = hit.sum()
+                            nc = hit.size
+                            TestLog.evt("pagemap_hit", "pages=$acc ch=$nc")
                         }
-                        ci += batch
-                        if (acc > 0 && (ci % 16 == 0 || ci >= nc)) pageCount = acc
+                    }
+                    if (acc <= 0) {
+                        val chapCounts = ArrayList<Int>()
+                        nc = withContext(Dispatchers.Default) { runCatching { d.countChapters() }.getOrDefault(1) }
+                        var ci = 0
+                        while (ci < nc) {
+                            val batch = minOf(16, nc - ci)
+                            val got = withContext(Dispatchers.Default) {
+                                val arr = IntArray(batch)
+                                var t = 0
+                                for (k in 0 until batch) {
+                                    arr[k] = runCatching { d.countPagesOf(ci + k) }.getOrDefault(0)
+                                    t += arr[k]
+                                }
+                                t to arr
+                            }
+                            acc += got.first
+                            for (v in got.second) chapCounts.add(v)
+                            ci += batch
+                            if (acc > 0 && (ci % 16 == 0 || ci >= nc)) pageCount = acc
+                        }
+                        if (pmKey != null && acc > 0) {
+                            withContext(Dispatchers.Default) { PagemapCache.save(pmKey, chapCounts.toIntArray()) }
+                            TestLog.evt("pagemap_save", "pages=$acc ch=$nc")
+                        }
                     }
                     if (acc <= 0) return@collectLatest
                     pageCount = acc
@@ -2573,4 +2616,59 @@ private fun cleanupAccels(path: String, keep: String) {
     val rest = (dir.listFiles() ?: emptyArray()).filter { it.isFile }
         .sortedByDescending { it.lastModified() }
     for (f in rest.drop(8)) runCatching { f.delete() }
+}
+
+// ---- v0.58 目录/页数侧车（安卓 outline 序列化缓存与页树 sidecar 同思路，LRU 保 50） ----
+
+/** 目录缓存：cache/outline/<键>.json。键含排版签名——页码随排版变，跨签名天然失配重算。 */
+private object TocCache {
+    private const val KEEP = 50
+    private fun dir(): File = File(AppPaths.cacheDir, "outline").apply { mkdirs() }
+
+    fun load(key: String): List<TocEntry>? = runCatching {
+        val f = File(dir(), "$key.json")
+        if (!f.isFile) return@runCatching null
+        val arr = org.json.JSONArray(f.readText(Charsets.UTF_8))
+        val out = ArrayList<TocEntry>(arr.length())
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            out.add(TocEntry(o.optInt("l"), o.optString("t"), o.optInt("p")))
+        }
+        out
+    }.getOrNull()
+
+    fun save(key: String, list: List<TocEntry>) {
+        runCatching {
+            val arr = org.json.JSONArray()
+            for (e in list) arr.put(org.json.JSONObject().put("l", e.level).put("t", e.title).put("p", e.page))
+            File(dir(), "$key.json").writeText(arr.toString(), Charsets.UTF_8)
+            val rest = (dir().listFiles() ?: emptyArray()).filter { it.isFile }
+                .sortedByDescending { it.lastModified() }
+            for (f in rest.drop(KEEP)) runCatching { f.delete() }
+        }
+    }
+}
+
+/** 流式远程书页数侧车：cache/pagemap/<键>.json（逐章页数）。流式文档无 accel，重开免重付全页计数。 */
+private object PagemapCache {
+    private const val KEEP = 50
+    private fun dir(): File = File(AppPaths.cacheDir, "pagemap").apply { mkdirs() }
+
+    fun load(key: String): IntArray? = runCatching {
+        val f = File(dir(), "$key.json")
+        if (!f.isFile) return@runCatching null
+        val arr = org.json.JSONArray(f.readText(Charsets.UTF_8))
+        IntArray(arr.length()) { i -> arr.optInt(i) }
+    }.getOrNull()
+
+    fun save(key: String, chapters: IntArray) {
+        runCatching {
+            val arr = org.json.JSONArray()
+            for (v in chapters) arr.put(v)
+            File(dir(), "$key.json").writeText(arr.toString(), Charsets.UTF_8)
+            val rest = (dir().listFiles() ?: emptyArray()).filter { it.isFile }
+                .sortedByDescending { it.lastModified() }
+            for (f in rest.drop(KEEP)) runCatching { f.delete() }
+        }
+    }
 }

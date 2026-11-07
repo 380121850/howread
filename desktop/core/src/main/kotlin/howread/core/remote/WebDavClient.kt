@@ -34,6 +34,7 @@ class WebDavClient(private val src: RemoteSource) : RemoteClient {
                 name = r.name.trimEnd('/').substringAfterLast('/'),
                 isDir = r.isDirectory,
                 size = r.contentLength ?: 0L,
+                mtime = r.modified?.time ?: 0L,
                 relPath = joinRel(relDir, r.name.trimEnd('/')),
             )
         }

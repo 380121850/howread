@@ -59,6 +59,12 @@ export interface ReaderSettings {
   dropCapEnabled: boolean;
   /** Font family: 'default', 'serif', 'sans-serif', 'monospace' */
   fontFamily: string;
+  /** 0.9.33 P2-11: active user font (absolute sandbox path; '' = none) */
+  userFontPath: string;
+  /** 0.9.33 P2-11: active user font display name */
+  userFontName: string;
+  /** 0.9.33 P2-11: imported user fonts, JSON array of {name, path} */
+  userFontList: string;
 
   /* ---- Sprint K: System integration ---- */
   /** App lock enabled (biometric/password) */
@@ -227,6 +233,9 @@ export function defaultSettings(): ReaderSettings {
     textIndent: 2,
     dropCapEnabled: false,
     fontFamily: 'default',
+    userFontPath: '',
+    userFontName: '',
+    userFontList: '[]',
     appLockEnabled: false,
     appLockPass: '1234',
     readReminderMinutes: 0,
@@ -331,6 +340,9 @@ export async function loadSettings(ctx: Context): Promise<ReaderSettings> {
       textIndent: typeof r.textIndent === 'number' ? r.textIndent : d.textIndent,
       dropCapEnabled: r.dropCapEnabled === true,
       fontFamily: typeof r.fontFamily === 'string' ? r.fontFamily : d.fontFamily,
+      userFontPath: typeof r.userFontPath === 'string' ? r.userFontPath : d.userFontPath,
+      userFontName: typeof r.userFontName === 'string' ? r.userFontName : d.userFontName,
+      userFontList: typeof r.userFontList === 'string' ? r.userFontList : d.userFontList,
       appLockEnabled: r.appLockEnabled === true,
       appLockPass: typeof r.appLockPass === 'string' ? r.appLockPass : d.appLockPass,
       readReminderMinutes: typeof r.readReminderMinutes === 'number' ? r.readReminderMinutes : d.readReminderMinutes,

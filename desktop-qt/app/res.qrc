@@ -1,0 +1,8 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+<qresource prefix="/res">
+  <file alias="banner_day.jpg">res/banner_day.jpg</file>
+  <file alias="banner_night.jpg">res/banner_night.jpg</file>
+  <file alias="app_icon.png">res/app_icon.png</file>
+</qresource>
+</RCC>

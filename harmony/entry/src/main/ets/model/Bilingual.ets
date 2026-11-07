@@ -334,7 +334,7 @@ function listAllFiles(dir: string): string[] {
  * Zip the unpacked EPUB tree store-only (method 0). `mimetype` is written
  * first and META-INF/container.xml second so MuPDF accepts the archive.
  */
-function zipDir(dir: string, outPath: string): void {
+export function zipDir(dir: string, outPath: string): void {
   const enc = new util.TextEncoder();
   const abs = listAllFiles(dir);
   const rels: string[] = [];

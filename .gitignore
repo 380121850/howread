@@ -90,3 +90,15 @@ __pycache__/
 # ---------- Desktop (Compose) build artifacts (2026-11-01) ----------
 # desktop 下任意深度的 build/ 产物目录(含 desktop/build、desktop/{app,core,engine}/build)
 desktop/**/build/
+
+# ---------- desktop-qt (Qt branch) build artifacts (2026-11-01) ----------
+# Qt 分支交叉构建产物目录（build-mxe 内含 exe/dll/运行 data）
+desktop-qt/build*/
+# 2026-11-07 上库前补充：过程/产物路径（保留盘上文件，仅不入库）
+/android/**/build/
+ci/autotest/results/
+ci/autotest-hmos/results/
+docs/**/build/
+/docs_listing.txt
+/android/com_files.txt
+/android/net_files.txt

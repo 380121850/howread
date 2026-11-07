@@ -48,6 +48,7 @@ class SmbClient(private val src: RemoteSource) : RemoteClient {
                 name = f.name.trimEnd('/'),
                 isDir = f.isDirectory,
                 size = if (f.isDirectory) 0L else f.length(),
+                mtime = if (f.isDirectory) 0L else f.lastModified(),
                 relPath = joinRel(relDir, f.name.trimEnd('/')),
             )
         }.sortedByDescending { it.isDir }

@@ -2,9 +2,9 @@
 """L0 smoke cases for HowRead Pro (HarmonyOS). Signature: fn(dev, case_id, cfg, fixtures).
 
 UI 词汇（zh-CN 模拟器实测，dumpLayout 文本）：
-  底部 tab：首页/书库/我的文件/偏好（id: app_tab_0..3）
+  底部 tab：首页/书架/我的书库/偏好（id: app_tab_0..3）
   首页：最近阅读 / 阅读统计 / 书签笔记 / 网上书库
-  书库：搜索 / 全文 / 最近 / 全部/未读/在读/已读/☆收藏
+  书架：搜索 / 全文 / 最近 / 全部/未读/在读/已读/☆收藏
   阅读器：页码 "N/M"；HRTEST 事件 book_open_done / page_change_done
   退出确认：标题 退出应用（id: exit_btn_cancel / exit_btn_ok）
 """
@@ -70,16 +70,16 @@ def sm03_tabs(dev, case_id, cfg, fixtures):
         with dev.step(case_id, 'tab %d -> %s' % (idx, markers[idx])):
             if not dev.click_id(TAB_IDS[idx]):
                 # .id() 兜底：按 tab 文本定位
-                names = ['首页', '书库', '我的文件', '偏好']
+                names = ['首页', '书架', '我的书库', '偏好']
                 if not dev.click_text(names[idx]):
                     raise TestFail('tab %d not found (id and text)' % idx)
             if not dev.wait_text(markers[idx], timeout=8):
                 dev.save_dump('tab_%d_marker_missing' % idx)
                 raise TestFail('tab %d marker %r not shown' % (idx, markers[idx]))
-    # tab 2 (我的文件)：首页分区里也有同名文案，改断言浏览页专属标记
+    # tab 2 (我的书库)：首页分区里也有同名文案，改断言浏览页专属标记
     with dev.step(case_id, 'tab 2 my-files'):
         if not dev.click_id(TAB_IDS[2]):
-            if not dev.click_text('我的文件'):
+            if not dev.click_text('我的书库'):
                 raise TestFail('tab 2 not found')
         ok = dev.wait_text('书库文件夹', timeout=8) or dev.wait_text('可阅读文件', timeout=4)
         if not ok:
@@ -97,7 +97,7 @@ def sm04_open_pdf_and_flip(dev, case_id, cfg, fixtures):
             raise TestFail('seeded wrong book: %s' % ev['raw'])
     with dev.step(case_id, 'seeded big25 visible in library'):
         if not dev.click_id('app_tab_1'):
-            dev.click_text('书库')
+            dev.click_text('书架')
         # 2026-09-29: the library defaults to the shelf view (Android parity)
         # where titles are not text nodes — switch to the list view first
         dev.click_xy(1253, 391)

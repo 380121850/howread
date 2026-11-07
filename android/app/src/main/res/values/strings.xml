@@ -769,7 +769,7 @@
    <string name="moon_home">Home</string>
    <string name="moon_home_recent">Recent reading</string>
    <string name="moon_home_favorites">My favorites</string>
-   <string name="moon_home_files">My files</string>
+   <string name="moon_home_files">My library</string>
    <string name="moon_home_net">Online library</string>
    <string name="moon_file_dropbox">[Dropbox]</string>
    <string name="moon_file_gdrive">[Gdrive]</string>
@@ -782,7 +782,7 @@
    <string name="moon_stat_today">Today</string>
    <string name="moon_stat_speed">Speed (pages/min)</string>
   <string name="moon_monthly_title">Monthly reading time (last 12 months)</string>
-  <string name="moon_my_files">My files</string>
+  <string name="moon_my_files">My library</string>
   <string name="moon_range_week">Week</string>
   <string name="moon_range_month">Month</string>
   <string name="moon_range_year">Year</string>
@@ -805,7 +805,7 @@
    <string name="webdav_sync_state_off">Off</string>
    <string name="webdav_sync_server">Server</string>
    <string name="webdav_sync_no_server">No server selected</string>
-   <string name="webdav_sync_add_server_hint">Add a WebDAV server on the My files page first</string>
+   <string name="webdav_sync_add_server_hint">Add a WebDAV server on the My library page first</string>
    <string name="webdav_sync_now">Sync now</string>
    <string name="webdav_syncing">Syncing…</string>
    <string name="webdav_sync_last">Last sync: %s</string>
@@ -828,7 +828,7 @@
    <string name="webdav_sync_interval_180">Every 3 hours</string>
    <string name="webdav_sync_interval_360">Every 6 hours</string>
    <string name="webdav_sync_interval_1440">Every day</string>
-   <string name="webdav_sync_independent">Independent from the WebDAV servers in My files</string>
+   <string name="webdav_sync_independent">Independent from the WebDAV servers in My library</string>
    <string name="webdav_sync_log">Sync log</string>
    <string name="webdav_sync_log_empty">No sync changes recorded yet</string>
    <string name="webdav_sync_remote_dir">Sync path</string>

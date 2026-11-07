@@ -36,6 +36,10 @@ fun main(args: Array<String>) {
         SmokeGuiMain.main(args.drop(1).firstOrNull { File(it).isFile })
         return
     }
+    if (args.firstOrNull() == "--shots") {
+        ShotsMain.main(args.drop(1).firstOrNull())
+        return
+    }
     // 数据目录解析+旧位置迁移（必须在任何 Db/偏好访问之前；v0.28.0 便携化）
     howread.core.AppPaths.init()
     // 恢复默认配置标记（v0.55.0）：确认复位后程序已退出，重启在最早处清空配置/索引/缓存

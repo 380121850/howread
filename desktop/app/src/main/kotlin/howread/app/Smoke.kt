@@ -104,3 +104,69 @@ object SmokeGuiMain {
         }
     }
 }
+
+
+/** 截图对比探针（Windows 宿主）：ShellScreen 真窗口内导航七页 + Robot 抓窗存 PNG 后退出（对齐 Qt --shotsmoke）。 */
+object ShotsMain {
+    private class Ref { @Volatile var win: java.awt.Window? = null }
+
+    fun main(outDirArg: String?) {
+        howread.core.AppPaths.init()
+        val outDir = File(outDirArg ?: "shots").apply { mkdirs() }
+        val ref = Ref()
+        application {
+            val st = remember { AppState() }
+            Window(
+                onCloseRequest = {}, title = "HowReadPro-Shots",
+                state = rememberWindowState(width = 1280.dp, height = 820.dp),
+            ) {
+                val w = this.window
+                androidx.compose.runtime.SideEffect { ref.win = w }
+                ShellScreen(st, w)
+            }
+            LaunchedEffect(Unit) {
+                TestLog.evt("shots_begin")
+                fun shot(name: String) {
+                    val w = ref.win ?: return
+                    runCatching {
+                        val r = java.awt.Robot()
+                        val rect = java.awt.Rectangle(
+                            w.locationOnScreen.x, w.locationOnScreen.y, w.width, w.height)
+                        val img = r.createScreenCapture(rect)
+                        javax.imageio.ImageIO.write(img, "png", File(outDir, name))
+                        TestLog.evt("shots_png", "$name ${img.width}x${img.height}")
+                    }.onFailure { TestLog.evt("shots_png_fail", "$name $it") }
+                }
+                delay(2800)
+                shot("home.png")
+                st.goto(MainTab.LIBRARY); delay(1300); shot("library.png")
+                st.goto(MainTab.BROWSE); delay(1300); shot("browse.png")
+                st.goto(MainTab.PREFS); delay(1300); shot("prefs.png")
+                st.extra = ExtraContent.REMOTE; delay(1300); shot("remote.png")
+                st.extra = ExtraContent.BOOKMARKS; delay(1100); shot("bookmarks.png")
+                st.extra = ExtraContent.FAVORITES; delay(1100); shot("favorites.png")
+                // v0.87.0 二轮：书库四视图
+                st.goto(MainTab.LIBRARY); delay(600)
+                st.libView = LibView.LIST; delay(1100); shot("view_list.png")
+                st.libView = LibView.TABLE; delay(1100); shot("view_table.png")
+                st.libView = LibView.SHELF; delay(1100); shot("view_shelf.png")
+                st.libView = LibView.GROUP_AUTHOR; delay(1100); shot("view_gauthor.png")
+                st.libView = LibPrefs.defaultView(); delay(400)
+                // v0.87.0 二轮：夜间模式三页
+                UiTheme.applyDark(true); delay(1200)
+                st.goto(MainTab.HOME); st.extra = ExtraContent.NONE; delay(1200); shot("dark_home.png")
+                st.goto(MainTab.LIBRARY); delay(1100); shot("dark_library.png")
+                st.goto(MainTab.PREFS); delay(1100); shot("dark_prefs.png")
+                UiTheme.applyDark(false); delay(600)
+                val first = st.library.firstOrNull { it.path.isNotEmpty() }
+                if (first != null) {
+                    st.open(first.path); delay(8000); shot("reader.png")
+                    st.closeReader(); delay(700)
+                }
+                TestLog.evt("shots_end")
+                println("SHOTS DONE")
+                exitProcess(0)
+            }
+        }
+    }
+}

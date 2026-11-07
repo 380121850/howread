@@ -1,0 +1,32 @@
+LIBRARY mupdfqt64
+EXPORTS
+hr_qt_init
+hr_qt_shutdown
+hr_qt_set_css
+hr_qt_open
+hr_qt_count
+hr_qt_layout
+hr_qt_render
+hr_qt_close
+hr_qt_last_error
+hr_qt_outline
+hr_qt_page_size
+hr_qt_meta
+hr_qt_open_stream
+hr_qt_selection
+hr_qt_page_box
+hr_qt_search_page
+hr_qt_page_paragraphs
+hr_qt_pdf_export_highlights
+hr_qt_pdf_annotation_count
+hr_qt_doc_to_html
+hr_qt_docx_to_html
+hr_qt_odt_to_html
+hr_qt_rtf_to_html
+    hr_qt_count_chapters
+    hr_qt_count_pages_of
+    hr_qt_save_accel
+    hr_qt_open_accel
+    hr_qt_zip_first_book
+    hr_qt_defer_images
+    hr_qt_rar_extract

@@ -73,7 +73,15 @@ export interface MupdfDocument {
 }
 
 export function version(): string;
-export function openDocument(path: string): ESObject;
+export function openDocument(path: string, accelPath?: string): ESObject;
+/** 0.9.34 P2-14: open a local document on a worker thread (OpenPrefetch). */
+export interface OpenAsyncResult {
+  handle: ESObject;
+  isReflow: boolean;
+}
+export function openDocumentAsync(path: string, accelPath?: string): Promise<OpenAsyncResult>;
+/** 0.9.27: persist the layout accelerator after counting (best effort). */
+export function saveAccelerator(handle: ESObject, accelPath: string): void;
 /** Open document via file descriptor (from @ohos.file.fs.openSync) */
 export function openDocumentByFd(fd: number): ESObject;
 export function pageCount(handle: ESObject): number;
@@ -160,9 +168,12 @@ export function remoteReadDone(id: number, seq: number, data: ArrayBuffer | unde
  * layoutW/layoutH/em/css before the metadata is collected.
  * Resolves { handle: ESObject, meta: string } where meta is JSON:
  * {"pageCount":N,"isReflow":bool,"needsPassword":bool,"toc":[{title,page,depth}...]}
+ * 0.9.25: lazy=true defers the open-time count+layout for reflowable docs -
+ * meta.pageCount then comes back -1 and the caller grows the count with
+ * docOpAsync op15 (progressive), mirroring the local staged open.
  */
 export function openDocumentRemoteAsync(readerId: number, magic: string, size: number, doLayout: boolean,
-  layoutW: number, layoutH: number, em: number, css: string): Promise<ESObject>;
+  layoutW: number, layoutH: number, em: number, css: string, lazy?: boolean): Promise<ESObject>;
 
 /**
  * Run a document operation on a worker thread (remote-stream safe — the

@@ -18,15 +18,15 @@
     },
     {
       "name": "tab_library",
-      "value": "Library"
+      "value": "Bookshelf"
     },
     {
       "name": "drawer_library",
-      "value": "My shelf"
+      "value": "My library"
     },
     {
       "name": "tab_my_files",
-      "value": "My Files"
+      "value": "My library"
     },
     {
       "name": "tab_prefs",
@@ -1566,7 +1566,7 @@
     },
     {
       "name": "sync_independent",
-      "value": "Independent of the WebDAV servers in My files"
+      "value": "Independent from the WebDAV servers in My library"
     },
     {
       "name": "sync_interval",
@@ -2275,6 +2275,10 @@
     {
       "name": "trans_mode_replace",
       "value": "Replace"
+    },
+    {
+      "name": "lib_folder_seed",
+      "value": "Library"
     }
   ]
 }

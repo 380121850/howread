@@ -375,10 +375,10 @@ GThread::start(void *arg)
   pthread_setasynccancel(CANCEL_ON);
 # endif
 #else // !DCETHREADS
-# ifdef PTHREAD_CANCEL_ENABLE
+# if defined(PTHREAD_CANCEL_ENABLE) && !defined(HR_DJVU_THREADS)
   pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, 0);
 # endif
-# ifdef PTHREAD_CANCEL_ASYNCHRONOUS
+# if defined(PTHREAD_CANCEL_ASYNCHRONOUS) && !defined(HR_DJVU_THREADS)
   pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, 0);
 # endif
 #endif
@@ -446,7 +446,7 @@ GThread::create(void (*entry)(void*), void *arg)
 void 
 GThread::terminate()
 {
-#ifndef __ANDROID__
+#if !defined(__ANDROID__) && !defined(HR_DJVU_THREADS)
   if (xentry || xarg)
     pthread_cancel(hthr);
 #endif

@@ -767,6 +767,14 @@ fun PrefsScreen(appState: AppState, window: ComposeWindow) {
                 capText = v
                 v.toLongOrNull()?.let { n -> if (n in 0..1048576L) LibPrefs.put("remoteCacheMaxMB", n) }
             }, hint = L10n.s("如 500；0 = 不限", "e.g. 500; 0 = no limit"), modifier = Modifier.width(160.dp))
+            // v0.58 转换/封面缓存上限（convert/txt/zip/covers 四目录 mtime LRU；0 = 不限）
+            Spacer(Modifier.height(6.dp))
+            Text(L10n.s("转换缓存上限 (MB)", "Convert cache limit (MB)"), color = UiTheme.p.textSecondary, fontSize = 12.sp)
+            var convCapText by remember { mutableStateOf(LibPrefs.str("convCapMB", "500")) }
+            CompactField(convCapText, { v ->
+                convCapText = v
+                v.toLongOrNull()?.let { n -> if (n in 0..1048576L) LibPrefs.put("convCapMB", n) }
+            }, hint = L10n.s("如 500；0 = 不限", "e.g. 500; 0 = no limit"), modifier = Modifier.width(160.dp))
             // 底部按钮行（用户裁定+附图：清空全部缓存 | 取消、保存上限；保存后关闭）
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween) {
@@ -786,7 +794,10 @@ fun PrefsScreen(appState: AppState, window: ComposeWindow) {
                         LibPrefs.put("remoteCacheMaxMB", n)
                         howread.core.remote.BlockCacheStore.capMaxMB = n   // 即时生效，不等下本书
                         runCatching { howread.core.remote.BlockCacheStore.enforceCap(n) }
-                        TestLog.evt("cache_cap", "$n")
+                        val cn = convCapText.toLongOrNull()?.coerceIn(0, 1048576L) ?: 500L
+                        LibPrefs.put("convCapMB", cn)
+                        ConvCacheTrim.forceTrim()
+                        TestLog.evt("cache_cap", "$n conv=$cn")
                         cacheDlg = false
                     }) { Text(L10n.s("保存上限", "Save limit"), fontSize = 12.sp) }
                 }
@@ -875,15 +886,15 @@ private val FORMAT_GROUPS: List<Pair<String, List<String>>> = listOf(
     "PDF" to listOf("pdf"),
     "DJVU" to listOf("djvu"),
     "FB2" to listOf("fb2"),
-    "MOBI/AZW/PRC" to listOf("mobi", "azw", "azw3", "prc"),
+    "MOBI/AZW/PRC" to listOf("mobi", "azw", "azw3", "prc", "pdb"),
     "EPUB" to listOf("epub"),
     "XPS" to listOf("xps"),
     "DOC/DOCX" to listOf("doc", "docx"),
     "RTF" to listOf("rtf"),
     "ODT" to listOf("odt"),
-    "CBZ/CBR" to listOf("cbz", "cbr"),
+    "CBZ/CBR" to listOf("cbz", "cbr", "tif", "tiff"),
     "ZIP" to listOf("zip"),
-    "HTML/TXT" to listOf("html", "htm", "txt", "svg"),
+    "HTML/TXT" to listOf("html", "htm", "txt", "svg", "md", "mht", "mhtml"),
 )
 
 /** 分组标题条（安卓 bg_search_second：满宽主题色底+白字加粗）。 */
@@ -1197,7 +1208,7 @@ fun AboutDialog(onDismiss: () -> Unit) {
                     L10n.s("第三方库许可", "Licenses for libraries"), url = "https://github.com/380121850/howread")
                 AboutRow(L10n.s("支持和问题反馈", "Support and feedback"),
                     L10n.s("HowReadPro 问题反馈", "HowReadPro issues"), url = "https://github.com/380121850/howread/issues")
-                AboutRow(L10n.s("邮箱", "Email"), "380121850@163.com", url = "mailto:380121850@163.com")
+                AboutRow(L10n.s("邮箱", "Email"), "leestudio_support", url = "mailto:leestudio_support@163.com")
                 AboutRow(L10n.s("官网", "Website"), "HowReadPro", url = "https://howread.app")
                 Text(L10n.s("This is a fork of Librera Reader", "This is a fork of Librera Reader"),
                     color = UiTheme.p.textFaintest, fontSize = 10.sp)

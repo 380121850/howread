@@ -17,6 +17,7 @@ import {
   RecentBook
 } from '../model/ReadingProgress';
 import { exportBookmarks, replaceBookmarks, getBookmarks, removeBookmark, addBookmark, Bookmark } from '../model/Bookmarks';
+import { OpenPrefetch } from '../model/OpenPrefetch';
 import {
   loadSettings, saveSettings, defaultSettings, THEME_NAMES, ReaderSettings
 } from '../model/Settings';
@@ -51,8 +52,9 @@ import {
   loadRemoteCacheSettings, buildRemoteUri, parseRemoteUri, serverIdOf, sha256Hex,
   resolveWebDavServer, resolveSmbServer, resolveSftpServer, webdavListDir, basicAuthHeader,
   smbListDir, sftpListDir, sftpProbeFingerprint, sftpHomeOf, smbHostPort, sftpHostPort, epubIsEncrypted,
-  fileExtOf, isDirectOpenExt, isSimpleFetchExt, isHeavyExt,
-  BlockCacheStore, cachedPercent, remoteCacheTotalBytes, clearRemoteCacheBook, clearRemoteCacheAll,
+  fileExtOf, isDirectOpenExt, isSimpleFetchExt, isHeavyExt, isPageFormatExt, isEngineUnsupportedExt,
+  checkRemoteMagic,
+  BlockCacheStore, cachedPercent, remoteCacheTotalBytes, clearRemoteCacheBook, clearRemoteCacheAll, fixHostileExt,
   fetchWholeBookToCache, materializeBook, mobiIsEncrypted, upsertRemoteBook, removeRemoteBook, getRemoteBooks
 } from '../model/RemoteBook';
 
@@ -66,7 +68,8 @@ const FORMAT_ROWS: string[][] = [['pdf', 'PDF'], ['epub', 'EPUB'], ['fb2', 'FB2'
 /* 2026-09-20 port: same what-is-new page as Android v1.3.13 */
 const WHATSNEW_URL: string = 'https://380121850.github.io/howread/what-is-new/zh.html';
 const HOME_URL: string = 'https://380121850.github.io/howread/';
-const SUPPORT_MAIL: string = '380121850@163.com';
+const SUPPORT_MAIL: string = 'leestudio_support@163.com';
+const SUPPORT_MAIL_DISPLAY: string = 'leestudio_support';
 const PRIVACY_URL: string = 'https://380121850.github.io/howread/PrivacyPolicy/zh.html';
 const FEEDBACK_URL: string = 'https://github.com/380121850/howread/issues';
 
@@ -669,7 +672,7 @@ struct Index {
         if (list.length > 0) {
           this.libFolders = list;
         } else {
-          const seed: LibFolder = { name: this.L($r('app.string.tab_library')), path: ctx.cacheDir };
+          const seed: LibFolder = { name: this.L($r('app.string.lib_folder_seed')), path: ctx.cacheDir };
           this.libFolders = [seed];
         }
       });
@@ -699,6 +702,7 @@ struct Index {
   /** Open a book from a bookmark entry. */
   private openBookmarkBook(bm: Bookmark): void {
     const name = bm.path.substring(bm.path.lastIndexOf('/') + 1);
+    this.prefetchOpen(bm.path);
     router.pushUrl({ url: 'components/Reader', params: { docPath: bm.path, title: name } })
       .then(() => {
         console.info(`[Index] Opened book from bookmark: ${name} page=${bm.page}`);
@@ -765,6 +769,7 @@ struct Index {
       this.generateCover(ctx, book);
       this.loadLibrary();
     });
+    this.prefetchOpen(fullPath);
     router.pushUrl({ url: 'components/Reader', params: { docPath: fullPath, title: fileName } })
       .then(() => {
         console.info(`[Index] Opened from browse: ${fileName}`);
@@ -1066,6 +1071,7 @@ struct Index {
 
   /** Open a full-text hit at its page. */
   openLibHit(hit: LibSearchHit): void {
+    this.prefetchOpen(hit.path);
     router.pushUrl({ url: 'components/Reader', params: { docPath: hit.path, title: hit.title, jumpPage: String(hit.page) } });
   }
 
@@ -1230,6 +1236,7 @@ struct Index {
       };
       saveRecentBook(ctx, book);
       this.generateCover(ctx, book);
+      this.prefetchOpen(target);
       router.pushUrl({ url: 'components/Reader', params: { docPath: target, title: fileName } })
         .then(() => {
           console.info(`[Index] Navigated to Reader (open-with: ${fileName})`);
@@ -1391,6 +1398,7 @@ struct Index {
       await this.loadLibrary();
 
       /* Navigate to Reader with the first picked document */
+      this.prefetchOpen(firstPath);
       router.pushUrl({ url: 'components/Reader', params: { docPath: firstPath, title: firstTitle } })
         .then(() => {
           console.info(`[Index] Navigated to Reader (picked ${uris.length} file(s))`);
@@ -1415,7 +1423,28 @@ struct Index {
     }
   }
 
+  /** 0.9.34 P2-14: pre-open a tapped local book on a worker during the reader
+   * startup window (Android OpenPrefetch parity). Remote URIs and convert-only
+   * formats are skipped; failures fall through to the reader's own sync open. */
+  private prefetchOpen(path: string): void {
+    try {
+      if (path.startsWith('remote://')) {
+        return;
+      }
+      const dot = path.lastIndexOf('.');
+      if (dot < 0) {
+        return;
+      }
+      const ext = path.substring(dot + 1).toLowerCase();
+      if (ext === 'doc' || ext === 'docx' || ext === 'rtf') {
+        return; /* converted to cached HTML before open - a pre-open would be a miss */
+      }
+      OpenPrefetch.start(path);
+    } catch (_e) { /* prefetch is best effort */ }
+  }
+
   private openBook(book: RecentBook): void {
+    this.prefetchOpen(book.path);
   tlog('book_open_tap', 'title=' + book.title);
     /* Round 7: alwaysPage1 forces page 1 in the Reader (ignores saved progress) */
     router.pushUrl({
@@ -2319,6 +2348,26 @@ tlog('download_start', 'name=' + fileName);    try {
       this.remoteFetchAndOpenSource(uri, fileName, settings, source);
     };
 
+    /* 0.9.25 P0-4: no engine handler exists - a whole-book download would
+     * end on a file that cannot open at all. Hint and offer local-only. */
+    if (isEngineUnsupportedExt(ext)) {
+      AlertDialog.show({
+        title: '无法打开',
+        message: `鸿蒙版暂不支持打开 ${ext.toUpperCase()} 格式，文件仍可下载到本地。是否下载？`,
+        primaryButton: {
+          value: '取消',
+          action: () => {}
+        },
+        secondaryButton: {
+          value: '下载',
+          action: () => {
+            fallbackDownload();
+          }
+        }
+      });
+      return;
+    }
+
     /* heavy formats: confirm then whole-book download (Android confirmHeavyFetch) */
     if (!settings.onlineFirst || !(isDirectOpenExt(ext) || isSimpleFetchExt(ext))) {
       if (isHeavyExt(ext)) {
@@ -2393,6 +2442,19 @@ tlog('download_start', 'name=' + fileName);    try {
     }
     if (!probe.supportsRange) {
       /* server without Range support: degrade to whole-book download */
+      this.remoteFetchAndOpenSource(uri, fileName, settings, source);
+      return;
+    }
+    /* 0.9.26 P0-1 tail (Android RemoteVariantDetector parity): a hostile
+     * file whose content does not match its extension would fail deep in
+     * the engine - verify the magic up front and fall back to the
+     * download-and-open path (which tolerates arbitrary content). */
+    const magicOk: boolean = await checkRemoteMagic(ext,
+      (off: number, want: number): Promise<ArrayBuffer> => {
+        return source.readAt(off, want);
+      });
+    if (!magicOk) {
+      promptAction.showToast({ message: '文件内容与扩展名不符，转为整本下载后打开' });
       this.remoteFetchAndOpenSource(uri, fileName, settings, source);
       return;
     }
@@ -2477,13 +2539,21 @@ tlog('download_start', 'name=' + fileName);    try {
           promptAction.showToast({ message: '无法连接远程文件' });
           return;
         }
+        /* 0.9.25: block size must follow the reader-session rule (page
+         * formats 1MB, everything else 256KB). The old direct/simple split
+         * fought RemoteSession.open's blockSize meta: the same book flipped
+         * block sizes between download and stream paths and wiped the cache
+         * (txt joining DIRECT made this hot). */
         await session.store.loadOrCreate(probe.size, probe.versionTag,
-          isDirectOpenExt(ext) ? 1024 * 1024 : 256 * 1024);
+          isPageFormatExt(ext) ? 1024 * 1024 : 256 * 1024);
         path = await fetchWholeBookToCache(session, ext, (p: number) => {
           this.webdavProgress = p;
           this.webdavDownloading = fileName;
         });
       }
+      /* 0.9.29 P0-1 tail: a hostile variant caught only after the download
+       * gets its real extension before the reader touches it */
+      path = fixHostileExt(path, ext);
       this.webdavProgress = -1;
       this.remoteFetchName = '';
       this.webdavStatus = `下载完成: ${fileName}`;
@@ -2503,6 +2573,7 @@ tlog('download_start', 'name=' + fileName);    try {
       };
       await saveRecentBook(ctx, book);
       await this.loadLibrary();
+      this.prefetchOpen(path);
       router.pushUrl({ url: 'components/Reader', params: { docPath: path, title: fileName } });
     } catch (e) {
       this.webdavProgress = -1;
@@ -6521,13 +6592,14 @@ tlog('download_start', 'name=' + fileName);    try {
       }
       .width('100%').height(170)
 
-      /* nav items: 最近阅读 / 书库 / 我的文件 / 网上书库 / 书签笔记 */
+      /* nav items: 最近阅读 / 我的书架 / 我的书库 / 书签笔记
+       * (2026-11-06 Android v1.3.14 parity: 网上书库 row removed;
+       *  OPDS stays reachable from the home quick-access block) */
       Column({ space: 0 }) {
         this.drawerNavItem($r('app.media.ic_toc'), this.L($r('app.string.sec_recent')), 0)
         this.drawerNavItem($r('app.media.ic_book_open'), this.L($r('app.string.drawer_library')), 1)
         this.drawerNavItem($r('app.media.ic_folder'), this.L($r('app.string.tab_my_files')), 2)
-        this.drawerNavItem($r('app.media.ic_globe'), this.L($r('app.string.sec_online')), 3)
-        this.drawerNavItem($r('app.media.ic_bookmark'), this.L($r('app.string.sec_bookmarks')), 4)
+        this.drawerNavItem($r('app.media.ic_bookmark'), this.L($r('app.string.sec_bookmarks')), 3)
       }
       .width('100%').margin({ top: 6 })
 
@@ -6561,7 +6633,7 @@ tlog('download_start', 'name=' + fileName);    try {
     .backgroundColor(this.drawerBg())
   }
 
-  /** One drawer nav row. target: 0/1=library, 2/3=my files (网上书库), 4=bookmarks sub-page. */
+  /** One drawer nav row. target: 0/1=shelf tab, 2=my-library tab, 3=bookmarks sub-page. */
   @Builder
   drawerNavItem(icon: Resource, label: string, target: number) {
     Row({ space: 18 }) {
@@ -6574,9 +6646,9 @@ tlog('download_start', 'name=' + fileName);    try {
       this.showDrawer = false;
       if (target === 0 || target === 1) {
         this.switchTab(1);
-      } else if (target === 2 || target === 3) {
+      } else if (target === 2) {
         this.switchTab(2);
-      } else if (target === 4) {
+      } else if (target === 3) {
         this.subPage = 2;
       }
       console.info(`[Index] Drawer nav: ${label}`);
@@ -8281,8 +8353,13 @@ tlog('download_start', 'name=' + fileName);    try {
         if (probe === null) {
           throw new Error('probe failed');
         }
+        /* 0.9.25: block size must follow the reader-session rule (page
+         * formats 1MB, everything else 256KB). The old direct/simple split
+         * fought RemoteSession.open's blockSize meta: the same book flipped
+         * block sizes between download and stream paths and wiped the cache
+         * (txt joining DIRECT made this hot). */
         await session.store.loadOrCreate(probe.size, probe.versionTag,
-          isDirectOpenExt(ext) ? 1024 * 1024 : 256 * 1024);
+          isPageFormatExt(ext) ? 1024 * 1024 : 256 * 1024);
         const localPath: string = await fetchWholeBookToCache(session, ext, (p: number) => {
           this.webdavProgress = p;
           this.webdavDownloading = `(${i + 1}/${names.length}) ${name}`;
@@ -8382,7 +8459,7 @@ tlog('download_start', 'name=' + fileName);    try {
         .fontSize(13).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
         .margin({ top: 10, bottom: 6 })
       if (this.smbSelected < 0 || this.smbSelected >= this.smbServers.length) {
-        Text('请先在书库-我的文件中添加 SMB 服务器')
+        Text('请先在“我的书库”中添加 SMB 服务器')
           .fontSize(12).fontColor(this.txtFaint()).margin({ top: 20 })
       } else {
         Text(this.smbServerSubtitle(this.smbSelected))
@@ -8420,7 +8497,7 @@ tlog('download_start', 'name=' + fileName);    try {
         .fontSize(13).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
         .margin({ top: 10, bottom: 6 })
       if (this.sftpSelected < 0 || this.sftpSelected >= this.sftpServers.length) {
-        Text('请先在书库-我的文件中添加 SFTP 服务器')
+        Text('请先在“我的书库”中添加 SFTP 服务器')
           .fontSize(12).fontColor(this.txtFaint()).margin({ top: 20 })
       } else {
         Text(this.sftpServerSubtitle(this.sftpSelected))
@@ -10910,7 +10987,7 @@ tlog('download_start', 'name=' + fileName);    try {
           this.aboutRow($r('app.string.about_feedback'), $r('app.string.about_feedback_link'), (): void => {
             this.openExternal(FEEDBACK_URL);
           })
-          this.aboutRow($r('app.string.about_mail'), SUPPORT_MAIL, (): void => {
+          this.aboutRow($r('app.string.about_mail'), SUPPORT_MAIL_DISPLAY, (): void => {
             this.openExternal('mailto:' + SUPPORT_MAIL);
           })
           this.aboutRow($r('app.string.about_web'), '\u597D\u597D\u8BFBPro', (): void => {

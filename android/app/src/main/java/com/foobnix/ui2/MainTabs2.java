@@ -874,7 +874,6 @@ public class MainTabs2 extends AdsFragmentActivity {
         addDrawerNavRow(parent, R.string.moon_home_recent, R.drawable.glyphicons_55_clock, UITab.RecentFragment);
         addDrawerNavRow(parent, R.string.moon_drawer_library, R.drawable.glyphicons_589_book_open, UITab.SearchFragment);
         addDrawerNavRow(parent, R.string.moon_home_files, R.drawable.glyphicons_145_folder_open, UITab.BrowseFragment);
-        addDrawerNavRow(parent, R.string.moon_home_net, R.drawable.glyphicons_417_globe, UITab.OpdsFragment);
         addDrawerNavRow(parent, R.string.bookmarks_and_notes, R.drawable.glyphicons_73_bookmark, UITab.BookmarksFragment);
 
         buildDrawerBottomBar();

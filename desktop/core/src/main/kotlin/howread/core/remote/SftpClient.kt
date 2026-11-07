@@ -45,6 +45,7 @@ class SftpClient(private val src: RemoteSource) : RemoteClient {
                 name = r.name,
                 isDir = r.attributes.mode.type == FileMode.Type.DIRECTORY,
                 size = r.attributes.size,
+                mtime = r.attributes.mtime * 1000L,
                 relPath = joinRel(relDir, r.name),
             )
         }.sortedByDescending { it.isDir }

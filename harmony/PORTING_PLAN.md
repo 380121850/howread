@@ -564,6 +564,110 @@ TTS 朗读、搜索全书、批注/高亮编辑、OPDS 书源、云同步等。*
 - 打点：bench_open_doc/reflow_probe/layout/pagelist/decode/first_frame（HRTEST，双构建保留）；安卓两项优化经实测在鸿蒙无对应开销（无固定首帧门限、解码已异步）。实施首帧优先（TOC/书签/批注延后一拍）。收益 fb2 -10%/epub -3%/pdf 噪声内持平。约束：openDocument 异步化与超大 reflow 排版为 native 层另立项。
 - 版本 0.9.15/53；50.104 四件套；L0 7/7。
 
+## 阶段 17g（0.9.38，2026-11-07）：同步安卓 11-06 导航更名批（v1.3.14）——书架/我的书库/抽屉去网上书库
+
+- **同步内容**（安卓 CHANGES 2026-11-06 条目：MainTabs2/SearchFragment2/strings ×3 → v1.3.14/7325）：① 标签栏 书库→书架、我的文件→我的书库（顶栏/首页快捷区/浏览根标题随 tab_library/tab_my_files 资源自动跟随）；② 抽屉去 网上书库 行（home 的 sec_online 区块入口保留，与安卓"功能未删、仍从首页进"同构；drawerNavItem target 重排 4→3）；③ SMB/SFTP 云盘空态提示与 WebDAV 同步 sync_independent 提示跟随更名；④ en 基文案 Bookshelf/My library（drawer_library My shelf→My library 对齐安卓现值）。
+- **防回归细节**：书库文件夹兜底种子名（Index.ets 原 name=tab_library）与标签解耦——新 string 键 lib_folder_seed（书库/Library），避免种子夹名随标签变成"书架"（安卓本批未动书库文件夹概念）。
+- **CI 同步**：tc_smoke.py 标签断言 names=['首页','书架','我的书库','偏好']、click_text('我的书库'/'书架')。
+- **验证**：Pura 90 x86_64 uitest 全导航断言 PASS（抽屉行几何校验 y(网上书库)=None；首页网上书库区块滚动后可见——首屏折叠下方，非缺失）；L0 7/7 PASS。
+- **版本**：0.9.38/91；构建 hap_938.log 四件套 RC=0；脚本 tmp/scripts/v938_{recon,recon2,recon3,patch,verify,home_dump,dump_texts,scroll_check2,docs}.py。
+- **安卓侧定位注**：该批条目在仓库根 CHANGES.md 中部（"## 2026-11-06 界面导航更名"行，11-06 文档误清空重建后位于细节区），顶部【重建】摘要区无此条——按日期检索应全文搜"界面导航更名"。
+
+## 阶段 17f（0.9.37，2026-11-07）：报告 P2-12——DjVu 引擎接线（djvulibre 移植）；AZW3(KF8) 勘定另立项
+
+- **勘定**：AZW3/KF8——本树 mobi.c 仅 348 行 PalmDOC，无 KF8 分支；安卓同源同缺（分析文档"上游有 KF8 分支"对 1.23.7 不成立）→ KF8 解析器=跨平台新项目，不在本批。DJVU——djvulibre-3.5.28 全源码在 Builder/jni/libdjvu-3.5.28（安卓平台 libdjvu.a 预编译在 platform/librera/obj，OHOS 不可直接链）→ OHOS 重编+处理器移植路径成立。
+- **实施**：① 新文件 `Builder/mupdf-1.23.7/source/fitz/howread-djvu-doc.c`——ddjvu C API 到 fz_document 的桥（open: context/create_by_filename_utf8/DOCINFO 泵；count/ bound_page: 像素×72/dpi 转 pt；run_page: DDJVU_RENDER_COLOR + DDJVU_FORMAT_RGB24（ddjvu_format_set_row_order 顶行序）→ 与 mupdf RGB pixmap 同构直拷 → fz_new_image_from_pixmap + fz_fill_image；ctm 带旋转时 set_rotation 防御；单文档 pump_mutex 串行化消息队列（NAPI 双渲染并发）；`#ifdef HR_DJVU` 整文件隔离）。② document-all.c 条件注册。③ harmony/native/CMakeLists.txt：HR_DJVU 宏 + DJVU_SRC（52 cpp，-fexceptions -frtti -DHAVE_CONFIG_H -DHR_DJVU_THREADS）+ src include。④ GThreads.cpp musl 无 pthread_cancel/setcancelstate——按既有 __ANDROID__ 先例加 HR_DJVU_THREADS 守卫（安卓不定义宏零变化）。
+- **范围界定**：v1 无隐藏文字层（搜索）/无目录；远程 djvu 维持整本下载→本地打开；**0.9.25 的 ENGINE_UNSUPPORTED_EXTS 硬门同步摘除 djvu**（原"鸿蒙版暂不支持 DJVU"提示过时），远程点击走 HEAVY 下载→打开流（设备实测 63MB 2 秒下载 + 打开即读，页 0/1/2/3 渲染 OK，音量键翻页稳定）；AZW3(KF8) 结余另立项。
+- **版本**：0.9.37/87；引擎双 ABI 重编（x86_64 56.2MB，djvu +2.2MB）；四件套。
+- **结余更新**：P2-12 DjVu ✅（v1）；AZW3(KF8) 另立项；报告 P2 全项至此实施完毕（P2-10 双语设备复验候补）。
+
+## 阶段 17e（0.9.36，2026-11-07）：报告 P2-17 页列表 LazyForEach 化（压测先行）+ P2-10 PDF 译文合成期绘制
+
+- **P2-17 压测（立项门槛，0.9.35 现状）**：big25.pdf 4696 页，Pura 90 模拟器 hidumper PSS——开书即 ~294-301MB（ForEach 全量页组件一次建齐），20 页音量键翻页零增长（成本在开书一次付清），无崩溃。
+- **P2-17 实施**：PageDataSource 本就是 IDataSource（getData 数值化后作 LazyForEach 数据源）；Swiper/List 双站点 ForEach(this.pageList)→LazyForEach(this.dataSource)（增长点本就全部走 setPageCount→onDataReloaded，配对已审计）；**当前页作用域叠加层（搜索高亮/批注/选中预览/双语译文/闪烁）改为组件内自判**——currentPage/searchHitPage 两个作用域 @Prop + hitsOf/annsOf/selsOf/flashesOf/oversOf 内滤方法，alive 单元经 @Prop 增量更新（这也是省内存的前提）；contrastLevel 升 @Prop；key 复合键原样保留（zoom/夜间/分屏/reflowVersion/renderEpoch 变更仍整体重建可见页）。
+- **P2-17 实测（0.9.36）**：同书同协议 294→**230MB（-65MB/-22%）**，20 翻零增长，L0 7/7 PASS。
+- **P2-10 实施**：PageRenderer 渲染完成保留原始位图（baseData/W/H），译文到位/换模式/翻到该页（biOverlays/biMode/currentPage 三 @Watch→onBiChanged）时用 OffscreenCanvas 把译文卡（含 REFLOW 对照原文+左侧蓝条，样式镜像原叠层，字号按 bitmap-px/vp 比例换算）画进页面位图再取回 createPixelMap；build() 内原 ArkUI 叠层仅 compositeFailed 时渲染（设备兼容回退，零回归设计）。
+- **P2-10 验证边界**：设备端双语链路本轮未验（需 AI 配置+模拟器远程会话不稳），回退设计保证零回归；待真机复验。
+- **版本**：0.9.36/83；四件套；L0 PASS。
+- **结余更新**：P2-17 ✅、P2-10 ✅（设备双语复验候补）；剩余 P2-12（→0.9.37 批）。
+
+## 阶段 17d（0.9.35，2026-11-07）：报告 P1-9 远程 PDF 懒页尺寸——pagemap 后台收敛（流式书读后即存图）
+
+- **对照安卓**：`DocumentModel.retrieveLazySizesInfo`（窗口内真实尺寸 + 模板占位 + PageCacheFile 落盘 + 随窗口后台收敛）。
+- **现状勘定**：op13/14 + pagemap.bin(v2) 已具备 nums+sizes 全链；缺口只在触发面——op13 仅在 `cached.fullyCached` 时于开书执行，流式书（读一半退出）永不落盘，重开重走页面树。另勘定引擎事实：懒会话不积累映射（fwd_page_map 保持 NULL，`pdf_finish_lazy_page_tree` 是唯一建图路径），"流式期间自然 harvest 前缀"不成立；引擎注释明确游走宜在整本缓存后跑（全 cache hit、亚秒）。
+- **实施（纯应用侧，引擎/NAPI 零改动）**：Reader.ets pagemap 流程加第三分支——无 sidecar 且未整本缓存 → 记收敛意图（pmConv* 字段）；块填充 `onFillerProgress` p>=100 时触发 `maybeConvergePagemap()`：docOpAsync(13)（全缓存命中游走）→ nums+sizes → `writePageTreeSidecar` 复用 v2 格式；tlog `pagemap_converged pages=N`。失败/提前退出无副作用，下次会话自动重试；关闭竞态为零（仅会话存活时触发）。
+- **实施中勘定并修复（fillWholeBook 上报缺口）**：块填充器对"已缓存块"直接 continue 不报进度——单块书/开书读全的书 p>=100 永不发出（既有"整本已缓存"提示同因失效，先于本批存在，模拟器 book_lazy 实测钉死）；修复=循环完整走完补报一次 100，与 fullyCached 翻转严格对齐（RemoteBook.ets）。
+- **效果**：读过的远程 PDF 重开零页面树流量（op14 注入）；搜索高亮等尺寸消费者免加载页面对象。安卓"后台收敛"语义达成（一次游走全量收敛，强于逐窗口）。
+- **版本**：0.9.35/79；四件套。
+- **结余更新**：P1-9 ✅；剩余 P2-10、P2-12、P2-17（→ 0.9.36/0.9.37 批）。
+
+## 阶段 17c（0.9.34，2026-11-07）：报告 P2-14 OpenPrefetch/FirstPaintGate + P2-13 夜间引擎重着色（HTDOC 样式冻结根修，HR_CSS_REPARSE 隔离）
+
+- **P2-14 预打开+首帧门控**：model/OpenPrefetch.ets（worker 线程 NAPI openDocumentAsync 预开，20s TTL/30s 自动关闭）；Index.ets 七个钩子在书架点书时预热；Reader 就位 adoptHandle（实测 1~4ms）；FirstPaintGate 门控层在真实首帧渲染后放行（reason=render，130~430ms，12s 兜底帽）。Pura 90 x86_64 多轮冷启/温开实测链路完整、零 FATAL。
+- **P2-13 夜间重着色根修**：buildCss 按 isReflow&&!isRemote 注入深浅两套 palette（深色 #101010/#d0d0d0、护眼 #eaddc3/#2a2118，链接 #7aa2ff），toggle/冷开路径对本地重排书 setInvert(false)（固定版式与远程书保留反色）。**根因（离线探针实证）**：HTDOC（html/xhtml/mobi-via-htdoc）的盒子树样式在 parse 时冻结，fz_layout_html 永不重应用 CSS——parse 后 fz_set_user_css 视觉零效果（探针 A==C）；而 EPUB（css_sum 加速器失效）与 TXT/FB2/MOBI 分章文档（css_seen）本就有重解析机制，唯 HTDOC 缺失。**修复**：html-doc.c 仿 css_seen——保留源 buffer+format，htdoc_layout 检测 fz_user_css 变化即整体重解析并刷新 outline。**多平台隔离**：补丁 100% 包在 `#ifdef HR_CSS_REPARSE` 内，宏仅在 harmony/native/CMakeLists.txt 定义；安卓 MuPDF-1.23.7.mk wildcard 同一份源但不定义宏，行为与上游逐字节一致。选择器实测定稿：背景挂 html+body、正文色挂 body（探针盒树转储证实 body→p→流节点 owner 全链 208 级联）。
+- **未竟（如实）**：修复包设备端像素验收未完成——Pura 90 模拟器合成器在阅读器会话中反复冻结（截屏/转储/环形日志同时失真，含旧帧幻象与 tiff 反转内容误判），应用侧零崩溃；待模拟器恢复或真机复验 HTML 夜间深底浅字/日间零回归/L0。**测试基建坑（记录）**：Emulator.exe 全重启后 uitest dumpLayout 可能吐会话前旧树（与 hilog 对照可识破）；hilog 环形缓冲被 QoS 噪声冲掉后 -x 不可依赖；阅读器会话触发模拟器合成器冻结（02:04 起三连复现），恢复需整机重启。
+- **版本**：0.9.34/75；引擎双 ABI 重编（HR_CSS_REPARSE 生效）+ 四件套 debug/release × arm64/x86_64；脚本 tmp/scripts/v934_css_reparse_patch.py、engine_probe.c（+build_engine_probe.sh、gen_probe_from_cmake.py——从 harmony CMakeLists 自动取源清单/宏/include 的宿主探针构建法）、v934_changes_entry.py、本脚本。
+
+## 阶段 17b（0.9.33，2026-11-06）：报告 P1-6 MOBI 懒排版 + P2-11 用户字体 + P2-16 Big5（引擎双 ABI 重建，含 TOC/段落三层根修）
+
+- **P1-6 MOBI 分章文档**（新 Builder/mupdf-1.23.7/source/html/mobi-chunk-doc.c，仿 fb2-chunk-doc.c；html-doc.c legacy wrapper + `mobi_open_document_with_buffer` 路由 chunk open；harmony/desktop CMakeLists 编译）：count_chapters 进 op15 staged，mobi/prc 大书窗口化开门、页数后台补。
+- **P2-16 Big5**（新 txt-big5-table.inc/txt-big5.inc：CP950 单元表+结构判定+频率打分；txt-chunk-doc.c enc 字段 0/1/2、chunk 起点对齐、逐章转换分派）。设备复验揪出两个判定缺陷并当日根修：① `g ? detect_big5 : 0` 短路使纯 Big5 文件（GBK 游走 52% 非法对）永不进 Big5 检测→改为无条件游走；② pick() GBK 尾字节集是 Big5 超集、首个命中即 continue 使 bhits 恒 0→双合法对同轮双打分、指针单进（平局仍 GBK）。仿真+真机双向对拍：big5 书 ghits=0/bhits=6432→Big5（498 乱页→356 繁体页）、gbk 书 6633/0 不变（372 页）。
+- **P2-11 用户字体**：Settings.ets userFontPath/Name/List 三字段；Reader.ets importUserFont（DocumentViewPicker ttf/otf/ttc→filesDir/fonts+userFontList JSON）/selectUserFont/refreshUserFonts（文件失踪即注销）+ buildCss `@font-face 'custom'` 前缀 + 排版面板字体行"+"与已注册字体按钮。**css@open 管道**（同批）：NAPI 新 op16（设用户 CSS 不计数，不镜像 h->userCss——buildCss 恒携带，镜像会在每次重排时重复叠加 @font-face）；Reader 本地/远程 staged 链 op15 前先 op16（**旧 staged 链从不经 buildCss，排版/用户字体在分章书上从未生效**）；fb2/txt-chunk css_seen 失效位（CSS 变更即使几何不变也废缓存章树）。
+- **TOC entries=0 三层根修（真机暴露，同包）**：① 引擎：UA 表关闭时 `fz_get_css_match_display` 缺省 DIS_INLINE→gen2_tag 永不走 DIS_BLOCK→box->structure 恒 NULL→html 派生 outline 静默 NULL（分章 mobi/无 NCX legacy/纯 html）且**段落渲染挤成 run-on 墙**；新增 html_display_only_css 语义子集（display-only 零间距、仅 UA 关时编译、桌面逐字节不变；与 txt_base_css 用户通道配方同根，此为引擎通道版）——0.9.32"分页零膨胀"决策保持；② TocPanel 从未接收父组件 tocEntries（loadToc 是桩、setEntries 无调用者）→改 @Prop（0.9.20 既定模式）；③ tocCachePath 未 await sha256Hex()，Promise 字符串拼进文件名→**所有书共用 cache/toc/[object Promise].json**（开 B 见 A 目录；0.9.27 P1-8 潜伏，目录恒空期间被掩盖）→路径构造 async 化 await。
+- **验证**：big_mobi staged 打开/翻页真机（v933_mobi_verify）；Big5/GBK 双书真机复验（繁体 356 页/GBK 372 页截图）；用户字体四步链路真机截图组（导入面板出 hrtestfont 按钮→页面 Comfortaa 上屏→force-stop 冷启仍生效→默认切回衬线）；L0 7/7 GATE PASS。
+- **测试侧坑（记录）**：文件选择器（FilePickerUIExtAbility）窗口不进 uitest dump 树——只能截图+坐标驱动；"最近/文档/搜索"类目走媒体库索引，.ttf 永不入索引——须走"浏览→我的手机"实时 FS 视图（测试字体经模拟器浏览器下载落根目录投放）；列表视图本模拟器渲染纯黑（保持图标视图）；截图滞后真实视图 ≥1 帧——对话框按钮一律以 dumpLayout 真实 bounds 点按（排版面板"完成"真实中心 (660,2118)，按截图估算 (597,1969) 会命中字体按钮）。
+- 版本 0.9.33/71；50.111 引擎双 ABI 重编（17:12）+ 四件套 ×3 轮（hap_933/933b/933c，终版 17:14）；脚本 tmp/scripts/v933_{engine,app,tocpanel,display_css,big5_shortfix}_patch.py 与 v933_* 验证系列；日志 tmp/logs/hap_933*.log。
+- **报告项结余（未实施）**：P1-9 远程 PDF 懒页尺寸、P2-10 译文页本体、P2-12 AZW3/DJVU、P2-13 重着色、P2-14 OpenPrefetch/FirstPaintGate、P2-17 LazyForEach。
+
+## 阶段 17a（0.9.26~0.9.32，2026-11-05/06）：报告 P0 收尾三项 + P1 三项 + P2 块校验（七个版本号一批）
+
+- **P0 尾 A 敌意变体回退**：Index.ets remoteOpenCore DIRECT 分支 probe 后 `checkRemoteMagic`（pdf=%PDF、epub/cbz/xps/oxps=PK，txt 跳过）不匹配→toast+自动转 `remoteFetchAndOpenSource`；下载产物在 materialize 汇合点 `fixHostileExt`（.pdf 实为 PK → rename .epub；PK 家族内不区分 cbz/xps，罕见场景不覆盖）→ Reader 打开真扩展名。0.9.28 首验暴露"下载后仍按假扩展名开失败"，0.9.29 补改名修正。
+- **P0 尾 B 离线提示**：Reader 两处 onFillerProgress 回调（staged/全路径）在 p>=100 时一次性 toast"整本已缓存，离线也可阅读"（offlineHintShown 会话闩）。
+- **P0 尾 C 方向感知预取**：RemoteSession.readAt 记 lastBridgedBlock；新 prefetchForPageTurn(dir)——dir<0 走新 BlockCacheStore.prefetchBehind（自 lastBridgedBlock-1 向后 depth 块），dir>0 立即 prefetchAfter；Reader.onPageChanged 按 index>prevPage 接线；页格式 depth 沿用 4/3。
+- **P1-5 accel**：NAPI openDocument 增可选 accelPath（fz_open_accelerated_document，fz_catch 回退普通开）+ 新导出 saveAccelerator（g_mu+fz_try，模式仿 PageCount）；Reader accelPathOf 键=sha256(path#size#mtime#fontSize#lineHeight#margin)（排版参数入盐，改字号不命中旧布局）；saveAccel 在 finishReaderOpen/startPhaseTwo 收尾/applyReflow 三处触发（setTimeout 50ms fire-and-forget，LRU 8）；**0.9.32 修：accels 父目录缺失先 mkdir（fz_save_accelerator rc=-3，桌面 0.101 同坑复踩）**。
+- **P1-8 TOC 缓存**：Reader tocCachePath（本地=path#size#mtime、远程=uri#size#versionTag）→ cache/toc/<sha>.json，loadToc 先查缓存（命中 tlog cached=1）后 live 写回+trimOldestFiles(50)；同次打开内二次 loadToc 命中即 cached=1 事件的来源（非跨书串键，已由 book_epub 16 章复验）。
+- **P1-7 docx/odt 保图（三轮迭代）**：0.9.27 目录化（img 引用 unzip 树）→ 实证**引擎对独立 html 不解析相对图片**（fz_parse_html5 的图片仅从 fz_archive 取）→ 0.9.31 终案：转换产物打包为最小 EPUB 容器（mimetype/META-INF/container.xml/OEBPS/content.opf + OEBPS/index.html + OEBPS/unzip|Pictures 树），复用 Bilingual.ets 的 store-only zipDir（export）；docx 图片经 rels r:embed→Target 映射、odt 经 draw:image xlink:href；rtf 维持纯文本（安卓 rtfparserkit 对齐）。种子实测：convert_ok out=book.epub、图片渲染上屏（截图）。**缓存形态变更：旧 <key>.html / <key>/index.html 缓存不再命中（产物=book.epub），首次打开自动重转。**
+- **P2-15 块 CRC**：RemoteBook.ets 表驱动 CRC32；crc.bin 每块 LE u32（写块时记录）；ensureBlock 盘读后校验，失败清位图重拉一次；无 crc.bin 的旧缓存跳过校验；crcFd 生命周期随 close。
+- **验证**：L0 7/7 ×3（0.9.28/0.9.29/0.9.31 轮）+ 0.9.32 轮；敌意书（var_hostile.pdf=EPUB 内容）点击→自动下载→改名→103 页 staged 打开（3.6s）；seed docx（自造合法 PNG 夹具）convert_ok→图片上屏截图；seed epub accel_saved=1 + toc cached=1；远程 txt staged 链路回归正常。**测试侧坑（记录）**：本模拟器 uitest 对系统 AlertDialog（AlertDialog.show）按钮哑火——docx"整本下载"确认框自动化点不中，验证绕行=种子路径（转换逻辑与下载产物路径同源）；行内下载按钮同样未生效。
+- **版本**：0.9.26/64（P0 尾）→ 0.9.27/65（P1-5/7/8，GetHandle 前向声明+saveAccelerator import 两轮编译修）→ 0.9.28/66（+CRC，openSync 返回 File 需 .fd 一修）→ 0.9.29/67（敌意改名+DocConvert mkdir）→ 0.9.30/68（convert 打点插桩）→ 0.9.31/69（EPUB 容器化）→ 0.9.32/70（accel mkdir，**终版**）。四件套每版 ×1。
+- **报告项结余（P1-6/9 与 P2 大项未实施，见汇报）**：P1-6 mobi count_chapters（引擎 C，候选=mobi pagebreak 切章文档）、P1-9 远程 PDF 懒页尺寸（改 op13/14 全树游走语义）、P2-10 译文页本体、P2-11 用户字体、P2-12 AZW3/DJVU、P2-13 重着色、P2-14 OpenPrefetch/FirstPaintGate、P2-16 Big5、P2-17 LazyForEach。
+- 脚本：tmp/scripts/v926_p0_tails.py、v927_p1_batch.py、v927_fix_fwd.py、v927_fix_import.py、v928_p2_crc.py、v928_fix_fd.py、v929_hostile_fix.py、v930_convert_trace.py、v931_epub_container.py、v931_remake_docx.py、v932_accel_mkdir.py、v928_verify.py、v930_docx_seed.py、v932_final_verify.py、v932_shelf_find.py、v932_open_epub.py、v928_make_fixtures2.py；日志 tmp/logs/hap_926_p0t.log、hap_927_p1{,b,c}.log、hap_928_p2{,b}.log、hap_929.log、hap_930.log、hap_931.log、hap_932.log。
+
+## 阶段 16z（0.9.25，2026-11-05）：安卓 11-05 对比报告 P0 批次——在线 TXT 直开流 + 远程懒排版 + 预取接线/缓存上限 + 不支持格式守卫
+
+- 依据《安卓_vs_鸿蒙_打开渲染缓存差异与适配分析_2026-11-05》§六 P0 清单（P0-1/P0-2/P0-3/P0-4）落地；引擎 .so 零改动（hvigor 重编即可）。
+- **P0-1 在线 TXT 直开**：'txt' 移入 DIRECT_OPEN_EXTS（决策树一行）；引擎侧 0.9.24 已就绪（txt-chunk-doc 持流增量读 + NAPI RemoteStreamSeek 桥）。fb2/html/mobi 的 handler 是 fz_read_all 整书 slurp，保持整本下载档位。
+- **P0-2 远程懒排版**：openDocumentRemoteAsync 新增第 9 参数 lazy（Index.d.ts 同步）；NAPI worker 在 `job->lazy && isReflow` 时跳过 fz_count_pages/OpTocJson，meta.pageCount=-1（重排版书全量 count 会强制全书排版，死参数 doLayout 旁路确认）；Reader.ets 远程分支走 staged：adoptRemote(handle,0)→docOp(15) 首窗计数→startPhaseTwo(gen)（phase2 收尾自带 settleProgressEpoch+loadToc），odd 文档回退 docOp(3) 全量。pdf 等固定版式不进 staged。
+- **P0-3 预取接线 + 缓存上限**：RemoteSession.readAt 出口接 prefetchAfter(floor(offset/blockSize))（此前零调用者）；页格式超前窗口 32→4 块（32MB→4MB，对齐安卓）；session.onFillerProgress 回调接 @State remoteFillPercent 底部横幅"后台缓存 N%"；remoteCacheMaxMB 首个消费者 enforceRemoteCacheQuota（LRU by data.bin mtime，跳过 books/ 与 pinnedCacheKeys——open 时 pin、close 时解 pin；此 SDK rmdirSync 无递归参数，整书目录按扁平文件 unlink 后 rmdir）。
+- **P0-4 不支持格式守卫**：ENGINE_UNSUPPORTED_EXTS=[azw3,azw,djvu,cbr,doc] + isEngineUnsupportedExt；remoteOpenCore 顶 AlertDialog（取消/下载→fallbackDownload），不再整本白下载。azw 由种子实测（hrSeedUrl 本地开 book_open_fail err=1，PDB 变体引擎不支持；prc 实测可开 25 页 staged 故不加）。
+- **块大小规则统一**：Index.ets 两处下载 loadOrCreate 的 `isDirectOpenExt?1MB:256KB` → `isPageFormatExt?1MB:256KB`（与 RemoteSession.open 口径一致；旧口径下 TXT/EPUB 在下载↔流式切换时因 blockSize 变化被 loadOrCreate 清缓存）。
+- **验证**：模拟器实测（Pura 90 x86_64，50.104 备用测试服务器）：远程 TXT 点击后 HRTEST 事件 book_open_done remote=1 staged=1（流式直开+懒排版链路生效，不再整本下载）；远程 PDF 回归 remote=1 pages=5 全量计数（固定版式不进 staged）；azw/azw3/doc 在线点击均弹无法打开并可取消——azw 系种子实测引擎 book_open_fail（既有限制非本次引入），prc 实测可开 25 页故不加守卫；L0 门禁 7/7 PASS ×2（初版与 azw 守卫终版）。
+- **事故记录（2026-11-06）**：本阶段文档脚本首次运行时 `open(CH,"w")` 先截断文件、write 参数求值才抛错，CHANGES.md 被清空成 0 字节；已按脚本头部说明用工作区第一人称副本（136 条至 09-11）+ v924 脚本逐字条目重建，09-12~09-30 段待用户 git 恢复。教训：写文档类脚本必须先 `t2 = transform(t)` 全部求值成功后再 `open(...,"w").write(t2)`。
+- 版本 0.9.25/63；50.111 四件套 ×2 轮（初版 + azw 守卫终版，dist debug/release × arm64/x86_64）；脚本 tmp/scripts/v925_p0_impl.py、v925_fix_compile.py、v925_verify_remote.py、v925_azw_guard.py、v925_guard_recheck.py、v925_azw_seed2.py、v925_prc_seed.py、v925_check_build.sh、v925_restore_and_docs.py；日志 tmp/logs/hap_925_p0{,b,c}.log、v925_remote_run.log、v925_azw*_hilog.txt。
+
+## 阶段 16y（0.9.24 修订，2026-11-05）：重排分页零回归（UA 样式守卫）+ 引擎级 GBK→UTF-8 分章转码 + 卡页取消重试加固
+
+- 16x 遗留两项（fb2/mobi 首帧 +60~140%、GBK 乱码）当日根因、修复、全量回归。
+- **UA 样式守卫**（html-parse.c，`HR_LOAD_UA_CSS` opt-in 宏，仅 desktop/engine/CMakeLists.txt 定义）：Windows 桌面版 [10-27 v0.26.0] "恢复启用引擎内建默认样式"改在共享源码，鸿蒙 0.9.24 重建首次传导；UA 开启后分页膨胀 +29~63%（big25 fb2 4696→6043、mobi 72→117、pose_epub 780→1020、GBK txt 2087→2966）且排版耗时上升。**移动端历史形态=UA 关、书式（document CSS）开**（书式经 `fz_use_document_css` 运行时开关加载：安卓 JNI 显式 set、鸿蒙默认为开）——守卫 v1 曾把书式一并挡掉，`book_epub.epub` 实测 55 页（基线 103）暴露过度守卫；v2 只包三处 `fz_parse_css(<default:…>)`（fb2/mobi/generic else）、书式加载移出守卫外，分页精确复原。
+- **引擎级 GBK→UTF-8 分章转码**（txt-chunk-doc.c + 新增 txt-gbk.inc/txt-gbk-table.inc，全部 `#ifndef __ANDROID__`，安卓 Java 转换层路径零改动）：OHOS musl iconv 不支持任何 legacy 编码（模拟器探测：GBK/GB18030/GB2312/CP936/Big5/EUC-CN/UTF-16LE/ISO-8859-1 全 NO）→ 引擎内嵌 CP936 单元表（126×190 uint16，21791 映射）+ 64KB 样本判定 GBK + 逐章缓冲转码；GBK 尾字节恒非 0x0A → 分块边界换行对齐即安全（GBK 书跳过 UTF-8 尾字节回退）。
+- **卡页取消重试加固**（Reader.ets loadData catch）：CANCELLED=被更新渲染取代、非失败；settle 纪元重排风暴对可见页连发数秒取消，旧上限 retryDepth<2/250ms 触顶即永久 'Render error'（GBK 5m 书三连 CANCELLED 复现，兄弟格同页渲染正常）→ depth<8 + 退避 `min(250+250·depth,1500)`ms。
+- **验证**（Pura 90 模拟器 x86_64，HAP5，引擎 md5 x86_64 eda936ca…/arm64 86f0fade…，与 prebuilt 一致）：`book_epub.epub` total=103（基线 103/样式全开 105/v1 过挡 55）ff295ms；`book_mobi.mobi` total=72（基线 72/全开 117）ff223ms；`book_fb2.fb2`(22MB big25 同源) n1=432/total=4696 **与 0.9.22 基线精确一致**、ff1819ms（基线 1806-2460）；GBK 5m《亵渎》首页中文可读、n1=425/stage1 978ms/total=2087 分章链路健康；五连开书 REAL_RENDER_FAILS=0；era 9/9（pose_epub 回 780 页 fork 纪元、font20→1140→还原 780）、L0 7/7 GATE PASS。
+- **基线书目勘误**：v922b `big_fb2.fb2` 即 16q 的 big25（22MB，4696 页）= tmp\build\books\book_fb2.fb2 同源；CI 标准夹具 var_fb2_big.fb2（30MB）是另一本书（守卫态 6296 页、页密度 210 页/MB≈基线 213），"总页差 29%"系夹具差异非回归；v922b 原夹具本体已被 tmp 周清理删除，50.104 三协议服务端保留同书集。
+- **安卓侧影响**：prebuilt so 停在 10-19（早于桌面 10-27 UA 开启），行为=UA 关+书式开=守卫语义的等价形态；安卓下次重建 so 自动获得同源修复（宏未定义）+16r 门安卓分支；GBK 安卓仍走 Java 转换层。Qt 桌面在 CMakeLists 定义宏，行为不变。
+- 脚本/数据：tmp/scripts/v924_css_guard.py、v924_css_guard2.py、v924_gbk_impl.py、v924_cancel_retry_fix.py、v924_iconv_probe.sh、v924_engine3.sh、v924_verify_lazy.py（增 VWAIT 环境变量）；tmp/logs/{era,l0}_v924g2.log、engine_924fix4.log、hap_924fix5.log。版本 0.9.24/62 不变（同日修订），50.111 四件套 ×2。
+
+## 阶段 16x（0.9.24，2026-11-05）：共享引擎同步重建 + 桌面字体钩子宏兼容
+
+- 安卓 10-12~11-04 窗口 15 条逐项比对：14 条不涉及——开书提速 A/C/两批（安卓 Activity 链/OpenPrefetch/FirstPaintGate 专属，鸿蒙 staged open 已等价）、换书闪退+FB2→MOBI 冻结（共享登记槽/codeCache 安卓独有）、泄漏×2（OpenPrefetch 专属；鸿蒙无 DjVu）、凭证回灌后台化（鸿蒙 preferences 异步毫秒级）、同帧撤场/预取空密码（结构不存在）、检视自检收口 5 处（0.9.23 设计已逐条覆盖）、测试侧 3 条、11-03 邮箱（鸿蒙已同步）与 11-04 版本机制。
+- 涉及 1 项（引擎级）：10-19 html-parse.c TXT 首页修复（`.first`）——鸿蒙 so 停在 10-02。对照实证鸿蒙不触发（页边距走 ArkUI 绘制层、无 user CSS/@page 注入，两态首页墨量 0.26/0.23），属防患性同源同步。
+- 引擎重编：harmony/native/build_mupdf_harmony.sh 双 ABI（50.111，653 目标 BUILD OK ×2 轮）→ entry/libs + prebuilt/harmony/mupdf-1.23.7 同步。
+- 桌面钩子兼容（两步）：①harmony/native/hr_user_fonts_stub.c（恒 NULL=内建字体）+ native CMakeLists 注册（链接阻塞点解除）；②性能实验显示钩子路径有可观开销 → html-font.c 钩子块加 `#ifndef HR_NO_USER_FONTS` 宏保护 + 鸿蒙 CMake `add_compile_definitions(HR_NO_USER_FONTS)`（编译期关闭；桌面/安卓构建不受影响）。实验数据：book_mobi stage1 258ms（关）vs 354-440ms（开）。
+- **已知问题复核（同日）→ 定位并修复**：初判"引擎演进改变懒排版"有误。复查铁证：当前引擎源码与 `platform/librera/jni/~mupdf-1.23.7/`（10-06/10-19 快照）逐文件 diff=0，BuildID 跨编译机一致 → 源码无演进改动。真因=发版节奏：0.9.21~0.9.23 复用 10-02 旧 so（编译于 16r 编码门加入之前），16r 收尾源码（10-06，txt-chunk-doc.c `txtchunk_sniff_candidate`：非 UTF-8 本地 TXT → legacy 整本）本次重建首次编译生效；基线 big_txt 为 GBK 编码 → 暴露"回归"。动态诊断实锤（DIAG 版 op15 原始载荷）：UTF-8/ASCII TXT 分章一直正常（15MB pose_txt `458|59|92|92|91|92|4|400`=首窗 458 页/chapters=59/stage1 584ms）；GBK 5MB（《亵渎》，utf8 解码失败/gbk 98.8% 高位字节）命中门 → 整本。
+- **修复（并入 0.9.24）**：txt-chunk-doc.c 编码门与 legacy 回落整体改 `#ifdef __ANDROID__`（安卓保留原决策、其转换层兜底；OHOS clang 实测不定义 `__ANDROID__`，安卓零影响）；op15 payload 与 stage1_raw 两处 DIAG-temp 已撤。验证：GBK 5m 修复后 n1=459/stage1=434ms/phase2_end total=2966 (9.1s)/progress_settled（修复前 n1=全书、stage1≈2s、无 phase2）；pose_txt n1=458/stage1=696ms 不回退；era 9/9、L0 7/7。屏摄证实 GBK 乱码为引擎既有缺口（fz_txt_buffer_to_html 仅识别 UTF-8/16，安卓靠 Java 转换层）——另立项；fb2/mobi 首帧 +60~140%（分章首窗模型未变，纯排版耗时）另立项。引擎双 ABI 重编入库（entry/libs + prebuilt/harmony 同步，md5 一致）。脚本 v924_lazy_restore.py、v924_diag_run2.py、v924_verify_lazy.py、v924_enc_check.py；数据 tmp/logs/{era,l0}_v924fix.log。
+- 验证（0.9.24 最终包）：TXT 15MB/4553 页首页正文正常；era 专项 9/9 ×2（1020 纪元，to=843 精确）；L0 7/7 ×2（冷启 760ms）。
+- 版本 0.9.24/62；构建 50.111 四件套。脚本沉淀 tmp/scripts/v924_make_seed_txt.py、v924_txt_repro.py、v924_txt_resnap.py、v924_stub_patch.py、v924_hook_guard.py、v924_hook_test.py、v924_bigbook_spot.py、v924_bench_cmp.py。
+- 模拟器 CLI 坑（沉淀）：Emulator.exe 真身 `tools/emulator/emulator/Emulator.exe`；启动=`-start "Pura 90"`（实例名带空格）**不带 -instancePath**（实例在默认路径，乱指反而 "not found" 秒退）；WMI 派生启动。
+
 ## 阶段 16w（0.9.23，2026-10-11）：同步安卓批次（书签/进度排版纪元 + 深页跳转等待 + 重置补删同步基线 + 底栏 seek 行）
 
 - 安卓 10-06~10-11 窗口逐项比对：**5 项涉及鸿蒙**（下），7 项免疫——①书库文件夹 UX 重构（鸿蒙书库=最近+远程合并结构，无书库文件夹勾选机制）；②书架严格归属/扫描根过滤（同上）；③同步恢复 metaUnion 缺文件跳过 + AI key 同口径同步（鸿蒙 Sync.ets 实现不同构）；④改字号 recreate 重启（鸿蒙无程序化重启机制，排版设置原地生效）；⑤hypenLang 转换缓存键（鸿蒙无 mobi 转换链）；⑥排版视口 Dips 屏幕尺寸（鸿蒙 staged 排版用引擎固定尺寸 595×842，无视图尺寸依赖）；⑦配置同步 localIsDefault 默认值保护陷阱（鸿蒙配置合并无该逻辑）。

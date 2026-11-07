@@ -145,10 +145,13 @@ napi_value Version(napi_env env, napi_callback_info /*info*/)
     return result;
 }
 
+/* forward decl: SaveAccelerator (below) uses GetHandle defined later */
+DocumentHandle *GetHandle(napi_env env, napi_value value);
+
 napi_value OpenDocument(napi_env env, napi_callback_info info)
 {
-    size_t argc = 1;
-    napi_value args[1];
+    size_t argc = 2;
+    napi_value args[2];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     if (argc < 1) {
         napi_throw_type_error(env, nullptr, "path (string) required");
@@ -161,6 +164,17 @@ napi_value OpenDocument(napi_env env, napi_callback_info info)
         napi_throw_type_error(env, nullptr, "path must be a string");
         return nullptr;
     }
+    /* 0.9.27 P1-5: optional accelerator file - open the cached layout when
+     * it exists (Android Temp/accel parity); a stale or corrupt accelerator
+     * transparently falls back to a plain open. */
+    char accel[kMaxPath] = {0};
+    if (argc >= 2) {
+        napi_valuetype at = napi_undefined;
+        napi_typeof(env, args[1], &at);
+        if (at == napi_string) {
+            napi_get_value_string_utf8(env, args[1], accel, sizeof(accel), nullptr);
+        }
+    }
 
     fz_context *ctx = fz_new_context(nullptr, nullptr, kMupdfStoreBytes);
     if (ctx == nullptr) {
@@ -170,16 +184,162 @@ napi_value OpenDocument(napi_env env, napi_callback_info info)
     fz_register_document_handlers(ctx);
 
     fz_document *doc = nullptr;
-    fz_try(ctx) {
-        doc = fz_open_document(ctx, path);
+    if (accel[0] != '\0') {
+        fz_try(ctx) {
+            doc = fz_open_accelerated_document(ctx, path, accel);
+        }
+        fz_catch(ctx) {
+            doc = nullptr;
+        }
     }
-    fz_catch(ctx) {
-        fz_drop_context(ctx);
-        napi_throw_error(env, "OPEN_FAILED", "cannot open document (unsupported or corrupt file)");
-        return nullptr;
+    if (doc == nullptr) {
+        fz_try(ctx) {
+            doc = fz_open_document(ctx, path);
+        }
+        fz_catch(ctx) {
+            fz_drop_context(ctx);
+            napi_throw_error(env, "OPEN_FAILED", "cannot open document (unsupported or corrupt file)");
+            return nullptr;
+        }
     }
 
     return MakeExternal(env, ctx, doc);
+}
+
+/* ---- 0.9.34 P2-14: local open on a worker thread (OpenPrefetch) ---- */
+struct OpenAsyncWork {
+    napi_async_work work;
+    napi_deferred deferral;
+    char path[kMaxPath];
+    char accel[kMaxPath] = {};
+    fz_context *ctx = nullptr;
+    fz_document *doc = nullptr;
+    bool ok = false;
+    bool reflow = false;
+};
+
+static void OpenAsyncExecute(napi_env env, void *data)
+{
+    (void)env;
+    auto *w = static_cast<OpenAsyncWork *>(data);
+    w->ctx = fz_new_context(nullptr, nullptr, kMupdfStoreBytes);
+    if (w->ctx == nullptr) {
+        return;
+    }
+    fz_register_document_handlers(w->ctx);
+    fz_document *doc = nullptr;
+    if (w->accel[0] != '\0') {
+        doc = fz_open_accelerated_document(w->ctx, w->path, w->accel);
+    }
+    if (doc == nullptr) {
+        doc = fz_open_document(w->ctx, w->path);
+    }
+    if (doc == nullptr) {
+        /* open failed: drop the context, reject in on_complete */
+        fz_drop_context(w->ctx);
+        w->ctx = nullptr;
+        return;
+    }
+    w->doc = doc;
+    w->reflow = fz_is_document_reflowable(w->ctx, doc);
+    w->ok = true;
+}
+
+static void OpenAsyncComplete(napi_env env, napi_status status, void *data)
+{
+    auto *w = static_cast<OpenAsyncWork *>(data);
+    if (env != nullptr && status == napi_ok && w->ok && w->ctx != nullptr) {
+        napi_value handle = MakeExternal(env, w->ctx, w->doc);
+        napi_value reflow;
+        napi_get_boolean(env, w->reflow, &reflow);
+        napi_value obj;
+        napi_create_object(env, &obj);
+        napi_set_named_property(env, obj, "handle", handle);
+        napi_set_named_property(env, obj, "isReflow", reflow);
+        napi_resolve_deferred(env, w->deferral, obj);
+    } else if (env != nullptr) {
+        napi_value errv = nullptr;
+        napi_value errcode;
+        napi_create_string_utf8(env, "OPEN_FAILED_ASYNC", NAPI_AUTO_LENGTH, &errcode);
+        napi_create_error(env, nullptr, errcode, &errv);
+        napi_reject_deferred(env, w->deferral, errv);
+    }
+    delete w;
+}
+
+napi_value OpenDocumentAsync(napi_env env, napi_callback_info info)
+{
+    size_t argc = 2;
+    napi_value args[2];
+    if (napi_get_cb_info(env, info, &argc, args, nullptr, nullptr) != napi_ok || argc < 1) {
+        return nullptr;
+    }
+    auto *w = new OpenAsyncWork();
+    size_t pathLen = 0;
+    if (napi_get_value_string_utf8(env, args[0], w->path, sizeof(w->path), &pathLen) != napi_ok) {
+        delete w;
+        napi_throw_type_error(env, nullptr, "path must be a string");
+        return nullptr;
+    }
+    if (argc >= 2) {
+        napi_valuetype at = napi_undefined;
+        napi_typeof(env, args[1], &at);
+        if (at == napi_string) {
+            napi_get_value_string_utf8(env, args[1], w->accel, sizeof(w->accel), nullptr);
+        }
+    }
+    napi_value promise;
+    if (napi_create_promise(env, &w->deferral, &promise) != napi_ok || w->deferral == nullptr) {
+        delete w;
+        return nullptr;
+    }
+    napi_value nameVal;
+    napi_create_string_utf8(env, "openDocumentAsync", NAPI_AUTO_LENGTH, &nameVal);
+    if (napi_create_async_work(env, nullptr, nameVal,
+                               OpenAsyncExecute, OpenAsyncComplete, w, &w->work) != napi_ok
+        || napi_queue_async_work(env, w->work) != napi_ok) {
+        delete w;
+        return nullptr;
+    }
+    return promise;
+}
+
+/* ---- 0.9.27 P1-5: accelerator persistence (fz_save_accelerator) ---- */
+napi_value SaveAccelerator(napi_env env, napi_callback_info info)
+{
+    size_t argc = 2;
+    napi_value args[2];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 2) {
+        napi_throw_type_error(env, nullptr, "handle, accelPath (string) required");
+        return nullptr;
+    }
+    auto *h = GetHandle(env, args[0]);
+    if (h == nullptr) {
+        return nullptr;
+    }
+    char accel[kMaxPath] = {0};
+    size_t len = 0;
+    if (napi_get_value_string_utf8(env, args[1], accel, sizeof(accel), &len) != napi_ok) {
+        napi_throw_type_error(env, nullptr, "accelPath must be a string");
+        return nullptr;
+    }
+    pthread_mutex_lock(&g_mu);
+    int rc = 0;
+    if (!fz_setjmp(*fz_push_try(h->ctx))) do {
+        fz_save_accelerator(h->ctx, h->doc, accel);
+    } while (0);
+    if (fz_do_catch(h->ctx)) {
+        rc = -1;
+    }
+    pthread_mutex_unlock(&g_mu);
+    if (rc != 0) {
+        napi_throw_error(env, "ACCEL_SAVE_FAILED", "cannot save accelerator");
+        return nullptr;
+    }
+    napi_value ok;
+    napi_get_boolean(env, true, &ok);
+    return ok;
 }
 
 DocumentHandle *GetHandle(napi_env env, napi_value value)
@@ -3011,6 +3171,7 @@ struct OpenRemoteJob {
     char magic[32];
     int64_t size;
     bool doLayout;
+    bool lazy = false; /* 0.9.25: defer reflow count+layout to op15 staged */
     double layoutW;
     double layoutH;
     double em;
@@ -3072,17 +3233,25 @@ static void OpenRemoteExecute(napi_env /*env*/, void *data)
             isReflow = false;
         }
 
+        /* 0.9.25 remote lazy layout: fz_count_pages forces the WHOLE reflow
+         * layout over the network stream before the first frame. With
+         * lazy=true the meta reports pageCount=-1 and the caller counts the
+         * first window via docOpAsync op15 (local openDoc staged model).
+         * Fixed-layout docs keep the cheap full count + toc. */
         int pages = 0;
-        if (!fz_setjmp(*fz_push_try(job->ctx))) do {
-            pages = fz_count_pages(job->ctx, doc);
-        } while (0);
-        if (fz_do_catch(job->ctx)) {
-            pages = 0;
-        }
-
         std::string toc = "[]";
-        if (pages > 0) {
-            toc = OpTocJson(job->ctx, doc);
+        if (job->lazy && isReflow) {
+            pages = -1;
+        } else {
+            if (!fz_setjmp(*fz_push_try(job->ctx))) do {
+                pages = fz_count_pages(job->ctx, doc);
+            } while (0);
+            if (fz_do_catch(job->ctx)) {
+                pages = 0;
+            }
+            if (pages > 0) {
+                toc = OpTocJson(job->ctx, doc);
+            }
         }
 
         char meta[128];
@@ -3137,8 +3306,8 @@ static void OpenRemoteComplete(napi_env env, napi_status status, void *data)
 
 napi_value OpenDocumentRemoteAsync(napi_env env, napi_callback_info info)
 {
-    size_t argc = 8;
-    napi_value args[8];
+    size_t argc = 9;
+    napi_value args[9];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     if (argc < 5) {
         napi_throw_type_error(env, nullptr,
@@ -3186,6 +3355,12 @@ napi_value OpenDocumentRemoteAsync(napi_env env, napi_callback_info info)
                 napi_get_value_string_utf8(env, args[7], &job->css[0], len + 1, &len);
             }
         }
+    }
+    /* 0.9.25: lazy - reflow docs defer the open-time count+layout */
+    if (argc >= 9) {
+        bool lazy = false;
+        napi_get_value_bool(env, args[8], &lazy);
+        job->lazy = lazy;
     }
 
     napi_value deferredVal = nullptr;
@@ -3507,6 +3682,18 @@ static void DocOpExecute(napi_env /*env*/, void *data)
                 /* 0.9.16 progressive page count (reflow books):
                  * a=w, b=h, c=em, s=upto */
                 job->json = OpCountProgressiveJson(ctx, doc, job->a, job->b, job->c, atoi(job->s.c_str()));
+                break;
+            case 16:
+                /* 0.9.33 (P2-11 pipe): set user CSS without counting. The
+                 * staged-open path has no css-carrying layout call before
+                 * op15, and openDocument creates a fresh context per book,
+                 * so the typography/user-font CSS must be (re)established
+                 * here before the first chunk parses. s = css. */
+                fz_set_user_css(ctx, job->s.c_str());
+                /* no h->userCss mirror on purpose: the app's buildCss always
+                 * carries the @font-face when a user font is active, and the
+                 * layout ops' merge logic would duplicate it on each re-apply */
+                job->json = "true";
                 break;
             case 13: {
                 /* HowRead pagemap export: finish the lazy page tree (only when
@@ -3965,6 +4152,8 @@ napi_value Init(napi_env env, napi_value exports)
     napi_property_descriptor desc[] = {
         {"version", nullptr, Version, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"openDocument", nullptr, OpenDocument, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"openDocumentAsync", nullptr, OpenDocumentAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"saveAccelerator", nullptr, SaveAccelerator, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"openDocumentByFd", nullptr, OpenDocumentByFd, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"registerRemoteReader", nullptr, RegisterRemoteReader, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"unregisterRemoteReader", nullptr, UnregisterRemoteReader, nullptr, nullptr, nullptr, napi_default, nullptr},

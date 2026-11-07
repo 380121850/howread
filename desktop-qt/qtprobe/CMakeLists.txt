@@ -1,0 +1,7 @@
+add_executable(qtprobe main.cpp)
+if (HR_QTVER STREQUAL "6")
+    target_link_libraries(qtprobe PRIVATE Qt6::Gui mupdfqt)
+else()
+    target_link_libraries(qtprobe PRIVATE Qt5::Gui mupdfqt)
+endif()
+target_include_directories(qtprobe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../engine-bridge)

@@ -32,7 +32,7 @@ object DocConvert {
                 "docx" -> docxToHtml(src)
                 "rtf" -> rtfToHtml(src)
                 "odt" -> odtToHtml(src)
-                "doc" -> docToHtml(src)
+                "doc" -> docToHtml(src) ?: rtfToHtml(src) ?: txtToHtml(src)
                 else -> null
             }
         }.getOrNull()
@@ -69,6 +69,11 @@ object DocConvert {
                 if (s.isNotEmpty()) parts.add(s)
             }
         })
+        return paragraphsToHtml(parts)
+    }
+
+    /** 段落序列 → <p> HTML（rtf / doc 回退链 txt 级共用）。 */
+    private fun paragraphsToHtml(parts: List<String>): String? {
         if (parts.isEmpty()) return null
         val sb = StringBuilder()
         var cur = StringBuilder()
@@ -82,6 +87,23 @@ object DocConvert {
         }
         if (cur.isNotBlank()) sb.append("<p>").append(esc(cur.toString())).append("</p>\n")
         return sb.toString().ifBlank { null }
+    }
+
+    // ---- doc 回退链第三级：纯文本（antiword 失败且非 rtf 时；安卓 DocContext antiword→RTF→TXT 同款） ----
+    private fun txtToHtml(f: File): String? {
+        return runCatching {
+            val bytes = f.readBytes()
+            val probe = minOf(bytes.size, 4096)
+            for (i in 0 until probe) if (bytes[i].toInt() == 0) return@runCatching null   // 二进制容器不是文本
+            val det = org.mozilla.universalchardet.UniversalDetector(null)
+            det.handleData(bytes, 0, minOf(bytes.size, 256 * 1024))
+            det.dataEnd()
+            val cs = det.detectedCharset ?: return@runCatching null
+            val text = if (cs.equals("UTF-8", true) || cs.equals("ASCII", true) || cs.equals("US-ASCII", true)) {
+                String(bytes, Charsets.UTF_8)
+            } else String(bytes, java.nio.charset.Charset.forName(cs)).trimStart('\uFEFF')
+            paragraphsToHtml(text.split('\n').map { it.trimEnd('\r') }.filter { it.isNotBlank() })
+        }.getOrNull()
     }
 
     // ---- odt（zip+content.xml：与安卓 at.stefl.opendocument 路径等价） ----
