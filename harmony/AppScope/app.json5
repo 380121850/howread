@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "com.leestudio.howread.reader.hmos",
     "vendor": "leestudio",
-    "versionCode": 91,
-    "versionName": "0.9.38",
+    "versionCode": 115,
+    "versionName": "0.9.44",
     "icon": "$media:app_icon",
     "label": "$string:app_name"
   }

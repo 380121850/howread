@@ -336,7 +336,7 @@ static void preOpenBook(const QString &path)
 
 LibraryWindow::LibraryWindow(QWidget *parent) : QMainWindow(parent)
 {
-    setWindowTitle("HowRead Qt — " + hr::l10n::s("书库", "Library"));
+    setWindowTitle("HowRead Qt — " + hr::l10n::s("书架", "Bookshelf")); /* v1.0.0 更名 */
     resize(980, 720);
     for (const char *e : kExts) m_exts.append(QString::fromLatin1(e));
     /* U4：启用格式从偏好载入（lib/exts；缺省=全开） */
@@ -475,6 +475,15 @@ LibraryWindow::LibraryWindow(QWidget *parent) : QMainWindow(parent)
     libMoreMenu->addAction(btnRemote->text(), btnRemote, [btnRemote] { btnRemote->click(); });
     libMoreMenu->addAction(btnAssoc->text(), btnAssoc, [btnAssoc] { btnAssoc->click(); });
     libMoreMenu->addAction(btnStats->text(), btnStats, [btnStats] { btnStats->click(); });
+    /* v1.0.0：工具行按钮撤出布局后仅作菜单载体——显式隐藏（此前悬浮窗口左上角
+     * 互相叠盖，最上层"统计"泄漏到阅读视图，用户点名去除；click() 对隐藏钮有效） */
+    btnScan->setVisible(false);
+    btnFav->setVisible(false);
+    btnAssoc->setVisible(false);
+    btnOpen->setVisible(false);
+    btnSync->setVisible(false);
+    btnRemote->setVisible(false);
+    btnStats->setVisible(false);
     QToolButton *libMoreBtn = new QToolButton(this);
     libMoreBtn->setText(QString::fromUtf8("\xE2\x8B\xAF")); /* ⋯ */
     libMoreBtn->setPopupMode(QToolButton::InstantPopup);
@@ -560,11 +569,12 @@ LibraryWindow::LibraryWindow(QWidget *parent) : QMainWindow(parent)
     /* v0.96.0 W17#1：导航字号 25px（用户点名），行上下 padding 拉大间隔 */
     m_side->setStyleSheet(QString::fromLatin1("QListWidget{font-size:25px;}"
                                               "QListWidget::item{padding:10px 2px;}"));
+    /* v1.0.0：同步安卓 11-06 导航更名——我的文件→我的书库；抽屉撤"网上书库"行
+     * （功能保留，仍从首页"网上书库"区块进入，与安卓同构） */
     const QStringList sideItems = {
         hr::l10n::s("最近阅读", "Recent"),
         hr::l10n::s("我的书架", "Bookshelf"),
-        hr::l10n::s("我的文件", "My files"),
-        hr::l10n::s("网上书库", "Online"),
+        hr::l10n::s("我的书库", "My library"),
         hr::l10n::s("书签笔记", "Bookmarks"),
     };
     for (const QString &s : sideItems) m_side->addItem(s);
@@ -573,8 +583,7 @@ LibraryWindow::LibraryWindow(QWidget *parent) : QMainWindow(parent)
     m_sideIconFiles << QString::fromLatin1("glyphicons_55_clock")
                     << QString::fromLatin1("glyphicons_589_book_open")
                     << QString::fromLatin1("glyphicons_145_folder_open")
-                    << QString::fromLatin1("glyphicons_417_globe")
-                    << QString::fromLatin1("glyphicons_73_bookmark"); /* v0.95.0 W16：说明/夜间图标随两行移出列表（底部横排按钮自带） */
+                    << QString::fromLatin1("glyphicons_73_bookmark"); /* v1.0.0：globe 随网上书库行撤 */ /* v0.95.0 W16：说明/夜间图标随两行移出列表（底部横排按钮自带） */
     m_side->setIconSize(QSize(20, 20));
     /* v0.95.0 W16：拉伸/软件说明/夜间三行不再入列表——底部横排置底、格言挂件在其上方 */
     /* v0.84.0 W3：静态行图标文件写入行 data（applySideIcons 改 data 驱动，插标签行后索引稳） */
@@ -684,9 +693,10 @@ LibraryWindow::LibraryWindow(QWidget *parent) : QMainWindow(parent)
     m_tabBar->setFixedHeight(52); /* v0.94.0 W15：压低底栏——比图标+名称略高即可（原 68 上下空白过多，用户点名） */
     QHBoxLayout *tabs = new QHBoxLayout(m_tabBar);
     tabs->setContentsMargins(6, 2, 6, 2);
+    /* v1.0.0：同步安卓——书库→书架、我的文件→我的书库 */
     const QStringList tabNames = {
-        hr::l10n::s("首页", "Home"), hr::l10n::s("书库", "Library"),
-        hr::l10n::s("我的文件", "My files"), hr::l10n::s("偏好", "Settings"),
+        hr::l10n::s("首页", "Home"), hr::l10n::s("书架", "Bookshelf"),
+        hr::l10n::s("我的书库", "My library"), hr::l10n::s("偏好", "Settings"),
     };
     /* v0.76.0 V1：底 tab 图标化（与安卓 glyphicons 同形），56dp 高 + 图标上/文字下 */
     static const char *kTabIcons[4] = {"glyphicons_21_home", "glyphicons_422_book_library",
@@ -695,7 +705,7 @@ LibraryWindow::LibraryWindow(QWidget *parent) : QMainWindow(parent)
     {
         QToolButton *tb = new QToolButton;
         tb->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        tb->setText(tabNames.at(i)); /* v0.90.0 W11：图标下显示名称（首页/书库/我的文件/偏好） */
+        tb->setText(tabNames.at(i)); /* v0.90.0 W11：图标下显示名称（首页/书架/我的书库/偏好） */
         tb->setIconSize(QSize(22, 22));
         tb->setCheckable(true);
         tb->setAutoRaise(true);
@@ -2178,10 +2188,10 @@ void LibraryWindow::showTab(int idx)
     /* v0.86.0 W5 H2：窗口标题随页刷新（对齐页名；此前恒为“书库”） */
     {
         static const struct { const char *zh, *en; } kPg[7] = {
-            {"首页", "Home"}, {"书库", "Library"}, {"我的文件", "My files"},
+            {"首页", "Home"}, {"书架", "Bookshelf"}, {"我的书库", "My library"},
             {"偏好", "Settings"}, {"网上书库", "Network"}, {"书签笔记", "Notes"},
             {"我的珍藏", "Favorites"},
-        };
+        }; /* v1.0.0：书库→书架、我的文件→我的书库 */
         setWindowTitle("HowRead Qt — " + hr::l10n::s(kPg[idx].zh, kPg[idx].en));
     }
     if (idx == 0) refreshHome(); /* U7：进首页即刷新数据 */
@@ -2191,7 +2201,7 @@ void LibraryWindow::showTab(int idx)
     evt("shell_tab", QString("idx=%1").arg(idx));
 }
 
-/* 侧栏：0 最近阅读 1 我的书架 2 我的文件 3 网上书库 4 书签笔记 5 拉伸 6 软件说明 7 夜间/白天 */
+/* 侧栏：0 最近阅读 1 我的书架 2 我的书库 3 书签笔记（v1.0.0 网上书库行撤）5 拉伸 6 软件说明 7 夜间/白天 */
 void LibraryWindow::onSide(int row)
 {
     if (row < 0) return;
@@ -2237,13 +2247,10 @@ void LibraryWindow::onSide(int row)
     case 1: /* 我的书架 */
         showTab(1);
         break;
-    case 2: /* 我的文件 */
+    case 2: /* 我的书库（v1.0.0 更名） */
         showTab(2);
         break;
-    case 3: /* 网上书库（U5 独立页） */
-        showTab(4);
-        break;
-    case 4: /* 书签笔记（U7 聚合页） */
+    case 3: /* 书签笔记（U7 聚合页）——v1.0.0 网上书库行撤，索引前移 */
         showTab(5);
         break;
     default:
@@ -6330,7 +6337,7 @@ void LibraryWindow::buildHomePage()
     lay->addSpacing(8);
 
     /* 5 我的文件（圆形条目） */
-    lay->addWidget(mkHeader(hr::l10n::s("我的文件", "My Files"), &m_hSubFiles, &more, nullptr));
+    lay->addWidget(mkHeader(hr::l10n::s("我的书库", "My library"), &m_hSubFiles, &more, nullptr)); /* v1.0.0 */
     lay->addWidget(mkRow(&m_hFiles));
     connect(more, &QPushButton::clicked, this, [this] { evt("home_files_more", ""); showTab(2); });
     lay->addSpacing(8);

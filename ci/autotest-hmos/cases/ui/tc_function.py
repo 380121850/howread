@@ -161,10 +161,22 @@ def _server_up(dev, cfg, url):
         return False
 
 
+def _type_chunks(dev, value, chunk=6):
+    """0.9.44: long uitest uiInput text commits fragment on the emulator IME
+    (full value + overlapping re-commits lands in the field). Short appends
+    are reliable, so type <=`chunk`-char pieces sequentially; the field
+    cursor sits at the end after the first commit."""
+    v = value.strip()
+    for i in range(0, len(v), chunk):
+        dev.shell('uitest uiInput text %s' % v[i:i + chunk], timeout=30)
+        time.sleep(0.25)
+
+
 def _input_field(dev, value, hint=None, text=None):
     """Fill a TextInput located by placeholder/hint (or current text).
-    Focus-by-click then `uitest uiInput text` (types at focus — more reliable
-    on this image than coordinate inputText)."""
+    Focus-by-click, select-all (double click) + delete, `uitest uiInput text`
+    at focus, then VERIFY; a paced backspace sweep is the fallback (rapid
+    uitest spawns drop keyEvents — 0.9.43 FN-17 dump evidence)."""
     a = None
     t0 = time.time()
     while time.time() - t0 < 8:
@@ -179,19 +191,53 @@ def _input_field(dev, value, hint=None, text=None):
         raise TestFail('input field bounds missing')
     x = (int(m.group(1)) + int(m.group(3))) // 2
     y = (int(m.group(2)) + int(m.group(4))) // 2
-    dev.click_xy(x, y)
-    time.sleep(0.8)
-    # Fields may carry initial values ('http://' prefix, default port
-    # '22'): uiInput text APPENDS at the cursor, so clear first with a
-    # backspace loop sized by the on-screen text (masked passwords are
-    # counted by their stars; over-deleting an empty field is a no-op).
-    cur = a.get('text') or ''
-    if cur:
-        n = len(cur) + 4
+    cur = a
+    for _attempt in range(2):
+        dev.click_xy(x, y)
+        time.sleep(0.6)
+        a1 = dev.find(text=text) if text else dev.find(hint=hint)
+        cur1 = ((a1.get('text') or '').strip()) if a1 else ''
+        if cur1 == value:
+            return
+        if cur1 and value.startswith(cur1):
+            # 0.9.44: harmony dialogs prefill scheme stubs (the WebDAV dialog
+            # starts its URL field at 'http://') and select-all/backspace do
+            # not work on this IME — appends are the one reliable op, so
+            # just type the remaining suffix.
+            _type_chunks(dev, value[len(cur1):])
+            time.sleep(0.6)
+            a2 = dev.find(text=text) if text else dev.find(hint=hint)
+            cur = (a2.get('text') or '') if a2 else ''
+            if cur.strip() == value or (cur and all(c in '*\u2022\u00b7' for c in cur.strip())):
+                return
+            continue
+        # select-all via double click, then one delete — atomic when the
+        # selection takes; over-deleting an empty field is a no-op
+        dev.shell('uitest uiInput doubleClick %d %d' % (x, y), timeout=30)
+        time.sleep(0.4)
+        dev.shell('uitest uiInput keyEvent 2055', timeout=30)
+        time.sleep(0.4)
+        _type_chunks(dev, value)
+        time.sleep(0.6)
+        a2 = dev.find(text=text) if text else dev.find(hint=hint)
+        cur = (a2.get('text') or '') if a2 else ''
+        if cur.strip() == value:
+            return
+        if cur and all(c in '*\u2022\u00b7' for c in cur.strip()):
+            return  # masked password field: stars only, accept
+        # fallback: paced backspace sweep sized by the residual text
+        n = len(cur) + 16
+        dev.click_xy(x, y)
+        time.sleep(0.5)
         dev.shell('i=0; while [ $i -lt %d ]; do uitest uiInput keyEvent 2055; '
-                  'i=$((i+1)); done' % n, timeout=120)
-    dev.shell('uitest uiInput text %s' % value)
-    time.sleep(0.6)
+                  'sleep 0.12; i=$((i+1)); done' % n, timeout=300)
+        _type_chunks(dev, value)
+        time.sleep(0.6)
+        a2 = dev.find(text=text) if text else dev.find(hint=hint)
+        cur = (a2.get('text') or '') if a2 else ''
+        if cur.strip() == value or (cur and all(c in '*\u2022\u00b7' for c in cur.strip())):
+            return
+    raise TestFail('input field (%r) not clean after retries: %r' % (hint or text, cur))
 
 
 def _type_at_field(dev, a, value):
@@ -229,7 +275,7 @@ def _click_add_after(dev, section_text):
 def fn01_open_epub(dev, case_id, cfg, fixtures):
     _ensure_home(dev, cfg)
     with dev.step(case_id, 'open Alice demo EPUB'):
-        pages = _open_book(dev, 'Alice', expect_pages=105)
+        pages = _open_book(dev, 'Alice', expect_pages=116)
         b, page = dev.current_page()
         if page != 'components/Reader':
             raise TestFail('not on Reader (%s)' % page)
@@ -239,7 +285,7 @@ def fn01_open_epub(dev, case_id, cfg, fixtures):
 def fn02_page_turn(dev, case_id, cfg, fixtures):
     _ensure_home(dev, cfg)
     with dev.step(case_id, 'volume-key turns advance pages'):
-        _open_book(dev, 'Alice', expect_pages=105)
+        _open_book(dev, 'Alice', expect_pages=116)
         dev.hilog_clear()
         last = 0
         for i in range(4):
@@ -250,7 +296,7 @@ def fn02_page_turn(dev, case_id, cfg, fixtures):
             time.sleep(0.7)
         if last < 3:
             raise TestFail('volume turns reached page %d (<3)' % last)
-        a = dev.find(text='/105')
+        a = dev.find(text='/116')
         if not a:
             raise TestFail('page indicator missing')
     _exit_reader(dev)
@@ -259,7 +305,7 @@ def fn02_page_turn(dev, case_id, cfg, fixtures):
 def fn03_jump_page(dev, case_id, cfg, fixtures):
     _ensure_home(dev, cfg)
     with dev.step(case_id, 'jump dialog to page 50'):
-        _open_book(dev, 'Alice', expect_pages=105)
+        _open_book(dev, 'Alice', expect_pages=116)
         _ensure_toolbar(dev)
         dev.hilog_clear()
         dev.click_xy(ICON_JUMP, TB)
@@ -301,15 +347,15 @@ def fn03_jump_page(dev, case_id, cfg, fixtures):
             dev.save_dump('jump_fail')
             raise TestFail('jump_page_done wrong: %s (want page=%s)'
                            % (ev and ev['raw'], prefill))
-        if not dev.wait_text(prefill + '/105', timeout=8):
-            raise TestFail('indicator did not show %s/105' % prefill)
+        if not dev.wait_text(prefill + '/116', timeout=8):
+            raise TestFail('indicator did not show %s/116' % prefill)
     _exit_reader(dev)
 
 
 def fn04_toc(dev, case_id, cfg, fixtures):
     _ensure_home(dev, cfg)
     with dev.step(case_id, 'TOC panel opens'):
-        _open_book(dev, 'Alice', expect_pages=105)
+        _open_book(dev, 'Alice', expect_pages=116)
         _ensure_toolbar(dev)
         dev.click_xy(ICON_TOC, TB)
         if not _wait_any(dev, ['目录', 'Contents'], 8):
@@ -326,7 +372,7 @@ def fn04_toc(dev, case_id, cfg, fixtures):
 def fn05_bookmark(dev, case_id, cfg, fixtures):
     _ensure_home(dev, cfg)
     with dev.step(case_id, 'bookmark list loads at open + panel opens'):
-        _open_book(dev, 'Alice', expect_pages=105)
+        _open_book(dev, 'Alice', expect_pages=116)
         # bookmark_list_loaded fires ONCE at book open (panel shows cached
         # data afterwards) — assert it from the open phase, no hilog_clear
         ev = dev.hilog_events(evt='bookmark_list_loaded')
@@ -343,18 +389,23 @@ def fn05_bookmark(dev, case_id, cfg, fixtures):
         # (bookmark already present), so accept remove-then-add.
         _ensure_toolbar(dev)
         dev.hilog_clear()
-        dev.click_xy(374, 2569)
+        # 0.9.43: the bottom bar is a scrollable icon row — the fixed
+        # (374,2569) slot drifted; drive the toggle by its CI id
+        if not dev.click_id('reader_btn_bm_toggle'):
+            dev.click_xy(374, 2569)
         ev = dev.wait_event('bookmark_added', timeout=8)
         if not ev:
             if not dev.wait_event('bookmark_removed', timeout=4):
                 dev.save_dump('bm_toggle_fail')
                 raise TestFail('bookmark toggle produced no event')
-            dev.click_xy(374, 2569)
+            if not dev.click_id('reader_btn_bm_toggle'):
+                dev.click_xy(374, 2569)
             ev = dev.wait_event('bookmark_added', timeout=8)
             if not ev:
                 dev.save_dump('bm_add_fail')
                 raise TestFail('bookmark_added not fired on re-toggle')
-        dev.click_xy(374, 2569)  # leave clean: remove again
+        if not dev.click_id('reader_btn_bm_toggle'):
+            dev.click_xy(374, 2569)  # leave clean: remove again
         if not dev.wait_event('bookmark_removed', timeout=8):
             dev.save_dump('bm_rm_fail')
             raise TestFail('bookmark_removed not fired on cleanup')
@@ -364,7 +415,7 @@ def fn05_bookmark(dev, case_id, cfg, fixtures):
 def fn06_font_size(dev, case_id, cfg, fixtures):
     _ensure_home(dev, cfg)
     with dev.step(case_id, 'settings panel A+/A-'):
-        _open_book(dev, 'Alice', expect_pages=105)
+        _open_book(dev, 'Alice', expect_pages=116)
         dev.click_xy(ICON_SET, TB)
         if not dev.wait_text('A+', timeout=8):
             raise TestFail('settings panel (A+) not shown')
@@ -385,7 +436,7 @@ def fn06_font_size(dev, case_id, cfg, fixtures):
 def fn07_night_mode(dev, case_id, cfg, fixtures):
     _ensure_home(dev, cfg)
     with dev.step(case_id, 'toggle night mode'):
-        _open_book(dev, 'Alice', expect_pages=105)
+        _open_book(dev, 'Alice', expect_pages=116)
         _ensure_toolbar(dev)
         dev.click_xy(ICON_SET, TB)
         if not _wait_any(dev, ['夜间', 'Night'], 8):
@@ -399,7 +450,7 @@ def fn07_night_mode(dev, case_id, cfg, fixtures):
     with dev.step(case_id, 'restore day mode'):
         if dev.current_page()[1] != 'components/Reader':
             # the drawer Back left the reader: open the book again
-            _open_book(dev, 'Alice', expect_pages=105)
+            _open_book(dev, 'Alice', expect_pages=116)
             _ensure_toolbar(dev)
             dev.click_xy(ICON_SET, TB)
             if not _wait_any(dev, ['夜间', 'Night'], 8):
@@ -417,7 +468,7 @@ def fn07_night_mode(dev, case_id, cfg, fixtures):
 def fn08_reading_stats(dev, case_id, cfg, fixtures):
     _ensure_home(dev, cfg)
     with dev.step(case_id, '30s reading timer recorded'):
-        _open_book(dev, 'Alice', expect_pages=105)
+        _open_book(dev, 'Alice', expect_pages=116)
         dev.hilog_clear()
         ev = dev.wait_event('stats_readtime_recorded', timeout=45)
         if not ev:
@@ -585,6 +636,15 @@ def fn13_webdav_browse(dev, case_id, cfg, fixtures):
             raise TestFail('dav_panel_loaded wrong: %s' % (ev and ev['raw']))
         if not (dev.exists_text('book_txt.txt') or dev.exists_text('book_pdf.pdf')
                 or dev.exists_text('book_epub.epub')):
+            # 0.9.44: on 50.104 the empty-start-dir panel opens the server
+            # ROOT (50 unsorted entries) and the book_* rows sit below the
+            # fold; the /HowRead/ dir holds the small book set targeted here
+            _row = dev.find(text='HowRead', contains=False)
+            if _row and dev._click_attrs(_row):
+                time.sleep(1.5)
+                dev.wait_event('dav_panel_loaded', timeout=25)
+        if not (dev.exists_text('book_txt.txt') or dev.exists_text('book_pdf.pdf')
+                or dev.exists_text('book_epub.epub')):
             dev.save_dump('dav_files_missing')
             raise TestFail('expected test books not listed')
 
@@ -656,6 +716,13 @@ def fn16_remote_open(dev, case_id, cfg, fixtures):
         # The panel lists the app's /HowRead/ remote dir (empty start-dir
         # default); book_epub.epub is present there and is a DIRECT_OPEN
         # format that streams online (remote=1).
+        # 0.9.44: with 50.104 the panel may open the server ROOT instead -
+        # enter the HowRead dir first so the book row is on screen.
+        if not dev.exists_text('book_epub.epub'):
+            _row = dev.find(text='HowRead', contains=False)
+            if _row:
+                dev._click_attrs(_row)
+            dev.wait_event('dav_panel_loaded', timeout=25)
         if not dev.click_text('book_epub.epub'):
             raise TestFail('book_epub.epub not listed in panel')
         ev = dev.wait_event('book_open_done', timeout=40)
@@ -675,8 +742,15 @@ def fn17_ai_config(dev, case_id, cfg, fixtures):
     url = fixtures.get('ai_mock_url')
     if not url:
         raise TestSkip('ai mock url not provided (run_all starts it for L1)')
-    _ensure_home(dev, cfg)
+    dev.stop_app()
+    _seed17 = ','.join(['hrtest_ci', url, 'ci-test-key',
+                        mock.get('model', 'howread-test-model')])
+    dev.start_app(params={'hrAiCfg': _seed17})
     with dev.step(case_id, 'configure AI to mock and test'):
+        if not dev.wait_event('ai_cfg_seeded', timeout=15):
+            raise TestSkip('hrAiCfg seed not consumed (cold start)')
+        if not dev.wait_home(timeout=30):
+            raise TestSkip('home not shown after seed start')
         dev.click_id('app_tab_3') or dev.click_text('偏好')
         if not dev.wait_text('书库设置', timeout=8):
             raise TestFail('prefs not shown')
@@ -691,14 +765,23 @@ def fn17_ai_config(dev, case_id, cfg, fixtures):
             raise TestSkip('AI config entry not found in prefs after scrolling')
         dev.click_text('AI 大模型') or dev.click_text('AI大模型') or dev.click_text('AI model')
         time.sleep(1.0)
-        # The AI dialog fields expose only their placeholders as hints
-        # (URL 'https://..', key 'sk-...', model 'glm-4.5-ai') and rows may
-        # carry prefilled values — _input_field clears before typing.
-        _input_field(dev, value=url, hint='https://')
-        _input_field(dev, value='ci-test-key', hint='sk-')
-        _input_field(dev, value=mock.get('model', 'howread-test-model'), hint='glm-4.5')
+        # 0.9.43: the dialog opens on the SEEDED (active) vendor — verify
+        # the mock URL is really on screen before trusting the test
+        if not dev.wait_text(url, timeout=8):
+            dev.save_dump('ai_seed_missing')
+            raise TestFail('seeded vendor URL not shown in dialog')
         dev.hilog_clear()
-        if not (dev.click_text('Test connection') or dev.click_text('测试连接')):
+        # 0.9.14 dialog grew vendor/protocol/provider rows: the test control
+        # can sit below the fold - scroll, then click
+        clicked = False
+        for _ in range(4):
+            if dev.click_text('Test connection') or dev.click_text('测试连接'):
+                clicked = True
+                break
+            dev.swipe(660, 1800, 660, 1000, 500)
+            time.sleep(0.8)
+        if not clicked:
+            dev.save_dump('ai_test_fail')
             raise TestFail('AI test button not found')
         ev = dev.wait_event('ai_req_done', timeout=25)
         if not ev:

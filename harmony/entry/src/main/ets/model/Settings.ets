@@ -175,6 +175,10 @@ export interface ReaderSettings {
   remotePrefetchWifiOnly: boolean;
   /** Whole-book background fill threshold in MB (0 = off) */
   remoteWholeBookThresholdMB: number;
+  /** Window fill before/after the reading position in % for books above
+   *  the threshold (android remoteWindowBeforePct/AfterPct) */
+  remoteWindowBeforePct: number;
+  remoteWindowAfterPct: number;
   /** Network retry count for range reads */
   remoteRetryCount: number;
   remoteBatchDir: string;
@@ -287,6 +291,8 @@ export function defaultSettings(): ReaderSettings {
     remoteCacheMaxMB: 500,
     remotePrefetchWifiOnly: true,
     remoteWholeBookThresholdMB: 20,
+    remoteWindowBeforePct: 20,
+    remoteWindowAfterPct: 30,
     remoteRetryCount: 3,
     remoteBatchDir: '',
     pdfTransMode: 0,
@@ -395,6 +401,10 @@ export async function loadSettings(ctx: Context): Promise<ReaderSettings> {
       remotePrefetchWifiOnly: (r.remotePrefetchWifiOnly !== false) && !(legacy.remoteWholeBookOnMetered === true),
       remoteWholeBookThresholdMB: typeof r.remoteWholeBookThresholdMB === 'number'
         ? r.remoteWholeBookThresholdMB : d.remoteWholeBookThresholdMB,
+      remoteWindowBeforePct: typeof r.remoteWindowBeforePct === 'number'
+        ? r.remoteWindowBeforePct : d.remoteWindowBeforePct,
+      remoteWindowAfterPct: typeof r.remoteWindowAfterPct === 'number'
+        ? r.remoteWindowAfterPct : d.remoteWindowAfterPct,
       remoteRetryCount: typeof r.remoteRetryCount === 'number' ? r.remoteRetryCount : d.remoteRetryCount,
       remoteBatchDir: typeof r.remoteBatchDir === 'string' ? r.remoteBatchDir : d.remoteBatchDir,
       pdfTransMode: typeof r.pdfTransMode === 'number' ? r.pdfTransMode : d.pdfTransMode,

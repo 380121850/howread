@@ -45,6 +45,25 @@ export function stashWantUri(want: Want): void {
     AppStorage.setOrCreate('hrSeedUrl', seedUrl);
     hilog.info(0x0000, TAG, 'CI seed url: %{public}s', seedUrl);
   }
+  /* 0.9.42 CI seed hook (hrSeedUrl parity): aa start --ps hrSyncCfg '<JSON>'
+   * seeds the WebDAV sync config — the app sandbox is not writable from the
+   * test harness, so the config travels through the Want parameters. */
+  const syncCfg: string | undefined = params !== undefined && params !== null
+    ? params['hrSyncCfg'] as string : undefined;
+  if (syncCfg !== undefined && syncCfg.length > 0) {
+    AppStorage.setOrCreate('hrSyncCfg', syncCfg);
+    hilog.info(0x0000, TAG, 'CI sync cfg seed (%{public}d chars)', syncCfg.length);
+  }
+  /* 0.9.43 CI seed hook (hrSeedUrl parity): aa start --ps hrAiCfg
+   * 'name,url,key,model' seeds one AI vendor profile and makes it active —
+   * the dialog's prefilled fields cannot be typed over reliably through
+   * uitest (IME swallows key events), so the config travels at cold start. */
+  const aiSeed: string | undefined = params !== undefined && params !== null
+    ? params['hrAiCfg'] as string : undefined;
+  if (aiSeed !== undefined && aiSeed.length > 0) {
+    AppStorage.setOrCreate('hrAiCfg', aiSeed);
+    hilog.info(0x0000, TAG, 'CI ai cfg seed (%{public}d chars)', aiSeed.length);
+  }
 }
 
 export default class EntryAbility extends UIAbility {

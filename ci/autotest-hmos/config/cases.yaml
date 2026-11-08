@@ -21,10 +21,10 @@ seed_server:
   host_dir: "Z:/opt/librera/LibreraReader/ci/autotest/teskbook"
   port: 8790
 
-# 50.23 协议测试服务器（与安卓 CI 共用，FN 网络用例）
+# 协议测试服务器（2026-11-08 起 50.23:8765 宕机，按预案切备用 50.104；与安卓 CI 共用，FN 网络用例）
 test_server:
-  host: 192.168.50.23
-  webdav_url: http://192.168.50.23:8765/
+  host: 192.168.50.104
+  webdav_url: http://192.168.50.104:8765/
   webdav_user: howread
   webdav_password: howread123
   smb_share: testbooks

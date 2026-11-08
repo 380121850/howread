@@ -100,3 +100,39 @@ export async function removeNote(ctx: Context, date: string): Promise<void> {
     console.error('[Notes] removeNote failed');
   }
 }
+
+/** 0.9.44 sync apply: replace all notes of one book with the given set
+ *  (WebDAV merge result = surviving local notes + imported android AI
+ *  notes). No-op when the resulting JSON is unchanged. */
+export async function replaceNotesForBook(ctx: Context, path: string,
+  notes: AiNote[]): Promise<boolean> {
+  try {
+    const prefs = await getPrefs(ctx);
+    const json: string = await prefs.get(KEY_NOTES, '[]') as string;
+    const list: AiNote[] = JSON.parse(json) as AiNote[];
+    const kept: AiNote[] = [];
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].path !== path) {
+        kept.push(list[i]);
+      }
+    }
+    for (let i = 0; i < notes.length; i++) {
+      kept.push(notes[i]);
+    }
+    kept.sort((a: AiNote, b: AiNote): number => b.date.localeCompare(a.date));
+    while (kept.length > MAX_NOTES) {
+      kept.pop();
+    }
+    const out: string = JSON.stringify(kept);
+    if (out === json) {
+      return false;
+    }
+    await prefs.put(KEY_NOTES, out);
+    await prefs.flush();
+    console.info('[Notes] replaced for book: n=' + notes.length);
+    return true;
+  } catch (e) {
+    console.error('[Notes] replaceNotesForBook failed');
+    return false;
+  }
+}

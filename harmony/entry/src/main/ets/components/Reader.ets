@@ -41,7 +41,7 @@ import {
 } from 'libmupdf_napi.so';
 import { saveRecentBook, getPageForPath, getRecentBookForPath, RecentBook } from '../model/ReadingProgress';
 import { recordReadTime, recordPagesRead } from '../model/ReadingStats';
-import { getBookmarks, addBookmark, removeBookmark, Bookmark } from '../model/Bookmarks';
+import { getBookmarks, addBookmark, removeBookmark, recordBookmarkTombstone, Bookmark } from '../model/Bookmarks';
 import { AiConfig, loadAiConfig, chatCompletion, chatCompletionStream, aiConfigReady, AiMessage, lastTruncated} from '../model/AiClient';
 import { getNotes, addNote, removeNote, AiNote } from '../model/Notes';
 import { PdfPara, PdfTransSession, BiOverlay, buildPdfParagraphs,
@@ -1589,6 +1589,8 @@ struct Reader {
       remoteCacheMaxMB: cur.remoteCacheMaxMB,
       remotePrefetchWifiOnly: cur.remotePrefetchWifiOnly,
       remoteWholeBookThresholdMB: cur.remoteWholeBookThresholdMB,
+      remoteWindowBeforePct: cur.remoteWindowBeforePct,
+      remoteWindowAfterPct: cur.remoteWindowAfterPct,
       remoteRetryCount: cur.remoteRetryCount,
       remoteRetryIntervalMs: cur.remoteRetryIntervalMs,
       tapLeftAction: this.tapLeftAction,
@@ -1872,6 +1874,9 @@ struct Reader {
       tlog('book_open_done', 'pages=' + this.totalPages + ' staged=1');
       this.openSettled = true;
       this.landOnRestoredPage();
+      /* 0.9.43: staged opens must fire bookmark_list_loaded like every
+       * other open path (non-staged/remote already do; CI FN-05) */
+      this.loadBookmarks();
       this.stagedOpen = true;
       this.startPhaseTwo(gen);
     } catch (e) {
@@ -5711,6 +5716,7 @@ struct Reader {
 
             Image($r('app.media.ic_bookmark'))
               .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
+              .id('reader_btn_bm_toggle')
               .onClick(() => {
                 this.toggleBookmark();
               })
@@ -6774,7 +6780,18 @@ struct Reader {
                         .fontSize(14).fontColor('#e57373')
                         .onClick(() => {
                           removeNote(getContext(this), n.date).then(() => {
-                            this.loadAiNotes();
+                            /* 0.9.44: deletion tombstone so the WebDAV sync
+                             * propagates the AI-note removal (android dk) */
+                            const msKey = Date.parse(n.date);
+                            if (!Number.isNaN(msKey) && this.documentPath.length > 0) {
+                              recordBookmarkTombstone(getContext(this),
+                                this.documentPath.substring(this.documentPath.lastIndexOf('/') + 1),
+                                String(msKey)).then(() => {
+                                this.loadAiNotes();
+                              });
+                            } else {
+                              this.loadAiNotes();
+                            }
                           });
                         })
                     }

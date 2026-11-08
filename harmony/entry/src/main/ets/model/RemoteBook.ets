@@ -326,6 +326,14 @@ export async function isMeteredNetwork(): Promise<boolean> {
   }
 }
 
+/* android RemoteBookSession.clampPct parity: <=0 -> default, capped at 90 */
+function clampWindowPct(v: number, def: number): number {
+  if (v <= 0) {
+    return def;
+  }
+  return Math.min(90, v);
+}
+
 /* ---- cache settings snapshot (Android AppState.remote*) ---- */
 
 export interface RemoteCacheSettings {
@@ -335,6 +343,10 @@ export interface RemoteCacheSettings {
    * wifi-only (single metered gate, Android 2026-09-17 parity) */
   prefetchWifiOnly: boolean;
   wholeBookThresholdMB: number;
+  /** window fill before/after the reading position in % for books above
+   *  the threshold (android remoteWindowBeforePct/AfterPct) */
+  windowBeforePct: number;
+  windowAfterPct: number;
   retryCount: number;
   retryIntervalMs: number;
 }
@@ -347,6 +359,8 @@ export async function loadRemoteCacheSettings(ctx: Context): Promise<RemoteCache
       cacheMaxMB: s.remoteCacheMaxMB > 0 ? s.remoteCacheMaxMB : 500,
       prefetchWifiOnly: s.remotePrefetchWifiOnly,
       wholeBookThresholdMB: s.remoteWholeBookThresholdMB,
+      windowBeforePct: s.remoteWindowBeforePct,
+      windowAfterPct: s.remoteWindowAfterPct,
       retryCount: s.remoteRetryCount,
       retryIntervalMs: s.remoteRetryIntervalMs
     };
@@ -356,6 +370,8 @@ export async function loadRemoteCacheSettings(ctx: Context): Promise<RemoteCache
       cacheMaxMB: 500,
       prefetchWifiOnly: true,
       wholeBookThresholdMB: 20,
+      windowBeforePct: 20,
+      windowAfterPct: 30,
       retryCount: 3,
       retryIntervalMs: 100
     };
@@ -859,7 +875,7 @@ export class BlockCacheStore {
   constructor(ctx: Context, cacheKey: string) {
     this.ctx = ctx;
     this.dir = bookDirOf(ctx, cacheKey);
-    this.meta = { size: 0, versionTag: '', blockSize: 256 * 1024, fullyCached: false };
+    this.meta = { size: 0, versionTag: '', blockSize: 1024 * 1024, fullyCached: false };
   }
 
   /** Read meta.json; null when no cache exists yet. */
@@ -1194,6 +1210,33 @@ export class BlockCacheStore {
     await this.flushMeta();
   }
 
+  /** 0.9.44: bounded window fill (android filler for books above the
+   *  whole-book threshold). Same foreground-yield discipline as
+   *  fillWholeBook; never flips fullyCached. */
+  async fillRange(from: number, to: number,
+    fetcher: (off: number, want: number) => Promise<ArrayBuffer>,
+    isCancelled: () => boolean): Promise<void> {
+    for (let bi = from; bi < to; bi++) {
+      if (isCancelled()) {
+        return;
+      }
+      if (this.hasBlock(bi)) {
+        continue;
+      }
+      while (this.inflight.size > 0 && !isCancelled()) {
+        await sleepMs(200);
+      }
+      if (isCancelled()) {
+        return;
+      }
+      try {
+        await this.ensureBlock(bi, fetcher);
+      } catch (e) {
+        return;
+      }
+    }
+  }
+
   get cachedBlockCount(): number {
     let n = 0;
     for (let i = 0; i < this.blockCount; i++) {
@@ -1342,7 +1385,11 @@ export class RemoteSession {
       throw new Error('remote probe failed');
     }
     const ext: string = fileExtOf(this.uri.substring(this.uri.lastIndexOf('/') + 1));
-    const blockSize: number = isPageFormatExt(ext) ? 1024 * 1024 : 256 * 1024;
+    /* 0.9.44 android block-size parity (BlockCacheStore.java BLOCK_SIZE /
+     * BLOCK_SIZE_PAGE_FORMAT): page formats (PDF/CBZ/XPS) 64KB, everything
+     * else 1MB. loadOrCreate wipes the dir when blockSize changes, so
+     * existing caches self-migrate on the first open. */
+    const blockSize: number = isPageFormatExt(ext) ? 64 * 1024 : 1024 * 1024;
     await this.store.loadOrCreate(probe.size, probe.versionTag, blockSize);
     return probe;
   }
@@ -1361,6 +1408,7 @@ export class RemoteSession {
      * bridge read, nudge the blocks ahead of the engine's cursor. The
      * prefetchBusy gate serializes, the metered gate honors wifi-only. */
     this.lastBridgedBlock = Math.floor(offset / this.meta.blockSize);
+    this.hasBridged = true;
     this.prefetchAfter(this.lastBridgedBlock);
     return buf;
   }
@@ -1368,6 +1416,9 @@ export class RemoteSession {
   /* 0.9.26: last block the engine asked for through the bridge - the
    * anchor for page-turn direction prefetch. */
   private lastBridgedBlock: number = 0;
+  /* 0.9.44: false until the first bridged read - window fill needs a real
+   * reading position (android fgPosBlock semantics) */
+  private hasBridged: boolean = false;
 
   /** 0.9.26 P0-3 tail (Android direction-aware prefetch): on a page turn,
    * nudge the window toward the reading direction. Forward turns let the
@@ -1424,32 +1475,45 @@ export class RemoteSession {
     });
   }
 
-  /** P3 whole-book filler (Android maybeStartFiller). */
+  /** Whole-book filler (android RemoteBookSession.maybeStartFiller, 0.9.44
+   * parity): books at/below wholeBookThresholdMB cache COMPLETELY on any
+   * network; bigger books fill only a window around the reading position -
+   * metered networks a fixed 10%/20%, WiFi the configured before/after
+   * window (no position yet: the next bridged read restarts us). The
+   * wifi-only toggle shapes the foreground prefetch depth only. */
   maybeStartFiller(): void {
     if (this.closed || this.fillerBusy || this.store.meta.fullyCached) {
       return;
     }
     const threshold: number = this.settings.wholeBookThresholdMB * 1024 * 1024;
-    if (threshold <= 0 || this.store.meta.size > threshold) {
+    if (threshold <= 0) {
       return;
     }
-    /* 0.9.6 single metered gate (Android maybeStartFiller): wifi-only ON +
-     * metered = no whole-book fill on mobile either; the old <5MB small-book
-     * mobile exception was dropped on Android in the same merge and never
-     * existed here */
-    if (this.settings.prefetchWifiOnly && this.metered) {
+    const total: number = this.store.totalBlockCount;
+    if (total <= 0) {
       return;
+    }
+    let from: number = 0;
+    let to: number = total;
+    if (this.store.meta.size > threshold) {
+      if (!this.hasBridged) {
+        return;
+      }
+      /* android clampPct: <=0 falls back to the default, capped at 90 */
+      const beforePct: number = this.metered ? 10 : clampWindowPct(this.settings.windowBeforePct, 20);
+      const afterPct: number = this.metered ? 20 : clampWindowPct(this.settings.windowAfterPct, 30);
+      from = Math.max(0, this.lastBridgedBlock - Math.floor(total * beforePct / 100));
+      to = Math.min(total, this.lastBridgedBlock + Math.floor(total * afterPct / 100) + 1);
+      if (to <= from) {
+        return;
+      }
     }
     this.fillerBusy = true;
     const gen: number = ++this.fillerGen;
     const fetcher = (off: number, want: number): Promise<ArrayBuffer> => {
       return this.source.readAt(off, want);
     };
-    this.store.fillWholeBook(fetcher, (percent: number): void => {
-      if (this.onFillerProgress !== undefined) {
-        this.onFillerProgress(percent);
-      }
-    }, (): boolean => {
+    this.store.fillRange(from, to, fetcher, (): boolean => {
       return this.closed || gen !== this.fillerGen;
     }).finally(() => {
       this.fillerBusy = false;

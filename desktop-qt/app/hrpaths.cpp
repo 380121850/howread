@@ -69,6 +69,6 @@ void evt(const QString &name, const QString &detail)
     f.write(line.toUtf8());
 }
 
-const char *appVersion() { return "0.111.1"; } /* 遗留项批：B2/B3/B4/A1/A2/A6/B6/B7/C5/C6/D9/D12/E5/F4 */ /* 适配批：P0+P1 二次确认后落地 */ /* U4：随批对齐 desktop-qt/VERSION */
+const char *appVersion() { return "1.0.1"; } /* 遗留项批：B2/B3/B4/A1/A2/A6/B6/B7/C5/C6/D9/D12/E5/F4 */ /* 适配批：P0+P1 二次确认后落地 */ /* U4：随批对齐 desktop-qt/VERSION */
 
 } // namespace hr

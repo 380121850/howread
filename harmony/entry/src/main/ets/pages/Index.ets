@@ -438,8 +438,70 @@ struct Index {
     });
     this.loadServers();
     loadSyncConfig(getContext(this)).then((c: SyncConfig) => {
-      this.syncCfg = c;
+      /* 0.9.42: consume the hrSyncCfg seed (aa start --ps, hrSeedUrl parity)
+       * before the config drives anything else */
+      const seeded: string | undefined = AppStorage.get<string>('hrSyncCfg');
+      if (seeded !== undefined && seeded.length > 0) {
+        try {
+          const r = JSON.parse(seeded) as Record<string, Object>;
+          const c2: SyncConfig = {
+            enabled: r['enabled'] === true,
+            url: typeof r['url'] === 'string' ? r['url'] as string : '',
+            user: typeof r['user'] === 'string' ? r['user'] as string : '',
+            password: typeof r['password'] === 'string' ? r['password'] as string : '',
+            trusted: r['trusted'] === true,
+            remotePath: typeof r['remotePath'] === 'string' && (r['remotePath'] as string).length > 0
+              ? r['remotePath'] as string : 'HowRead',
+            conflict: typeof r['conflict'] === 'string' && (r['conflict'] as string).length > 0
+              ? r['conflict'] as string : c.conflict,
+            autoSync: r['autoSync'] === true,
+            autoSyncMin: typeof r['autoSyncMin'] === 'number' && (r['autoSyncMin'] as number) > 0
+              ? r['autoSyncMin'] as number : 5,
+            lastSyncTime: '',
+            lastUp: 0,
+            lastLinked: 0,
+            lastMs: 0
+          };
+          this.syncCfg = c2;
+          saveSyncConfig(getContext(this), c2);
+          console.info('[Index] hrSyncCfg seed applied: ' + c2.url);
+        } catch (e) {
+          console.error('[Index] hrSyncCfg parse failed');
+        }
+        AppStorage.setOrCreate<string>('hrSyncCfg', '');
+      }
+      /* 0.9.43: consume the hrAiCfg seed ('name,url,key,model' — comma
+       * separated so it survives the shell; hrSeedUrl parity): upsert one
+       * vendor, make it active, fire a tlog the CI case waits for */
+      const aiSeed: string | undefined = AppStorage.get<string>('hrAiCfg');
+      if (aiSeed !== undefined && aiSeed.length > 0) {
+        const parts = aiSeed.split(',');
+        if (parts.length >= 4) {
+          const seededVendor: AiVendorEntry = {
+            name: parts[0].length > 0 ? parts[0] : 'hrtest_ci',
+            protocol: PROTOCOL_OPENAI,
+            url: parts[1],
+            key: parts[2],
+            model: parts[3],
+            maxTokens: 4096,
+            thinking: false
+          };
+          saveVendor(getContext(this), seededVendor).then((): void => {
+            tlog('ai_cfg_seeded', 'name=' + seededVendor.name);
+          });
+          console.info('[Index] hrAiCfg seed applied: ' + seededVendor.name);
+        }
+        AppStorage.setOrCreate<string>('hrAiCfg', '');
+      }
       this.armAutoSync();
+      /* 0.9.39 (Android MainTabs2 parity): silent background sync shortly
+       * after launch, so progress/bookmarks from other devices appear
+       * without opening the sync dialog. */
+      setTimeout(() => {
+        if (this.syncCfg.enabled && this.syncCfg.url.length > 0 && !this.syncBusy) {
+          this.runSyncWithAi(getContext(this), this.syncCfg);
+        }
+      }, 4000);
     });
     /* Round 7: read the real versionName for the About pill */
     try {
@@ -2441,8 +2503,30 @@ tlog('download_start', 'name=' + fileName);    try {
       return;
     }
     if (!probe.supportsRange) {
-      /* server without Range support: degrade to whole-book download */
-      this.remoteFetchAndOpenSource(uri, fileName, settings, source);
+      /* server without Range support: degrade to whole-book download
+       * (android RemoteBookOpener CONFIRM_FULL_FETCH_BYTES parity: huge
+       * books ask first - a silent multi-hundred-MB download with nothing
+       * opening reads like a hang) */
+      if (probe.size >= 50 * 1024 * 1024) {
+        const sizeMb: string = (probe.size / 1024 / 1024).toFixed(0);
+        AlertDialog.show({
+          title: '需要整本下载',
+          message: '该服务器不支持分段下载（HTTP Range），需先整本缓存（' + sizeMb + ' MB）后才能打开。',
+          primaryButton: {
+            value: '下载',
+            action: (): void => {
+              this.remoteFetchAndOpenSource(uri, fileName, settings, source);
+            }
+          },
+          secondaryButton: {
+            value: '取消',
+            action: (): void => {
+            }
+          }
+        });
+      } else {
+        this.remoteFetchAndOpenSource(uri, fileName, settings, source);
+      }
       return;
     }
     /* 0.9.26 P0-1 tail (Android RemoteVariantDetector parity): a hostile
@@ -2539,13 +2623,14 @@ tlog('download_start', 'name=' + fileName);    try {
           promptAction.showToast({ message: '无法连接远程文件' });
           return;
         }
-        /* 0.9.25: block size must follow the reader-session rule (page
-         * formats 1MB, everything else 256KB). The old direct/simple split
-         * fought RemoteSession.open's blockSize meta: the same book flipped
-         * block sizes between download and stream paths and wiped the cache
-         * (txt joining DIRECT made this hot). */
+        /* 0.9.44: block size follows the reader-session rule (android
+         * BlockCacheStore parity: page formats 64KB, everything else 1MB).
+         * The old direct/simple split fought RemoteSession.open's
+         * blockSize meta: the same book flipped block sizes between
+         * download and stream paths and wiped the cache (txt joining
+         * DIRECT made this hot). */
         await session.store.loadOrCreate(probe.size, probe.versionTag,
-          isPageFormatExt(ext) ? 1024 * 1024 : 256 * 1024);
+          isPageFormatExt(ext) ? 64 * 1024 : 1024 * 1024);
         path = await fetchWholeBookToCache(session, ext, (p: number) => {
           this.webdavProgress = p;
           this.webdavDownloading = fileName;
@@ -5205,6 +5290,13 @@ tlog('download_start', 'name=' + fileName);    try {
         }
         .width('100%')
 
+        /* 0.9.43: the dialog grew (vendor/protocol/provider rows) and its
+         * tail (test area, Close/Save) could sit below the fold - the
+         * middle scrolls, header/footer stay pinned (CI FN-17 + small
+         * screens) */
+        Scroll() {
+        Column({ space: 10 }) {
+
         Row({ space: 6 }) {
           Text($r('app.string.ai_profile')).fontSize(14).fontColor(this.txtPri()).width(70)
           ForEach(this.aiVendorNames, (n: string) => {
@@ -5409,6 +5501,12 @@ tlog('download_start', 'name=' + fileName);    try {
             .borderRadius(4)
         }
 
+        }
+        .width('100%')
+        }
+        .layoutWeight(1)
+        .scrollBar(BarState.Auto)
+
         Row({ space: 12 }) {
           Blank()
           Button($r('app.string.common_close'))
@@ -5428,6 +5526,7 @@ tlog('download_start', 'name=' + fileName);    try {
       }
       .width('86%')
       .padding(14)
+      .constraintSize({ maxHeight: '92%' })
       .backgroundColor(this.cardBg())
       .borderRadius(8)
     }
@@ -8353,13 +8452,14 @@ tlog('download_start', 'name=' + fileName);    try {
         if (probe === null) {
           throw new Error('probe failed');
         }
-        /* 0.9.25: block size must follow the reader-session rule (page
-         * formats 1MB, everything else 256KB). The old direct/simple split
-         * fought RemoteSession.open's blockSize meta: the same book flipped
-         * block sizes between download and stream paths and wiped the cache
-         * (txt joining DIRECT made this hot). */
+        /* 0.9.44: block size follows the reader-session rule (android
+         * BlockCacheStore parity: page formats 64KB, everything else 1MB).
+         * The old direct/simple split fought RemoteSession.open's
+         * blockSize meta: the same book flipped block sizes between
+         * download and stream paths and wiped the cache (txt joining
+         * DIRECT made this hot). */
         await session.store.loadOrCreate(probe.size, probe.versionTag,
-          isPageFormatExt(ext) ? 1024 * 1024 : 256 * 1024);
+          isPageFormatExt(ext) ? 64 * 1024 : 1024 * 1024);
         const localPath: string = await fetchWholeBookToCache(session, ext, (p: number) => {
           this.webdavProgress = p;
           this.webdavDownloading = `(${i + 1}/${names.length}) ${name}`;
@@ -9808,9 +9908,11 @@ tlog('download_start', 'name=' + fileName);    try {
           this.settingsSubBar('在线阅读(Pro)', 'remote')
           if (this.groupExp['remote'] === true) {
             this.settingsToggleRow('在线优先阅读', 'remoteOnlineFirst', '直开格式直接流式打开')
-            this.settingsToggleRow('仅 WiFi 下预取与整本缓存', 'remotePrefetchWifiOnly', '开：流量下只随读随取；关：流量与 WiFi 同等对待')
+            this.settingsToggleRow('仅 WiFi 下预取', 'remotePrefetchWifiOnly', '开：流量下暂停预取；关：流量与 WiFi 同等对待。整本缓存不受此开关限制（与安卓一致：小书任意网络整取，大书按窗口填充）')
             this.settingsNumRowPair('缓存上限 (MB)', 'remoteCacheMaxMB', 50, 4096,
               '整本缓存阈值 (MB)', 'remoteWholeBookThresholdMB', 0, 200)
+            this.settingsNumRowPair('窗口填充前 (%)', 'remoteWindowBeforePct', 0, 90,
+              '窗口填充后 (%)', 'remoteWindowAfterPct', 0, 90)
             this.settingsNumRowPair('重试次数', 'remoteRetryCount', 0, 10,
               '重试间隔 (ms)', 'remoteRetryIntervalMs', 0, 30000)
             Row() {
@@ -10290,6 +10392,12 @@ tlog('download_start', 'name=' + fileName);    try {
     if (key === 'remoteWholeBookThresholdMB') {
       return this.settings.remoteWholeBookThresholdMB;
     }
+    if (key === 'remoteWindowBeforePct') {
+      return this.settings.remoteWindowBeforePct;
+    }
+    if (key === 'remoteWindowAfterPct') {
+      return this.settings.remoteWindowAfterPct;
+    }
     if (key === 'remoteRetryCount') {
       return this.settings.remoteRetryCount;
     }
@@ -10305,6 +10413,10 @@ tlog('download_start', 'name=' + fileName);    try {
       this.settings.remoteCacheMaxMB = v;
     } else if (key === 'remoteWholeBookThresholdMB') {
       this.settings.remoteWholeBookThresholdMB = v;
+    } else if (key === 'remoteWindowBeforePct') {
+      this.settings.remoteWindowBeforePct = v;
+    } else if (key === 'remoteWindowAfterPct') {
+      this.settings.remoteWindowAfterPct = v;
     } else if (key === 'remoteRetryCount') {
       this.settings.remoteRetryCount = v;
     } else if (key === 'remoteRetryIntervalMs') {
@@ -10331,6 +10443,12 @@ tlog('download_start', 'name=' + fileName);    try {
     }
     if (key === 'remoteWholeBookThresholdMB') {
       return '小书整本缓存阈值 (MB，0=关闭)';
+    }
+    if (key === 'remoteWindowBeforePct') {
+      return '窗口填充前 (%，0=默认20)';
+    }
+    if (key === 'remoteWindowAfterPct') {
+      return '窗口填充后 (%，0=默认30)';
     }
     if (key === 'remoteRetryCount') {
       return '网络失败重试次数';

@@ -239,3 +239,147 @@ export async function getMonthlyStats(ctx: Context, months: number): Promise<Mon
   }
   return result;
 }
+
+
+/* ---------------- 0.9.43: android app-Stats.json sync payload ------------
+ * Android schema (ProfileStateIO.exportStats):
+ *   { readTimeMs, readDayKey: "yyyy-MM-dd", readDayMs, readPages,
+ *     readMonthlyJson: "{\"2026-08\": ms, ...}",
+ *     readDailyJson:   "{\"2026-11-08\": ms, ...}" }
+ * Export rebuilds the payload from the local store (readPages = the sum of
+ * the per-day page counters - Harmony keeps no lifetime page counter, the
+ * max-merge below keeps the android lifetime value authoritative). Import
+ * applies android applyStats parity: numeric max, per-key bucket max, and
+ * the "today" guard (a foreign day key never lands under 今日阅读). */
+
+function statsRecStr(o: Record<string, Object>, k: string): string {
+  const v = o[k];
+  return typeof v === 'string' ? v as string : '';
+}
+
+function statsRecNum(o: Record<string, Object>, k: string): number {
+  const v = o[k];
+  return typeof v === 'number' ? v as number : 0;
+}
+
+function parseBucket(json: string): Record<string, number> {
+  const out: Record<string, number> = {};
+  try {
+    const o = JSON.parse(json) as Record<string, Object>;
+    const ks = Object.keys(o);
+    for (let i = 0; i < ks.length; i++) {
+      const v = o[ks[i]];
+      if (typeof v === 'number' && (v as number) > 0) {
+        out[ks[i]] = Math.round(v as number);
+      }
+    }
+  } catch (e) {
+    /* keep whatever parsed */
+  }
+  return out;
+}
+
+export async function exportStatsSyncPayload(ctx: Context): Promise<string> {
+  const store = await loadStore(ctx);
+  const tk = todayKey();
+  let dayMs = 0;
+  let pages = 0;
+  const daily: Record<string, Object> = {};
+  for (let i = 0; i < store.daily.length; i++) {
+    const d = store.daily[i];
+    daily[d.day] = d.ms;
+    pages += d.pages;
+    if (d.day === tk) {
+      dayMs = d.ms;
+    }
+  }
+  const monthly: Record<string, Object> = {};
+  for (let i = 0; i < store.monthly.length; i++) {
+    monthly[store.monthly[i].month] = store.monthly[i].ms;
+  }
+  const o: Record<string, Object> = {
+    'readTimeMs': store.totalMs,
+    'readDayKey': tk,
+    'readDayMs': dayMs,
+    'readPages': pages,
+    'readMonthlyJson': JSON.stringify(monthly),
+    'readDailyJson': JSON.stringify(daily)
+  };
+  return JSON.stringify(o);
+}
+
+export async function importStatsSyncPayload(ctx: Context,
+  o: Record<string, Object>): Promise<boolean> {
+  try {
+    const store = await loadStore(ctx);
+    let changed = false;
+    const rt = statsRecNum(o, 'readTimeMs');
+    if (rt > store.totalMs) {
+      store.totalMs = Math.round(rt);
+      changed = true;
+    }
+    const daily = parseBucket(statsRecStr(o, 'readDailyJson'));
+    const monthly = parseBucket(statsRecStr(o, 'readMonthlyJson'));
+    const dks = Object.keys(daily);
+    for (let i = 0; i < dks.length; i++) {
+      const day = dks[i];
+      const ms = daily[day];
+      let found = false;
+      for (let j = 0; j < store.daily.length; j++) {
+        if (store.daily[j].day === day) {
+          if (ms > store.daily[j].ms) {
+            store.daily[j].ms = ms;
+            changed = true;
+          }
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        store.daily.push({ day: day, ms: ms, pages: 0 });
+        changed = true;
+      }
+    }
+    const mks = Object.keys(monthly);
+    for (let i = 0; i < mks.length; i++) {
+      const month = mks[i];
+      const ms = monthly[month];
+      let found = false;
+      for (let j = 0; j < store.monthly.length; j++) {
+        if (store.monthly[j].month === month) {
+          if (ms > store.monthly[j].ms) {
+            store.monthly[j].ms = ms;
+            changed = true;
+          }
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        store.monthly.push({ month: month, ms: ms });
+        changed = true;
+      }
+    }
+    /* android applyStats "today" guard: the source device's day key must
+     * match THIS device's calendar day, else a historic total would land
+     * under 今日阅读 (the per-day buckets stay the history source of truth) */
+    const oKey = statsRecStr(o, 'readDayKey');
+    const oMs = statsRecNum(o, 'readDayMs');
+    const tk = todayKey();
+    if (oKey === tk && oMs > 0) {
+      for (let j = 0; j < store.daily.length; j++) {
+        if (store.daily[j].day === tk && oMs > store.daily[j].ms) {
+          store.daily[j].ms = Math.round(oMs);
+          changed = true;
+          break;
+        }
+      }
+    }
+    if (changed) {
+      await saveStore(ctx, store);
+    }
+    return changed;
+  } catch (e) {
+    return false;
+  }
+}

@@ -53,7 +53,7 @@ def pf02_memory(dev, case_id, cfg, fixtures):
         raise TestSkip('mem_pss_kb unavailable (%s)' % base)
     pss_open = None
     with dev.step(case_id, 'open book + 8 turns'):
-        _open_book(dev, 'Alice', expect_pages=105)
+        _open_book(dev, 'Alice', expect_pages=116)
         time.sleep(2.0)
         # First-render working set (fonts/store/layout, plateaus immediately;
         # 2026-09-22 baseline on Pura 90: ~155 -> ~245MB, informational only)

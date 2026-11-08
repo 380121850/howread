@@ -109,13 +109,15 @@ ReaderWindow::ReaderWindow(QWidget *parent) : QMainWindow(parent)
     m_lbBook = new QLabel(hr::l10n::s("(未打开)", "(no book)"));
     m_lbBook->setMaximumWidth(320);
     /* v0.77.0 V2：顶栏/底栏图标钮（与安卓 glyphicons 同形，悬停显示文案；无图标资源时显示文字） */
-    auto mkTb = [](const QString &text, const char *icon, bool checkable = false)
+    auto mkTb = [](const QString &text, const char *icon, bool checkable = false,
+                   bool withText = false)
     {
         QToolButton *b = new QToolButton;
         b->setAutoRaise(true);
         b->setCheckable(checkable);
         b->setToolTip(text);
         b->setIconSize(QSize(20, 20));
+        if (withText) b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon); /* v1.0.0：顶栏图标旁带文字 */
         if (hr::Icons::have())
             hr::Icons::bind(b, QString::fromLatin1(icon), 20);
         else
@@ -123,15 +125,15 @@ ReaderWindow::ReaderWindow(QWidget *parent) : QMainWindow(parent)
         return b;
     };
     QPushButton *btnOpen = new QPushButton(hr::l10n::s("打开", "Open"));
-    QToolButton *btnToc = mkTb(hr::l10n::s("目录", "TOC"), "glyphicons_160_playlist");
-    QToolButton *btnBm = mkTb(hr::l10n::s("书签", "Bookmarks"), "glyphicons_73_bookmark");
-    QToolButton *btnAddBm = mkTb(hr::l10n::s("+签", "+Mark"), "glyphicons_371_plus");
+    QToolButton *btnToc = mkTb(hr::l10n::s("目录", "TOC"), "glyphicons_160_playlist", false, true);
+    QToolButton *btnBm = mkTb(hr::l10n::s("书签", "Bookmarks"), "glyphicons_73_bookmark", false, true);
+    QToolButton *btnAddBm = mkTb(hr::l10n::s("+签", "+Mark"), "glyphicons_371_plus", false, true);
     QPushButton *btnFontDown = new QPushButton("A-");
     QPushButton *btnFontUp = new QPushButton("A+");
-    QToolButton *btnTheme = mkTb(hr::l10n::s("主题", "Theme"), "glyphicons_140_adjust");
+    QToolButton *btnTheme = mkTb(hr::l10n::s("主题", "Theme"), "glyphicons_140_adjust", false, true);
     QPushButton *btnTwo = new QPushButton(hr::l10n::s("双页", "2-up"));
-    QToolButton *btnSearch = mkTb(hr::l10n::s("搜索", "Search"), "glyphicons_28_search");
-    QToolButton *btnTrim = mkTb(hr::l10n::s("裁白边", "Trim"), "glyphicons_94_crop", true); /* v0.83.0 W2 D6 */
+    QToolButton *btnSearch = mkTb(hr::l10n::s("搜索", "Search"), "glyphicons_28_search", false, true);
+    QToolButton *btnTrim = mkTb(hr::l10n::s("裁白边", "Trim"), "glyphicons_94_crop", true, true); /* v0.83.0 W2 D6 */
     QPushButton *btnSpeak = new QPushButton(hr::l10n::s("朗读", "Speak"));
     QPushButton *btnStop = new QPushButton(hr::l10n::s("停止", "Stop"));
     QPushButton *btnWav = new QPushButton(hr::l10n::s("导出WAV", "WAV"));
@@ -139,9 +141,9 @@ ReaderWindow::ReaderWindow(QWidget *parent) : QMainWindow(parent)
     QPushButton *btnMode = new QPushButton(hr::l10n::s("滚动", "Scroll"));
     QPushButton *btnAuto = new QPushButton(hr::l10n::s("自动", "Auto"));
     QPushButton *btnRsvp = new QPushButton(hr::l10n::s("速读", "RSVP"));
-    QToolButton *btnPrefs = mkTb(hr::l10n::s("排版", "Layout"), "glyphicons_108_text_resize");
-    QToolButton *btnMore = mkTb(hr::l10n::s("更多", "More"), "glyphicons_498_more_vertical");
-    QToolButton *btnClose = mkTb(hr::l10n::s("关闭", "Close"), "glyphicons_599_menu_close");
+    QToolButton *btnPrefs = mkTb(hr::l10n::s("排版", "Layout"), "glyphicons_108_text_resize", false, true);
+    QToolButton *btnMore = mkTb(hr::l10n::s("更多", "More"), "glyphicons_498_more_vertical", false, true);
+    QToolButton *btnClose = mkTb(hr::l10n::s("关闭", "Close"), "glyphicons_599_menu_close", false, true);
     btnMode->setCheckable(true);
     btnAuto->setCheckable(true);
     btnMode->setChecked(m_scrollMode);
@@ -1395,7 +1397,7 @@ void ReaderWindow::finishOpen(void *doc, int pages, int chapters, int restored,
     m_pendingPage = -1;
     m_img = QImage();
     m_img2 = QImage();
-    m_estH = 1200;
+    m_estH = m_viewH > 0 ? m_viewH : 1200; /* v1.0.0：锚排版页高，防占位细条海 */
     buildStack();
     m_slider->setRange(0, qMax(0, m_pages - 1));
     m_slider->setValue(m_page);
@@ -1470,13 +1472,10 @@ void ReaderWindow::startPhase2Count(int fromChapter, int partialPages, int chapt
                     doc = nullptr;
                     break;
                 }
-                /* v0.107.1：交互让路——1.5s 内有渲染请求则暂停补数（对齐安卓
-                 * filler 前台静默）；翻页渲染不再排队 6-9s，安静 1.5s 后续跑 */
-                while (gw && gw->m_openGen.load() == gen &&
-                       QDateTime::currentMSecsSinceEpoch() -
-                               gw->m_lastRenderReq.load() <
-                           1500)
-                    QThread::msleep(120);
+                /* v1.0.1：撤除"1.5s 内有渲染请求即冻结"让路——用户边翻页边等时
+                 * 补数完全停摆，已数窗口之外全是空白（v1.0.0 会话日志复证实锤）。
+                 * 改靠引擎锁自然串行：逐章计数 20-56ms 与渲染 10-60ms 交错，互相
+                 * 等锁的代价 ≤ 一次计数；补数前沿 ~百页/秒跟进，翻页追不上 */
                 if (!gw || gw->m_openGen.load() != gen)
                 {
                     doc = nullptr;
@@ -1491,6 +1490,20 @@ void ReaderWindow::startPhase2Count(int fromChapter, int partialPages, int chapt
                         QString::fromLatin1("ch=%1 ms=%2")
                             .arg(k)
                             .arg(QDateTime::currentMSecsSinceEpoch() - tpc));
+                /* v1.0.1：每 16 章增量落地页数/标签——旧口径全部数完才扩一次，
+                 * 大书前沿数十秒不可翻；增量后前沿持续生长（gen 守卫防与
+                 * 字号重排竞态：重排会重建页表，旧布局的页数不得再扩入） */
+                if ((k - fromChapter) % 16 == 15)
+                {
+                    QMetaObject::invokeMethod(
+                        gw.data(),
+                        [gw, gen, tot = partialPages + extra, chn = all.size()]
+                        {
+                            if (gw && gw->m_openGen.load() == gen)
+                                gw->applyPhase2Pages(tot, chn);
+                        },
+                        Qt::QueuedConnection);
+                }
             }
         }
         if (gw) gw->m_phase2Busy.store(false);
@@ -1502,10 +1515,11 @@ void ReaderWindow::startPhase2Count(int fromChapter, int partialPages, int chapt
         evt("phase2_pages", QString("total=%1 ms=%2").arg(partialPages + extra).arg(ms));
         QMetaObject::invokeMethod(
             gw.data(),
-            [gw, total = partialPages + extra, chapters]
+            [gw, gen, total = partialPages + extra, chapters]
             {
-                if (!gw) return;
-                gw->applyPhase2Pages(total, chapters);
+                /* v1.0.1：gen 守卫（同上，防重排竞态错扩） */
+                if (gw && gw->m_openGen.load() == gen)
+                    gw->applyPhase2Pages(total, chapters);
             },
             Qt::QueuedConnection);
     }));
@@ -1663,7 +1677,7 @@ bool ReaderWindow::afterOpen(int jumpPage)
             m_smokeW > 0
                 ? 0x7fffffff
                 : (remotePath ? uptoPg + qMax(3, qMin(10, uptoPg / 4))
-                              : uptoPg + qMax(80, uptoPg / 4));
+                              : uptoPg + qMax(160, uptoPg / 4)); /* v1.0.1：初始前沿 80→160 页 */
         m_pages = 0;
         int cdone = 0;
         bool partial = false;
@@ -1753,7 +1767,7 @@ bool ReaderWindow::afterOpen(int jumpPage)
     m_img = QImage();
     m_img2 = QImage();
     m_pfCache.clear(); /* v0.103.0：邻页预取随书/排版换代 */
-    m_estH = 1200;
+    m_estH = m_viewH > 0 ? m_viewH : 1200; /* v1.0.0：锚排版页高，防占位细条海 */
     buildStack();
     m_slider->setRange(0, qMax(0, m_pages - 1));
     m_slider->setValue(m_page);
@@ -2054,7 +2068,10 @@ void ReaderWindow::requestPage(int page)
                     lb->setPixmap(QPixmap::fromImage(im2));
                     lb->setFixedSize(im2.size());
                     m_labelW[page] = targetW;
-                    if (page == 0) m_estH = img.height();
+                    /* v1.0.0：矮页（封面/标题行，高仅几十 px）不参与校准——
+                     * 此前 estH 被第 0 页带塌，整本占位标签成细条海（用户附图实证） */
+                    if (page == 0 && m_viewH > 0 && img.height() >= m_viewH / 2)
+                        m_estH = img.height();
                     evt("render_ok", QString("page=%1 ms=%2").arg(page + 1)
                             .arg(QDateTime::currentMSecsSinceEpoch() - m_renderT0.load()));
                 }
@@ -2135,7 +2152,8 @@ void ReaderWindow::renderNow(int page)
             renderRaw(page + 1, w, &m_img2);
     }
     else m_img2 = QImage();
-    if (page == 0) m_estH = m_img.height(); /* 未裁剪原高（滚动布局口径） */
+    if (page == 0 && m_viewH > 0 && m_img.height() >= m_viewH / 2) /* v1.0.0：矮页不校准 */
+        m_estH = m_img.height(); /* 未裁剪原高（滚动布局口径） */
     if (m_trimWhite) /* v0.83.0 W2 D6：裁白边（翻页模式） */
     {
         m_img = trimWhiteImg(m_img);
@@ -2225,7 +2243,7 @@ void ReaderWindow::finishRelayoutWindowed(int gen, void *doc, const QVector<int>
     m_img = QImage();
     m_img2 = QImage();
     m_pfCache.clear(); /* 排版参数变了，预取位图全部失效 */
-    m_estH = 1200;
+    m_estH = m_viewH > 0 ? m_viewH : 1200; /* v1.0.0：锚排版页高，防占位细条海 */
     m_busy = false;
     m_pendingPage = -1;
     buildStack();
@@ -2283,7 +2301,7 @@ void ReaderWindow::relayoutAfterChange(bool metrics)
         m_img = QImage();
         m_img2 = QImage();
         m_pfCache.clear();
-        m_estH = 1200;
+        m_estH = m_viewH > 0 ? m_viewH : 1200; /* v1.0.0：锚排版页高，防占位细条海 */
         m_busy = false;
         m_pendingPage = -1;
         buildStack();
@@ -2414,7 +2432,7 @@ void ReaderWindow::finishRelayout(int gen, void *doc, int pages, int chapters)
     m_img = QImage();
     m_img2 = QImage();
     m_pfCache.clear(); /* 排版参数变了，预取位图全部失效 */
-    m_estH = 1200;
+    m_estH = m_viewH > 0 ? m_viewH : 1200; /* v1.0.0：锚排版页高，防占位细条海 */
     m_busy = false;
     m_pendingPage = -1;
     buildStack();
