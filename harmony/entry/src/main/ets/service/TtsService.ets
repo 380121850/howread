@@ -5,6 +5,7 @@ import preferences from '@ohos.data.preferences';
 import formProvider from '@ohos.app.form.formProvider';
 import formBindingData from '@ohos.app.form.formBindingData';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import bundleManager from '@ohos.bundle.bundleManager';
 
 /**
  * TTS background playback support (round 5, Android TTSService parity).
@@ -18,11 +19,36 @@ const NOTIF_ID = 10001;
 const TAG = 'TtsService';
 export const KEY_TTS_CMD = 'ttsCmd';
 
+let cachedSelfBundle: string = '';
+/** S1/R1 fix (0.9.45): the button WantAgents used to carry the hard-coded
+ *  DEFAULT bundle name - under the pro variant (the only shipped bundle)
+ *  they routed taps to a foreign/uninstalled package (build_hap_all.sh
+ *  swaps app.json5 per variant but never .ets literals). Resolve the
+ *  RUNNING bundle's own name once and reuse it (same API as the About
+ *  version pill). */
+function selfBundleName(): string {
+  if (cachedSelfBundle.length > 0) {
+    return cachedSelfBundle;
+  }
+  try {
+    cachedSelfBundle = bundleManager.getBundleInfoForSelfSync(
+      bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT).name;
+    hilog.info(0x0000, TAG, 'self bundle resolved: %{public}s', cachedSelfBundle);
+  } catch (e) {
+    hilog.warn(0x0000, TAG, 'self bundle resolve failed: %{public}s', String(e));
+  }
+  return cachedSelfBundle;
+}
+
+/* warm resolve at module load: the name is cached (and visible in hilog)
+ * before any TTS notification path needs it */
+selfBundleName();
+
 /** Build a WantAgent that reopens EntryAbility with the given tts_cmd parameter. */
 function makeButtonAgent(ctx: Context, cmd: string): Promise<WantAgent> {
   const info: wantAgent.WantAgentInfo = {
     wants: [{
-      bundleName: 'com.leestudio.howread.reader.hmos',
+      bundleName: selfBundleName(),
       abilityName: 'EntryAbility',
       parameters: { tts_cmd: cmd }
     }],

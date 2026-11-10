@@ -1508,6 +1508,7 @@ export class RemoteSession {
         return;
       }
     }
+    const wholeBook: boolean = from === 0 && to === total;
     this.fillerBusy = true;
     const gen: number = ++this.fillerGen;
     const fetcher = (off: number, want: number): Promise<ArrayBuffer> => {
@@ -1515,6 +1516,22 @@ export class RemoteSession {
     };
     this.store.fillRange(from, to, fetcher, (): boolean => {
       return this.closed || gen !== this.fillerGen;
+    }).then(async (): Promise<void> => {
+      /* review fix: the background whole-book fill must flip fullyCached
+       * exactly like fetchWholeBookToCache does - the offline-open gate,
+       * the whole-book-cached toast, the pagemap convergence and this
+       * filler's own early-return all read meta.fullyCached (0.9.35 P1-9;
+       * android filler tail: if (fWhole && !capped) setFullyCached). The
+       * bitmap check keeps a fake 100% off a cancelled-but-incomplete
+       * sweep. Window fills (partial) must NOT flip. */
+      if (wholeBook && !this.closed && gen === this.fillerGen &&
+        !this.store.meta.fullyCached && this.store.cachedBlockCount >= total) {
+        this.store.meta.fullyCached = true;
+        await this.store.flushMeta();
+        if (this.onFillerProgress !== undefined) {
+          this.onFillerProgress(100);
+        }
+      }
     }).finally(() => {
       this.fillerBusy = false;
     });

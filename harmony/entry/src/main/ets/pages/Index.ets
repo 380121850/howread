@@ -1334,6 +1334,14 @@ struct Index {
       expectDataType: http.HttpDataType.ARRAY_BUFFER })
       .then((resp: http.HttpResponse) => {
         dl.destroy();
+        /* 0.9.45: a non-2xx body (e.g. the 503-byte 401 page from an
+         * authenticated WebDAV URL) must never land as a "book" - the
+         * garbage file later aborts the engine when opened. */
+        const seedCode: number = resp.responseCode;
+        if (seedCode < 200 || seedCode > 299) {
+          tlog('seed_fail', 'code=' + seedCode);
+          return;
+        }
         const buf = resp.result as ArrayBuffer;
         const path: string = ctx.cacheDir + '/' + fileName;
         const f = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
