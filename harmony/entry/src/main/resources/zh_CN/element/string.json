@@ -690,7 +690,7 @@
     },
     {
       "name": "dav_name_hint",
-      "value": "名称（如：MyNAS）"
+      "value": "名称"
     },
     {
       "name": "dav_none",
@@ -795,10 +795,6 @@
     {
       "name": "lib_filter",
       "value": "筛:"
-    },
-    {
-      "name": "lib_fulltext",
-      "value": "全文"
     },
     {
       "name": "lib_import",
@@ -2062,11 +2058,11 @@
     },
     {
       "name": "about_gpl",
-      "value": "GNU GPL v3"
+      "value": "开放源代码许可"
     },
     {
       "name": "about_licenses",
-      "value": "开源许可"
+      "value": "第三方库许可"
     },
     {
       "name": "about_support",
@@ -2090,7 +2086,7 @@
     },
     {
       "name": "about_feedback",
-      "value": "问题和反馈"
+      "value": "支持和问题反馈"
     },
     {
       "name": "about_feedback_link",
@@ -2158,7 +2154,7 @@
     },
     {
       "name": "dav_start_hint",
-      "value": "起始目录（可选，如 /sub）"
+      "value": "起始目录（可选）"
     },
     {
       "name": "dav_test",
@@ -2271,6 +2267,194 @@
     {
       "name": "lib_folder_seed",
       "value": "书库"
+    },
+    {
+      "name": "label_sort",
+      "value": "排序"
+    },
+    {
+      "name": "label_add",
+      "value": "添加"
+    },
+    {
+      "name": "label_view",
+      "value": "视图"
+    },
+    {
+      "name": "libsort_folder",
+      "value": "文件夹"
+    },
+    {
+      "name": "libsort_filename",
+      "value": "文件名"
+    },
+    {
+      "name": "libsort_size",
+      "value": "文件大小"
+    },
+    {
+      "name": "libsort_date",
+      "value": "时间"
+    },
+    {
+      "name": "libsort_title",
+      "value": "标题"
+    },
+    {
+      "name": "libsort_author",
+      "value": "作者"
+    },
+    {
+      "name": "libsort_series",
+      "value": "丛书"
+    },
+    {
+      "name": "libsort_series_no",
+      "value": "丛书编号"
+    },
+    {
+      "name": "libsort_pages",
+      "value": "页数"
+    },
+    {
+      "name": "libsort_ext",
+      "value": "格式"
+    },
+    {
+      "name": "libsort_language",
+      "value": "语言"
+    },
+    {
+      "name": "libsort_pubdate",
+      "value": "出版时间"
+    },
+    {
+      "name": "libsort_publisher",
+      "value": "出版商"
+    },
+    {
+      "name": "libsort_recent",
+      "value": "最近"
+    },
+    {
+      "name": "vm_list",
+      "value": "列表"
+    },
+    {
+      "name": "vm_compact",
+      "value": "简表"
+    },
+    {
+      "name": "vm_grid",
+      "value": "网格"
+    },
+    {
+      "name": "vm_cover",
+      "value": "封面"
+    },
+    {
+      "name": "vm_shelf",
+      "value": "书架"
+    },
+    {
+      "name": "vm_author",
+      "value": "作者"
+    },
+    {
+      "name": "vm_genre",
+      "value": "流派"
+    },
+    {
+      "name": "vm_series",
+      "value": "丛书"
+    },
+    {
+      "name": "vm_keywords",
+      "value": "关键词"
+    },
+    {
+      "name": "vm_language",
+      "value": "语言"
+    },
+    {
+      "name": "vm_tags",
+      "value": "标签"
+    },
+    {
+      "name": "vm_publisher",
+      "value": "出版商"
+    },
+    {
+      "name": "vm_pubdate",
+      "value": "出版时间"
+    },
+    {
+      "name": "ms_subfolders",
+      "value": "包含子文件夹"
+    },
+    {
+      "name": "ms_inlib",
+      "value": "在书库中搜索"
+    },
+    {
+      "name": "ms_stop",
+      "value": "停止"
+    },
+    {
+      "name": "ms_bad_value",
+      "value": "值不正确"
+    },
+    {
+      "name": "about_pro",
+      "value": "高级功能"
+    },
+    {
+      "name": "about_pro_active",
+      "value": "Pro 已激活"
+    },
+    {
+      "name": "about_pro_info",
+      "value": "解锁方式：本地 key\n购买时间：\n订单号后四位："
+    },
+    {
+      "name": "about_pro_restore",
+      "value": "恢复购买"
+    },
+    {
+      "name": "about_pro_manage",
+      "value": "管理权益"
+    },
+    {
+      "name": "host_or_ip",
+      "value": "主机或 IP"
+    },
+    {
+      "name": "smb_share_hint",
+      "value": "SMB 共享名"
+    },
+    {
+      "name": "smb_domain_hint",
+      "value": "域/工作 组（可选）"
+    },
+    {
+      "name": "key_path_hint",
+      "value": "私钥文件路径（可选）"
+    },
+    {
+      "name": "key_pass_hint",
+      "value": "私钥口令（可选）"
+    },
+    {
+      "name": "smb_sftp_trust",
+      "value": "信任所有证书（不校验主机）"
+    },
+    {
+      "name": "dirpick_choose",
+      "value": "选择"
+    },
+    {
+      "name": "start_dir_optional",
+      "value": "起始目录（可选）"
     }
   ]
 }

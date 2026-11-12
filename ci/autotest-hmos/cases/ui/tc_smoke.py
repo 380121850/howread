@@ -4,7 +4,7 @@
 UI 词汇（zh-CN 模拟器实测，dumpLayout 文本）：
   底部 tab：首页/书架/我的书库/偏好（id: app_tab_0..3）
   首页：最近阅读 / 阅读统计 / 书签笔记 / 网上书库
-  书架：搜索 / 全文 / 最近 / 全部/未读/在读/已读/☆收藏
+  书架：搜索 / 最近 / 全部/未读/在读/已读
   阅读器：页码 "N/M"；HRTEST 事件 book_open_done / page_change_done
   退出确认：标题 退出应用（id: exit_btn_cancel / exit_btn_ok）
 """
@@ -100,7 +100,12 @@ def sm04_open_pdf_and_flip(dev, case_id, cfg, fixtures):
             dev.click_text('书架')
         # 2026-09-29: the library defaults to the shelf view (Android parity)
         # where titles are not text nodes — switch to the list view first
+        # 0.9.50: the toolbar button opens the 视图 popup (Android parity);
+        # pick 列表 to get title text nodes
         dev.click_xy(1253, 391)
+        time.sleep(0.8)
+        if not dev.click_text('列表'):
+            dev.click_text('List')
         time.sleep(1.2)
         if not dev.wait_text('big25.pdf', timeout=15):
             dev.swipe(660, 1800, 660, 800)

@@ -96,10 +96,10 @@ def _ensure_library_folder(dev, case_id, folder="Download"):
     只有 Books 与存储根,测试书所在的 Download 不在列表——依赖"根列表 Download 行"
     开书的用例(FN-07/14/16/18/34/40/41)因此找不到入口(易败分析集群 A).
     流程(源码核实):书库文件夹行「+ 添加」(无 id,_click_section_add 按 y 区间
-    定位)→ PopupMenu[添加文件夹] → ChooserDialogFragment 目录浏览器(恒打开在
-    /storage/emulated/0)→ 点 folder 行进入 → 底部 onAction[选择];配置即时刷新
-    并落盘,一次添加长期有效.已在列表返回 True;失败返回 False(调用方继续走原
-    兜底),本 helper 不抛异常."""
+    定位)→ v1.3.18+ 直达 ChooserDialogFragment 目录选择页(旧版先弹
+    PopupMenu[添加文件夹] 再打开,helper 两版兼容)→ 点 folder 行进入 →
+    底部 onAction[选择];配置即时刷新并落盘,一次添加长期有效.已在列表返回
+    True;失败返回 False(调用方继续走原兜底),本 helper 不抛异常."""
 
     def _folder_visible():
         if dev.d(text=folder).exists:
@@ -116,36 +116,58 @@ def _ensure_library_folder(dev, case_id, folder="Download"):
             if not _click_section_add(dev, "书库文件夹"):
                 dev.save_dump(case_id, "libfolder_no_add_btn")
                 return False
-        item = None
-        for _ in range(4):
-            time.sleep(1)
-            item = dev.d(text="添加文件夹")
-            if item.exists:
-                break
-            item = dev.d(text="Add folder")
-            if item.exists:
-                break
+        # v1.3.18(2026-11-11)起"＋添加"直接打开目录 chooser(ChooserDialogFragment,
+        # 标题"选择",确认按钮 onAction),不再弹中间菜单;旧版本先弹
+        # PopupMenu["添加文件夹"]。短暂等菜单项做版本探测:可见=旧版,点击进
+        # chooser;不可见=新版 chooser 已直达打开,直接进行目录选择。
+        time.sleep(1.2)
+        item = dev.d(text="添加文件夹")
         if not item.exists:
-            dev.save_dump(case_id, "libfolder_no_menu_item")
-            dev.d.press("back")
-            return False
-        item.click()
-        time.sleep(2.5)
-        # 目录浏览器恒开在 /storage/emulated/0,点 folder 行=进入该目录;
+            item = dev.d(text="Add folder")
+        if item.exists:
+            item.click()
+            time.sleep(1.5)
+        time.sleep(1.5)
+        # chooser 打开在上次浏览路径(常态即 /storage/emulated/0),点 folder 行=进入该目录;
         # 行列表同样有虚拟化:P20 上首屏只有部分目录,需滚动查找(2026-09-20 libfolder_no_entry_in_chooser 现场)
-        entry = dev.d(text=folder)
-        if not entry.exists:
-            entry = dev.d(textContains=folder)
+        def _find_entry():
+            e = dev.d(text=folder)
+            if not e.exists:
+                e = dev.d(textContains=folder)
+            return e
+
+        # chooser 列表(目录/文件混排按名排序)虚拟化且初始位置=上次记忆
+        # (11-12 P30 实证:常停中段/底段文件详情区)。结构化滚动均不可靠:
+        # scrollable=True 首中面包屑条;RecyclerView scroll.to 冷开命中离屏缓存
+        # 假返回不滚动;step 滚动按页跳越行。手势慢 swipe(0.8s,P30 实证 0.3s
+        # 快 fling 不滚)是唯一稳的:先反向回顶,再正向分屏扫描+读回,行首两轮
+        # 不变判到头退出。
+        entry = _find_entry()
         if not entry.exists:
             cw, ch = dev.d.window_size()
-            for _ in range(5):
-                dev.d.swipe(int(0.5 * cw), int(0.7 * ch), int(0.5 * cw), int(0.3 * ch), 0.3)
-                time.sleep(1.1)
-                entry = dev.d(text=folder)
-                if not entry.exists:
-                    entry = dev.d(textContains=folder)
-                if entry.exists:
+            for _ in range(8):
+                dev.d.swipe(int(0.5 * cw), int(0.30 * ch), int(0.5 * cw), int(0.70 * ch), 0.8)
+                time.sleep(0.9)
+                if _find_entry().exists:
                     break
+        if not _find_entry().exists:
+            last_first = None
+            for _ in range(16):
+                dev.d.swipe(int(0.5 * cw), int(0.70 * ch), int(0.5 * cw), int(0.25 * ch), 0.8)
+                time.sleep(1.0)
+                if _find_entry().exists:
+                    break
+                try:
+                    # 必须取列表区内首行(目录行 x=132/详情行 x=220):全局首个 text
+                    # 恒为面包屑"storage",拿它判到头会第二轮误停(11-12 实锤)
+                    m = re.search(r'text="([^"]+)"[^>]*bounds="\[(?:132|220),\d+\]', dev.d.dump_hierarchy())
+                    first = m.group(1) if m else None
+                except Exception:
+                    first = None
+                if first is not None and first == last_first:
+                    break
+                last_first = first
+        entry = _find_entry()
         if not entry.exists:
             dev.save_dump(case_id, "libfolder_no_entry_in_chooser")
             dev.d.press("back")
@@ -244,7 +266,7 @@ def _goto_browse_download(dev, case_id):
     """首页 → 我的文件 → Download 文件夹(幂等)."""
     dev.click_desc("首页") or dev.click_text("首页")
     time.sleep(1)
-    if not (dev.click_desc("我的文件") or dev.click_text("我的文件")):
+    if not (dev.click_desc("我的书库") or dev.click_text("我的书库") or dev.click_desc("我的文件") or dev.click_text("我的文件")):
         raise AssertionError("我的文件 Tab 不可达")
     time.sleep(2)
     # 先归一回根页(同 _open_reader_warm,浏览 Tab 可能停在任意子目录)
@@ -470,6 +492,26 @@ def _open_reader_bookmark_entry(dev, fixtures=None):
                 time.sleep(2)
                 continue
         if _reader_show_toolbar(dev):
+            # 2026-11-12 P30 v1.3.19 书签入口改版:pagesBookmark 不再在顶栏露出,
+            # 入口=底缘 6 键行第 3 键(bottomBar 第二行,u2 对该行全漏节点须坐标点)
+            # 开"目录|书签"面板,切"书签"Tab 后 addBookmarkNormal 才出现。
+            # 实证手动全链(添加→输入→确定→app-Bookmarks.json 落盘)功能正常。
+            # 此路径无需再点入口按钮:面板已在,返回 True 由 FN-03 添加步自点。
+            if not dev.d(resourceId=dev.pkg + ":id/pagesBookmark").exists:
+                try:
+                    _wb, _hb = dev.d.window_size()
+                    dev.d.click(int(0.551 * _wb), _hb - 40)
+                    time.sleep(2)
+                    _bt = dev.d(text="书签")
+                    if not _bt.exists:
+                        _bt = dev.d(text="Bookmark")
+                    if _bt.exists:
+                        _bt.click()
+                        time.sleep(1.5)
+                        if dev.d(resourceId=dev.pkg + ":id/addBookmarkNormal").exists:
+                            return True
+                except Exception:
+                    pass
             bm = dev.d(resourceId=dev.pkg + ":id/pagesBookmark")
             if not bm.exists:
                 bm = dev.d(resourceId=dev.pkg + ":id/onBookmarks")
@@ -662,7 +704,7 @@ def fn04_search(dev, case_id, cfg=None, fixtures=None):
     """全文搜索:我的文件根视图/Download 视图 → 搜索页 → editSearchText + searchStart."""
     with dev.step(case_id, "open_search"):
         _ensure_home(dev)
-        if not (dev.click_desc("我的文件") or dev.click_text("我的文件")):
+        if not (dev.click_desc("我的书库") or dev.click_text("我的书库") or dev.click_desc("我的文件") or dev.click_text("我的文件")):
             raise AssertionError("我的文件 Tab 不可达")
         time.sleep(2)
         # 先在根视图找入口(MI9 实测根视图才响应),找不到就滚动揭示(P20 搜索区在屏幕外)
@@ -1003,7 +1045,7 @@ def _open_reader_warm(dev, case_id, keyword):
     def _norm(s):
         return re.sub(r"[^0-9a-z]", "", (s or "").lower())
 
-    if not (dev.click_desc("我的文件") or dev.click_text("我的文件")):
+    if not (dev.click_desc("我的书库") or dev.click_text("我的书库") or dev.click_desc("我的文件") or dev.click_text("我的文件")):
         raise AssertionError("我的文件 Tab 不可达")
     time.sleep(2)
     # 先归一回根页:浏览 Tab 状态持久化,前序用例可能把它留在任意子目录,
@@ -1054,7 +1096,7 @@ def _open_reader_warm(dev, case_id, keyword):
                   % (dev.serial, keyword, got, _attempt + 1))
             _exit_reader(dev, case_id)
             time.sleep(1.5)
-            if not (dev.click_desc("我的文件") or dev.click_text("我的文件")):
+            if not (dev.click_desc("我的书库") or dev.click_text("我的书库") or dev.click_desc("我的文件") or dev.click_text("我的文件")):
                 raise AssertionError("我的文件 Tab 不可达(重试导航)")
             time.sleep(2)
             continue
@@ -1065,7 +1107,7 @@ def _open_reader_warm(dev, case_id, keyword):
               % (dev.serial, keyword, got, _attempt + 1))
         _exit_reader(dev, case_id)
         time.sleep(1.5)
-        if not (dev.click_desc("我的文件") or dev.click_text("我的文件")):
+        if not (dev.click_desc("我的书库") or dev.click_text("我的书库") or dev.click_desc("我的文件") or dev.click_text("我的文件")):
             raise AssertionError("我的文件 Tab 不可达(重试导航)")
         time.sleep(2)
     raise AssertionError("热态开书连续 3 次开错(列表 position 竞态)")
@@ -1177,10 +1219,16 @@ def _snap(dev, case_id, name):
 def _goto_tab(dev, tab, wait=2.5):
     """底部 Tab 导航(content-desc 含 " 标签",click_desc 用 descriptionContains 命中).
     如果 UI dump 不可用,回退到直接点击屏幕底部区域."""
-    # First try normal approach
-    if dev.click_desc(tab) or dev.click_text(tab):
-        time.sleep(wait)
-        return True
+    # 2026-11-12 更名跟进:新旧标签别名(新词优先)。P30 实证(1112 轮 FN-10 dump):
+    # 首页自绘 u2 树 0 文本、Tab 栏仅有 desc"书架 标签/我的书库 标签/偏好 标签"——
+    # click_text 在首页恒不中,click_desc(descriptionContains)才是正路;且旧词
+    # "书库"会 contains 误命中"我的书库 标签"落错页,故别名必须新词在前先命中先返回
+    aliases = {"我的书库": ("我的书库", "我的文件"),
+               "书架": ("书架", "书库")}.get(tab, (tab,))
+    for kw in aliases:
+        if dev.click_desc(kw) or dev.click_text(kw):
+            time.sleep(wait)
+            return True
     
     # If normal approach fails, try direct tapping at screen bottom
     try:
@@ -1188,7 +1236,9 @@ def _goto_tab(dev, tab, wait=2.5):
         # Define tab areas (approximate positions)
         tab_positions = {
             "首页": (w * 0.2, h * 0.9),
+            "书架": (w * 0.4, h * 0.9),
             "书库": (w * 0.4, h * 0.9),
+            "我的书库": (w * 0.6, h * 0.9),
             "我的文件": (w * 0.6, h * 0.9),
             "偏好": (w * 0.8, h * 0.9),
             "Home": (w * 0.2, h * 0.9),
@@ -1353,14 +1403,14 @@ def _browse_root(dev):
     """进入[我的文件]根视图(netSection 可见).
     netSection 仅在根路径显示(BrowseFragment2:1769 子目录时 GONE),前序用例可能把应用
     留在子目录,故先回 Tab 再逐级 back 到根;back 不够或误出 Tab 时重进 Tab 兜底."""
-    _goto_tab_or_fail(dev, "我的文件")
+    _goto_tab_or_fail(dev, "我的书库")
     for _ in range(10):
         if dev.d(resourceId=_rid(dev, "netSection")).exists:
             return True
         dev.d.press("back")
         time.sleep(1.2)
     # 兜底:重新进[我的文件]Tab(可能 back 误出 Tab 或层级过深)
-    _goto_tab_or_fail(dev, "我的文件")
+    _goto_tab_or_fail(dev, "我的书库")
     for _ in range(10):
         if dev.d(resourceId=_rid(dev, "netSection")).exists:
             return True
@@ -2224,7 +2274,7 @@ def fn10_library_search(dev, case_id, cfg=None, fixtures=None):
     """书库搜索:书库 Tab 搜索框输入关键词 → 命中列表 + 计数 → 清空恢复.覆盖 §3 书库搜索."""
     with dev.step(case_id, "goto_library"):
         _ensure_home(dev)
-        _goto_tab_or_fail(dev, "书库")
+        _goto_tab_or_fail(dev, "书架")
         time.sleep(1)
         if not dev.d(resourceId=_rid(dev, "filterLine")).exists:
             raise AssertionError("书库搜索框(filterLine)不可见")
@@ -2258,7 +2308,7 @@ def fn11_sort_and_filter(dev, case_id, cfg=None, fixtures=None):
     覆盖 §3 排序(15+ 比较器)+ 阅读状态筛选 chips."""
     with dev.step(case_id, "goto_library"):
         _ensure_home(dev)
-        _goto_tab_or_fail(dev, "书库")
+        _goto_tab_or_fail(dev, "书架")
         time.sleep(1)
         sb = dev.d(resourceId=_rid(dev, "sortBy"))
         if not sb.exists:
@@ -2341,7 +2391,7 @@ def fn12_view_modes(dev, case_id, cfg=None, fixtures=None):
     seen = {}
     with dev.step(case_id, "goto_library"):
         _ensure_home(dev)
-        _goto_tab_or_fail(dev, "书库")
+        _goto_tab_or_fail(dev, "书架")
         time.sleep(1)
         if not dev.d(resourceId=_rid(dev, "onGridList")).exists:
             dev.save_dump(case_id, "no_gridlist")
@@ -3770,7 +3820,7 @@ def _ensure_list_row(dev, keyword, extra_titles=()):
     # 必须确认落在书库 Tab:我的文件 Tab 也有 onGridList(打开的是书库文件夹配置对话框,
     # 真机踩坑 2026-09-13),用书库专属的 filterLine 区分
     for _ in range(2):
-        _goto_tab_or_fail(dev, "书库")
+        _goto_tab_or_fail(dev, "书架")
         time.sleep(1.5)
         if _safe_exists(dev, dev.d(resourceId=_rid(dev, "filterLine"))):
             break
@@ -4085,7 +4135,7 @@ def fn33_hidden_files(dev, case_id, cfg=None, fixtures=None):
             # 开关会触发列表重扫,netSection 短暂消失——直接进 Tab 轮询等待,
             # 不做 back 风暴(刷新期 back 会把应用退到桌面,真机踩坑 2026-09-13)
             _close_stray_dialogs(dev)
-            _goto_tab_or_fail(dev, "我的文件")
+            _goto_tab_or_fail(dev, "我的书库")
             ok = False
             deadline = time.time() + 15
             while time.time() < deadline:

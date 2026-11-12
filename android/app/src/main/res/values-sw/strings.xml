@@ -988,4 +988,6 @@
    <string name="privacy_row_title">Makampuni ya Habari ya Kifaa</string>
    <string name="privacy_policy_link">Makampuni ya Habari ya HowReadPro</string>
    <string name="mail_row_title">Barua</string>
-</resources>
+
+    <string name="label_sort">Panga</string>
+    <string name="label_view">Mwonekano</string></resources>

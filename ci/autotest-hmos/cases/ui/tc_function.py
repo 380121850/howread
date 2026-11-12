@@ -6,7 +6,7 @@ UI 地图（Pura 90 模拟器 1320x2856，zh-CN；坐标来自 dumpLayout 实测
                         1113=阅读设置 1239=标注/最近
   底部 y≈2569：快滚滑轨（拖动换页）
   偏好页：退出确认对话框 行 + 右侧 Toggle（_click_toggle_near 定位）
-  书库页：搜索框(hint=搜索)、全文 chip、筛选 chips、行内 ☆ 收藏
+  书库页：搜索框(hint=搜索)、筛选 chips(全部/未读/在读/已读)、行内 ☆ 收藏
   我的文件：网上书库(OPDS)/WebDAV/SMB/SFTP/书库文件夹 分区
 翻页通道：音量键（keyEvent 16/17，inputConsumer）——注入滑动到不了 Swiper。
 """
@@ -59,7 +59,12 @@ def _open_book(dev, title, expect_pages=None, timeout=30):
     if not dev.wait_text(title, 12):
         # 2026-09-29: shelf view is the default (Android parity) and has no
         # title text nodes — fall back to the list view via the view toggle
+        # 0.9.50: the toolbar button opens the 视图 popup (Android parity);
+        # pick 列表 to get title text nodes
         dev.click_xy(1253, 391)
+        time.sleep(0.8)
+        if not dev.click_text('列表'):
+            dev.click_text('List')
         time.sleep(1.2)
         if not dev.wait_text(title, 8):
             dev.swipe(660, 1800, 660, 800)
@@ -479,12 +484,14 @@ def fn08_reading_stats(dev, case_id, cfg, fixtures):
 # ------------------------------------------------------------ library
 def fn09_library_search(dev, case_id, cfg, fixtures):
     _ensure_home(dev, cfg)
-    with dev.step(case_id, 'full-text search across library'):
+    with dev.step(case_id, 'library title filter'):
         dev.click_id('app_tab_1') or dev.click_text('书库')
-        if not _wait_any(dev, ['全文', 'Full text', 'Full-text'], 8):
-            raise TestFail('library search chip not visible')
-        dev.click_text('全文') or dev.click_text('Full text') or dev.click_text('Full-text')
-        time.sleep(0.8)
+        # 2026-11-12 (0.9.54): the shelf 全文 chip is gone — Android parity,
+        # the shelf keeps only the 4 reading-status chips. The search box now
+        # live-filters titles as you type: a non-matching query must empty
+        # the list into the lib_empty_import hint.
+        if dev.exists_text('还没有阅读记录') or dev.exists_text('No reading history'):
+            raise TestFail('library unexpectedly empty before filter test')
         a = dev.find(hint='搜索')
         if not a:
             a = dev.find(text='搜索')
@@ -500,17 +507,13 @@ def fn09_library_search(dev, case_id, cfg, fixtures):
         dev.hilog_clear()
         dev.click_xy(x, y)
         time.sleep(0.8)
-        dev.shell('uitest uiInput text Alice')
-        time.sleep(1.0)
-        dev.key('Back')  # dismiss keyboard
-        time.sleep(0.6)
-        # The 全文 chip is the RUN toggle (Index.ets: tap runs runLibSearch,
-        # tap again while busy cancels) — the first tap only armed the mode.
-        dev.click_text('全文') or dev.click_text('Full text') or dev.click_text('Full-text')
-        ev = dev.wait_event('lib_search_done', timeout=60)
-        if not ev or int(ev['kv'].get('hits', '0')) < 1:
-            dev.save_dump('lib_search_fail')
-            raise TestFail('lib_search_done wrong: %s' % (ev and ev['raw']))
+        dev.shell('uitest uiInput text zzzzqq')
+        time.sleep(1.2)
+        if not _wait_any(dev, ['还没有阅读记录', 'No reading history'], 8):
+            dev.save_dump('lib_filter_fail')
+            raise TestFail('library title filter did not empty the list')
+        # no restore needed: the next case's _ensure_home force-stops and
+        # cold-starts the app, resetting the in-memory query
 
 
 def fn10_browse_files(dev, case_id, cfg, fixtures):
@@ -533,6 +536,13 @@ def fn11_star(dev, case_id, cfg, fixtures):
     _ensure_home(dev, cfg)
     with dev.step(case_id, 'star a library row'):
         dev.click_id('app_tab_1') or dev.click_text('书库')
+        # 0.9.50: the ☆ 收藏 chip left the chips row (Android parity); row
+        # stars are Text ☆ but only in the list view — switch first.
+        dev.click_xy(1253, 391)
+        time.sleep(0.8)
+        if not dev.click_text('列表'):
+            dev.click_text('List')
+        time.sleep(1.2)
         if not dev.wait_text('☆', timeout=8):
             raise TestFail('star markers not visible')
         dev.hilog_clear()
@@ -580,7 +590,8 @@ def _fill_webdav_dialog(dev, ts, name='CI-WebDAV'):
     Password, Start dir; buttons Test/Browse dirs/Close/Add — hints/buttons
     are hardcoded English regardless of UI language)."""
     _input_field(dev, value=ts.get('webdav_url', ''), hint='http')
-    _input_field(dev, value=name, hint='MyNAS')
+    # 0.9.53: the name hint is 名称 (Android parity); MyNAS was the old hint
+    _input_field_any(dev, value=name, hints=['MyNAS', '名称', 'Name'])
     _input_field_any(dev, value=ts.get('user', ''), hints=['Account', '账号'])
     _input_field_any(dev, value=ts.get('password', ''), hints=['Password', '密码'])
     _hide_kb(dev)
@@ -616,16 +627,17 @@ def fn13_webdav_browse(dev, case_id, cfg, fixtures):
         _open_myfiles_webdav_add(dev)
         _fill_webdav_dialog(dev, ts)
         dev.hilog_clear()
-        # The my-files page has a Text 'Add' per section header; the
-        # dialog's own Add is the only one rendered as type Button.
-        add_btn = None
-        for n in dev._walk(dev.dump()):
-            a = n.get('attributes', {})
-            if a.get('text') in ('Add', '添加') and a.get('type') == 'Button':
-                add_btn = a
-                break
-        if not add_btn or not dev._click_attrs(add_btn):
-            raise TestFail('dialog Add button not found')
+        # 0.9.53: the dialog footer 添加 is a Text with id dav_btn_add;
+        # fall back to the old type==Button scan for older builds.
+        if not dev.click_id('dav_btn_add'):
+            add_btn = None
+            for n in dev._walk(dev.dump()):
+                a = n.get('attributes', {})
+                if a.get('text') in ('Add', '添加') and a.get('type') == 'Button':
+                    add_btn = a
+                    break
+            if not add_btn or not dev._click_attrs(add_btn):
+                raise TestFail('dialog Add button not found')
         time.sleep(1.5)
         # server card now listed on my-files; tap it to open the panel
         if not dev.click_text('CI-WebDAV'):
@@ -661,7 +673,7 @@ def fn14_smb_test(dev, case_id, cfg, fixtures):
         if not dev.exists_text('testbooks'):
             _click_add_after(dev, 'SMB')
             # zh-hinted dialog: 显示名（可选）/主机/445/共享名/域/账号/密码
-            _input_field_any(dev, value='CI-SMB', hints=['显示名', 'Name'])
+            _input_field_any(dev, value='CI-SMB', hints=['显示名', 'Name', '名称'])
             _input_field_any(dev, value=ts.get('host', ''), hints=['主机', 'Host'])
             _input_field_any(dev, value=ts.get('smb_share', 'testbooks'),
                              hints=['共享名', 'Share'])
@@ -684,7 +696,7 @@ def fn15_sftp_test(dev, case_id, cfg, fixtures):
         if not dev.wait_text('SFTP', timeout=8):
             raise TestFail('SFTP section not visible')
         _click_add_after(dev, 'SFTP')
-        _input_field_any(dev, value='CI-SFTP', hints=['显示名', 'Name'])
+        _input_field_any(dev, value='CI-SFTP', hints=['显示名', 'Name', '名称'])
         _input_field_any(dev, value=ts.get('host', ''), hints=['主机', 'Host'])
         _input_field_any(dev, value=str(ts.get('sftp_port', 22)), hints=['22', 'Port'])
         _input_field_any(dev, value=ts.get('user', ''), hints=['账号', 'Account'])
@@ -844,7 +856,7 @@ ALL = [
     ('FN-06', '字号调节', fn06_font_size),
     ('FN-07', '夜间模式切换', fn07_night_mode),
     ('FN-08', '阅读统计记录', fn08_reading_stats),
-    ('FN-09', '库内全文搜索', fn09_library_search),
+    ('FN-09', '书库搜索（标题过滤）', fn09_library_search),
     ('FN-10', '我的文件目录浏览', fn10_browse_files),
     ('FN-11', '收藏/取消收藏', fn11_star),
     ('FN-12', 'WebDAV 测试连接', fn12_webdav_test),

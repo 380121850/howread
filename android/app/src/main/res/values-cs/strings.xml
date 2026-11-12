@@ -988,4 +988,6 @@
    <string name="privacy_row_title">Zásady ochrany osobních údajů</string>
    <string name="privacy_policy_link">Zásady ochrany osobních údajů HowReadPro</string>
    <string name="mail_row_title">E-mail</string>
-</resources>
+
+    <string name="label_sort">Seřadit</string>
+    <string name="label_view">Zobrazení</string></resources>

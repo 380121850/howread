@@ -14,7 +14,7 @@ import {
 import {
   saveRecentBook, getRecentBooks, getRecentBooksStarred, toggleStar,
   exportRecentBooks, replaceRecentBooks, setBookStatus, setBooksStatus,
-  RecentBook
+  RecentBook, RECENT_VIEW_LIMIT
 } from '../model/ReadingProgress';
 import { exportBookmarks, replaceBookmarks, getBookmarks, removeBookmark, addBookmark, Bookmark } from '../model/Bookmarks';
 import { OpenPrefetch } from '../model/OpenPrefetch';
@@ -28,7 +28,7 @@ import { getTagList, addTagToBook, removeTagFromBook, getSeriesList } from '../m
 import { getReadingStats, getDailyStats, getMonthlyStats, clearReadingStats, ReadingStatsData, DayStat, MonthStat } from '../model/ReadingStats';
 import { fetchOpds, OpdsEntry } from '../model/Opds';
 import { OpdsServer, DavServer, SmbServer, SftpServer, getOpdsServers, saveOpdsServer, removeOpdsServer, getDavServers, saveDavServer, removeDavServer, getSmbServers, saveSmbServer, removeSmbServer, getSftpServers, saveSftpServer, removeSftpServer, LibFolder, getLibFolders, saveLibFolders } from '../model/Servers';
-import { SyncConfig, SyncLogEntry, SYNC_CONFLICTS, defaultSyncConfig, loadSyncConfig, saveSyncConfig, getSyncLog, runSync, testSyncConnection, syncAiProfiles } from '../model/Sync';
+import { SyncConfig, SyncLogEntry, SYNC_CONFLICTS, defaultSyncConfig, loadSyncConfig, saveSyncConfig, getSyncLog, runSync, testSyncConnection, syncAiProfiles, syncBookStateMark } from '../model/Sync';
 import { AiConfig, AiMessage, loadAiConfig, saveAiConfig, chatCompletion, listModels, testChat, aiConfigReady, AI_PROVIDERS, AI_PROVIDER_URLS, PROTOCOL_OPENAI, PROTOCOL_ANTHROPIC, PROTOCOL_GOOGLE, defaultUrl, lastTruncated } from '../model/AiClient';
 import { AiVendorEntry, listVendors, activeVendorName, activeVendor, saveVendor, deleteVendor } from '../model/AiVendors';
 import { addNote, AiNote } from '../model/Notes';
@@ -62,6 +62,14 @@ import {
 const THEME_LABELS: Resource[] = [$r('app.string.set_theme_light'), $r('app.string.set_theme_dark'), $r('app.string.set_theme_oled'), $r('app.string.set_theme_ink')];
 const TAB_ICONS: Resource[] = [$r('app.media.ic_home'), $r('app.media.ic_book_open'), $r('app.media.ic_folder'), $r('app.media.ic_settings')];
 const TAB_NAMES: Resource[] = [$r('app.string.tab_home'), $r('app.string.tab_library'), $r('app.string.tab_my_files'), $r('app.string.tab_prefs')];
+/* 0.9.50: 书架排序弹单 (Android SORT_BY order, SearchFragment2.sortByPopup) */
+const SORT_IDS: number[] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+const SORT_LABELS: Resource[] = [$r('app.string.libsort_folder'), $r('app.string.libsort_filename'), $r('app.string.libsort_size'), $r('app.string.libsort_date'), $r('app.string.libsort_title'), $r('app.string.libsort_author'), $r('app.string.libsort_series'), $r('app.string.libsort_series_no'), $r('app.string.libsort_pages'), $r('app.string.libsort_ext'), $r('app.string.libsort_language'), $r('app.string.libsort_pubdate'), $r('app.string.libsort_publisher'), $r('app.string.libsort_recent')];
+/* 0.9.50: 书架视图弹单 (SearchFragment2.popupMenu names/icons order; Android
+ * 标签 reuses the 关键词 tags icon) */
+const VIEW_IDS: number[] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+const VIEW_MENU_LABELS: Resource[] = [$r('app.string.vm_list'), $r('app.string.vm_compact'), $r('app.string.vm_grid'), $r('app.string.vm_cover'), $r('app.string.vm_shelf'), $r('app.string.vm_author'), $r('app.string.vm_genre'), $r('app.string.vm_series'), $r('app.string.vm_keywords'), $r('app.string.vm_language'), $r('app.string.vm_tags'), $r('app.string.vm_publisher'), $r('app.string.vm_pubdate')];
+const VIEW_MENU_ICONS: Resource[] = [$r('app.media.ic_view_list'), $r('app.media.ic_view_compact'), $r('app.media.ic_view_grid'), $r('app.media.ic_view_cover'), $r('app.media.ic_view_shelf'), $r('app.media.ic_view_author'), $r('app.media.ic_view_genre'), $r('app.media.ic_view_series'), $r('app.media.ic_view_keywords'), $r('app.media.ic_view_language'), $r('app.media.ic_view_keywords'), $r('app.media.ic_view_publisher'), $r('app.media.ic_view_pubdate')];
 const THEME_PRESETS: string[] = ['#3949AB', '#1565C0', '#00897B', '#2E7D32', '#6D4C41', '#455A64', '#AD1457', '#37474F'];
 const ACCENT_PRESETS: string[] = ['#03A9F4', '#FF4081', '#7CB342', '#FFB300', '#9575CD', '#4DD0E1', '#F06292', '#90A4AE'];
 const FORMAT_ROWS: string[][] = [['pdf', 'PDF'], ['epub', 'EPUB'], ['fb2', 'FB2'], ['txtmd', 'TXT/MD'], ['mobi', 'MOBI/AZW/PRC'], ['djvu', 'DJVU'], ['xps', 'XPS'], ['doc', 'DOC/DOCX'], ['rtf', 'RTF'], ['odt', 'ODT'], ['cbz', 'CBZ/CBR'], ['zip', 'ZIP'], ['html', 'HTML']];
@@ -173,7 +181,9 @@ struct Index {
   @State showDavBrowse: boolean = false;
   @State davBrowsePath: string = '';
   @State davBrowseDirs: string[] = [];
-  @State libGroupBy: number = 0;   /* 分组 chip: 0=off 1=author 2=series 3=genre */
+  /* 0.9.50: grouping = view-menu modes: 0=off 1=作者 2=丛书 3=流派(genre)
+   * 4=关键词/标签(tags) 5=语言 6=出版商 7=出版时间 (5..7 have no metadata yet) */
+  @State libGroupBy: number = 0;
 
   // ---- Phase 1: Android-aligned shell (top bar + 4 tabs + left drawer + FAB) ----
   /** top bar title = current tab name (Android 18sp bold white) */
@@ -196,10 +206,7 @@ struct Index {
   @State libStatusFilter: number = -1;
   /** view mode: 0=list 1=compact 2=grid 3=cover 4=bookshelf */
   @State libViewMode: number = 4;
-  /* ---- Round 6: full-text search + device scan + missing cleanup ---- */
-  @State libSearchBusy: boolean = false;
-  @State libSearchProgress: string = '';
-  @State libSearchHits: LibSearchHit[] = [];
+  /* ---- device scan + missing cleanup (Round 6) ---- */
   @State missingCount: number = 0;
   private scanBusy: boolean = false;
   /* Round 6: profile management */
@@ -246,7 +253,24 @@ struct Index {
   @StorageProp('accentColorHex') stAccentHex: string = '#03A9F4';
   @StorageProp('fontScale') stFontScale: number = 1.0;
   /** sort mode: 0=recent 1=name 2=date 3=author 4=series */
-  @State libSortMode: number = 0;
+  /* 0.9.50: libSortMode follows Android SORT_BY indexes (0=文件夹..13=最近);
+   * default 3=时间 like Android AppState.sortBy=DATA, descending (newest first) */
+  @State libSortMode: number = 3;
+  @State libSortAsc: boolean = false;
+  @State showSortMenu: boolean = false;
+  @State showViewMenu: boolean = false;
+  /* cached file sizes for the 文件大小 sort (sync stat, guarded, per path) */
+  private sizeCache: Map<string, number> = new Map();
+  /* 0.9.51: 多文档搜索 (Android MultyDocSearchDialog) */
+  @State showMultySearch: boolean = false;
+  @State msPath: string = '';
+  @State msSub: boolean = true;
+  @State msInLib: boolean = false;
+  @State msText: string = '';
+  @State msBusy: boolean = false;
+  @State msProgress: string = '';
+  @State msResults: LibSearchHit[] = [];
+  private msCancel: boolean = false;
   /** batch selection mode (long-press a row to enter) */
   @State selMode: boolean = false;
   /** selected book paths in batch mode */
@@ -408,6 +432,16 @@ struct Index {
   @State sftpEditKeyPath: string = '';
   @State sftpEditKeyPass: string = '';
   @State sftpEditTrustAll: boolean = false;
+  /* 0.9.53: Android AddRemoteDialog parity fields (起始目录 + SMB trust) */
+  @State smbEditStart: string = '';
+  @State smbEditTrustAll: boolean = false;
+  @State sftpEditStart: string = '';
+  /* 0.9.53: SMB/SFTP 起始目录 remote dir picker (浏览目录) */
+  @State showRemoteDirPick: boolean = false;
+  @State rdpProto: string = '';
+  @State rdpPath: string = '';
+  @State rdpDirs: string[] = [];
+  @State rdpStatus: string = '';
   @State sftpTestStatus: string = '';
   /** SMB/SFTP cloud browse panels (netSection 2 / 3) */
   @State smbSelected: number = -1;
@@ -1106,31 +1140,6 @@ struct Index {
     }
   }
 
-  /** Run the full-text search over the whole library with progress. */
-  async runLibSearch(): Promise<void> {
-    const q: string = this.libQuery.trim();
-    if (q.length === 0 || this.libSearchBusy) {
-      return;
-    }
-    this.libSearchBusy = true;
-    this.libSearchHits = [];
-    this.libSearchProgress = '0/' + this.recentBooks.length;
-    const hits: LibSearchHit[] = await searchLibraryText(this.recentBooks, q, (done: number, total: number) => {
-      this.libSearchProgress = done + '/' + total;
-      return this.libSearchBusy; /* false when cancelled */
-    });
-    this.libSearchHits = hits;
-    this.libSearchBusy = false;
-    promptAction.showToast({ message: `\u5168\u6587\u641C\u7D22\uFF1A${hits.length} \u5904\u547D\u4E2D` });
-    console.info(`[Index] Full-text search '${q}': ${hits.length} hits`);
-    tlog('lib_search_done', 'hits=' + hits.length);
-  }
-
-  /** Cancel a running full-text search. */
-  cancelLibSearch(): void {
-    this.libSearchBusy = false;
-  }
-
   /** Open a full-text hit at its page. */
   openLibHit(hit: LibSearchHit): void {
     this.prefetchOpen(hit.path);
@@ -1716,6 +1725,19 @@ struct Index {
         this.buildStatsChartDialog()
       }
 
+      // ---- 0.9.50: 书架排序/视图弹单 (Android MyPopupMenu parity) ----
+      if (this.showSortMenu) {
+        this.buildSortMenuDialog()
+      }
+      if (this.showViewMenu) {
+        this.buildViewMenuDialog()
+      }
+
+      // ---- 0.9.51: 多文档搜索 (Android MultyDocSearchDialog) ----
+      if (this.showMultySearch) {
+        this.buildMultySearchDialog()
+      }
+
       // ---- AI 大模型接入 dialog (Android hr08) ----
       if (this.showAiDialog) {
         this.buildAiDialog()
@@ -1760,6 +1782,11 @@ struct Index {
       }
       if (this.showSftpEdit) {
         this.buildSftpEditDialog()
+      }
+
+      // ---- 0.9.53: SMB/SFTP 起始目录浏览 ----
+      if (this.showRemoteDirPick) {
+        this.buildRemoteDirPickDialog()
       }
 
       // ---- WebDAV 同步 dialog (hr09) ----
@@ -2842,6 +2869,8 @@ tlog('download_start', 'name=' + fileName);    try {
       this.smbEditDomain = s.domain;
       this.smbEditUser = s.user;
       this.smbEditPass = s.password;
+      this.smbEditStart = s.startPath ? s.startPath : '';
+      this.smbEditTrustAll = s.trustAll ? true : false;
       this.smbEditIdx = idx;
     } else {
       this.smbEditName = '';
@@ -2851,6 +2880,8 @@ tlog('download_start', 'name=' + fileName);    try {
       this.smbEditDomain = '';
       this.smbEditUser = '';
       this.smbEditPass = '';
+      this.smbEditStart = '';
+      this.smbEditTrustAll = false;
       this.smbEditIdx = -1;
     }
     this.showSmbEdit = true;
@@ -2890,7 +2921,9 @@ tlog('download_start', 'name=' + fileName);    try {
       domain: this.smbEditDomain.trim(),
       name: this.smbEditName.trim().length > 0 ? this.smbEditName.trim() : host,
       user: this.smbEditUser.trim(),
-      password: this.smbEditPass
+      password: this.smbEditPass,
+      trustAll: this.smbEditTrustAll,
+      startPath: this.smbEditStart.trim()
     };
     saveSmbServer(getContext(this), s, original).then(() => {
       this.showSmbEdit = false;
@@ -2925,11 +2958,13 @@ tlog('download_start', 'name=' + fileName);    try {
       this.sftpEditKeyPath = s.keyPath;
       this.sftpEditKeyPass = s.keyPass;
       this.sftpEditTrustAll = s.trustAll;
+      this.sftpEditStart = s.startPath ? s.startPath : '';
       this.sftpEditIdx = idx;
     } else {
       this.sftpEditName = '';
       this.sftpEditHost = '';
       this.sftpEditPort = '22';
+      this.sftpEditStart = '';
       this.sftpEditUser = '';
       this.sftpEditPass = '';
       this.sftpEditKeyPath = '';
@@ -3013,6 +3048,7 @@ tlog('download_start', 'name=' + fileName);    try {
       keyPath: this.sftpEditKeyPath.trim(),
       keyPass: this.sftpEditKeyPass,
       trustAll: this.sftpEditTrustAll,
+      startPath: this.sftpEditStart.trim(),
       fingerprint: prevFp
     };
     saveSftpServer(getContext(this), s, original).then(() => {
@@ -3056,11 +3092,14 @@ tlog('download_start', 'name=' + fileName);    try {
   /** Tap an SMB server row: open its browse panel (netSection 2). */
   private smbConnectServer(idx: number): void {
     this.smbSelected = idx;
-    this.smbPath = '';
+    /* 0.9.53: honor the configured 起始目录 (start path) */
+    const start: string = idx >= 0 && idx < this.smbServers.length && this.smbServers[idx].startPath
+      ? this.smbServers[idx].startPath : '';
+    this.smbPath = start;
     this.netSection = 2;
     this.netBrowseTitle = idx >= 0 && idx < this.smbServers.length ? this.smbServers[idx].name : 'SMB';
     this.activeOverlay = 2;
-    this.smbBrowse('');
+    this.smbBrowse(start);
   }
 
   /** List a directory of the selected SMB server (path relative to share). */
@@ -3172,11 +3211,14 @@ tlog('download_start', 'name=' + fileName);    try {
   /** Tap an SFTP server row: open its browse panel (netSection 3). */
   private sftpConnectServer(idx: number): void {
     this.sftpSelected = idx;
-    this.sftpPath = '/';
+    /* 0.9.53: honor the configured 起始目录 (start path) */
+    const start: string = idx >= 0 && idx < this.sftpServers.length && this.sftpServers[idx].startPath
+      ? this.sftpServers[idx].startPath : '/';
+    this.sftpPath = start;
     this.netSection = 3;
     this.netBrowseTitle = idx >= 0 && idx < this.sftpServers.length ? this.sftpServers[idx].name : 'SFTP';
     this.activeOverlay = 2;
-    this.sftpBrowse('/');
+    this.sftpBrowse(start);
   }
 
   /** List an SFTP directory of the selected server (absolute path). */
@@ -4121,15 +4163,15 @@ tlog('download_start', 'name=' + fileName);    try {
    * kind: 0=书籍总数 1=已读书籍 2=总阅读时间 3=今日阅读 4=阅读速度.
    * Values are read via statValue() inside build so @State changes re-render. */
   @Builder
-  statCard(kind: number) {
+  statCard(kind: number, h: number) {
     Column({ space: 6 }) {
       Text(this.statValue(kind))
         .fontSize(24).fontWeight(FontWeight.Bold).fontColor(this.thm()).maxLines(1)
       Text(this.statLabel(kind))
         .fontSize(13).fontColor(this.txtMid()).maxLines(1)
     }
-    .layoutWeight(1)
-    .height(96)
+    .width('100%')
+    .height(h)
     .justifyContent(FlexAlign.Center)
     .backgroundColor(this.cardBg())
     .borderRadius(4)
@@ -4279,7 +4321,7 @@ tlog('download_start', 'name=' + fileName);    try {
         this.sectionHeader(this.L($r('app.string.sec_recent')), 10)
         Scroll() {
           Row({ space: 12 }) {
-            ForEach(this.recentBooks, (book: RecentBook) => {
+            ForEach(this.recentBooks.slice(0, RECENT_VIEW_LIMIT), (book: RecentBook) => {
               this.coverTile(book)
             }, (item: RecentBook) => item.path)
           }
@@ -4348,8 +4390,8 @@ tlog('download_start', 'name=' + fileName);    try {
           .width('100%')
         }
 
-        /* 阅读统计: 3 + 2 white cards; 0.9.21: gear = one-tap stats clear
-         * (Android 阅读统计一键清空, CHANGES 2026-10-06) */
+        /* 阅读统计: 2x2 + 右侧整列白卡（0.9.49 五框对齐）; 0.9.21: gear =
+         * one-tap stats clear (Android 阅读统计一键清空, CHANGES 2026-10-06) */
         Row() {
           Text(this.L($r('app.string.sec_stats')) + ' (Pro)')
             .fontSize(17).fontWeight(FontWeight.Medium).fontColor(this.txtPri())
@@ -4362,18 +4404,28 @@ tlog('download_start', 'name=' + fileName);    try {
         }
         .width('94%')
         .padding({ top: 14, bottom: 8 })
+        /* 五框对齐（用户要求，对齐安卓 fragment_dashboard.xml）：三列等宽 ->
+         * [书籍总数][已读书籍][总阅读时间]
+         * [今日阅读][阅读速度][  (占两行)  ]
+         * 右框高度 = 96 x 2 + 10 间距 = 202。 */
         Row({ space: 10 }) {
-          this.statCard(0)
-          this.statCard(1)
-          this.statCard(2)
+          Column({ space: 10 }) {
+            this.statCard(0, 96)
+            this.statCard(3, 96)
+          }
+          .layoutWeight(1)
+          Column({ space: 10 }) {
+            this.statCard(1, 96)
+            this.statCard(4, 96)
+          }
+          .layoutWeight(1)
+          Column() {
+            this.statCard(2, 202)
+          }
+          .layoutWeight(1)
         }
         .width('94%')
-        Row({ space: 10 }) {
-          this.statCard(3)
-          this.statCard(4)
-        }
-        .width('94%')
-        .margin({ top: 10 })
+        .alignItems(VerticalAlign.Top)
 
         /* 我的文件: quick circles for every configured source (Android
            buildFileSources: WebDAV/SMB/SFTP servers + library folders;
@@ -4422,6 +4474,363 @@ tlog('download_start', 'name=' + fileName);    try {
     .height('100%')
     .backgroundColor(this.inputBg())
     .scrollBar(BarState.Off)
+  }
+
+  /** 0.9.50: current view icon for the 视图 button (Android sets
+   * onGridList.setImageResource to the selected mode's icon). */
+  viewIcon(): Resource {
+    if (this.libGroupBy === 1) {
+      return $r('app.media.ic_view_author');
+    }
+    if (this.libGroupBy === 2) {
+      return $r('app.media.ic_view_series');
+    }
+    if (this.libGroupBy === 3) {
+      return $r('app.media.ic_view_genre');
+    }
+    if (this.libGroupBy === 4) {
+      return $r('app.media.ic_view_keywords');
+    }
+    if (this.libGroupBy === 5) {
+      return $r('app.media.ic_view_language');
+    }
+    if (this.libGroupBy === 6) {
+      return $r('app.media.ic_view_publisher');
+    }
+    if (this.libGroupBy === 7) {
+      return $r('app.media.ic_view_pubdate');
+    }
+    return this.libViewMode === 0 ? $r('app.media.ic_view_list')
+      : this.libViewMode === 1 ? $r('app.media.ic_view_compact')
+        : this.libViewMode === 2 ? $r('app.media.ic_view_grid')
+          : this.libViewMode === 3 ? $r('app.media.ic_view_cover')
+            : $r('app.media.ic_view_shelf');
+  }
+
+  /* view-menu id (>=5) -> libGroupBy value; 0..4 = layout modes */
+  viewMenuGroup(id: number): number {
+    return id === 5 ? 1 : id === 6 ? 3 : id === 7 ? 2 : id === 8 ? 4
+      : id === 9 ? 5 : id === 10 ? 4 : id === 11 ? 6 : 7;
+  }
+
+  viewMenuSelected(id: number): boolean {
+    if (id <= 4) {
+      return this.libGroupBy === 0 && this.libViewMode === id;
+    }
+    /* 标签(10) shares the tags group with 关键词(8); highlight 关键词 only */
+    return id !== 10 && this.libGroupBy === this.viewMenuGroup(id);
+  }
+
+  applySort(id: number): void {
+    this.libSortMode = id;
+    this.showSortMenu = false;
+  }
+
+  applyViewMenu(id: number): void {
+    if (id <= 4) {
+      this.libViewMode = id;
+      this.libGroupBy = 0;
+    } else {
+      this.libGroupBy = this.viewMenuGroup(id);
+      /* Android clears the search box when switching to a grouping mode */
+      this.libQuery = '';
+    }
+    this.showViewMenu = false;
+  }
+
+  /* folder part of a book path (Android PATH sort/group key) */
+  folderOf(p: string): string {
+    const s: string = p.indexOf('file://') === 0 ? p.substring(7) : p;
+    const i: number = s.lastIndexOf('/');
+    return i > 0 ? s.substring(0, i) : '/';
+  }
+
+  /* file size for the 文件大小 sort (cached; remote/missing = 0) */
+  fileSizeOf(p: string): number {
+    if (this.sizeCache.has(p)) {
+      return this.sizeCache.get(p)!;
+    }
+    let sz: number = 0;
+    try {
+      if (p.indexOf('remote://') !== 0) {
+        const st: fs.Stat = fs.statSync(p);
+        sz = st.size;
+      }
+    } catch (err) {
+      sz = 0;
+    }
+    this.sizeCache.set(p, sz);
+    return sz;
+  }
+
+  /** 0.9.50: 书架排序弹单 (Android sortByPopup: plain text list, SORT_BY order). */
+  @Builder
+  buildSortMenuDialog() {
+    Stack({ alignContent: Alignment.TopEnd }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showSortMenu = false;
+        })
+      Column({ space: 2 }) {
+        ForEach(SORT_IDS, (id: number) => {
+          Row({ space: 8 }) {
+            Text(SORT_LABELS[id])
+              .fontSize(14).fontColor(this.libSortMode === id ? this.thm() : this.txtPri())
+              .layoutWeight(1)
+            if (this.libSortMode === id) {
+              Image($r('app.media.ic_check'))
+                .width(16).height(16).fillColor(this.thm())
+            }
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+          .borderRadius(6)
+          .onClick(() => {
+            this.applySort(id);
+          })
+        }, (id: number) => `sortm_${id}`)
+      }
+      .width(200)
+      .padding(8)
+      .backgroundColor(this.cardBg())
+      .borderRadius(8)
+      .shadow({ radius: 6, color: '#33000000', offsetX: 0, offsetY: 2 })
+      .margin({ top: 100, right: 12 })
+    }
+    .width('100%').height('100%')
+  }
+
+  /** 0.9.50: 书架视图弹单 (Android popupMenu: icon + label rows, 13 modes). */
+  @Builder
+  buildViewMenuDialog() {
+    Stack({ alignContent: Alignment.TopEnd }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showViewMenu = false;
+        })
+      Column({ space: 2 }) {
+        ForEach(VIEW_IDS, (id: number) => {
+          Row({ space: 10 }) {
+            Image(VIEW_MENU_ICONS[id])
+              .width(18).height(18)
+              .fillColor(this.viewMenuSelected(id) ? this.thm() : this.txtMid())
+            Text(VIEW_MENU_LABELS[id])
+              .fontSize(14).fontColor(this.viewMenuSelected(id) ? this.thm() : this.txtPri())
+              .layoutWeight(1)
+            if (this.viewMenuSelected(id)) {
+              Image($r('app.media.ic_check'))
+                .width(16).height(16).fillColor(this.thm())
+            }
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+          .borderRadius(6)
+          .onClick(() => {
+            this.applyViewMenu(id);
+          })
+        }, (id: number) => `viewm_${id}`)
+      }
+      .width(220)
+      .padding(8)
+      .backgroundColor(this.cardBg())
+      .borderRadius(8)
+      .shadow({ radius: 6, color: '#33000000', offsetX: 0, offsetY: 2 })
+      .margin({ top: 100, right: 12 })
+    }
+    .width('100%').height('100%')
+  }
+
+  /** 0.9.51: open the multi-doc search dialog (default path = storage root). */
+  private openMultySearch(): void {
+    if (this.msPath.length === 0) {
+      this.msPath = this.resolveFolderPath(this.settings.rootFolder);
+      if (this.msPath.length === 0) {
+        this.msPath = getContext(this).filesDir;
+      }
+    }
+    this.showMultySearch = true;
+  }
+
+  /** 0.9.51: run the multi-doc search — folder walk (sub-folders optional) or
+   *  the whole library, per-file first-match results (Android MultyDocSearch). */
+  private async runMultySearch(): Promise<void> {
+    const q: string = this.msText.trim();
+    if (q.length === 0) {
+      promptAction.showToast({ message: this.L($r('app.string.ms_bad_value')) });
+      return;
+    }
+    if (this.msBusy) {
+      return;
+    }
+    this.msBusy = true;
+    this.msCancel = false;
+    this.msResults = [];
+    let books: RecentBook[] = [];
+    if (this.msInLib) {
+      books = this.getLibraryBooks();
+    } else {
+      const ctx = getContext(this);
+      const root: string = this.msPath.length > 0 ? this.msPath : this.resolveFolderPath(this.settings.rootFolder);
+      const hits: ScanHit[] = scanFolderBooks(ctx, root, this.msSub ? 3 : 0,
+        parseScanFormats(this.settings.scanFormats), this.settings.skipNoMediaFolders);
+      for (let i = 0; i < hits.length; i++) {
+        const b: RecentBook = {
+          path: hits[i].path,
+          title: hits[i].name,
+          page: 0,
+          totalPages: 0,
+          lastRead: '',
+          star: false,
+          coverPath: '',
+          author: '',
+          tags: [],
+          series: '',
+          genre: '',
+          status: 0
+        };
+        books.push(b);
+      }
+    }
+    this.msProgress = '0/' + books.length;
+    const found: LibSearchHit[] = await searchLibraryText(books, q, (done: number, total: number) => {
+      let cur: string = '';
+      if (done < books.length) {
+        cur = books[done].title;
+      }
+      this.msProgress = done < total ? '[' + (done + 1) + '/' + total + '] ' + cur : done + '/' + total;
+      return !this.msCancel;
+    });
+    /* Android lists one line per file with the first matching page */
+    const seen: Record<string, boolean> = {};
+    const per: LibSearchHit[] = [];
+    for (let i = 0; i < found.length; i++) {
+      if (!seen[found[i].path]) {
+        seen[found[i].path] = true;
+        per.push(found[i]);
+      }
+    }
+    this.msResults = per;
+    if (per.length > 0) {
+      this.msProgress = '';
+    }
+    this.msBusy = false;
+    tlog('multy_search_done', 'hits=' + found.length + ' files=' + per.length);
+  }
+
+  /** 0.9.51: 多文档搜索 dialog (dialog_multy_search.xml parity). */
+  @Builder
+  buildMultySearchDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.msCancel = true;
+          this.showMultySearch = false;
+        })
+      Column({ space: 10 }) {
+        Text(this.L($r('app.string.browse_search_docs')))
+          .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
+          .width('100%')
+        if (!this.msInLib) {
+          Row({ space: 8 }) {
+            Text(this.msPath.length > 0 ? this.msPath : '/')
+              .fontSize(12).fontColor(this.txtFaint()).maxLines(1)
+              .layoutWeight(1)
+            Button($r('app.string.libsort_folder'))
+              .fontSize(13).height(32).backgroundColor(this.chipBg()).fontColor(this.txtPri())
+              .onClick(() => {
+                this.openDirPick('multySearch');
+              })
+          }
+          .width('100%')
+          Row({ space: 8 }) {
+            Checkbox({ name: 'msSub' })
+              .select(this.msSub).selectedColor(this.thm())
+              .onChange((v: boolean) => {
+                this.msSub = v;
+              })
+            Text(this.L($r('app.string.ms_subfolders')))
+              .fontSize(14).fontColor(this.txtPri())
+          }
+          .width('100%')
+        }
+        Row({ space: 8 }) {
+          Checkbox({ name: 'msInLib' })
+            .select(this.msInLib).selectedColor(this.thm())
+            .onChange((v: boolean) => {
+              this.msInLib = v;
+            })
+          Text(this.L($r('app.string.ms_inlib')))
+            .fontSize(14).fontColor(this.txtPri())
+        }
+        .width('100%')
+        Row({ space: 8 }) {
+          TextInput({ placeholder: this.L($r('app.string.sel_text')), text: this.msText })
+            .fontSize(14).height(36).layoutWeight(1)
+            .backgroundColor(this.inputBg())
+            .onChange((v: string) => {
+              this.msText = v;
+            })
+          Button(this.L($r('app.string.common_search')))
+            .fontSize(13).height(36).backgroundColor(this.chipBg()).fontColor(this.txtPri())
+            .onClick(() => {
+              this.runMultySearch();
+            })
+          Button(this.L($r('app.string.ms_stop')))
+            .fontSize(13).height(36).backgroundColor(this.chipBg()).fontColor(this.txtPri())
+            .onClick(() => {
+              this.msCancel = true;
+            })
+        }
+        .width('100%')
+        if (this.msProgress.length > 0) {
+          Text(this.msProgress)
+            .fontSize(11).fontColor(this.txtFaint())
+            .width('100%').maxLines(1)
+        }
+        if (this.msResults.length > 0) {
+          List({ space: 2 }) {
+            ForEach(this.msResults, (h: LibSearchHit) => {
+              ListItem() {
+                Text(h.title + ' [' + (h.page + 1) + ']')
+                  .fontSize(13).fontColor(this.thm())
+                  .maxLines(1)
+                  .width('100%')
+                  .padding({ left: 4, right: 4, top: 6, bottom: 6 })
+                  .onClick(() => {
+                    this.msCancel = true;
+                    this.showMultySearch = false;
+                    this.openLibHit(h);
+                  })
+              }
+            }, (h: LibSearchHit) => h.path + '_' + h.page)
+          }
+          .width('100%')
+          .height(180)
+        }
+        Row() {
+          Blank()
+          Text(this.L($r('app.string.common_close')))
+            .fontSize(15).fontColor('#00897B')
+            .padding({ left: 16, top: 6, bottom: 2 })
+            .onClick(() => {
+              this.msCancel = true;
+              this.showMultySearch = false;
+            })
+        }
+        .width('100%')
+      }
+      .width('86%')
+      .padding(16)
+      .backgroundColor(this.cardBg())
+      .borderRadius(8)
+    }
+    .width('100%').height('100%')
   }
 
   /** 阅读统计 chart dialog (Android hr02): range tabs + bar chart + 更多. */
@@ -4528,49 +4937,48 @@ tlog('download_start', 'name=' + fileName);    try {
           .borderRadius(3)
           .padding({ left: 8, right: 8 })
 
-          /* Round 6: full-text search trigger (tap again to cancel) */
-          Column({ space: 2 }) {
-            Text($r('app.string.lib_fulltext')).fontSize(13).fontColor(Color.White)
-            if (this.libSearchBusy) {
-              Text(this.libSearchProgress).fontSize(9).fontColor('#c5cae9')
+          /* 0.9.50: Android 书架 toolbar (fragment_search2.xml secondTopPanel):
+           * three labeled groups 排序(icon+direction chevron) / 添加(scan) / 视图(menu) */
+          Column({ space: 1 }) {
+            Row({ space: 2 }) {
+              Image($r('app.media.ic_sort_amount'))
+                .width(22).height(22).fillColor(Color.White)
+              Image(this.libSortAsc ? $r('app.media.ic_chevron_up') : $r('app.media.ic_chevron_down'))
+                .width(16).height(16).fillColor(Color.White)
+                .onClick(() => {
+                  this.libSortAsc = !this.libSortAsc;
+                })
             }
+            Text($r('app.string.label_sort')).fontSize(9).fontColor(Color.White)
           }
-          .height(38).justifyContent(FlexAlign.Center).padding({ left: 4, right: 4 })
+          .justifyContent(FlexAlign.Center)
           .onClick(() => {
-            if (this.libSearchBusy) {
-              this.cancelLibSearch();
-            } else {
-              this.runLibSearch();
-            }
+            this.showSortMenu = true;
           })
 
-          /* Round 6: device scan + import */
-          Image($r('app.media.ic_import'))
-            .width(20).height(20).fillColor(Color.White).margin({ right: 4 })
-            .onClick(() => {
-              this.runDeviceScan();
-            })
+          Divider().vertical(true).height(40).color('#54FFFFFF').margin({ left: 4, right: 4 })
 
-          /* 0.9.21: sort = funnel icon + popup menu incl. 格式 (Android
-           * 书库排列改版, CHANGES 2026-10-06) */
-          Image($r('app.media.ic_filter'))
-            .width(20).height(20).fillColor(Color.White)
-            .margin({ left: 6, right: 6 })
-            .onClick(() => {
-              this.openOptSheet('libsort');
-            })
+          Column({ space: 1 }) {
+            Image($r('app.media.ic_add_thick'))
+              .width(22).height(22).fillColor(Color.White)
+            Text($r('app.string.label_add')).fontSize(9).fontColor(Color.White)
+          }
+          .justifyContent(FlexAlign.Center)
+          .onClick(() => {
+            this.runDeviceScan();
+          })
 
-          Image($r('app.media.ic_refresh'))
-            .width(20).height(20).fillColor(Color.White)
-            .onClick(() => {
-              this.loadLibrary();
-            })
+          Divider().vertical(true).height(40).color('#54FFFFFF').margin({ left: 4, right: 4 })
 
-          Image($r('app.media.ic_shelf'))
-            .width(22).height(22).fillColor(Color.White)
-            .onClick(() => {
-              this.libViewMode = (this.libViewMode + 1) % 5;
-            })
+          Column({ space: 1 }) {
+            Image(this.viewIcon())
+              .width(22).height(22).fillColor(Color.White)
+            Text($r('app.string.label_view')).fontSize(9).fontColor(Color.White)
+          }
+          .justifyContent(FlexAlign.Center)
+          .onClick(() => {
+            this.showViewMenu = true;
+          })
         }
         .width('100%')
       }
@@ -4578,7 +4986,9 @@ tlog('download_start', 'name=' + fileName);    try {
       .padding({ left: 8, right: 8, top: 6, bottom: 8 })
       .backgroundColor(this.thm())
 
-      /* status chips: 全部 / 未读 / 在读 / 已读 (white chip + blue border, selected = blue bg) */
+      /* status chips: 全部 / 未读 / 在读 / 已读 (Android readingStatusChips
+       * parity; 0.9.54 dropped the 全文 chip — the Android shelf has only
+       * these four; white chip + blue border, selected = blue bg) */
       Scroll() {
         Row({ space: 8 }) {
           ForEach([$r('app.string.chip_all'), $r('app.string.chip_unread'), $r('app.string.chip_reading'), $r('app.string.chip_finished')], (label: string, idx: number) => {
@@ -4594,18 +5004,6 @@ tlog('download_start', 'name=' + fileName);    try {
                 this.libStatusFilter = this.libStatusFilter === idx - 1 ? -1 : idx - 1;
               })
           }, (label: string, idx: number) => `chip_${idx}`)
-          Text(this.libStarFilter ? $r('app.string.chip_star_on') : $r('app.string.chip_star_off'))
-            .fontSize(13)
-            .fontColor(this.libStarFilter ? Color.White : this.thm())
-            .height(28)
-            .padding({ left: 14, right: 14 })
-            .borderRadius(3)
-            .backgroundColor(this.libStarFilter ? this.thm() : this.chipBg())
-            .border({ width: 1, color: this.libStarFilter ? this.thm() : '#9FA8DA' })
-            .onClick(() => {
-              this.libStarFilter = !this.libStarFilter;
-              console.info(`[Index] Library star filter: ${this.libStarFilter}`);
-            })
         }
       }
       .scrollable(ScrollDirection.Horizontal)
@@ -4620,48 +5018,6 @@ tlog('download_start', 'name=' + fileName);    try {
           .onClick(() => {
             this.cleanupMissing();
           })
-      }
-
-      /* Round 6: full-text search progress + results panel */
-      if (this.libSearchBusy || this.libSearchHits.length > 0) {
-        Column({ space: 4 }) {
-          Row({ space: 8 }) {
-            Text(this.libSearchBusy ? `\u5168\u6587\u641C\u7D22\u4E2D ${this.libSearchProgress}` : `\u5168\u6587\u641C\u7D22\u7ED3\u679C\uFF1A${this.libSearchHits.length} \u5904`)
-              .fontSize(12).fontColor(this.txtSec()).layoutWeight(1)
-            if (this.libSearchBusy) {
-              Text($r('app.string.common_cancel')).fontSize(12).fontColor(this.thm())
-                .onClick(() => {
-                  this.cancelLibSearch();
-                })
-            } else {
-              Text($r('app.string.common_close')).fontSize(12).fontColor(this.txtFaint())
-                .onClick(() => {
-                  this.libSearchHits = [];
-                })
-            }
-          }
-          .width('100%')
-
-          List() {
-            ForEach(this.libSearchHits, (hit: LibSearchHit) => {
-              ListItem() {
-                Column({ space: 2 }) {
-                  Text(`${hit.title} \u00B7 \u7B2C ${hit.page + 1} \u9875`).fontSize(12).fontColor(this.txtPri())
-                  Text(hit.excerpt).fontSize(11).fontColor(this.txtHint()).maxLines(2)
-                }
-                .alignItems(HorizontalAlign.Start)
-                .width('100%').padding({ top: 6, bottom: 6, left: 8, right: 8 })
-                .onClick(() => {
-                  this.openLibHit(hit);
-                })
-              }
-            }, (hit: LibSearchHit) => hit.path + '_' + hit.page)
-          }
-          .height(180)
-          .divider({ strokeWidth: 1, color: this.inputBg(), startMargin: 8, endMargin: 8 })
-        }
-        .width('94%').margin({ top: 6 }).padding(8)
-        .backgroundColor(this.cardBg()).borderRadius(6)
       }
 
       /* batch selection bar */
@@ -4692,9 +5048,10 @@ tlog('download_start', 'name=' + fileName);    try {
       if (this.getLibraryBooks().length === 0) {
         Text($r('app.string.lib_empty_import'))
           .fontSize(13).fontColor(this.txtFaint()).margin({ top: 60 })
-      } else if (this.libGroupBy > 0 || this.libSortMode === 5) {
-        /* grouped view: author / series / genre (Android 分组视图 parity;
-         * empty groups impossible here — the branch above handles the empty list) */
+      } else if (this.libGroupBy > 0 || this.libSortMode === 0 || this.libSortMode === 6 || this.libSortMode === 9) {
+        /* grouped view: view-menu modes (author/series/genre/tags/...) or the
+         * Android header-sorts 文件夹/丛书/格式 (empty groups impossible here —
+         * the branch above handles the empty list) */
         Scroll() {
           Column({ space: 0 }) {
             ForEach(this.getGroupedLibrary(), (group: [string, RecentBook[]]) => {
@@ -4815,16 +5172,54 @@ tlog('download_start', 'name=' + fileName);    try {
       }
       list.push(b);
     }
-    if (this.libSortMode === 1) {
-      list.sort((a: RecentBook, b2: RecentBook) => a.title.localeCompare(b2.title));
+    /* 0.9.50: Android SORT_BY order + direction chevron; ties fall back to
+     * title. 文件夹/丛书/格式 also render grouped headers (Android parity). */
+    const dir: number = this.libSortAsc ? 1 : -1;
+    if (this.libSortMode === 0) {
+      list.sort((a: RecentBook, b2: RecentBook) => {
+        const fa: string = this.folderOf(a.path);
+        const fb: string = this.folderOf(b2.path);
+        if (fa !== fb) {
+          return dir * fa.localeCompare(fb);
+        }
+        return a.title.localeCompare(b2.title);
+      });
+    } else if (this.libSortMode === 1 || this.libSortMode === 4) {
+      /* 文件名 / 标题 */
+      list.sort((a: RecentBook, b2: RecentBook) => dir * a.title.localeCompare(b2.title));
     } else if (this.libSortMode === 2) {
-      list.sort((a: RecentBook, b2: RecentBook) => b2.lastRead.localeCompare(a.lastRead));
-    } else if (this.libSortMode === 3) {
-      list.sort((a: RecentBook, b2: RecentBook) => a.author.localeCompare(b2.author));
-    } else if (this.libSortMode === 4) {
-      list.sort((a: RecentBook, b2: RecentBook) => a.series.localeCompare(b2.series));
+      /* 文件大小 (cached stat; remote/missing = 0) */
+      list.sort((a: RecentBook, b2: RecentBook) => {
+        const sa: number = this.fileSizeOf(a.path);
+        const sb: number = this.fileSizeOf(b2.path);
+        if (sa !== sb) {
+          return dir * (sa - sb);
+        }
+        return a.title.localeCompare(b2.title);
+      });
+    } else if (this.libSortMode === 3 || this.libSortMode === 13) {
+      /* 时间 / 最近 */
+      list.sort((a: RecentBook, b2: RecentBook) => dir * a.lastRead.localeCompare(b2.lastRead));
     } else if (this.libSortMode === 5) {
-      /* 0.9.21: format sort -> aggregate groups (EPUB (12) headers) */
+      /* 作者 */
+      list.sort((a: RecentBook, b2: RecentBook) => {
+        const c: number = dir * a.author.localeCompare(b2.author);
+        return c !== 0 ? c : a.title.localeCompare(b2.title);
+      });
+    } else if (this.libSortMode === 6 || this.libSortMode === 7) {
+      /* 丛书 / 丛书编号 (series order not tracked on this platform) */
+      list.sort((a: RecentBook, b2: RecentBook) => {
+        const c: number = dir * a.series.localeCompare(b2.series);
+        return c !== 0 ? c : a.title.localeCompare(b2.title);
+      });
+    } else if (this.libSortMode === 8) {
+      /* 页数 */
+      list.sort((a: RecentBook, b2: RecentBook) => {
+        const c: number = dir * (a.totalPages - b2.totalPages);
+        return c !== 0 ? c : a.title.localeCompare(b2.title);
+      });
+    } else if (this.libSortMode === 9) {
+      /* 格式 -> aggregate groups (EPUB (12) headers) */
       list.sort((a: RecentBook, b2: RecentBook) => {
         const fa: string = fileExtOf(a.path);
         const fb: string = fileExtOf(b2.path);
@@ -4833,36 +5228,57 @@ tlog('download_start', 'name=' + fileName);    try {
         }
         return a.title.localeCompare(b2.title);
       });
+    } else {
+      /* 语言 / 出版时间 / 出版商: per-book metadata not tracked on this
+       * platform — stable title order */
+      list.sort((a: RecentBook, b2: RecentBook) => a.title.localeCompare(b2.title));
     }
     return list;
   }
 
-  sortName(mode: number): string {
-    return mode === 0 ? this.L($r('app.string.sort_recent')) : mode === 1 ? this.L($r('app.string.common_name')) : mode === 2 ? this.L($r('app.string.sort_date')) : mode === 3 ? this.L($r('app.string.sort_author')) : mode === 4 ? this.L($r('app.string.sort_series')) : '格式';
-  }
-
-  /** Grouped library for the 分组 chip (1=author 2=series 3=genre). */
+  /** Grouped library: view-menu modes (1=作者 2=丛书 3=流派 4=关键词/标签
+   * 5=语言 6=出版商 7=出版时间) or the header-sorts 文件夹/丛书/格式. */
   getGroupedLibrary(): [string, RecentBook[]][] {
     const groups: Map<string, RecentBook[]> = new Map();
     const filtered = this.getLibraryBooks();
+    const noneLabel: string = this.L($r('app.string.tag_none'));
     for (let i = 0; i < filtered.length; i++) {
       const book = filtered[i];
-      const extKey: string = fileExtOf(book.path).toUpperCase();
-      const key = this.libGroupBy === 2 ? book.series
-        : this.libGroupBy === 3 ? book.genre
-          : this.libSortMode === 5 ? (extKey.length > 0 ? extKey : '其它')
-            : book.author;
-      const label = key.length > 0 ? key : this.L($r('app.string.tag_none'));
-      if (groups.has(label)) {
-        groups.get(label)!.push(book);
+      let keys: string[] = [];
+      if (this.libGroupBy === 1) {
+        keys = [book.author];
+      } else if (this.libGroupBy === 2) {
+        keys = [book.series];
+      } else if (this.libGroupBy === 3) {
+        keys = [book.genre];
+      } else if (this.libGroupBy === 4) {
+        /* 关键词/标签: a book appears under every one of its tags */
+        keys = book.tags.length > 0 ? book.tags : [noneLabel];
+      } else if (this.libGroupBy === 5 || this.libGroupBy === 6 || this.libGroupBy === 7) {
+        /* 语言/出版商/出版时间: metadata not tracked on this platform yet */
+        keys = [noneLabel];
+      } else if (this.libSortMode === 0) {
+        keys = [this.folderOf(book.path)];
+      } else if (this.libSortMode === 6) {
+        keys = [book.series];
       } else {
-        groups.set(label, [book]);
+        const extKey: string = fileExtOf(book.path).toUpperCase();
+        keys = [extKey.length > 0 ? extKey : '其它'];
+      }
+      for (let k = 0; k < keys.length; k++) {
+        const label = keys[k].length > 0 ? keys[k] : noneLabel;
+        if (groups.has(label)) {
+          groups.get(label)!.push(book);
+        } else {
+          groups.set(label, [book]);
+        }
       }
     }
     const result: [string, RecentBook[]][] = [];
     groups.forEach((val: RecentBook[], keyStr: string) => {
       result.push([keyStr, val]);
     });
+    result.sort((x: [string, RecentBook[]], y: [string, RecentBook[]]) => x[0].localeCompare(y[0]));
     return result;
   }
 
@@ -4891,10 +5307,6 @@ tlog('download_start', 'name=' + fileName);    try {
     }).catch((err: Error) => {
       console.error('[Index] getLastWindow failed: ' + JSON.stringify(err));
     });
-  }
-
-  viewName(mode: number): string {
-    return mode === 0 ? this.L($r('app.string.view_list')) : mode === 1 ? this.L($r('app.string.view_compact')) : mode === 2 ? this.L($r('app.string.view_grid')) : mode === 3 ? this.L($r('app.string.view_cover')) : this.L($r('app.string.view_shelf'));
   }
 
   statusLabel(s: number): string {
@@ -4934,6 +5346,24 @@ tlog('download_start', 'name=' + fileName);    try {
       return;
     }
     await setBooksStatus(getContext(this), this.selSet, status);
+    /* 0.9.47: keep app-BookStates.json in step (android saveOwn parity);
+     * remote:// entries are skipped (no shelf record to mark) */
+    const books: RecentBook[] = this.getLibraryBooks();
+    for (let i = 0; i < this.selSet.length; i++) {
+      const p = this.selSet[i];
+      if (p.startsWith('remote://')) {
+        continue;
+      }
+      let fn = p.substring(p.lastIndexOf('/') + 1);
+      for (let j = 0; j < books.length; j++) {
+        if (books[j].path === p && books[j].title.length > 0) {
+          fn = books[j].title;
+          break;
+        }
+      }
+      await syncBookStateMark(getContext(this), fn, status === 1);
+    }
+    this.syncRunNow();
     await this.loadLibrary();
     this.exitSel();
   }
@@ -6321,7 +6751,23 @@ tlog('download_start', 'name=' + fileName);    try {
     .padding({ left: 18, right: 18, top: 13, bottom: 13 })
     .onClick(() => {
       const path: string = this.libMenuPath;
+      const bk = this.libMenuBook();
       this.libMenuPath = '';
+      /* 0.9.47: keep app-BookStates.json in step (android saveOwn parity);
+       * remote:// entries have no shelf record - marking them is a no-op
+       * today, so no override is written for them either */
+      if (!path.startsWith('remote://')) {
+        const fn = bk !== undefined && bk.title.length > 0
+          ? bk.title
+          : path.substring(path.lastIndexOf('/') + 1);
+        setBookStatus(getContext(this), path, status).then(() => {
+          return syncBookStateMark(getContext(this), fn, status === 1);
+        }).then(() => {
+          this.syncRunNow();
+          return this.loadLibrary();
+        });
+        return;
+      }
       setBookStatus(getContext(this), path, status).then(() => {
         return this.loadLibrary();
       });
@@ -7829,6 +8275,56 @@ tlog('download_start', 'name=' + fileName);    try {
   }
 
   /** hr06: WebDAV add/edit dialog (URL/name/user/password/trust). */
+  /** 0.9.53: underline text input (Android AddRemoteDialog EditText style). */
+  @Builder
+  udInput(text: string, ph: ResourceStr, isPass: boolean, onChange: (v: string) => void) {
+    TextInput({ text: text, placeholder: ph })
+      .fontSize(14).height(40).width('100%')
+      .backgroundColor(Color.Transparent)
+      .borderRadius(0)
+      .type(isPass ? InputType.Password : InputType.Normal)
+      .border({ width: { bottom: 1 }, color: { bottom: this.divColor() } })
+      .onChange(onChange)
+  }
+
+  /** 0.9.53: centered 测试连接 text link (Android parity). The per-dialog
+   * status Text is rendered INLINE by the dialog body (by-value builder
+   * params never refresh). idStr: CI control hook (FN-12 taps
+   * dav_btn_test on the WebDAV dialog). */
+  @Builder
+  testLink(idStr: string, onTap: () => void) {
+    Text($r('app.string.dav_test'))
+      .fontSize(14).fontColor(this.thm())
+      .width('100%')
+      .textAlign(TextAlign.Center)
+      .padding({ top: 4, bottom: 2 })
+      .id(idStr)
+      .onClick(() => {
+        onTap();
+      })
+  }
+
+  /** 0.9.53: dialog footer 关闭/添加 text buttons (Android parity).
+   * idStr: CI control hook (FN-13 taps dav_btn_add on the WebDAV dialog). */
+  @Builder
+  dialogFooter(onClose: () => void, addLabel: ResourceStr, onAdd: () => void, idStr: string) {
+    Row({ space: 24 }) {
+      Blank()
+      Text($r('app.string.common_close'))
+        .fontSize(15).fontColor('#00897B')
+        .onClick(() => {
+          onClose();
+        })
+      Text(addLabel)
+        .fontSize(15).fontWeight(FontWeight.Medium).fontColor(this.thm())
+        .id(idStr)
+        .onClick(() => {
+          onAdd();
+        })
+    }
+    .width('100%')
+  }
+
   @Builder
   buildDavEditDialog() {
     Stack({ alignContent: Alignment.Center }) {
@@ -7838,68 +8334,39 @@ tlog('download_start', 'name=' + fileName);    try {
         .onClick(() => {
           this.showDavEdit = false;
         })
-      Column({ space: 10 }) {
+      Column({ space: 12 }) {
         Text(this.davEditIdx >= 0 ? $r('app.string.dav_edit') : $r('app.string.dav_add'))
-          .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
+          .fontSize(17).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
           .width('100%')
-        TextInput({ text: this.davEditUrl, placeholder: 'http://' })
-          .fontSize(13).height(38).width('100%')
-          .backgroundColor(this.cardBg())
-          .border({ width: 1, color: this.divColor() })
-          .borderRadius(4)
-          .onChange((v: string) => {
-            this.davEditUrl = v;
-          })
-        TextInput({ text: this.davEditName, placeholder: $r('app.string.dav_name_hint') })
-          .fontSize(13).height(38).width('100%')
-          .backgroundColor(this.cardBg())
-          .border({ width: 1, color: this.divColor() })
-          .borderRadius(4)
-          .onChange((v: string) => {
-            this.davEditName = v;
-          })
-        TextInput({ text: this.davEditUser, placeholder: $r('app.string.common_account') })
-          .fontSize(13).height(38).width('100%')
-          .backgroundColor(this.cardBg())
-          .border({ width: 1, color: this.divColor() })
-          .borderRadius(4)
-          .onChange((v: string) => {
-            this.davEditUser = v;
-          })
-        TextInput({ text: this.davEditPass, placeholder: $r('app.string.common_password') })
-          .type(InputType.Password)
-          .fontSize(13).height(38).width('100%')
-          .backgroundColor(this.cardBg())
-          .border({ width: 1, color: this.divColor() })
-          .borderRadius(4)
-          .onChange((v: string) => {
-            this.davEditPass = v;
-          })
-        TextInput({ text: this.davEditStart, placeholder: $r('app.string.dav_start_hint') })
-          .fontSize(13).height(38).width('100%')
-          .backgroundColor(this.cardBg())
-          .border({ width: 1, color: this.divColor() })
-          .borderRadius(4)
-          .onChange((v: string) => {
-            this.davEditStart = v;
-          })
-        Row({ space: 8 }) {
-          Button($r('app.string.dav_test'))
-            .fontSize(12).height(34).layoutWeight(1)
-            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
-            .id('dav_btn_test')
-            .onClick(() => {
-              this.davTestConnection();
+        this.udInput(this.davEditUrl, 'http://', false, (v: string) => {
+          this.davEditUrl = v;
+        })
+        this.udInput(this.davEditName, $r('app.string.dav_name_hint'), false, (v: string) => {
+          this.davEditName = v;
+        })
+        this.udInput(this.davEditUser, $r('app.string.common_account'), false, (v: string) => {
+          this.davEditUser = v;
+        })
+        this.udInput(this.davEditPass, $r('app.string.common_password'), true, (v: string) => {
+          this.davEditPass = v;
+        })
+        Row({ space: 10 }) {
+          TextInput({ text: this.davEditStart, placeholder: $r('app.string.start_dir_optional') })
+            .fontSize(14).height(40).layoutWeight(1)
+            .backgroundColor(Color.Transparent)
+            .borderRadius(0)
+            .border({ width: { bottom: 1 }, color: { bottom: this.divColor() } })
+            .onChange((v: string) => {
+              this.davEditStart = v;
             })
-          Button($r('app.string.dav_browse_dirs'))
-            .fontSize(12).height(34).layoutWeight(1)
-            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+          Text($r('app.string.dav_browse_dirs'))
+            .fontSize(14).fontColor(this.thm())
             .onClick(() => {
               this.davBrowseOpen();
             })
         }
         .width('100%')
-        Row({ space: 6 }) {
+        Row({ space: 8 }) {
           Checkbox({ name: 'davTrust' })
             .width(18).height(18)
             .selectedColor(this.thm())
@@ -7910,25 +8377,17 @@ tlog('download_start', 'name=' + fileName);    try {
           Text($r('app.string.sync_trust_selfsigned')).fontSize(13).fontColor(this.txtPri())
         }
         .width('100%')
-        Row({ space: 12 }) {
-          Blank()
-          Button($r('app.string.common_close'))
-            .fontSize(14).height(36)
-            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
-            .onClick(() => {
-              this.showDavEdit = false;
-            })
-          Button(this.davEditIdx >= 0 ? $r('app.string.common_save') : $r('app.string.common_add'))
-            .fontSize(14).height(36)
-            .backgroundColor(this.thm()).fontColor(Color.White)
-            .onClick(() => {
-              this.saveDavEdit();
-            })
-        }
-        .width('100%')
+        this.testLink('dav_btn_test', (): void => {
+          this.davTestConnection();
+        })
+        this.dialogFooter((): void => {
+          this.showDavEdit = false;
+        }, this.davEditIdx >= 0 ? $r('app.string.common_save') : $r('app.string.common_add'), (): void => {
+          this.saveDavEdit();
+        }, 'dav_btn_add')
       }
       .width('82%')
-      .padding(14)
+      .padding(16)
       .backgroundColor(this.cardBg())
       .borderRadius(8)
     }
@@ -8005,6 +8464,159 @@ tlog('download_start', 'name=' + fileName);    try {
     .width('100%').height('100%')
   }
 
+  /** 0.9.53: SMB/SFTP 起始目录 remote dir picker (浏览目录, Android parity). */
+  private rdpOpen(proto: string): void {
+    this.rdpProto = proto;
+    this.rdpPath = proto === 'smb' ? this.smbEditStart.trim() : this.sftpEditStart.trim();
+    this.showRemoteDirPick = true;
+    this.rdpRefresh();
+  }
+
+  private rdpJoin(name: string): string {
+    if (this.rdpProto === 'smb') {
+      return this.rdpPath.length > 0 ? this.rdpPath + '/' + name : name;
+    }
+    const base: string = this.rdpPath.endsWith('/') ? this.rdpPath : this.rdpPath + '/';
+    return base + name;
+  }
+
+  private rdpDrill(name: string): void {
+    this.rdpPath = this.rdpJoin(name);
+    this.rdpRefresh();
+  }
+
+  private rdpUp(): void {
+    if (this.rdpProto === 'smb') {
+      const i: number = this.rdpPath.lastIndexOf('/');
+      this.rdpPath = i > 0 ? this.rdpPath.substring(0, i) : '';
+    } else {
+      let p: string = this.rdpPath;
+      if (!p.endsWith('/')) {
+        p = p + '/';
+      }
+      const i: number = p.lastIndexOf('/', p.length - 2);
+      p = i >= 0 ? p.substring(0, i + 1) : '/';
+      this.rdpPath = p;
+    }
+    this.rdpRefresh();
+  }
+
+  private rdpChoose(): void {
+    if (this.rdpProto === 'smb') {
+      this.smbEditStart = this.rdpPath;
+    } else {
+      this.sftpEditStart = this.rdpPath;
+    }
+    this.showRemoteDirPick = false;
+  }
+
+  private async rdpRefresh(): Promise<void> {
+    this.rdpDirs = [];
+    this.rdpStatus = '加载中...';
+    try {
+      let entries: DavListEntry[] = [];
+      if (this.rdpProto === 'smb') {
+        const hp: string = smbHostPort(this.smbEditHost.trim(), parseInt(this.smbEditPort, 10) || 445);
+        entries = await smbListDir(hp, this.smbEditShare.trim(), this.rdpPath,
+          this.smbEditUser.trim(), this.smbEditDomain.trim(), this.smbEditPass);
+      } else {
+        const expectFp: string = this.sftpEditIdx >= 0 && this.sftpEditIdx < this.sftpServers.length
+          ? this.sftpServers[this.sftpEditIdx].fingerprint : '';
+        entries = await sftpListDir(this.sftpEditHost.trim(), parseInt(this.sftpEditPort, 10) || 22,
+          this.sftpEditUser.trim(), this.sftpEditPass, this.sftpEditKeyPath.trim(), this.sftpEditKeyPass,
+          this.sftpEditTrustAll, expectFp, this.rdpPath.length > 0 ? this.rdpPath : '/');
+      }
+      const dirs: string[] = [];
+      for (let i = 0; i < entries.length; i++) {
+        if (entries[i].isDir) {
+          dirs.push(entries[i].name);
+        }
+      }
+      dirs.sort();
+      this.rdpDirs = dirs;
+      this.rdpStatus = dirs.length > 0 ? '' : '无子目录';
+    } catch (err) {
+      this.rdpStatus = '连接失败';
+    }
+  }
+
+  /** 0.9.53: remote dir picker dialog (blue breadcrumb bar + dir list + 选择). */
+  @Builder
+  buildRemoteDirPickDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showRemoteDirPick = false;
+        })
+      Column({ space: 10 }) {
+        Row({ space: 8 }) {
+          Text('\u2039')
+            .fontSize(22).fontColor(Color.White)
+            .width(36).height(36).textAlign(TextAlign.Center)
+            .onClick(() => {
+              this.rdpUp();
+            })
+          Text(this.rdpProto === 'smb' && this.rdpPath.length > 0 ? '/' + this.rdpPath
+            : (this.rdpPath.length > 0 ? this.rdpPath : '/'))
+            .fontSize(12).fontColor(Color.White).maxLines(1)
+            .layoutWeight(1)
+          Text('(' + this.rdpDirs.length + ')')
+            .fontSize(12).fontColor(Color.White)
+        }
+        .width('100%')
+        .padding({ left: 4, right: 10 })
+        .backgroundColor(this.thm())
+        .height(42)
+        .alignItems(VerticalAlign.Center)
+        Scroll() {
+          Column() {
+            if (this.rdpDirs.length === 0) {
+              Text(this.rdpStatus.length > 0 ? this.rdpStatus : '无子目录')
+                .fontSize(12).fontColor(this.txtFaint())
+                .width('100%').padding(10)
+            }
+            ForEach(this.rdpDirs, (d: string) => {
+              Row({ space: 10 }) {
+                Image($r('app.media.ic_folder')).width(22).height(22).fillColor(this.thm())
+                Text(d).fontSize(14).fontColor(this.txtPri()).layoutWeight(1).maxLines(1)
+              }
+              .width('100%')
+              .padding({ top: 11, bottom: 11 })
+              .onClick(() => {
+                this.rdpDrill(d);
+              })
+            }, (d: string) => d)
+          }
+          .width('100%')
+        }
+        .constraintSize({ maxHeight: 260 })
+        .width('100%')
+        Row({ space: 10 }) {
+          Button($r('app.string.common_close'))
+            .fontSize(15).height(42).layoutWeight(1)
+            .backgroundColor(this.thm()).fontColor(Color.White)
+            .onClick(() => {
+              this.showRemoteDirPick = false;
+            })
+          Button($r('app.string.dirpick_choose'))
+            .fontSize(15).height(42).layoutWeight(1)
+            .backgroundColor(this.thm()).fontColor(Color.White)
+            .onClick(() => {
+              this.rdpChoose();
+            })
+        }
+        .width('100%')
+      }
+      .width('80%')
+      .padding(12)
+      .backgroundColor(this.cardBg())
+      .borderRadius(10)
+    }
+    .width('100%').height('100%')
+  }
+
   /** Local directory picker dialog (备份配置 folder rows + 书库文件夹 add). */
   @Builder
   buildDirPickDialog() {
@@ -8016,26 +8628,39 @@ tlog('download_start', 'name=' + fileName);    try {
           this.showDirPick = false;
         })
       Column({ space: 10 }) {
-        Text(this.dirPickTarget === 'libFolder' ? '选择要加入书库的文件夹'
-          : this.dirPickTarget === 'libFolderEdit' ? '选择新的文件夹路径' : '选择文件夹')
-          .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
-          .width('100%')
-        Text(this.dirPickPath)
-          .fontSize(11).fontColor(this.txtFaint()).maxLines(2).width('100%')
+        /* 0.9.53: blue breadcrumb bar (Android ChooserDialogFragment top bar) */
+        Row({ space: 8 }) {
+          Text('\u2039')
+            .fontSize(22).fontColor(Color.White)
+            .width(36).height(36).textAlign(TextAlign.Center)
+            .onClick(() => {
+              this.dirPickUp();
+            })
+          Text(this.dirPickPath)
+            .fontSize(12).fontColor(Color.White).maxLines(1)
+            .layoutWeight(1)
+          Text('(' + this.dirPickDirs.length + ')')
+            .fontSize(12).fontColor(Color.White)
+        }
+        .width('100%')
+        .padding({ left: 4, right: 10 })
+        .backgroundColor(this.thm())
+        .height(42)
+        .alignItems(VerticalAlign.Center)
         Scroll() {
           Column() {
             if (this.dirPickDirs.length === 0) {
               Text('无子文件夹')
                 .fontSize(12).fontColor(this.txtFaint())
+                .width('100%').padding(10)
             }
             ForEach(this.dirPickDirs, (d: string) => {
               Row({ space: 10 }) {
-                Image($r('app.media.ic_folder')).width(18).height(18).fillColor(this.thm())
+                Image($r('app.media.ic_folder')).width(22).height(22).fillColor(this.thm())
                 Text(d).fontSize(14).fontColor(this.txtPri()).layoutWeight(1).maxLines(1)
-                Text('\u203A').fontSize(16).fontColor(this.txtFaint())
               }
               .width('100%')
-              .padding({ top: 9, bottom: 9 })
+              .padding({ top: 11, bottom: 11 })
               .onClick(() => {
                 this.dirPickDrill(d);
               })
@@ -8044,23 +8669,24 @@ tlog('download_start', 'name=' + fileName);    try {
           .width('100%')
         }
         .constraintSize({ maxHeight: 300 })
-
-        Row({ space: 8 }) {
-          Button('上一级')
-            .fontSize(12).height(34)
-            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
-            .onClick(() => {
-              this.dirPickUp();
-            })
-          Blank()
-          Button($r('app.string.common_cancel'))
-            .fontSize(12).height(34)
-            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+        .width('100%')
+        TextInput({ text: this.dirPickPath, placeholder: ' ' })
+          .fontSize(13).height(38).width('100%')
+          .backgroundColor(Color.Transparent)
+          .borderRadius(0)
+          .border({ width: { bottom: 1 }, color: { bottom: this.divColor() } })
+          .onChange((v: string) => {
+            this.dirPickPath = v;
+          })
+        Row({ space: 10 }) {
+          Button($r('app.string.common_close'))
+            .fontSize(15).height(42).layoutWeight(1)
+            .backgroundColor(this.thm()).fontColor(Color.White)
             .onClick(() => {
               this.showDirPick = false;
             })
-          Button('选择此处')
-            .fontSize(12).height(34)
+          Button($r('app.string.dirpick_choose'))
+            .fontSize(15).height(42).layoutWeight(1)
             .backgroundColor(this.thm()).fontColor(Color.White)
             .onClick(() => {
               this.dirPickHere();
@@ -8068,8 +8694,8 @@ tlog('download_start', 'name=' + fileName);    try {
         }
         .width('100%')
       }
-      .width('80%')
-      .padding(14)
+      .width('86%')
+      .padding(12)
       .backgroundColor(this.cardBg())
       .borderRadius(10)
     }
@@ -8152,77 +8778,81 @@ tlog('download_start', 'name=' + fileName);    try {
         .onClick(() => {
           this.showSmbEdit = false;
         })
-      Column({ space: 8 }) {
+      Column({ space: 12 }) {
         Text(this.smbEditIdx >= 0 ? '编辑 SMB 服务器' : '添加 SMB 服务器')
-          .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
+          .fontSize(17).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
           .width('100%')
-        TextInput({ text: this.smbEditName, placeholder: '显示名（可选）' })
-          .fontSize(13).height(36).width('100%')
+        this.udInput(this.smbEditName, $r('app.string.common_name'), false, (v: string) => {
+          this.smbEditName = v;
+        })
+        this.udInput(this.smbEditHost, $r('app.string.host_or_ip'), false, (v: string) => {
+          this.smbEditHost = v;
+        })
+        TextInput({ text: this.smbEditPort, placeholder: '445' })
+          .fontSize(14).height(40).width('100%')
+          .type(InputType.Number)
+          .backgroundColor(Color.Transparent)
+          .borderRadius(0)
+          .border({ width: { bottom: 1 }, color: { bottom: this.divColor() } })
           .onChange((v: string) => {
-            this.smbEditName = v;
+            this.smbEditPort = v;
           })
-        Row({ space: 8 }) {
-          TextInput({ text: this.smbEditHost, placeholder: '主机 / IP' })
-            .fontSize(13).height(36).layoutWeight(1)
-            .onChange((v: string) => {
-              this.smbEditHost = v;
-            })
-          TextInput({ text: this.smbEditPort, placeholder: '445' })
-            .fontSize(13).height(36).width(72)
-            .type(InputType.Number)
-            .onChange((v: string) => {
-              this.smbEditPort = v;
-            })
-        }
-        .width('100%')
-        TextInput({ text: this.smbEditShare, placeholder: '共享名 (share)' })
-          .fontSize(13).height(36).width('100%')
-          .onChange((v: string) => {
-            this.smbEditShare = v;
-          })
-        TextInput({ text: this.smbEditDomain, placeholder: '域（可选）' })
-          .fontSize(13).height(36).width('100%')
-          .onChange((v: string) => {
-            this.smbEditDomain = v;
-          })
-        TextInput({ text: this.smbEditUser, placeholder: '账号（空 = guest）' })
-          .fontSize(13).height(36).width('100%')
-          .onChange((v: string) => {
-            this.smbEditUser = v;
-          })
-        TextInput({ text: this.smbEditPass, placeholder: '密码' })
-          .type(InputType.Password)
-          .fontSize(13).height(36).width('100%')
-          .onChange((v: string) => {
-            this.smbEditPass = v;
-          })
-        Text(this.smbTestStatus)
-          .fontSize(11).fontColor(this.txtMid()).width('100%')
+        this.udInput(this.smbEditShare, $r('app.string.smb_share_hint'), false, (v: string) => {
+          this.smbEditShare = v;
+        })
+        this.udInput(this.smbEditDomain, $r('app.string.smb_domain_hint'), false, (v: string) => {
+          this.smbEditDomain = v;
+        })
+        this.udInput(this.smbEditUser, $r('app.string.common_account'), false, (v: string) => {
+          this.smbEditUser = v;
+        })
+        this.udInput(this.smbEditPass, $r('app.string.common_password'), true, (v: string) => {
+          this.smbEditPass = v;
+        })
         Row({ space: 10 }) {
-          Button('测试连接')
-            .fontSize(13).height(34)
-            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
-            .onClick(() => {
-              this.smbTestConnect();
+          TextInput({ text: this.smbEditStart, placeholder: $r('app.string.start_dir_optional') })
+            .fontSize(14).height(40).layoutWeight(1)
+            .backgroundColor(Color.Transparent)
+            .borderRadius(0)
+            .border({ width: { bottom: 1 }, color: { bottom: this.divColor() } })
+            .onChange((v: string) => {
+              this.smbEditStart = v;
             })
-          Blank()
-          Button($r('app.string.common_close'))
-            .fontSize(13).height(34)
-            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+          Text($r('app.string.dav_browse_dirs'))
+            .fontSize(14).fontColor(this.thm())
             .onClick(() => {
-              this.showSmbEdit = false;
-            })
-          Button(this.smbEditIdx >= 0 ? $r('app.string.common_save') : $r('app.string.common_add'))
-            .fontSize(13).height(34)
-            .backgroundColor(this.thm()).fontColor(Color.White)
-            .onClick(() => {
-              this.saveSmbEdit();
+              this.rdpOpen('smb');
             })
         }
         .width('100%')
+        Row({ space: 8 }) {
+          Checkbox({ name: 'smbTrust' })
+            .width(18).height(18)
+            .selectedColor(this.thm())
+            .select(this.smbEditTrustAll)
+            .onChange((v: boolean) => {
+              this.smbEditTrustAll = v;
+            })
+          Text($r('app.string.smb_sftp_trust')).fontSize(13).fontColor(this.txtPri())
+        }
+        .width('100%')
+        this.testLink('smb_btn_test', (): void => {
+          this.smbTestConnect();
+        })
+        if (this.smbTestStatus.length > 0) {
+          Text(this.smbTestStatus)
+            .fontSize(11).fontColor(this.txtMid())
+            .width('100%')
+            .textAlign(TextAlign.Center)
+        }
+        this.dialogFooter((): void => {
+          this.showSmbEdit = false;
+        }, this.smbEditIdx >= 0 ? $r('app.string.common_save') : $r('app.string.common_add'), (): void => {
+          this.saveSmbEdit();
+        }, '')
       }
       .width('82%')
-      .padding(14)
+      .padding(16)
       .backgroundColor(this.cardBg())
       .borderRadius(8)
     }
@@ -8239,51 +8869,54 @@ tlog('download_start', 'name=' + fileName);    try {
         .onClick(() => {
           this.showSftpEdit = false;
         })
-      Column({ space: 8 }) {
+      Column({ space: 12 }) {
         Text(this.sftpEditIdx >= 0 ? '编辑 SFTP 服务器' : '添加 SFTP 服务器')
-          .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
+          .fontSize(17).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
           .width('100%')
-        TextInput({ text: this.sftpEditName, placeholder: '显示名（可选）' })
-          .fontSize(13).height(36).width('100%')
+        this.udInput(this.sftpEditName, $r('app.string.common_name'), false, (v: string) => {
+          this.sftpEditName = v;
+        })
+        this.udInput(this.sftpEditHost, $r('app.string.host_or_ip'), false, (v: string) => {
+          this.sftpEditHost = v;
+        })
+        TextInput({ text: this.sftpEditPort, placeholder: '22' })
+          .fontSize(14).height(40).width('100%')
+          .type(InputType.Number)
+          .backgroundColor(Color.Transparent)
+          .borderRadius(0)
+          .border({ width: { bottom: 1 }, color: { bottom: this.divColor() } })
           .onChange((v: string) => {
-            this.sftpEditName = v;
+            this.sftpEditPort = v;
           })
-        Row({ space: 8 }) {
-          TextInput({ text: this.sftpEditHost, placeholder: '主机 / IP' })
-            .fontSize(13).height(36).layoutWeight(1)
+        this.udInput(this.sftpEditUser, $r('app.string.common_account'), false, (v: string) => {
+          this.sftpEditUser = v;
+        })
+        this.udInput(this.sftpEditPass, $r('app.string.common_password'), true, (v: string) => {
+          this.sftpEditPass = v;
+        })
+        this.udInput(this.sftpEditKeyPath, $r('app.string.key_path_hint'), false, (v: string) => {
+          this.sftpEditKeyPath = v;
+        })
+        this.udInput(this.sftpEditKeyPass, $r('app.string.key_pass_hint'), false, (v: string) => {
+          this.sftpEditKeyPass = v;
+        })
+        Row({ space: 10 }) {
+          TextInput({ text: this.sftpEditStart, placeholder: $r('app.string.start_dir_optional') })
+            .fontSize(14).height(40).layoutWeight(1)
+            .backgroundColor(Color.Transparent)
+            .borderRadius(0)
+            .border({ width: { bottom: 1 }, color: { bottom: this.divColor() } })
             .onChange((v: string) => {
-              this.sftpEditHost = v;
+              this.sftpEditStart = v;
             })
-          TextInput({ text: this.sftpEditPort, placeholder: '22' })
-            .fontSize(13).height(36).width(72)
-            .type(InputType.Number)
-            .onChange((v: string) => {
-              this.sftpEditPort = v;
+          Text($r('app.string.dav_browse_dirs'))
+            .fontSize(14).fontColor(this.thm())
+            .onClick(() => {
+              this.rdpOpen('sftp');
             })
         }
         .width('100%')
-        TextInput({ text: this.sftpEditUser, placeholder: '账号' })
-          .fontSize(13).height(36).width('100%')
-          .onChange((v: string) => {
-            this.sftpEditUser = v;
-          })
-        TextInput({ text: this.sftpEditPass, placeholder: '密码' })
-          .type(InputType.Password)
-          .fontSize(13).height(36).width('100%')
-          .onChange((v: string) => {
-            this.sftpEditPass = v;
-          })
-        TextInput({ text: this.sftpEditKeyPath, placeholder: '私钥路径（可选）' })
-          .fontSize(13).height(36).width('100%')
-          .onChange((v: string) => {
-            this.sftpEditKeyPath = v;
-          })
-        TextInput({ text: this.sftpEditKeyPass, placeholder: '私钥口令（可选）' })
-          .fontSize(13).height(36).width('100%')
-          .onChange((v: string) => {
-            this.sftpEditKeyPass = v;
-          })
-        Row({ space: 6 }) {
+        Row({ space: 8 }) {
           Checkbox({ name: 'sftpTrust' })
             .width(18).height(18)
             .selectedColor(this.thm())
@@ -8291,36 +8924,26 @@ tlog('download_start', 'name=' + fileName);    try {
             .onChange((v: boolean) => {
               this.sftpEditTrustAll = v;
             })
-          Text('信任任意主机密钥').fontSize(13).fontColor(this.txtPri())
+          Text($r('app.string.smb_sftp_trust')).fontSize(13).fontColor(this.txtPri())
         }
         .width('100%')
-        Text(this.sftpTestStatus)
-          .fontSize(11).fontColor(this.txtMid()).width('100%')
-        Row({ space: 10 }) {
-          Button('测试连接')
-            .fontSize(13).height(34)
-            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
-            .onClick(() => {
-              this.sftpTestConnect();
-            })
-          Blank()
-          Button($r('app.string.common_close'))
-            .fontSize(13).height(34)
-            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
-            .onClick(() => {
-              this.showSftpEdit = false;
-            })
-          Button(this.sftpEditIdx >= 0 ? $r('app.string.common_save') : $r('app.string.common_add'))
-            .fontSize(13).height(34)
-            .backgroundColor(this.thm()).fontColor(Color.White)
-            .onClick(() => {
-              this.saveSftpEdit();
-            })
+        this.testLink('sftp_btn_test', (): void => {
+          this.sftpTestConnect();
+        })
+        if (this.sftpTestStatus.length > 0) {
+          Text(this.sftpTestStatus)
+            .fontSize(11).fontColor(this.txtMid())
+            .width('100%')
+            .textAlign(TextAlign.Center)
         }
-        .width('100%')
+        this.dialogFooter((): void => {
+          this.showSftpEdit = false;
+        }, this.sftpEditIdx >= 0 ? $r('app.string.common_save') : $r('app.string.common_add'), (): void => {
+          this.saveSftpEdit();
+        }, '')
       }
       .width('82%')
-      .padding(14)
+      .padding(16)
       .backgroundColor(this.cardBg())
       .borderRadius(8)
     }
@@ -8748,7 +9371,7 @@ tlog('download_start', 'name=' + fileName);    try {
         .width('94%')
         .padding({ left: 12, right: 12, top: 12, bottom: 24 })
         .onClick(() => {
-          this.switchTab(1);
+          this.openMultySearch();
         })
       }
       .width('100%')
@@ -8757,6 +9380,7 @@ tlog('download_start', 'name=' + fileName);    try {
     .width('100%')
     .layoutWeight(1)
     .scrollBar(BarState.Off)
+    .align(Alignment.Top)
   }
 
   /* ---- 2026-09-18: local directory picker + 书库文件夹 add/remove ---- */
@@ -8784,6 +9408,9 @@ tlog('download_start', 'name=' + fileName);    try {
   private openDirPick(target: string): void {
     const ctx = getContext(this);
     let start: string = ctx.filesDir;
+    if (target === 'multySearch' && this.msPath.length > 0) {
+      start = this.msPath;
+    }
     if (target === 'libFolderEdit' && this.dirPickEditOld.length > 0) {
       start = this.dirPickEditOld;
     }
@@ -8853,6 +9480,9 @@ tlog('download_start', 'name=' + fileName);    try {
       this.settings.remoteBatchDir = this.dirPickPath;
       this.saveNow();
       this.remoteBatchDownload(this.dirPickPath);
+    } else if (this.dirPickTarget === 'multySearch') {
+      /* 0.9.51: pick the folder for the multi-doc search */
+      this.msPath = this.dirPickPath;
     }
     this.showDirPick = false;
   }
@@ -10639,10 +11269,6 @@ tlog('download_start', 'name=' + fileName);    try {
       this.optTitle = this.L($r('app.string.set_volume_keys'));
       this.optLabels = [this.L($r('app.string.set_volkey_off')), this.L($r('app.string.set_volkey_page')), this.L($r('app.string.set_volkey_zoom'))];
       this.optSel = this.settings.volumeKeyAction;
-    } else if (target === 'libsort') {
-      this.optTitle = '排列方式';
-      this.optLabels = ['最近阅读', '名称', '日期', '作者', '系列', '格式'];
-      this.optSel = this.libSortMode;
     }
     this.showOptSheet = true;
   }
@@ -10675,8 +11301,6 @@ tlog('download_start', 'name=' + fileName);    try {
     } else if (t === 'volKey') {
       this.settings.volumeKeyAction = idx;
       this.saveNow();
-    } else if (t === 'libsort') {
-      this.libSortMode = idx;
     }
     this.showOptSheet = false;
   }
@@ -11040,9 +11664,12 @@ tlog('download_start', 'name=' + fileName);    try {
     .borderRadius(12)
   }
 
-  /** Version pill text (Android section6: "App: v1.2.3 build <time>"). */
+  /** Version bar text (Android section6: String.format("%s: v%s build %s",
+   *  app name, version, BuildTime); BuildTime = compact yyyyMMddHHmm). */
   private appVersionLabel(): string {
-    return 'HowRead: v' + this.appVersion + ' build ' + BUILD_TIME;
+    const parts: string[] = BUILD_TIME.split(' ');
+    const compact: string = parts[0].split('-').join('') + (parts.length > 1 ? parts[1].split(':').join('') : '');
+    return 'HowReadPro: v' + this.appVersion + ' build ' + compact;
   }
 
   /** About row: label + underlined link (Android about_section row style). */
@@ -11051,7 +11678,7 @@ tlog('download_start', 'name=' + fileName);    try {
     Row({ space: 10 }) {
       Text(label)
         .fontSize(13).fontColor(this.txtSec())
-        .width(110)
+        .width(120)
       Text(value)
         .fontSize(13).fontColor(this.thm())
         .decoration({ type: TextDecorationType.Underline, color: this.thm() })
@@ -11065,43 +11692,60 @@ tlog('download_start', 'name=' + fileName);    try {
     .width('100%')
   }
 
-  /** Modal overlay: about (关于说明, Android about_section.xml parity). */
+/** Modal overlay: about (Android 软件说明 dialog parity — no title row,
+   * content starts with the version bar; 0.9.54). */
   @Builder
   buildAboutOverlay() {
     Column() {
       Row() {
-        Text($r('app.string.drawer_about'))
-          .fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.txtPri()).layoutWeight(1)
         Text('\u2716')
           .fontSize(18).fontColor(this.txtHint()).width(36).height(36).textAlign(TextAlign.Center)
           .onClick(() => {
             this.activeOverlay = 0;
           })
       }
-      .width('100%').padding({ left: 12, right: 6, top: 8 })
-      Divider().color(this.divColor())
+      .width('100%').justifyContent(FlexAlign.End).padding({ left: 12, right: 6, top: 8 })
       Scroll() {
         Column({ space: 10 }) {
-          /* version pill */
+          /* 0.9.52: version bar (Android section6: full-width theme bar) */
           Text(this.appVersionLabel())
             .fontSize(13).fontColor(Color.White)
-            .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+            .width('100%')
+            .padding({ left: 10, right: 10, top: 8, bottom: 8 })
             .backgroundColor(this.thm())
-            .borderRadius(16)
-          /* app description */
+          /* app description (left-aligned, Android parity) */
           Text($r('app.string.app_description'))
             .fontSize(13).fontColor(this.txtSec())
-            .textAlign(TextAlign.Center)
+            .textAlign(TextAlign.Start)
             .padding({ left: 8, right: 8 })
-          /* version row */
-          Text('v' + this.appVersion)
-            .fontSize(12).fontColor(this.txtHint())
+          /* Pro card (Android about_section proCardRoot, active state;
+           * HarmonyOS Pro HAP ships unlocked, no IAP — display only) */
+          Row({ space: 10 }) {
+            Text($r('app.string.about_pro'))
+              .fontSize(13).fontColor(this.txtSec())
+              .width(120)
+            Text($r('app.string.about_pro_active'))
+              .fontSize(13).fontWeight(FontWeight.Bold).fontColor(this.thm())
+          }
+          .width('100%')
+          Text($r('app.string.about_pro_info'))
+            .fontSize(13).fontColor(this.txtSec())
+            .width('100%')
+          Row({ space: 20 }) {
+            Text($r('app.string.about_pro_restore'))
+              .fontSize(13).fontColor(this.thm())
+              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+            Text($r('app.string.about_pro_manage'))
+              .fontSize(13).fontColor(this.thm())
+              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+          }
+          .width('100%')
           /* Android about_section.xml rows (2026-09-24): developer / what's
            * new / privacy / license / feedback / mail / web */
           this.aboutRow($r('app.string.about_developer'), 'LeeStudio', (): void => {
             this.openExternal(HOME_URL);
           })
-          this.aboutRow($r('app.string.about_whatnew'), 'v' + this.appVersion, (): void => {
+          this.aboutRow($r('app.string.about_whatnew'), 'HowReadPro v' + this.appVersion, (): void => {
             this.openExternal(WHATSNEW_URL);
           })
           this.aboutRow($r('app.string.about_privacy'), $r('app.string.about_privacy_link'), (): void => {

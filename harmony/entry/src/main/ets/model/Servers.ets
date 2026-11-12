@@ -32,6 +32,11 @@ export interface SmbServer {
   name: string;
   user: string;
   password: string;
+  /** 0.9.53: Android parity trust-all flag (display; libsmb2 does no host
+   *  verification anyway) */
+  trustAll: boolean;
+  /** 0.9.53: start directory inside the share ('' = share root) */
+  startPath: string;
 }
 
 /** SFTP server (Android RemoteServer TYPE_SFTP parity). Identity = host:port. */
@@ -47,6 +52,8 @@ export interface SftpServer {
   trustAll: boolean;
   /** TOFU: stored SHA-256 host key fingerprint ('' until first connect) */
   fingerprint: string;
+  /** 0.9.53: start directory ('' = home) */
+  startPath: string;
 }
 
 const PREF_NAME = 'librera_servers';
@@ -251,6 +258,15 @@ export async function getSmbServers(ctx: Context): Promise<SmbServer[]> {
   const json: string = await readRaw(ctx, KEY_SMB);
   const list: SmbServer[] = JSON.parse(json) as SmbServer[];
   list.sort((a: SmbServer, b: SmbServer) => a.name.localeCompare(b.name));
+  /* 0.9.53: normalize records persisted before the new fields existed */
+  for (let i = 0; i < list.length; i++) {
+    if (!list[i].trustAll) {
+      list[i].trustAll = false;
+    }
+    if (!list[i].startPath) {
+      list[i].startPath = '';
+    }
+  }
   return list;
 }
 
@@ -289,6 +305,12 @@ export async function getSftpServers(ctx: Context): Promise<SftpServer[]> {
   const json: string = await readRaw(ctx, KEY_SFTP);
   const list: SftpServer[] = JSON.parse(json) as SftpServer[];
   list.sort((a: SftpServer, b: SftpServer) => a.name.localeCompare(b.name));
+  /* 0.9.53: normalize records persisted before the new field existed */
+  for (let i = 0; i < list.length; i++) {
+    if (!list[i].startPath) {
+      list[i].startPath = '';
+    }
+  }
   return list;
 }
 

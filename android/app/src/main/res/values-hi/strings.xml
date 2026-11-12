@@ -988,4 +988,6 @@
    <string name="privacy_row_title">गोपनीयता नीति</string>
    <string name="privacy_policy_link">HowReadPro गोपनीयता नीति</string>
    <string name="mail_row_title">ईमेल</string>
-</resources>
+
+    <string name="label_sort">क्रमबद्ध करें</string>
+    <string name="label_view">देखें</string></resources>

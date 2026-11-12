@@ -998,4 +998,6 @@
    <string name="support_issues_url">https://github.com/380121850/howread/issues</string>
     <string name="ai_key_show">顯示</string>
     <string name="ai_key_hide">隱藏</string>
-</resources>
+
+    <string name="label_sort">排序</string>
+    <string name="label_view">檢視</string></resources>

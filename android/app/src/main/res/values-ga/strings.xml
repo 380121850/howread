@@ -988,4 +988,6 @@
    <string name="privacy_row_title">Polasaí Príobháideachta</string>
    <string name="privacy_policy_link">Polasaí Príobháideachta HowReadPro</string>
    <string name="mail_row_title">Ríomhphost</string>
-</resources>
+
+    <string name="label_sort">Sórtáil</string>
+    <string name="label_view">Amharc</string></resources>

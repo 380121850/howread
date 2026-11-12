@@ -1035,4 +1035,6 @@
     <string name="moon_stats_clear_confirm">Clear the total reading time, today reading time and speed statistics? This cannot be undone.</string>
     <string name="moon_stats_clear">Clear reading statistics</string>
     <string name="reset_app_confirm">Restore default configuration will clear all settings, the book index, reading statistics and caches, then restart the app (book files are not affected). Continue?</string>
-</resources>
+
+    <string name="label_sort">Sort</string>
+    <string name="label_view">View</string></resources>

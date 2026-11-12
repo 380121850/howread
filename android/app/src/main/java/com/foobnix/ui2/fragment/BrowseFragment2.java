@@ -1414,24 +1414,9 @@ import java.util.Map;
         netSection.addView(netSectionDivider());
         netSection.addView(netSectionHeader(getString(R.string.moon_section_folders), new OnClickListener() {
             @Override public void onClick(View v) {
-                PopupMenu p = new PopupMenu(a, v);
-                p.getMenu()
-                 .add(R.string.add_folder)
-                 .setOnMenuItemClickListener(new OnMenuItemClickListener() {
-                     @Override public boolean onMenuItemClick(MenuItem item) {
-                         addLibraryFolder(rebuild);
-                         return false;
-                     }
-                 });
-                p.getMenu()
-                 .add(R.string.search)
-                 .setOnMenuItemClickListener(new OnMenuItemClickListener() {
-                     @Override public boolean onMenuItemClick(MenuItem item) {
-                         scanLibrary();
-                         return false;
-                     }
-                 });
-                p.show();
+                // direct add: open the local folder chooser immediately
+                // (no intermediate menu with the search action)
+                addLibraryFolder(rebuild);
             }
         }));
 

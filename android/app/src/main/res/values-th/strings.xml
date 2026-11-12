@@ -988,4 +988,6 @@
    <string name="privacy_row_title">นโยบายプライバシー</string>
    <string name="privacy_policy_link">นโยบายプライバซี่ย์ของ HowReadPro</string>
    <string name="mail_row_title">อีเมล</string>
-</resources>
+
+    <string name="label_sort">เรียงลำดับ</string>
+    <string name="label_view">มุมมอง</string></resources>

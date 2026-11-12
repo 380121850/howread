@@ -698,7 +698,7 @@
     },
     {
       "name": "dav_name_hint",
-      "value": "Name (e.g. MyNAS)"
+      "value": "Name"
     },
     {
       "name": "dav_none",
@@ -803,10 +803,6 @@
     {
       "name": "lib_filter",
       "value": "Filter:"
-    },
-    {
-      "name": "lib_fulltext",
-      "value": "Full text"
     },
     {
       "name": "lib_import",
@@ -2070,7 +2066,7 @@
     },
     {
       "name": "about_gpl",
-      "value": "GNU GPL v3"
+      "value": "Open source license"
     },
     {
       "name": "about_licenses",
@@ -2098,7 +2094,7 @@
     },
     {
       "name": "about_feedback",
-      "value": "Feedback"
+      "value": "Support & feedback"
     },
     {
       "name": "about_feedback_link",
@@ -2166,7 +2162,7 @@
     },
     {
       "name": "dav_start_hint",
-      "value": "Start directory (optional, e.g. /sub)"
+      "value": "Start directory (optional)"
     },
     {
       "name": "dav_test",
@@ -2279,6 +2275,194 @@
     {
       "name": "lib_folder_seed",
       "value": "Library"
+    },
+    {
+      "name": "label_sort",
+      "value": "Sort"
+    },
+    {
+      "name": "label_add",
+      "value": "Add"
+    },
+    {
+      "name": "label_view",
+      "value": "View"
+    },
+    {
+      "name": "libsort_folder",
+      "value": "Folder"
+    },
+    {
+      "name": "libsort_filename",
+      "value": "File name"
+    },
+    {
+      "name": "libsort_size",
+      "value": "File size"
+    },
+    {
+      "name": "libsort_date",
+      "value": "Date"
+    },
+    {
+      "name": "libsort_title",
+      "value": "Title"
+    },
+    {
+      "name": "libsort_author",
+      "value": "Author"
+    },
+    {
+      "name": "libsort_series",
+      "value": "Series"
+    },
+    {
+      "name": "libsort_series_no",
+      "value": "No. in series"
+    },
+    {
+      "name": "libsort_pages",
+      "value": "Pages"
+    },
+    {
+      "name": "libsort_ext",
+      "value": "Format"
+    },
+    {
+      "name": "libsort_language",
+      "value": "Language"
+    },
+    {
+      "name": "libsort_pubdate",
+      "value": "Publication date"
+    },
+    {
+      "name": "libsort_publisher",
+      "value": "Publisher"
+    },
+    {
+      "name": "libsort_recent",
+      "value": "Recent"
+    },
+    {
+      "name": "vm_list",
+      "value": "List"
+    },
+    {
+      "name": "vm_compact",
+      "value": "Compact"
+    },
+    {
+      "name": "vm_grid",
+      "value": "Grid"
+    },
+    {
+      "name": "vm_cover",
+      "value": "Covers"
+    },
+    {
+      "name": "vm_shelf",
+      "value": "Shelf"
+    },
+    {
+      "name": "vm_author",
+      "value": "Authors"
+    },
+    {
+      "name": "vm_genre",
+      "value": "Genres"
+    },
+    {
+      "name": "vm_series",
+      "value": "Series"
+    },
+    {
+      "name": "vm_keywords",
+      "value": "Keywords"
+    },
+    {
+      "name": "vm_language",
+      "value": "Languages"
+    },
+    {
+      "name": "vm_tags",
+      "value": "Tags"
+    },
+    {
+      "name": "vm_publisher",
+      "value": "Publishers"
+    },
+    {
+      "name": "vm_pubdate",
+      "value": "Publication date"
+    },
+    {
+      "name": "ms_subfolders",
+      "value": "Include subfolders"
+    },
+    {
+      "name": "ms_inlib",
+      "value": "Search in the library"
+    },
+    {
+      "name": "ms_stop",
+      "value": "Stop"
+    },
+    {
+      "name": "ms_bad_value",
+      "value": "Incorrect value"
+    },
+    {
+      "name": "about_pro",
+      "value": "Pro features"
+    },
+    {
+      "name": "about_pro_active",
+      "value": "Pro active"
+    },
+    {
+      "name": "about_pro_info",
+      "value": "Unlocked via: local key\nPurchase time:\nOrder no. (last 4):"
+    },
+    {
+      "name": "about_pro_restore",
+      "value": "Restore purchases"
+    },
+    {
+      "name": "about_pro_manage",
+      "value": "Manage entitlements"
+    },
+    {
+      "name": "host_or_ip",
+      "value": "Host or IP"
+    },
+    {
+      "name": "smb_share_hint",
+      "value": "SMB share"
+    },
+    {
+      "name": "smb_domain_hint",
+      "value": "Domain or workgroup (optional)"
+    },
+    {
+      "name": "key_path_hint",
+      "value": "Private key path (optional)"
+    },
+    {
+      "name": "key_pass_hint",
+      "value": "Private key passphrase (optional)"
+    },
+    {
+      "name": "smb_sftp_trust",
+      "value": "Trust all certificates (no host verification)"
+    },
+    {
+      "name": "dirpick_choose",
+      "value": "Choose"
+    },
+    {
+      "name": "start_dir_optional",
+      "value": "Start directory (optional)"
     }
   ]
 }

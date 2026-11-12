@@ -988,4 +988,6 @@
    <string name="privacy_row_title">プライバシーポリシー</string>
    <string name="privacy_policy_link">HowReadPro プライバシーポリシー</string>
    <string name="mail_row_title">メール</string>
-</resources>
+
+    <string name="label_sort">並べ替え</string>
+    <string name="label_view">表示</string></resources>

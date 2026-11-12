@@ -988,4 +988,6 @@
    <string name="privacy_row_title">Pribatutasun Politika</string>
    <string name="privacy_policy_link">HowReadPro Pribatutasun Politika</string>
    <string name="mail_row_title">E-posta</string>
-</resources>
+
+    <string name="label_sort">Sailkatu</string>
+    <string name="label_view">Ikusi</string></resources>

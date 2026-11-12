@@ -72,12 +72,29 @@
         android:inputType="textPassword"
         android:singleLine="true" />
 
-    <EditText
-        android:id="@+id/startDir"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="@string/remote_startdir_hint"
-        android:singleLine="true" />
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <EditText
+            android:id="@+id/startDir"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:hint="@string/remote_startdir_hint"
+            android:singleLine="true" />
+
+        <TextView
+            android:id="@+id/remoteBrowseBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:padding="8dp"
+            android:text="@string/remote_browse_dir"
+            android:textStyle="bold" />
+    </LinearLayout>
 
     <CheckBox
         android:id="@+id/trustAll"
@@ -99,16 +116,6 @@
             android:gravity="center"
             android:padding="8dp"
             android:text="@string/remote_test_connection"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/remoteBrowseBtn"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:gravity="center"
-            android:padding="8dp"
-            android:text="@string/remote_browse_dir"
             android:textStyle="bold" />
     </LinearLayout>
 

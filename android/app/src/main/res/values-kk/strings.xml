@@ -988,4 +988,6 @@
    <string name="privacy_row_title">Шығыстар саясаты</string>
    <string name="privacy_policy_link">HowReadPro шығыстар саясаты</string>
    <string name="mail_row_title">Электрондық пошта</string>
-</resources>
+
+    <string name="label_sort">Сұрыптау</string>
+    <string name="label_view">Көрініс</string></resources>

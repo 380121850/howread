@@ -988,4 +988,6 @@
    <string name="privacy_row_title">Gizlilik Politikası</string>
    <string name="privacy_policy_link">HowReadPro Gizlilik Politikası</string>
    <string name="mail_row_title">E-posta</string>
-</resources>
+
+    <string name="label_sort">Sırala</string>
+    <string name="label_view">Görünüm</string></resources>

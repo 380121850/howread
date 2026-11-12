@@ -988,4 +988,6 @@
    <string name="privacy_row_title">מדיניות פרטיות</string>
    <string name="privacy_policy_link">מדיניות פרטיות HowReadPro</string>
    <string name="mail_row_title">דוא\"ל</string>
-</resources>
+
+    <string name="label_sort">מיון</string>
+    <string name="label_view">תצוגה</string></resources>

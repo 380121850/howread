@@ -1,5 +1,6 @@
 import preferences from '@ohos.data.preferences';
 import { storeName } from './Profiles';
+import { bookMd5 } from './BookHash';
 
 /**
  * Reading progress persistence using @ohos.data.preferences.
@@ -52,7 +53,10 @@ function deriveStatus(page: number, totalPages: number): number {
 
 const PREF_NAME = 'librera_reader';
 const KEY_RECENT = 'recent_books';
-const MAX_RECENT = 20;
+/* 0.9.47: the store doubles as the SHELF master list (android library
+ * parity - every book stays listed). MRU views slice RECENT_VIEW_LIMIT. */
+const MAX_SHELF = 1000;
+export const RECENT_VIEW_LIMIT = 20;
 
 let prefInstance: preferences.Preferences | undefined = undefined;
 let prefInstanceStore: string = '';
@@ -75,10 +79,31 @@ export async function saveRecentBook(ctx: Context, book: RecentBook): Promise<vo
        pass page/totalPages/lastRead, so preserve star/cover/author/tags/series/
        genre and keep status in sync with the progress. */
     let old: RecentBook | undefined = undefined;
+    let rehomePath = '';
     for (let i = 0; i < list.length; i++) {
       if (list[i].path === book.path) {
         old = list[i];
         break;
+      }
+    }
+    /* 0.9.48 (plan-4 batch-2): re-home - the same book re-imported at a
+     * new location (content MD5 match within equal display titles)
+     * inherits the archived record instead of duplicating it; the old
+     * entry is dropped. */
+    if (old === undefined && book.title.length > 0 && book.path.indexOf('remote://') !== 0) {
+      const newMd5 = await bookMd5(ctx, book.path);
+      if (newMd5.length > 0) {
+        for (let i = 0; i < list.length; i++) {
+          const c = list[i];
+          if (c.title === book.title && c.path !== book.path && c.path.indexOf('remote://') !== 0) {
+            const oldMd5 = await bookMd5(ctx, c.path);
+            if (oldMd5.length > 0 && oldMd5 === newMd5) {
+              old = c;
+              rehomePath = c.path;
+              break;
+            }
+          }
+        }
       }
     }
     let status: number = typeof book.status === 'number' ? book.status : deriveStatus(book.page, book.totalPages);
@@ -119,17 +144,30 @@ export async function saveRecentBook(ctx: Context, book: RecentBook): Promise<vo
       genre: (old !== undefined && (book.genre === undefined || book.genre.length === 0)) ? old.genre : book.genre,
       status: status
     };
-    /* Remove existing entry for same path, keep merged at front */
+    if (rehomePath.length > 0 && old !== undefined && book.page === 0) {
+      /* the fresh import carries no position - adopt the archived one
+       * (same content, new location); finished stays finished */
+      merged.page = old.page;
+      merged.totalPages = old.totalPages;
+      merged.lastRead = old.lastRead;
+      if (old.status === 2) {
+        merged.status = 2;
+      } else {
+        merged.status = deriveStatus(merged.page, merged.totalPages);
+      }
+    }
+    /* Remove existing entry for same path (and the re-homed old one),
+     * keep merged at front */
     const filtered: RecentBook[] = [];
     for (let i = 0; i < list.length; i++) {
-      if (list[i].path !== book.path) {
+      if (list[i].path !== book.path && list[i].path !== rehomePath) {
         filtered.push(list[i]);
       }
     }
     filtered.unshift(merged);
-    /* Cap at MAX_RECENT */
+    /* Cap at MAX_SHELF */
     const trimmed: RecentBook[] = [];
-    for (let i = 0; i < filtered.length && i < MAX_RECENT; i++) {
+    for (let i = 0; i < filtered.length && i < MAX_SHELF; i++) {
       trimmed.push(filtered[i]);
     }
     await prefs.put(KEY_RECENT, JSON.stringify(trimmed));
@@ -178,6 +216,36 @@ export async function setBooksStatus(ctx: Context, paths: string[], status: numb
   } catch (e) {
     console.error('[Progress] setBooksStatus failed');
   }
+}
+
+/** 0.9.47: adopt a merged READING override by book FILE NAME
+ * (app-BookStates.json key parity = ExtUtils.getFileName). Matches title or
+ * path base name; only upgrades unread (0 -> 1), never demotes finished. */
+export async function setStatusByFileName(ctx: Context, fileName: string,
+  status: number): Promise<boolean> {
+  const list = await getRecentBooks(ctx);
+  let changed = false;
+  for (let i = 0; i < list.length; i++) {
+    const b = list[i];
+    const base = b.path.substring(b.path.lastIndexOf('/') + 1);
+    if (status === 1 && b.status === 0 && (b.title === fileName || base === fileName)) {
+      b.status = 1;
+      changed = true;
+    }
+  }
+  if (!changed) {
+    return false;
+  }
+  try {
+    const prefs = await getPrefs(ctx);
+    await prefs.put(KEY_RECENT, JSON.stringify(list));
+    await prefs.flush();
+    console.info(`[Progress] setStatusByFileName ${fileName} -> ${status}`);
+  } catch (e) {
+    console.error('[Progress] setStatusByFileName failed');
+    return false;
+  }
+  return true;
 }
 
 export async function getRecentBooks(ctx: Context): Promise<RecentBook[]> {
@@ -309,7 +377,7 @@ export async function replaceRecentBooks(ctx: Context, list: RecentBook[]): Prom
   try {
     const prefs = await getPrefs(ctx);
     const trimmed: RecentBook[] = [];
-    for (let i = 0; i < list.length && i < MAX_RECENT; i++) {
+    for (let i = 0; i < list.length && i < MAX_SHELF; i++) {
       trimmed.push(list[i]);
     }
     await prefs.put(KEY_RECENT, JSON.stringify(trimmed));

@@ -216,6 +216,7 @@ struct OpenAsyncWork {
     fz_document *doc = nullptr;
     bool ok = false;
     bool reflow = false;
+    char errmsg[256] = {}; /* 0.9.46 R7: engine error text carried to the reject */
 };
 
 static void OpenAsyncExecute(napi_env env, void *data)
@@ -228,11 +229,29 @@ static void OpenAsyncExecute(napi_env env, void *data)
     }
     fz_register_document_handlers(w->ctx);
     fz_document *doc = nullptr;
+    fz_var(doc);
+    /* 0.9.46 R7 (Android JNI parity): a worker thread has no error handler to
+     * unwind into - a corrupt/forged document used to fz_rethrow -> exit(1) ->
+     * SIGABRT the whole process (11-10 faultlogger). Android wraps its open in
+     * fz_try/fz_catch (Builder/jni/libmupdf-librera.c:325/:667) and raises a
+     * Java exception instead; catch here and reject the promise via
+     * on_complete so the caller keeps running. */
     if (w->accel[0] != '\0') {
-        doc = fz_open_accelerated_document(w->ctx, w->path, w->accel);
+        fz_try(w->ctx) {
+            doc = fz_open_accelerated_document(w->ctx, w->path, w->accel);
+        }
+        fz_catch(w->ctx) {
+            doc = nullptr; /* stale or corrupt accelerator: plain open below */
+        }
     }
     if (doc == nullptr) {
-        doc = fz_open_document(w->ctx, w->path);
+        fz_try(w->ctx) {
+            doc = fz_open_document(w->ctx, w->path);
+        }
+        fz_catch(w->ctx) {
+            snprintf(w->errmsg, sizeof(w->errmsg), "%s", fz_caught_message(w->ctx));
+            doc = nullptr;
+        }
     }
     if (doc == nullptr) {
         /* open failed: drop the context, reject in on_complete */
@@ -241,7 +260,12 @@ static void OpenAsyncExecute(napi_env env, void *data)
         return;
     }
     w->doc = doc;
-    w->reflow = fz_is_document_reflowable(w->ctx, doc);
+    fz_try(w->ctx) {
+        w->reflow = fz_is_document_reflowable(w->ctx, doc);
+    }
+    fz_catch(w->ctx) {
+        w->reflow = false; /* cheap flag read, but never let a throw escape */
+    }
     w->ok = true;
 }
 
@@ -259,9 +283,15 @@ static void OpenAsyncComplete(napi_env env, napi_status status, void *data)
         napi_resolve_deferred(env, w->deferral, obj);
     } else if (env != nullptr) {
         napi_value errv = nullptr;
-        napi_value errcode;
-        napi_create_string_utf8(env, "OPEN_FAILED_ASYNC", NAPI_AUTO_LENGTH, &errcode);
-        napi_create_error(env, nullptr, errcode, &errv);
+        char msg[320];
+        if (w->errmsg[0] != '\0') {
+            snprintf(msg, sizeof(msg), "OPEN_FAILED_ASYNC: %s", w->errmsg);
+        } else {
+            snprintf(msg, sizeof(msg), "OPEN_FAILED_ASYNC");
+        }
+        napi_value msgv;
+        napi_create_string_utf8(env, msg, NAPI_AUTO_LENGTH, &msgv);
+        napi_create_error(env, nullptr, msgv, &errv);
         napi_reject_deferred(env, w->deferral, errv);
     }
     delete w;

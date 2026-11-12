@@ -988,4 +988,6 @@
    <string name="privacy_row_title">Datenschutzbestimmungen</string>
    <string name="privacy_policy_link">HowReadPro Datenschutzbestimmungen</string>
    <string name="mail_row_title">E-Mail</string>
-</resources>
+
+    <string name="label_sort">Sortieren</string>
+    <string name="label_view">Ansicht</string></resources>

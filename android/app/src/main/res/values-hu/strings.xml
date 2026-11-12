@@ -988,4 +988,6 @@
    <string name="privacy_row_title">Adatvédelmi irányelv</string>
    <string name="privacy_policy_link">HowReadPro Adatvédelmi irányelv</string>
    <string name="mail_row_title">E-mail</string>
-</resources>
+
+    <string name="label_sort">Rendezés</string>
+    <string name="label_view">Nézet</string></resources>

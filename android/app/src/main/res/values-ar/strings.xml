@@ -988,4 +988,6 @@
    <string name="privacy_row_title">سياسة الخصوصية</string>
    <string name="privacy_policy_link">سياسة الخصوصية لـ HowReadPro</string>
    <string name="mail_row_title">البريد الإلكتروني</string>
-</resources>
+
+    <string name="label_sort">ترتيب</string>
+    <string name="label_view">عرض</string></resources>

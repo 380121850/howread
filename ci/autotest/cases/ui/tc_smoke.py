@@ -41,10 +41,10 @@ def sm03_tabs(dev, case_id):
     with dev.step(case_id, "traverse"):
         tabs = [
             (("首页", "Dashboard", "Home"), True),
-            (("书库", "Library", "Clouds", "OPDS"), False),
+            (("书架", "书库", "Library", "Clouds", "OPDS"), False),
             # "My files": en 底栏 Tab 文案(moon_home_files)——旧词 Browse/Files
             # 已随 10-06 改版漂移,AVD 英文环境两词都不存在导致 SM-03 误报
-            (("我的文件", "My files", "Browse", "Files"), False),
+            (("我的书库", "我的文件", "My library", "My files", "Browse", "Files"), False),
             (("偏好", "Settings", "Preferences"), False),
         ]
         unreachable = []

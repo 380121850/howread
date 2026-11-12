@@ -1,7 +1,9 @@
 import http from '@ohos.net.http';
 import preferences from '@ohos.data.preferences';
 import util from '@ohos.util';
-import { RecentBook, exportRecentBooks, saveRecentBook } from './ReadingProgress';
+import { RecentBook, exportRecentBooks, saveRecentBook, setStatusByFileName } from './ReadingProgress';
+import { parseScanFormats } from './LibrarySearch';
+import { debugLogDefault, debugLogIsOn, debugLogSetEnabled } from './DebugLog';
 import { Bookmark, exportBookmarks, replaceBookmarks, loadBookmarkTombstones,
   pruneBookmarkTombstones } from './Bookmarks';
 /* 0.9.44: AI notes join the per-book payload as android isAiNote bookmarks;
@@ -538,17 +540,17 @@ interface DelBookRec {
 }
 
 function entryFromBookmark(bm: Bookmark, ms: number): Record<string, Object> {
-  const pgc = bm.pgs > 0 ? bm.pgs : -1;
+  const pgs = bm.pgs > 0 ? bm.pgs : -1;
   const e: Record<string, Object> = {
     'path': bm.path,
     'text': bm.label,
-    'p': pgc > 0 ? bm.page / pgc : 0,
+    'p': pgs > 0 ? bm.page / pgs : 0,
     'pg': bm.page,
-    'pgc': pgc,
-    /* 0.9.44: android bookmarks serialize FIELD NAMES (AppBookmark via
-     * Objects.loadFromJson) - the epoch key there is "pgs"; "pgc" stays
-     * for pre-0.9.44 harmony readers */
-    'pgs': pgc,
+    /* 0.9.47: single epoch key "pgs" - android AppBookmark field-name
+     * serialization parity. The legacy "pgc" compat key (pre-0.9.44
+     * harmony readers) is retired by decision; unknown keys are ignored
+     * on both sides so everything else stays lossless. */
+    'pgs': pgs,
     't': ms
   };
   /* 0.9.43: AI-note bookmarks keep their flags on the wire (android
@@ -616,12 +618,9 @@ function policyOf(c: SyncConfig): string {
 
 function bookmarkOf(key: string, e: Record<string, Object>, path: string): Bookmark {
   const pg = recNum(e, 'pg', -1);
-  /* 0.9.44: android carries the epoch total as "pgs" (field-name
-   * serialization); "pgc" was this port's pre-0.9.44 spelling */
-  let pgc = recNum(e, 'pgs', -1);
-  if (pgc < 0) {
-    pgc = recNum(e, 'pgc', -1);
-  }
+  /* 0.9.47: epoch total is "pgs" only (android field-name parity); the
+   * pre-0.9.44 "pgc" fallback is retired by decision */
+  const pgc = recNum(e, 'pgs', -1);
   const p = recNum(e, 'p', 0);
   const t = recNum(e, 't', 0);
   let page: number;
@@ -1922,6 +1921,8 @@ async function importNetworkSources(ctx: Context, rootText: string): Promise<num
     const it = smbMap[k];
     const host = recStr(it, 'host', '');
     const srv: SmbServer = {
+      trustAll: false,
+      startPath: '',
       host: host,
       port: recNum(it, 'port', 445),
       share: recStr(it, 'share', ''),
@@ -1974,6 +1975,7 @@ async function importNetworkSources(ctx: Context, rootText: string): Promise<num
       }
     }
     const srv: SftpServer = {
+      startPath: '',
       host: host,
       port: recNum(it, 'port', 22),
       name: recStr(it, 'title', host),
@@ -2500,6 +2502,74 @@ async function buildStateFull(ctx: Context, cfg: SyncConfig,
   if (full['remoteWindowAfterPct'] !== undefined || st.remoteWindowAfterPct !== 30) {
     full['remoteWindowAfterPct'] = st.remoteWindowAfterPct;
   }
+  /* 0.9.47 batch-1: plain bool/int mappings. Android keys verified against
+   * STATE_DEVICE_FIELDS (WebDavSyncer.java:124-149) - none are device-bound. */
+  if (full['isHideReadBook'] !== undefined || st.hideReadBooks !== false) {
+    full['isHideReadBook'] = st.hideReadBooks;
+  }
+  if (full['flippingInterval'] !== undefined || st.autoFlipInterval !== 3) {
+    full['flippingInterval'] = st.autoFlipInterval;
+  }
+  if (full['isCropBookCovers'] !== undefined || st.cropCovers !== true) {
+    full['isCropBookCovers'] = st.cropCovers;
+  }
+  if (full['isBookCoverEffect'] !== undefined || st.coverEffect !== false) {
+    full['isBookCoverEffect'] = st.coverEffect;
+  }
+  if (full['isBorderAndShadow'] !== undefined || st.coverBorderShadow !== false) {
+    full['isBorderAndShadow'] = st.coverBorderShadow;
+  }
+  if (full['isSkipFolderWithNOMEDIA'] !== undefined || st.skipNoMediaFolders !== true) {
+    full['isSkipFolderWithNOMEDIA'] = st.skipNoMediaFolders;
+  }
+  if (full['isFirstSurname'] !== undefined || st.authorSurnameFirst !== false) {
+    full['isFirstSurname'] = st.authorSurnameFirst;
+  }
+  if (full['isShowCloseAppDialog'] !== undefined || st.showExitDialog !== false) {
+    full['isShowCloseAppDialog'] = st.showExitDialog;
+  }
+  /* 0.9.48 batch-2: app lock switch (android isAppPassword; the password
+   * itself rides app-Misc PasswordState - plaintext there too) */
+  if (full['isAppPassword'] !== undefined || st.appLockEnabled !== false) {
+    full['isAppPassword'] = st.appLockEnabled;
+  }
+  /* 0.9.48 batch-2: scan whitelist <-> android support* booleans. The map
+   * is deny-by-false (LibrarySearch.isExtAllowed: absent = allowed), so a
+   * group maps to support as `!== false`. Published only when the
+   * whitelist is set: '' means "scan everything" and must not widen
+   * android's format set. */
+  if (st.scanFormats.length > 0) {
+    const wf = parseScanFormats(st.scanFormats);
+    full['supportPDF'] = wf['pdf'] !== false;
+    full['supportEPUB'] = wf['epub'] !== false;
+    full['supportFB2'] = wf['fb2'] !== false;
+    full['supportTXT'] = wf['txtmd'] !== false;
+    full['supportMOBI'] = wf['mobi'] !== false;
+    full['supportDJVU'] = wf['djvu'] !== false;
+    full['supportXPS'] = wf['xps'] !== false;
+    full['supportDOCX'] = wf['doc'] !== false;
+    full['supportRTF'] = wf['rtf'] !== false;
+    full['supportODT'] = wf['odt'] !== false;
+    full['supportCBZ'] = wf['cbz'] !== false;
+    full['supportZIP'] = wf['zip'] !== false;
+  }
+  /* 0.9.48 batch-2: accent color <-> android tintColor (#RRGGBB <-> ARGB
+   * int; the #3949AB factory default never publishes so an uncustomized
+   * device cannot repaint a customized one). */
+  const acc = st.accentColor.toLowerCase();
+  if (acc.length === 7 && acc.charAt(0) === '#' && acc !== '#3949ab') {
+    const rgb = parseInt(acc.substring(1, 7), 16);
+    if (!isNaN(rgb)) {
+      full['tintColor'] = -16777216 | rgb;
+    }
+  }
+  /* 0.9.48 batch-2: debug log switch (android isDebugLogEnabled + UserSet
+   * companion); published while it differs from this build's default or
+   * the mirror already carries it. */
+  if (debugLogIsOn() !== debugLogDefault() || full['isDebugLogEnabled'] !== undefined) {
+    full['isDebugLogEnabled'] = debugLogIsOn();
+    full['isDebugLogEnabledUserSet'] = true;
+  }
   /* webdavSyncPolicy roams (android: a reading preference, deliberately NOT
    * in SYNC_CONFIG_FIELDS); harmony default = SYNC_CONFLICTS[0] = 'newer' */
   if (full['webdavSyncPolicy'] !== undefined || cfg.conflict !== SYNC_CONFLICTS[0]) {
@@ -2636,6 +2706,109 @@ async function applyStateImport(ctx: Context, cfg: SyncConfig,
       changed = true;
     }
   }
+  /* 0.9.47 batch-1: plain bool/int mappings (validated, same keys as export) */
+  const hrb = merged['isHideReadBook'];
+  if (typeof hrb === 'boolean' && (hrb as boolean) !== st.hideReadBooks) {
+    st.hideReadBooks = hrb as boolean;
+    changed = true;
+  }
+  const fli = merged['flippingInterval'];
+  if (typeof fli === 'number' && (fli as number) >= 1 && (fli as number) <= 240 &&
+    (fli as number) !== st.autoFlipInterval) {
+    st.autoFlipInterval = fli as number;
+    changed = true;
+  }
+  const cbc = merged['isCropBookCovers'];
+  if (typeof cbc === 'boolean' && (cbc as boolean) !== st.cropCovers) {
+    st.cropCovers = cbc as boolean;
+    changed = true;
+  }
+  const bce = merged['isBookCoverEffect'];
+  if (typeof bce === 'boolean' && (bce as boolean) !== st.coverEffect) {
+    st.coverEffect = bce as boolean;
+    changed = true;
+  }
+  const bas = merged['isBorderAndShadow'];
+  if (typeof bas === 'boolean' && (bas as boolean) !== st.coverBorderShadow) {
+    st.coverBorderShadow = bas as boolean;
+    changed = true;
+  }
+  const snm = merged['isSkipFolderWithNOMEDIA'];
+  if (typeof snm === 'boolean' && (snm as boolean) !== st.skipNoMediaFolders) {
+    st.skipNoMediaFolders = snm as boolean;
+    changed = true;
+  }
+  const ifs = merged['isFirstSurname'];
+  if (typeof ifs === 'boolean' && (ifs as boolean) !== st.authorSurnameFirst) {
+    st.authorSurnameFirst = ifs as boolean;
+    changed = true;
+  }
+  const sca = merged['isShowCloseAppDialog'];
+  if (typeof sca === 'boolean' && (sca as boolean) !== st.showExitDialog) {
+    st.showExitDialog = sca as boolean;
+    changed = true;
+  }
+  /* 0.9.48 batch-2: app lock switch */
+  const iap = merged['isAppPassword'];
+  if (typeof iap === 'boolean' && (iap as boolean) !== st.appLockEnabled) {
+    st.appLockEnabled = iap as boolean;
+    changed = true;
+  }
+  /* 0.9.48 batch-2: android support* booleans -> scan whitelist. Adopted
+   * only when the combo differs from android's factory defaults - the
+   * all-default combo would silently narrow harmony's scan set. */
+  const supGroups: string[] = ['pdf', 'epub', 'fb2', 'txtmd', 'mobi', 'djvu',
+    'xps', 'doc', 'rtf', 'odt', 'cbz', 'zip'];
+  const supKeys: string[] = ['supportPDF', 'supportEPUB', 'supportFB2', 'supportTXT',
+    'supportMOBI', 'supportDJVU', 'supportXPS', 'supportDOCX', 'supportRTF',
+    'supportODT', 'supportCBZ', 'supportZIP'];
+  const supDefault: boolean[] = [true, true, true, false, true, true, false, true,
+    true, true, false, true];
+  let supOk = true;
+  let supDiff = false;
+  const supVals: boolean[] = [];
+  for (let i = 0; i < supKeys.length; i++) {
+    const sv = merged[supKeys[i]];
+    if (typeof sv !== 'boolean') {
+      supOk = false;
+      break;
+    }
+    const bv = sv as boolean;
+    supVals.push(bv);
+    if (bv !== supDefault[i]) {
+      supDiff = true;
+    }
+  }
+  if (supOk && supDiff) {
+    const wl: Record<string, boolean> = {};
+    for (let i = 0; i < supGroups.length; i++) {
+      wl[supGroups[i]] = supVals[i];
+    }
+    const wantWl = JSON.stringify(wl);
+    if (wantWl !== st.scanFormats) {
+      st.scanFormats = wantWl;
+      changed = true;
+    }
+  }
+  /* 0.9.48 batch-2: android tintColor -> accent color (skip the factory
+   * #3949AB so defaults never repaint). */
+  const tic = merged['tintColor'];
+  if (typeof tic === 'number') {
+    const rgb = ((tic as number) & 0xFFFFFF).toString(16).padStart(6, '0');
+    if (rgb.toUpperCase() !== '3949AB') {
+      const want = '#' + rgb.toUpperCase();
+      if (want !== st.accentColor) {
+        st.accentColor = want;
+        changed = true;
+      }
+    }
+  }
+  /* 0.9.48 batch-2: debug log switch (android pairs enabled with UserSet) */
+  const dle = merged['isDebugLogEnabled'];
+  if (typeof dle === 'boolean' && (dle as boolean) !== debugLogIsOn()) {
+    await debugLogSetEnabled(ctx, dle as boolean);
+    changed = true;
+  }
   if (changed) {
     await saveSettings(ctx, st);
   }
@@ -2711,51 +2884,94 @@ async function buildMiscFull(ctx: Context,
       full['AppSP'] = sp;
     }
   }
+  /* 0.9.48 batch-2: PasswordState section (android prefs snapshot parity -
+   * plaintext there too, same trust boundary as the WebDAV credentials in
+   * app-NetworkSources.json). Value guard: a disabled/untouched lock never
+   * publishes a pass (android factory = empty). */
+  const psObj = full['PasswordState'];
+  const psTouched = st.appLockEnabled === true || st.appLockBiometric === true ||
+    st.appLockPass !== '1234';
+  if (isPlainObj(psObj) || psTouched) {
+    let ps: Record<string, Object>;
+    if (isPlainObj(psObj)) {
+      ps = psObj as Record<string, Object>;
+    } else {
+      const p0: Record<string, Object> = {};
+      ps = p0;
+    }
+    if (ps['appPassword'] !== undefined || psTouched) {
+      ps['appPassword'] = (st.appLockEnabled || st.appLockPass !== '1234') ? st.appLockPass : '';
+      ps['isFingerPrintPassword'] = st.appLockBiometric;
+      full['PasswordState'] = ps;
+    }
+  }
   return full;
 }
 
 async function applyMiscImport(ctx: Context,
   merged: Record<string, Object>): Promise<boolean> {
-  const spObj = merged['AppSP'];
-  if (!isPlainObj(spObj)) {
-    return false;
-  }
-  const sp = spObj as Record<string, Object>;
-  const rm = sp['readingMode'];
-  if (typeof rm !== 'number') {
-    return false;
-  }
-  const dbl = sp['isDouble'] === true;
-  const st = await loadSettings(ctx);
   let changed = false;
-  const mode = rm as number;
-  if (mode === 1) {
-    if (st.scrollMode !== 1) {
-      st.scrollMode = 1;
-      changed = true;
-    }
-  } else if (mode === 2) {
-    if (st.scrollMode !== 0) {
-      st.scrollMode = 0;
-      changed = true;
-    }
-    const want = dbl ? 1 : 0;
-    if (st.pageMode !== want) {
-      st.pageMode = want;
-      changed = true;
-    }
-  } else if (mode === 3) {
-    if (st.scrollMode !== 0) {
-      st.scrollMode = 0;
-      changed = true;
-    }
-    if (st.pageMode !== 2) {
-      st.pageMode = 2;
-      changed = true;
+  const spObj = merged['AppSP'];
+  if (isPlainObj(spObj)) {
+    const sp = spObj as Record<string, Object>;
+    const rm = sp['readingMode'];
+    if (typeof rm === 'number') {
+      const dbl = sp['isDouble'] === true;
+      const st = await loadSettings(ctx);
+      const mode = rm as number;
+      if (mode === 1) {
+        if (st.scrollMode !== 1) {
+          st.scrollMode = 1;
+          changed = true;
+        }
+      } else if (mode === 2) {
+        if (st.scrollMode !== 0) {
+          st.scrollMode = 0;
+          changed = true;
+        }
+        const want = dbl ? 1 : 0;
+        if (st.pageMode !== want) {
+          st.pageMode = want;
+          changed = true;
+        }
+      } else if (mode === 3) {
+        if (st.scrollMode !== 0) {
+          st.scrollMode = 0;
+          changed = true;
+        }
+        if (st.pageMode !== 2) {
+          st.pageMode = 2;
+          changed = true;
+        }
+      }
+      if (changed) {
+        await saveSettings(ctx, st);
+      }
     }
   }
-  if (changed) {
-    await saveSettings(ctx, st);
+  /* 0.9.48 batch-2: PasswordState adoption (android restorePrefsDiff
+   * parity). appPassword is adopted only when non-empty, so a device
+   * without a password can never blank one; the merge engine already
+   * arbitrates both-changed (local wins). */
+  const psObj = merged['PasswordState'];
+  if (isPlainObj(psObj)) {
+    const ps = psObj as Record<string, Object>;
+    const ap = ps['appPassword'];
+    const fp = ps['isFingerPrintPassword'];
+    const st = await loadSettings(ctx);
+    let psChanged = false;
+    if (typeof ap === 'string' && (ap as string).length > 0 && (ap as string) !== st.appLockPass) {
+      st.appLockPass = ap as string;
+      psChanged = true;
+    }
+    if (typeof fp === 'boolean' && (fp as boolean) !== st.appLockBiometric) {
+      st.appLockBiometric = fp as boolean;
+      psChanged = true;
+    }
+    if (psChanged) {
+      await saveSettings(ctx, st);
+      changed = true;
+    }
   }
   return changed;
 }
@@ -2840,6 +3056,52 @@ function mergeStatesMaxWinsHarmony(local: Record<string, Object>,
   return out;
 }
 
+/* ---- 0.9.47: app-BookStates.json production/consumption (android
+ * BookStateStore parity). A local mark mutates the mirror copy of the file
+ * (android saveOwn writes its local file the same way) so the next
+ * three-way merge publishes it; consumption adopts merged READING
+ * overrides into the shelf model. ---- */
+
+/** Consume merged overrides: {fileName: 1} upgrades an unread shelf entry
+ * to READING (android effective() semantics: explicit override wins over
+ * derived states; finished stays finished). */
+async function applyBookStatesToLocal(ctx: Context,
+  obj: Record<string, Object>): Promise<void> {
+  const names = Object.keys(obj);
+  for (let i = 0; i < names.length; i++) {
+    if (recNum(obj, names[i], -1) === 1) {
+      await setStatusByFileName(ctx, names[i], 1);
+    }
+  }
+}
+
+/** Local READING override write/remove (android saveOwn/removeOverride
+ * parity): key = book file name (ExtUtils.getFileName parity). No delete
+ * operator (ArkTS): removal rebuilds the object without the key. */
+export async function syncBookStateMark(ctx: Context, fileName: string,
+  reading: boolean): Promise<void> {
+  try {
+    const text = await loadMirrorText(ctx, GS_BOOKSTATES);
+    const obj = text.length > 0 ? parseRec(text) : ({} as Record<string, Object>);
+    if (reading) {
+      obj[fileName] = 1;
+    } else {
+      const rest: Record<string, Object> = {};
+      const ks = Object.keys(obj);
+      for (let i = 0; i < ks.length; i++) {
+        if (ks[i] !== fileName) {
+          rest[ks[i]] = obj[ks[i]];
+        }
+      }
+      await saveMirrorText(ctx, GS_BOOKSTATES, JSON.stringify(rest));
+      return;
+    }
+    await saveMirrorText(ctx, GS_BOOKSTATES, JSON.stringify(obj));
+  } catch (e) {
+    console.error('[Sync] bookStateMark failed');
+  }
+}
+
 async function syncBookStatesHarmony(ctx: Context, cfg: SyncConfig,
   entry: SyncLogEntry): Promise<void> {
   const url = globalUrlOf(cfg) + '/' + GS_BOOKSTATES;
@@ -2867,6 +3129,8 @@ async function syncBookStatesHarmony(ctx: Context, cfg: SyncConfig,
   if (!canonEqText(mergedText, mirrorText.length > 0 ? mirrorText : '{}')) {
     await saveMirrorText(ctx, GS_BOOKSTATES, mergedText);
   }
+  /* 0.9.47: adopt merged READING overrides into the local shelf model */
+  await applyBookStatesToLocal(ctx, merged);
   let bsPutFailed = false;
   if (!canonEqText(mergedText, remoteText)) {
     const ok = await davPut(ctx, cfg, url, mergedText);

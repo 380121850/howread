@@ -410,6 +410,20 @@ public class BookmarksData {
                 return;
             }
             List<AppBookmark> mine = getBookmarksByBook(path);
+            // 2026-11-11 T5-A fix (real-device verification): a LOCAL book
+            // without bookmarks used to hit the early return below with no
+            // tombstone at all - no "p" deletion marker recorded and the
+            // progress entry left alive - so the WebDAV sync kept the server
+            // books/<hash>.json as a permanent orphan and re-consumed it every
+            // round (DefaultListeners.deleteFile / CheckDeletedBooksWorker
+            // paths). Tombstone the progress for every non-remote path before
+            // the early return (deleteProgress is idempotent; the bookmarked
+            // path below still runs its own call). Remote paths keep the old
+            // behavior: shelf-removal of a remote book never tombstones on its
+            // own - the server file is never touched there.
+            if (!com.foobnix.remote.RemoteBook.isRemotePathLoose(path)) {
+                org.ebookdroid.common.settings.books.SharedBooks.deleteProgress(path);
+            }
             if (mine.isEmpty()) {
                 return;
             }

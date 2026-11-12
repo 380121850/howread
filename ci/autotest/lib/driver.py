@@ -438,7 +438,8 @@ class Device:
             raise TestFail("主界面 10s 内未就绪")
         entered = False
         for _ in range(3):
-            if self.click_desc("我的文件") or self.click_text("我的文件") \
+            if self.click_desc("我的书库") or self.click_text("我的书库") \
+                    or self.click_desc("我的文件") or self.click_text("我的文件") \
                     or self.click_desc("Browse") or self.click_text("Browse"):
                 time.sleep(1.5)
                 if self.dump_has_text("网上书库") or self.dump_has_text("Browse") \

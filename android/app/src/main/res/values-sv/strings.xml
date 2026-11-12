@@ -988,4 +988,6 @@
    <string name="privacy_row_title">Integritetspolicy</string>
    <string name="privacy_policy_link">HowReadPro Integritetspolicy</string>
    <string name="mail_row_title">E-post</string>
-</resources>
+
+    <string name="label_sort">Sortera</string>
+    <string name="label_view">Vy</string></resources>

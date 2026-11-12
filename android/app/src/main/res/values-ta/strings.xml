@@ -988,4 +988,6 @@
    <string name="privacy_row_title">தனிப்பட்ட அறிக்கை</string>
    <string name="privacy_policy_link">HowReadPro தனிப்பட்ட அறிக்கை</string>
    <string name="mail_row_title">மின்னஞ்சல்</string>
-</resources>
+
+    <string name="label_sort">வரிசைப்படுத்து</string>
+    <string name="label_view">காட்சி</string></resources>

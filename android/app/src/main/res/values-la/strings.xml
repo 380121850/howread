@@ -988,4 +988,6 @@
    <string name="privacy_row_title">Politica de Confidentialitate</string>
    <string name="privacy_policy_link">Politica de Confidentialitate HowReadPro</string>
    <string name="mail_row_title">Email</string>
-</resources>
+
+    <string name="label_sort">Sort</string>
+    <string name="label_view">View</string></resources>

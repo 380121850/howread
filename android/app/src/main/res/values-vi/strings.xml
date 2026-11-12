@@ -988,4 +988,6 @@
    <string name="privacy_row_title">Chính sách quyền riêng tư</string>
    <string name="privacy_policy_link">Chính sách quyền riêng tư của HowReadPro</string>
    <string name="mail_row_title">Email</string>
-</resources>
+
+    <string name="label_sort">Sắp xếp</string>
+    <string name="label_view">Xem</string></resources>
