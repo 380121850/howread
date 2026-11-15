@@ -1,5 +1,5 @@
 import preferences from '@ohos.data.preferences';
-import { AiConfig, PROTOCOL_OPENAI, loadAiConfig, saveAiConfig } from './AiClient';
+import { AiConfig, PROTOCOL_OPENAI, defaultUrl, loadAiConfig, saveAiConfig } from './AiClient';
 
 /**
  * Named AI vendor profiles (Android AiVendors 2026-09-26 parity): the saved
@@ -160,6 +160,15 @@ export async function deleteVendor(ctx: Context, name: string): Promise<void> {
   await putString(ctx, K_DELETED, JSON.stringify(del));
   if ((await activeVendorName(ctx)) === name) {
     await putString(ctx, K_ACTIVE, '');
+    /* 0.9.57 review: the legacy blob is what AiClient.loadAiConfig reads
+     * on every dialog open — after deleting the active vendor its url/key/
+     * model silently stayed in effect and reappeared on reopen (android
+     * deletes the effective config state in the same branch). */
+    const blank: AiConfig = {
+      provider: '', protocol: PROTOCOL_OPENAI, url: defaultUrl(PROTOCOL_OPENAI),
+      key: '', model: '', maxTokens: 4096, thinking: false
+    };
+    await saveAiConfig(ctx, blank);
   }
   console.info('[AiVendors] deleted profile: ' + name);
 }

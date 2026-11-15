@@ -14,7 +14,7 @@ import {
 import {
   saveRecentBook, getRecentBooks, getRecentBooksStarred, toggleStar,
   exportRecentBooks, replaceRecentBooks, setBookStatus, setBooksStatus,
-  RecentBook, RECENT_VIEW_LIMIT
+  RecentBook
 } from '../model/ReadingProgress';
 import { exportBookmarks, replaceBookmarks, getBookmarks, removeBookmark, addBookmark, Bookmark } from '../model/Bookmarks';
 import { OpenPrefetch } from '../model/OpenPrefetch';
@@ -22,14 +22,14 @@ import {
   loadSettings, saveSettings, defaultSettings, THEME_NAMES, ReaderSettings
 } from '../model/Settings';
 import { importUriToSandbox } from '../model/FileImport';
-import { scanDeviceBooks, scanFolderBooks, importPathToSandbox, searchLibraryText, findMissingBooks, ScanHit, LibSearchHit } from '../model/LibrarySearch';
+import { scanDeviceBooks, scanFolderBooks, importPathToSandbox, searchLibraryText, findMissingBooks, readCalibreMeta, ScanHit, LibSearchHit } from '../model/LibrarySearch';
 import { initProfiles, listProfiles, createProfile, switchProfile, deleteProfile, getCurrentProfile, storeName, DEFAULT_PROFILE } from '../model/Profiles';
 import { getTagList, addTagToBook, removeTagFromBook, getSeriesList } from '../model/Tags';
 import { getReadingStats, getDailyStats, getMonthlyStats, clearReadingStats, ReadingStatsData, DayStat, MonthStat } from '../model/ReadingStats';
 import { fetchOpds, OpdsEntry } from '../model/Opds';
 import { OpdsServer, DavServer, SmbServer, SftpServer, getOpdsServers, saveOpdsServer, removeOpdsServer, getDavServers, saveDavServer, removeDavServer, getSmbServers, saveSmbServer, removeSmbServer, getSftpServers, saveSftpServer, removeSftpServer, LibFolder, getLibFolders, saveLibFolders } from '../model/Servers';
-import { SyncConfig, SyncLogEntry, SYNC_CONFLICTS, defaultSyncConfig, loadSyncConfig, saveSyncConfig, getSyncLog, runSync, testSyncConnection, syncAiProfiles, syncBookStateMark } from '../model/Sync';
-import { AiConfig, AiMessage, loadAiConfig, saveAiConfig, chatCompletion, listModels, testChat, aiConfigReady, AI_PROVIDERS, AI_PROVIDER_URLS, PROTOCOL_OPENAI, PROTOCOL_ANTHROPIC, PROTOCOL_GOOGLE, defaultUrl, lastTruncated } from '../model/AiClient';
+import { SyncConfig, SyncLogEntry, SYNC_CONFLICTS, defaultSyncConfig, loadSyncConfig, saveSyncConfig, getSyncLog, runSync, testSyncConnection, syncAiProfiles, syncBookStateMark, davBrowseDirs, davCreateDir } from '../model/Sync';
+import { AiConfig, AiMessage, loadAiConfig, chatCompletion, listModels, testChat, aiConfigReady, PROTOCOL_OPENAI, PROTOCOL_ANTHROPIC, PROTOCOL_GOOGLE, defaultUrl, lastTruncated } from '../model/AiClient';
 import { AiVendorEntry, listVendors, activeVendorName, activeVendor, saveVendor, deleteVendor } from '../model/AiVendors';
 import { addNote, AiNote } from '../model/Notes';
 import { biometricAvailable, startBiometricAuth } from '../model/Biometric';
@@ -55,7 +55,8 @@ import {
   fileExtOf, isDirectOpenExt, isSimpleFetchExt, isHeavyExt, isPageFormatExt, isEngineUnsupportedExt,
   checkRemoteMagic,
   BlockCacheStore, cachedPercent, remoteCacheTotalBytes, clearRemoteCacheBook, clearRemoteCacheAll, fixHostileExt,
-  fetchWholeBookToCache, materializeBook, mobiIsEncrypted, upsertRemoteBook, removeRemoteBook, getRemoteBooks
+  fetchWholeBookToCache, materializeBook, mobiIsEncrypted, upsertRemoteBook, removeRemoteBook, getRemoteBooks,
+  isMeteredNetwork,
 } from '../model/RemoteBook';
 
 /* Round 7: module-level resources & constants (Android PrefFragment2 parity) */
@@ -72,7 +73,15 @@ const VIEW_MENU_LABELS: Resource[] = [$r('app.string.vm_list'), $r('app.string.v
 const VIEW_MENU_ICONS: Resource[] = [$r('app.media.ic_view_list'), $r('app.media.ic_view_compact'), $r('app.media.ic_view_grid'), $r('app.media.ic_view_cover'), $r('app.media.ic_view_shelf'), $r('app.media.ic_view_author'), $r('app.media.ic_view_genre'), $r('app.media.ic_view_series'), $r('app.media.ic_view_keywords'), $r('app.media.ic_view_language'), $r('app.media.ic_view_keywords'), $r('app.media.ic_view_publisher'), $r('app.media.ic_view_pubdate')];
 const THEME_PRESETS: string[] = ['#3949AB', '#1565C0', '#00897B', '#2E7D32', '#6D4C41', '#455A64', '#AD1457', '#37474F'];
 const ACCENT_PRESETS: string[] = ['#03A9F4', '#FF4081', '#7CB342', '#FFB300', '#9575CD', '#4DD0E1', '#F06292', '#90A4AE'];
-const FORMAT_ROWS: string[][] = [['pdf', 'PDF'], ['epub', 'EPUB'], ['fb2', 'FB2'], ['txtmd', 'TXT/MD'], ['mobi', 'MOBI/AZW/PRC'], ['djvu', 'DJVU'], ['xps', 'XPS'], ['doc', 'DOC/DOCX'], ['rtf', 'RTF'], ['odt', 'ODT'], ['cbz', 'CBZ/CBR'], ['zip', 'ZIP'], ['html', 'HTML']];
+/* 0.9.56: Android AppState.STYLE_COLORS / ACCENT_COLORS (row palettes) */
+const STYLE_COLORS: string[] = ['#3949AB', '#EA5964', '#00897B', '#000000'];
+const ACCENT_COLORS: string[] = ['#E3C800', '#EA5964', '#00897B', '#FFFFFF', '#000000'];
+/* 0.9.55: Android formatEntries order (PrefFragment2.formatEntries); the
+ * HTML/TXT family merges txt/md/html/xhtml/mhtml/shtml (legacy 'html' key
+ * folds into 'txtmd' at parse time). */
+const FORMAT_ROWS: string[][] = [['pdf', 'PDF'], ['djvu', 'DJVU'], ['fb2', 'FB2'], ['mobi', 'MOBI/AZW/PRC'], ['epub', 'EPUB'], ['xps', 'XPS'], ['doc', 'DOC/DOCX'], ['rtf', 'RTF'], ['odt', 'ODT'], ['cbz', 'CBZ/CBR'], ['zip', 'ZIP'], ['txtmd', 'HTML/TXT']];
+/* 0.9.57: 定时同步 popup options in minutes (Android interval picker; 0 = off) */
+const SYNC_INTERVAL_MINUTES: number[] = [0, 5, 15, 30, 60, 180, 360, 1440];
 /* 2026-09-20 port: same what-is-new page as Android v1.3.13 */
 const WHATSNEW_URL: string = 'https://380121850.github.io/howread/what-is-new/zh.html';
 const HOME_URL: string = 'https://380121850.github.io/howread/';
@@ -237,8 +246,6 @@ struct Index {
   /* ---- Round 7: exit confirm + licenses viewer + tab order editor ---- */
   @State showExitConfirm: boolean = false;
   @State showLicenses: boolean = false;
-  @State showTabsEdit: boolean = false;
-  @State tabsDraft: number[] = [0, 1, 2, 3];
   /* ---- Round 7: tab display order + Tabs bar position ---- */
   @State tabDisplay: number[] = [0, 1, 2, 3];
   @State tabPos: number = 0;
@@ -343,12 +350,28 @@ struct Index {
   @State aiVendorNames: string[] = [];
   @State aiVendorName: string = '';
   @State aiKeyVisible: boolean = false;
-  @State aiAddingName: boolean = false;
   @State aiNewName: string = '';
+  /* 0.9.57: sync-path picker + sync option sheet + AI popup sheet +
+   * online-read direct inputs */
+  @State showDavPicker: boolean = false;
+  @State davPickerRel: string = '';
+  @State davPickerDirs: string[] = [];
+  @State davPickerBusy: boolean = false;
+  @State davPickerMsg: string = '';
+  @State davPickerAdding: boolean = false;
+  @State davPickerName: string = '';
+  @State syncSheet: string = '';
+  @State aiSheet: string = '';
+  @State remoteCfgThreshold: string = '';
+  @State remoteCfgBefore: string = '';
+  @State remoteCfgAfter: string = '';
+  @State remoteCfgRetry: string = '';
+  @State remoteCfgInterval: string = '';
+  @State remoteNetMetered: boolean = true;
   /** editable AI config bound to the dialog inputs */
   @State aiCfg: AiConfig = {
     protocol: PROTOCOL_OPENAI,
-    provider: AI_PROVIDERS[0], url: AI_PROVIDER_URLS[0], key: '', model: '', maxTokens: 8192, thinking: false
+    provider: '', url: '', key: '', model: '', maxTokens: 8192, thinking: false
   };
   @State aiTestIn: string = '';
   @State aiTestOut: string = '';
@@ -396,16 +419,23 @@ struct Index {
   @State remotePercents: Record<string, number> = {};
   /** remote whole-book fetch progress: -1 = idle */
   @State remoteFetchName: string = '';
-  /** numeric remote pref dialog */
-  @State showRemoteNum: boolean = false;
-  @State remoteNumKey: string = '';
-  @State remoteNumValue: string = '';
-  @State remoteNumMin: number = 0;
-  @State remoteNumMax: number = 99999;
   @State remoteCacheUsage: string = '';
+  @State convCacheUsage: string = '';
+  @State tempCacheUsage: string = '';
   @State appCacheUsage: string = '';
   @State cacheTotalUsage: string = '';
+  /* 0.9.58: cache cap editor + path-migration dialog state */
+  @State cacheMaxInput: string = '500';
+  @State showMigrate: boolean = false;
+  @State migrateFrom: string = '';
+  @State migrateTo: string = '';
   @State dbgLogOn: boolean = false;
+  /* 0.9.55: remote/cache manager + lock-password dialogs */
+  @State showRemoteCfg: boolean = false;
+  @State showCacheMgr: boolean = false;
+  @State showLockPass: boolean = false;
+  @State lockPassInput: string = '';
+  private seekMaxCache: number = 0;
 
   /* ---- SMB/SFTP servers (native libsmb2 / libssh2 clients) ---- */
   @State smbServers: SmbServer[] = [];
@@ -696,6 +726,12 @@ struct Index {
     if (this.settings.autoScanOnStart) {
       this.runDeviceScan();
     }
+    /* 0.9.55: restore the shelf search query (Android isRestoreSearchQuery) */
+    if (this.settings.restoreSearchQuery && this.settings.lastLibQuery.length > 0) {
+      this.libQuery = this.settings.lastLibQuery;
+    }
+    /* 0.9.55: cache-manager row shows the usage total upfront */
+    this.refreshCacheUsage();
     this.checkAppLock();
   }
 
@@ -742,6 +778,8 @@ struct Index {
   }
 
   private async saveNow(): Promise<void> {
+    /* 0.9.55: remember the shelf search query (restore at startup) */
+    this.settings.lastLibQuery = this.libQuery;
     await saveSettings(getContext(this), this.settings);
   }
 
@@ -875,10 +913,14 @@ struct Index {
       });
   }
 
-  /** Export settings + recents + bookmarks to a JSON file in the sandbox. */
+  /** 0.9.58: export settings + recents + bookmarks to a user-picked JSON
+   *  file (Android exportDialog parity — the sandbox copy was invisible to
+   *  the user; HarmonyOS keeps profile state in preferences, so the backup
+   *  unit is the BackupFile payload, not a folder zip).
+   *  0.9.58 review: cancel = silent no-op (Android parity). */
   private async doBackup(): Promise<void> {
+    const ctx = getContext(this);
     try {
-      const ctx = getContext(this);
       const recents = await exportRecentBooks(ctx);
       const bookmarks = await exportBookmarks(ctx);
       const payload: BackupFile = {
@@ -889,40 +931,155 @@ struct Index {
         recents: recents,
         bookmarks: bookmarks
       };
-      const target = ctx.filesDir + '/librera_backup.json';
-      const f = fs.openSync(target, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
-      fs.writeSync(f.fd, JSON.stringify(payload));
-      fs.closeSync(f);
-      this.backupText = `已导出：${recents.length} 本书籍 / ${bookmarks.length} 条书签 → ${target}`;
-      console.info(`[Index] Backup written: ${target}`);
+      const body = JSON.stringify(payload, null, 2);
+      const name = 'HowReadPro-backup-' + new Date().toISOString().substring(0, 10) + '.json';
+      /* 0.9.58 review: cancel = silent no-op (Android parity) — no sandbox
+       * fallback file the user can never see, no false "exported" toast. */
+      const docPicker = new picker.DocumentViewPicker(ctx);
+      const opts: picker.DocumentSaveOptions = new picker.DocumentSaveOptions();
+      opts.newFileNames = [name];
+      const uris: Array<string> = await docPicker.save(opts);
+      if (uris.length === 0) {
+        return;
+      }
+      const f: fs.File = fs.openSync(uris[0], fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      try {
+        fs.writeSync(f.fd, body);
+      } finally {
+        fs.closeSync(f);
+      }
+      const short = uris[0].substring(uris[0].lastIndexOf('/') + 1);
+      this.backupText = this.L($r('app.string.backup_exported')) + short;
+      promptAction.showToast({ message: this.L($r('app.string.backup_exported')) + short });
+      console.info(`[Index] Backup written: ${uris[0]} (${recents.length} books / ${bookmarks.length} bookmarks)`);
     } catch (e) {
+      /* cancel (reject) or write failure: report, never fake success */
       this.backupText = this.L($r('app.string.common_export_failed'));
-      console.error('[Index] backup failed');
+      console.error('[Index] backup cancelled or failed');
     }
   }
 
-  /** Restore settings + recents + bookmarks from the sandbox backup file. */
+  /** 0.9.58: import a backup JSON picked by the user (Android importDialog
+   *  parity; replaces the invisible sandbox restore). */
   private async doRestore(): Promise<void> {
+    const ctx = getContext(this);
+    let tmp = '';
     try {
-      const ctx = getContext(this);
-      const target = ctx.filesDir + '/librera_backup.json';
-      const content = fs.readTextSync(target);
-      const payload = JSON.parse(content) as BackupFile;
-      if (payload.app !== 'librera-harmony' || payload.settings === undefined) {
-        this.backupText = this.L($r('app.string.backup_invalid'));
+      const docPicker = new picker.DocumentViewPicker(ctx);
+      const opts: picker.DocumentSelectOptions = new picker.DocumentSelectOptions();
+      /* 0.9.58 review: 'desc|suffix' two-part form per SDK docs + repo
+       * precedent ('PDF|pdf'); single-select so extra picks aren't ignored. */
+      opts.fileSuffixFilters = ['json|json'];
+      opts.maxSelectNumber = 1;
+      const uris: Array<string> = await docPicker.select(opts);
+      if (uris.length === 0) {
         return;
       }
-      await saveSettings(ctx, payload.settings);
-      this.settings = payload.settings;
-      await replaceRecentBooks(ctx, payload.recents);
-      await replaceBookmarks(ctx, payload.bookmarks);
-      await this.loadLibrary();
-      this.backupText = `已恢复导入：${payload.recents.length} 本书籍 + ${payload.bookmarks.length} 条书签`;
-      console.info(`[Index] Backup restored from ${target}`);
+      tmp = ctx.cacheDir + '/restore.json';
+      const src: fs.File = fs.openSync(uris[0], fs.OpenMode.READ_ONLY);
+      try {
+        fs.copyFileSync(src.fd, tmp);
+      } finally {
+        fs.closeSync(src);
+      }
+      const payload = JSON.parse(fs.readTextSync(tmp)) as BackupFile;
+      try {
+        fs.unlinkSync(tmp);
+      } catch (e) { /* best effort */ }
+      tmp = '';
+      if (payload.app !== 'librera-harmony' || payload.settings === undefined) {
+        this.backupText = this.L($r('app.string.backup_invalid'));
+        promptAction.showToast({ message: this.L($r('app.string.backup_invalid')) });
+        return;
+      }
+      AlertDialog.show({
+        title: this.L($r('app.string.backup_import')),
+        message: this.L($r('app.string.backup_import_warn')),
+        primaryButton: { value: this.L($r('app.string.common_cancel')), action: () => {} },
+        secondaryButton: {
+          value: this.L($r('app.string.backup_import')),
+          action: () => {
+            this.applyRestore(payload);
+          }
+        }
+      });
     } catch (e) {
+      if (tmp.length > 0) {
+        try { fs.unlinkSync(tmp); } catch (ee) { /* best effort */ }
+      }
       this.backupText = this.L($r('app.string.backup_restore_failed'));
-      console.error('[Index] restore failed');
+      console.error('[Index] import cancelled or failed');
     }
+  }
+
+  private async applyRestore(payload: BackupFile): Promise<void> {
+    const ctx = getContext(this);
+    /* 0.9.58 review: old exports (pre-0.9.58) lack newer fields (ttsFolder,
+     * ...) — go through loadSettings normalization instead of assigning the
+     * raw JSON to @State (an undefined field crashed the settings page). */
+    await saveSettings(ctx, payload.settings);
+    this.settings = await loadSettings(ctx);
+    const recents = Array.isArray(payload.recents) ? payload.recents : [];
+    const marks = Array.isArray(payload.bookmarks) ? payload.bookmarks : [];
+    await replaceRecentBooks(ctx, recents);
+    await replaceBookmarks(ctx, marks);
+    /* 0.9.58 review: importing must not trigger loadLibrary's auto-open
+     * last-book side effect mid-session. */
+    this.lastBookAutoOpened = true;
+    await this.loadLibrary();
+    /* bookmark page data must refresh too (was showing pre-import paths) */
+    await this.loadAllBookmarks();
+    this.backupText = this.L($r('app.string.backup_restored_fmt')).replace('%d', String(recents.length));
+    promptAction.showToast({ message: this.backupText });
+    console.info('[Index] Backup restored');
+  }
+
+  /** 0.9.58: Android migrationDialog parity — rewrite a path prefix in
+   *  recents + bookmarks (dk tombstones are basename-keyed, unaffected). */
+  private async doMigrate(): Promise<void> {
+    const fromRaw = this.migrateFrom;
+    const toRaw = this.migrateTo;
+    /* 0.9.58 review: normalize to trailing-slash prefixes — '/Books' must
+     * not match '/Books2', and concatenation must keep the separator
+     * (Android migrationDialog seeds prefixes with trailing '/'); 'to' must
+     * be absolute like 'from' (the toast copy promises both). */
+    const from = fromRaw.endsWith('/') ? fromRaw : fromRaw + '/';
+    const to = toRaw.endsWith('/') ? toRaw : toRaw + '/';
+    if (fromRaw.length === 0 || toRaw.length === 0 || from === to
+      || !fromRaw.startsWith('/') || !toRaw.startsWith('/')) {
+      promptAction.showToast({ message: this.L($r('app.string.migrate_invalid')) });
+      return;
+    }
+    const ctx = getContext(this);
+    const recents = await getRecentBooks(ctx);
+    let changed = 0;
+    for (let i = 0; i < recents.length; i++) {
+      if (recents[i].path.startsWith(from)) {
+        recents[i].path = to + recents[i].path.substring(from.length);
+        changed++;
+      }
+    }
+    if (changed > 0) {
+      await replaceRecentBooks(ctx, recents);
+    }
+    const marks = await exportBookmarks(ctx);
+    let markChanged = 0;
+    for (let i = 0; i < marks.length; i++) {
+      if (marks[i].path.startsWith(from)) {
+        marks[i].path = to + marks[i].path.substring(from.length);
+        markChanged++;
+      }
+    }
+    if (markChanged > 0) {
+      await replaceBookmarks(ctx, marks);
+    }
+    await this.loadLibrary();
+    /* 0.9.58 review: the bookmarks page reads allBookmarks — refresh it so
+     * rewritten paths show up without an app restart. */
+    await this.loadAllBookmarks();
+    this.showMigrate = false;
+    promptAction.showToast({ message: this.L($r('app.string.migrate_done_fmt')).replace('%d', String(changed + markChanged)) });
+    console.info(`[Index] migrated ${changed} recents + ${markChanged} bookmarks: ${from} -> ${to}`);
   }
 
   /**
@@ -1113,17 +1270,42 @@ struct Index {
         if (target.length === 0) {
           continue;
         }
+        /* 0.9.55: title/author derivation (Android BooksService parity):
+         * original filename, or the Calibre metadata.opf facts when enabled */
+        const base: string = hits[i].name.replace(/\.[^.]*$/, '');
+        let title: string = base;
+        let author: string = '';
+        let series: string = '';
+        let seriesIdx: number = 0;
+        if (!this.settings.showOnlyOriginalFileNames) {
+          const meta = this.settings.useCalibreOpf ? readCalibreMeta(hits[i].path) : null;
+          if (meta !== null) {
+            if (meta.title.length > 0) {
+              title = meta.title;
+            }
+            if (meta.author.length > 0) {
+              author = meta.author;
+            }
+            if (meta.series.length > 0) {
+              series = meta.series;
+              seriesIdx = meta.seriesIndex;
+            }
+          }
+        }
+        if (this.settings.seriesNumberInTitle && series.length > 0 && seriesIdx > 0) {
+          title = title + ' (#' + (seriesIdx % 1 === 0 ? String(Math.round(seriesIdx)) : String(seriesIdx)) + ')';
+        }
         const book: RecentBook = {
           path: target,
-          title: hits[i].name,
+          title: title,
           page: 0,
           totalPages: 0,
           lastRead: new Date().toISOString(),
           star: false,
           coverPath: '',
-          author: '',
+          author: author,
           tags: [],
-          series: '',
+          series: series,
           genre: '',
           status: 0
         };
@@ -1291,9 +1473,13 @@ struct Index {
       const target = importUriToSandbox(ctx, uri);
       const lastSlash: number = target.lastIndexOf('/');
       const fileName = lastSlash >= 0 ? target.substring(lastSlash + 1) : target;
+      /* 0.9.56 review fix: open-with imports copy ONE file into the sandbox,
+       * so no <base>.opf sidecar is reachable here (readCalibreMeta would
+       * always return null) — the title is the file base name; author/series
+       * unknown. Auto-add gate: Android isAutoAddToLibrary. */
       const book: RecentBook = {
         path: target,
-        title: fileName,
+        title: fileName.replace(/\.[^.]*$/, ''),
         page: 0,
         totalPages: 0,
         lastRead: new Date().toISOString(),
@@ -1305,8 +1491,10 @@ struct Index {
           genre: '',
           status: 0
       };
-      saveRecentBook(ctx, book);
-      this.generateCover(ctx, book);
+      if (this.settings.autoAddToLibrary) {
+        saveRecentBook(ctx, book);
+        this.generateCover(ctx, book);
+      }
       this.prefetchOpen(target);
       router.pushUrl({ url: 'components/Reader', params: { docPath: target, title: fileName } })
         .then(() => {
@@ -1382,11 +1570,18 @@ struct Index {
       const pages: number = pageCount(handle);
       book.totalPages = pages;
 
-      /* B2: extract author metadata */
+      /* B2: metadata backfill — gated by 显示PDF元数据中的作者和书名
+       * (Android isAuthorTitleFromMetaPDF; unconditional before 0.9.55) */
       try {
         const info: DocumentInfo = getDocumentInfo(handle);
-        if (info.author !== undefined && info.author !== null && info.author.length > 0) {
-          book.author = info.author;
+        if (this.settings.authorTitleFromMetaPDF) {
+          if (info.author !== undefined && info.author !== null && info.author.length > 0) {
+            book.author = info.author;
+          }
+          if (info.title !== undefined && info.title !== null && info.title.length > 0
+            && !this.settings.showOnlyOriginalFileNames && this.hasBareTitle(book)) {
+            book.title = info.title;
+          }
         }
       } catch (e) {
         /* metadata optional */
@@ -1567,7 +1762,7 @@ struct Index {
           .fontColor(this.txtPri())
           .maxLines(1)
         if (book.author.length > 0) {
-          Text(book.author)
+          Text(this.fmtAuthor(book.author))
             .fontSize(11)
             .fontColor(this.txtHint())
             .maxLines(1)
@@ -1738,6 +1933,40 @@ struct Index {
         this.buildMultySearchDialog()
       }
 
+      // ---- 0.9.55: 在线阅读(Pro) 调节 / 缓存管理 / 锁屏密码 dialogs ----
+      if (this.showRemoteCfg) {
+        Column() {}
+          .width('100%').height('100%')
+          .backgroundColor('#66000000')
+          .onClick(() => {
+            this.showRemoteCfg = false;
+          })
+        this.buildRemoteCfgDialog()
+      }
+      if (this.showCacheMgr) {
+        Column() {}
+          .width('100%').height('100%')
+          .backgroundColor('#66000000')
+          .onClick(() => {
+            this.showCacheMgr = false;
+          })
+        this.buildCacheMgrDialog()
+      }
+      if (this.showMigrate) {
+        /* 0.9.58 review: the builder carries its own centered mask — an
+         * extra full-screen mask here darkened the background twice. */
+        this.buildMigrateDialog()
+      }
+      if (this.showLockPass) {
+        Column() {}
+          .width('100%').height('100%')
+          .backgroundColor('#66000000')
+          .onClick(() => {
+            this.showLockPass = false;
+          })
+        this.buildLockPassDialog()
+      }
+
       // ---- AI 大模型接入 dialog (Android hr08) ----
       if (this.showAiDialog) {
         this.buildAiDialog()
@@ -1797,6 +2026,11 @@ struct Index {
       // ---- 同步日志 page (hr09b) ----
       if (this.showSyncLog) {
         this.buildSyncLogDialog()
+      }
+
+      // ---- 0.9.57: WebDAV 同步路径 server-folder picker ----
+      if (this.showDavPicker) {
+        this.buildDavPickerDialog()
       }
 
       // ---- left drawer (Android DrawerLayout overlay) ----
@@ -1860,15 +2094,6 @@ struct Index {
           })
         this.buildColorPick()
       }
-      if (this.showTabsEdit) {
-        Column() {}
-          .width('100%').height('100%')
-          .backgroundColor('#66000000')
-          .onClick(() => {
-            this.showTabsEdit = false;
-          })
-        this.buildTabsEdit()
-      }
       if (this.showExitConfirm) {
         Column() {}
           .width('100%').height('100%')
@@ -1877,46 +2102,6 @@ struct Index {
             this.showExitConfirm = false;
           })
         this.buildExitConfirm()
-      }
-      if (this.showRemoteNum) {
-        /* Round 8: numeric remote-cache pref dialog */
-        Column() {}
-          .width('100%').height('100%')
-          .backgroundColor('#66000000')
-          .onClick(() => {
-            this.showRemoteNum = false;
-          })
-        Column({ space: 12 }) {
-          Text('设置数值')
-            .fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
-          Text(this.remoteNumKey.startsWith('remote') ? this.remoteNumLabel(this.remoteNumKey) : this.remoteNumKey)
-            .fontSize(12).fontColor(this.txtSec())
-          TextInput({ text: this.remoteNumValue })
-            .fontSize(14).height(38).width('86%')
-            .type(InputType.NUMBER_DECIMAL)
-            .onChange((v: string) => {
-              this.remoteNumValue = v;
-            })
-          Row({ space: 12 }) {
-            Button('取消')
-              .fontSize(13).height(36).layoutWeight(1)
-              .backgroundColor(this.chipBg()).fontColor(this.txtPri())
-              .onClick(() => {
-                this.showRemoteNum = false;
-              })
-            Button('确定')
-              .fontSize(13).height(36).layoutWeight(1)
-              .backgroundColor(this.thm()).fontColor(Color.White)
-              .onClick(() => {
-                this.confirmRemoteNum();
-              })
-          }
-          .width('86%')
-        }
-        .width('72%')
-        .padding(14)
-        .backgroundColor(this.cardBg())
-        .borderRadius(12)
       }
       if (this.showLicenses) {
         Column() {}
@@ -3783,60 +3968,154 @@ tlog('download_start', 'name=' + fileName);    try {
     });
   }
 
-  /** 0.9.21: cache dir size, one level deep (sync, cacheDir is small). */
-  private dirSize(dir: string): number {
+  /** 0.9.58: recursive dir size (Android dirSize parity — the old one-level
+   *  sum under-counted nested caches like converted/<key>/book.epub). */
+  private async dirSizeR(dir: string): Promise<number> {
     let sum: number = 0;
     try {
-      const names: string[] = fs.listFileSync(dir);
-      for (let i = 0; i < names.length; i++) {
-        try {
-          sum += fs.statSync(dir + '/' + names[i]).size;
-        } catch (e) { /* raced entry */ }
+      /* 0.9.58 review: async fs API (stat/listFile) — sync variants ran the
+       * whole recursive walk on the UI thread (Android uses a background
+       * executor for the same computation). */
+      const st: fs.Stat = await fs.stat(dir);
+      if (st.isDirectory()) {
+        const names: string[] = await fs.listFile(dir);
+        for (let i = 0; i < names.length; i++) {
+          sum += await this.dirSizeR(dir + '/' + names[i]);
+        }
+      } else {
+        sum += st.size;
       }
-    } catch (e) { /* no dir yet */ }
+    } catch (e) { /* raced entry / no dir yet */ }
     return sum;
   }
 
-  private refreshCacheUsage(): void {
-    const ctx = getContext(this);
-    remoteCacheTotalBytes(ctx).then((remote: number) => {
-      const app: number = this.dirSize((getContext(this) as common.UIAbilityContext).cacheDir);
-      this.remoteCacheUsage = this.fmtBytes(remote);
-      this.appCacheUsage = this.fmtBytes(app);
-      this.cacheTotalUsage = this.fmtBytes(remote + app);
-    });
-  }
-
-  private confirmClearAppCache(): void {
-    AlertDialog.show({
-      title: '清空应用缓存',
-      message: '删除应用运行缓存（封面缩略、临时文件等）？书籍与设置不受影响。',
-      primaryButton: { value: '取消', action: () => {} },
-      secondaryButton: {
-        value: '清空',
-        action: () => {
-          const ctx = getContext(this) as common.UIAbilityContext;
-          try {
-            const names: string[] = fs.listFileSync(ctx.cacheDir);
-            for (let i = 0; i < names.length; i++) {
-              const p: string = ctx.cacheDir + '/' + names[i];
-              try {
-                const st: fs.Stat = fs.statSync(p);
-                if (st.isDirectory()) {
-                  fs.rmdirSync(p);
-                } else {
-                  fs.unlinkSync(p);
-                }
-              } catch (e) { /* skip entry */ }
-            }
-            promptAction.showToast({ message: '应用缓存已清空' });
-          } catch (e) {
-            promptAction.showToast({ message: '清空失败' });
-          }
-          this.refreshCacheUsage();
+  /* 0.9.58: Android showAppCacheDialog five buckets — online = filesDir/Remote
+   * block cache; convert = cacheDir/converted; temp = bilingual + pdftrans +
+   * loose cacheDir files; runtime = the rest of cacheDir; total = sum. */
+  private async refreshCacheUsage(): Promise<void> {
+    const ctx = getContext(this) as common.UIAbilityContext;
+    const remote: number = await remoteCacheTotalBytes(ctx);
+    let conv = 0;
+    let temp = 0;
+    let runtime = 0;
+    try {
+      const names: string[] = await fs.listFile(ctx.cacheDir);
+      for (let i = 0; i < names.length; i++) {
+        const p: string = ctx.cacheDir + '/' + names[i];
+        let isDir = false;
+        try {
+          isDir = (await fs.stat(p)).isDirectory();
+        } catch (e) { continue; }
+        /* 0.9.58 review: books live in cacheDir on HarmonyOS — they are not
+         * cache and must not inflate the runtime bucket. */
+        if (!isDir && this.isBookExtFile(names[i])) {
+          continue;
+        }
+        if (names[i] === 'converted') {
+          conv += await this.dirSizeR(p);
+        } else if (names[i] === 'bilingual' || names[i] === 'pdftrans') {
+          temp += await this.dirSizeR(p);
+        } else if (isDir) {
+          runtime += await this.dirSizeR(p);
+        } else {
+          temp += await this.dirSizeR(p);
         }
       }
-    });
+    } catch (e) { /* no cacheDir yet */ }
+    this.remoteCacheUsage = this.fmtBytes(remote);
+    this.convCacheUsage = this.fmtBytes(conv);
+    this.tempCacheUsage = this.fmtBytes(temp);
+    this.appCacheUsage = this.fmtBytes(runtime);
+    this.cacheTotalUsage = this.fmtBytes(remote + conv + temp + runtime);
+  }
+
+  /* 0.9.58 review: Android clears getCacheDir() wholesale, but on HarmonyOS
+   * the books themselves live in cacheDir (importUriToSandbox /
+   * importPathToSandbox / WebDAV downloads / demo seeds) — a wholesale
+   * delete would break the whole shelf while the confirm dialog promises
+   * books are untouched. Clear only known cache subdirs + non-book files. */
+  private cacheSubdirs: string[] = ['converted', 'bilingual', 'pdftrans', 'toc', 'accels', 'covers'];
+
+  /* distinct from isBookFile() below (browse-page short list): this one
+   * uses the full FORMAT_EXTS set so cache clearing never deletes a book. */
+  private isBookExtFile(name: string): boolean {
+    const i = name.lastIndexOf('.');
+    if (i <= 0) {
+      return false;
+    }
+    const ext = name.substring(i + 1).toLowerCase();
+    const keys = Object.keys(FORMAT_EXTS);
+    for (let g = 0; g < keys.length; g++) {
+      const exts: string[] = FORMAT_EXTS[keys[g]];
+      for (let k = 0; k < exts.length; k++) {
+        if (exts[k] === ext) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private async clearLocalCache(): Promise<void> {
+    const ctx = getContext(this) as common.UIAbilityContext;
+    try {
+      const names: string[] = await fs.listFile(ctx.cacheDir);
+      for (let i = 0; i < names.length; i++) {
+        const p: string = ctx.cacheDir + '/' + names[i];
+        try {
+          const st: fs.Stat = await fs.stat(p);
+          if (st.isDirectory()) {
+            /* unknown subdirs are kept — under-clean beats deleting data */
+            if (this.cacheSubdirs.indexOf(names[i]) >= 0) {
+              fs.rmdirSync(p);
+            }
+          } else if (!this.isBookExtFile(names[i])) {
+            fs.unlinkSync(p);
+          }
+        } catch (e) { /* skip entry */ }
+      }
+    } catch (e) { /* no dir yet */ }
+  }
+
+  /** 0.9.58: clear ALL caches (Android cache_clear_all: remote + convert +
+   *  temp + runtime). The cache cap is saved first, Android parity. */
+  private async clearAllCaches(): Promise<void> {
+    const ctx = getContext(this) as common.UIAbilityContext;
+    this.saveCacheCap();
+    await clearRemoteCacheAll(ctx);
+    await this.clearLocalCache();
+    this.loadRemoteBooks();
+    await this.refreshCacheUsage();
+    promptAction.showToast({ message: this.L($r('app.string.cache_cleared')) });
+    /* 0.9.58 review: covers/ was cleared — regenerate shelf thumbnails in
+     * the background (generateCover otherwise only runs on import/open). */
+    try {
+      fs.mkdirSync(ctx.cacheDir + '/covers', true);
+    } catch (e) { /* exists */ }
+    const books = this.recentBooks.slice();
+    (async (): Promise<void> => {
+      for (let i = 0; i < books.length; i++) {
+        try {
+          await this.generateCover(ctx, books[i]);
+        } catch (e) { /* skip book */ }
+      }
+    })();
+  }
+
+  /** 0.9.58: persist the cache cap (clamp 50..65536 MB, Android parity). */
+  private saveCacheCap(): void {
+    /* 0.9.58 review: empty/garbage input must NOT silently clamp to 50 MB
+     * (Android keeps the stored cap when parseInt throws). */
+    const raw = this.cacheMaxInput.trim();
+    const n = parseInt(raw, 10);
+    if (raw.length === 0 || Number.isNaN(n) || n <= 0) {
+      promptAction.showToast({ message: this.L($r('app.string.cache_limit_invalid')) });
+      return;
+    }
+    this.settings.remoteCacheMaxMB = Math.min(65536, Math.max(50, n));
+    this.cacheMaxInput = String(this.settings.remoteCacheMaxMB);
+    this.saveNow();
+    promptAction.showToast({ message: this.L($r('app.string.cache_limit_saved')) });
   }
 
   /** 0.9.21: export debug-log.txt via the system save picker (Android
@@ -4319,16 +4598,30 @@ tlog('download_start', 'name=' + fileName);    try {
       Column() {
         /* 最近阅读 horizontal cover shelf */
         this.sectionHeader(this.L($r('app.string.sec_recent')), 10)
-        Scroll() {
-          Row({ space: 12 }) {
-            ForEach(this.recentBooks.slice(0, RECENT_VIEW_LIMIT), (book: RecentBook) => {
+        if (this.settings.widgetLayout === 1) {
+          /* 布局=网格 (Android widgetType WIDGET_GRID) */
+          Grid() {
+            ForEach(this.widgetCardBooks(), (book: RecentBook) => {
               this.coverTile(book)
             }, (item: RecentBook) => item.path)
           }
+          .columnsTemplate('1fr 1fr 1fr')
+          .columnsGap(8).rowsGap(8)
+          .height(300)
+          .width('100%')
           .padding({ left: 12, right: 12 })
+        } else {
+          Scroll() {
+            Row({ space: 12 }) {
+              ForEach(this.widgetCardBooks(), (book: RecentBook) => {
+                this.coverTile(book)
+              }, (item: RecentBook) => item.path)
+            }
+            .padding({ left: 12, right: 12 })
+          }
+          .scrollable(ScrollDirection.Horizontal)
+          .width('100%')
         }
-        .scrollable(ScrollDirection.Horizontal)
-        .width('100%')
 
         /* 书签笔记: per-book cards */
         this.sectionHeader(this.L($r('app.string.sec_bookmarks')), 9)
@@ -5296,8 +5589,9 @@ tlog('download_start', 'name=' + fileName);    try {
   applyOrientation(): void {
     window.getLastWindow(getContext(this)).then((win: window.Window) => {
       const o: number = this.settings.screenOrientation;
-      const target = o === 1 ? window.Orientation.PORTRAIT
+      const target = o === 1 ? window.Orientation.AUTO_ROTATION
         : o === 2 ? window.Orientation.LANDSCAPE
+        : o === 3 ? window.Orientation.PORTRAIT
         : window.Orientation.UNSPECIFIED;
       win.setPreferredOrientation(target).then(() => {
         console.info(`[Index] Orientation set to ${o}`);
@@ -5398,7 +5692,7 @@ tlog('download_start', 'name=' + fileName);    try {
         Text(book.title.length > 24 ? book.title.substring(0, 24) + '\u2026' : book.title)
           .fontSize(compact ? 12 : 13).fontColor(this.txtPri()).maxLines(1)
         if (!compact && book.author.length > 0) {
-          Text(book.author).fontSize(11).fontColor(this.txtHint()).maxLines(1)
+          Text(this.fmtAuthor(book.author)).fontSize(11).fontColor(this.txtHint()).maxLines(1)
         }
         Row({ space: 8 }) {
           Text(this.statusLabel(book.status)).fontSize(10).fontColor(this.statusColor(book.status))
@@ -5617,8 +5911,8 @@ tlog('download_start', 'name=' + fileName);    try {
   }
 
   private beginAddAiVendor(): void {
-    this.aiAddingName = true;
     this.aiNewName = '';
+    this.aiSheet = 'name';
   }
 
   private confirmAddAiVendor(): void {
@@ -5634,8 +5928,9 @@ tlog('download_start', 'name=' + fileName);    try {
     this.aiCfg.model = '';
     this.aiCfg.maxTokens = 4096;
     this.aiCfg.thinking = false;
+    this.aiCfg.provider = name;
     this.aiVendorName = name;
-    this.aiAddingName = false;
+    this.aiSheet = '';
   }
 
   private removeAiVendor(): void {
@@ -5650,6 +5945,7 @@ tlog('download_start', 'name=' + fileName);    try {
       this.aiCfg.model = '';
       this.aiCfg.maxTokens = 4096;
       this.aiCfg.thinking = false;
+      this.aiCfg.provider = '';
       this.aiVendorName = '';
       this.refreshAiVendors();
       this.status = this.L($r('app.string.ai_profile_deleted'));
@@ -5663,13 +5959,6 @@ tlog('download_start', 'name=' + fileName);    try {
     if (was.length === 0 || was === defaultUrl(PROTOCOL_OPENAI)
       || was === defaultUrl(PROTOCOL_ANTHROPIC) || was === defaultUrl(PROTOCOL_GOOGLE)) {
       this.aiCfg.url = d;
-    }
-  }
-
-  private pickAiProvider(idx: number): void {
-    this.aiCfg.provider = AI_PROVIDERS[idx];
-    if (idx < AI_PROVIDER_URLS.length && AI_PROVIDER_URLS[idx].length > 0) {
-      this.aiCfg.url = AI_PROVIDER_URLS[idx];
     }
   }
 
@@ -5695,7 +5984,9 @@ tlog('download_start', 'name=' + fileName);    try {
     }
     this.aiBusy = true;
     this.aiTestOut = '';
-    saveAiConfig(getContext(this), this.aiCfg);
+    /* 0.9.57 review: android sends the test chat with the typed values and
+     * persists only on 保存 — do the same so testing cannot write a
+     * half-filled profile to disk (FN-17 asserts on the seeded config). */
     testChat(this.aiCfg, this.aiTestIn, getContext(this)).then((out: string) => {
       this.aiTestOut = lastTruncated ? out + '\n' + this.L($r('app.string.ai_reply_truncated')) : out;
       this.aiBusy = false;
@@ -5705,7 +5996,10 @@ tlog('download_start', 'name=' + fileName);    try {
     });
   }
 
-  /** hr08: AI 大模型接入 dialog (provider/url/key/model/tokens/thinking/test). */
+  /** hr08: AI 大模型接入 dialog (Android AiConfigDialog parity 0.9.57):
+   *  协议 + 模型厂商 header links (vendor sheet: pick / delete / add with
+   *  name prompt), hint-styled url/key/model inputs, key show/hide,
+   *  获取模型 list, output budget, thinking checkbox, test + chat-send. */
   @Builder
   buildAiDialog() {
     Stack({ alignContent: Alignment.Center }) {
@@ -5714,124 +6008,58 @@ tlog('download_start', 'name=' + fileName);    try {
         .backgroundColor('#66000000')
         .onClick(() => {
           this.showAiDialog = false;
+          this.aiSheet = '';
         })
-      Column({ space: 10 }) {
+      Column({ space: 8 }) {
         Row() {
           Text($r('app.string.ai_config_title'))
             .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
             .layoutWeight(1)
-          Image($r('app.media.ic_close'))
-            .width(20).height(20).fillColor(this.txtHint())
-            .onClick(() => {
-              this.showAiDialog = false;
-            })
         }
         .width('100%')
+        /* 0.9.58: Android title bar sits flush on the first row (3dip padding). */
+        .margin({ bottom: -4 })
 
-        /* 0.9.43: the dialog grew (vendor/protocol/provider rows) and its
-         * tail (test area, Close/Save) could sit below the fold - the
-         * middle scrolls, header/footer stay pinned (CI FN-17 + small
-         * screens) */
+        /* 0.9.43 comment kept: the dialog grows with the model list and its
+         * tail (test area, Close/Save) must stay pinned — middle scrolls. */
         Scroll() {
         Column({ space: 10 }) {
 
+        /* 0.9.57: 协议 | 模型厂商 header (Android dialog_ai_config row 1) */
         Row({ space: 6 }) {
-          Text($r('app.string.ai_profile')).fontSize(14).fontColor(this.txtPri()).width(70)
-          ForEach(this.aiVendorNames, (n: string) => {
-            Text(n)
-              .fontSize(12)
-              .fontColor(this.aiVendorName === n ? Color.White : this.thm())
-              .backgroundColor(this.aiVendorName === n ? this.thm() : Color.Transparent)
-              .border({ width: 1, color: this.thm() })
-              .borderRadius(10)
-              .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-              .onClick(() => {
-                this.selectAiVendor(n);
-              })
-          }, (n: string) => n)
-          Text($r('app.string.ai_profile_add'))
-            .fontSize(12).fontColor('#00897B')
+          Text($r('app.string.ai_protocol')).fontSize(14).fontColor(this.txtPri())
+          Text(this.aiCfg.protocol === PROTOCOL_ANTHROPIC ? $r('app.string.ai_proto_anthropic')
+            : (this.aiCfg.protocol === PROTOCOL_GOOGLE ? $r('app.string.ai_proto_google') : $r('app.string.ai_proto_openai')))
+            .fontSize(14).fontColor(this.thm())
+            .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+            .layoutWeight(1)
+            .maxLines(1)
             .onClick(() => {
-              this.beginAddAiVendor();
+              this.aiSheet = this.aiSheet === 'proto' ? '' : 'proto';
             })
-          if (this.aiVendorName.length > 0) {
-            Text($r('app.string.ai_profile_delete'))
-              .fontSize(12).fontColor('#d32f2f')
-              .onClick(() => {
-                this.removeAiVendor();
-              })
-          }
-        }
-        .width('100%')
-
-        if (this.aiAddingName) {
-          Row({ space: 8 }) {
-            TextInput({ text: this.aiNewName, placeholder: $r('app.string.ai_profile_name_hint') })
-              .fontSize(13).height(36).layoutWeight(1)
-              .onChange((v: string) => {
-                this.aiNewName = v;
-              })
-            Button($r('app.string.common_confirm'))
-              .fontSize(12).height(32)
-              .backgroundColor(this.thm()).fontColor(Color.White)
-              .onClick(() => {
-                this.confirmAddAiVendor();
-              })
-          }
-          .width('100%')
-        }
-
-        Row({ space: 6 }) {
-          Text($r('app.string.ai_protocol')).fontSize(14).fontColor(this.txtPri()).width(70)
-          ForEach([PROTOCOL_OPENAI, PROTOCOL_ANTHROPIC, PROTOCOL_GOOGLE], (p: string) => {
-            Text(p === PROTOCOL_OPENAI ? $r('app.string.ai_proto_openai')
-              : (p === PROTOCOL_ANTHROPIC ? $r('app.string.ai_proto_anthropic') : $r('app.string.ai_proto_google')))
-              .fontSize(12)
-              .fontColor(this.aiCfg.protocol === p ? Color.White : this.thm())
-              .backgroundColor(this.aiCfg.protocol === p ? this.thm() : Color.Transparent)
-              .border({ width: 1, color: this.thm() })
-              .borderRadius(10)
-              .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-              .onClick(() => {
-                this.switchAiProtocol(p);
-              })
-          }, (p: string) => p)
-        }
-        .width('100%')
-
-        Row({ space: 8 }) {
-          Text($r('app.string.ai_provider')).fontSize(14).fontColor(this.txtPri()).width(70)
-          ForEach(AI_PROVIDERS, (p: string, idx: number) => {
-            Text(p)
-              .fontSize(12)
-              .fontColor(this.aiCfg.provider === p ? Color.White : this.thm())
-              .backgroundColor(this.aiCfg.provider === p ? this.thm() : Color.Transparent)
-              .border({ width: 1, color: this.thm() })
-              .borderRadius(10)
-              .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-              .onClick(() => {
-                this.pickAiProvider(idx);
-              })
-          }, (p: string) => p)
-        }
-        .width('100%')
-
-        Row({ space: 8 }) {
-          Text($r('app.string.ai_url')).fontSize(14).fontColor(this.txtPri()).width(70)
-          TextInput({ text: this.aiCfg.url, placeholder: 'https://...' })
-            .fontSize(13).height(38).layoutWeight(1)
-            .backgroundColor(this.cardBg())
-            .border({ width: 1, color: this.divColor() })
-            .borderRadius(4)
-            .onChange((v: string) => {
-              this.aiCfg.url = v;
+          Text($r('app.string.ai_provider')).fontSize(14).fontColor(this.txtPri()).margin({ left: 10 })
+          Text(this.aiVendorName.length > 0 ? this.aiVendorName : $r('app.string.ai_profile_none'))
+            .fontSize(14).fontColor(this.thm())
+            .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+            .layoutWeight(1)
+            .maxLines(1)
+            .onClick(() => {
+              this.aiSheet = this.aiSheet === 'vendor' ? '' : 'vendor';
             })
         }
         .width('100%')
 
+        TextInput({ text: this.aiCfg.url, placeholder: $r('app.string.ai_config_url_hint') })
+          .fontSize(13).height(38).width('100%')
+          .backgroundColor(this.cardBg())
+          .border({ width: 1, color: this.divColor() })
+          .borderRadius(4)
+          .onChange((v: string) => {
+            this.aiCfg.url = v;
+          })
+
         Row({ space: 8 }) {
-          Text($r('app.string.ai_key')).fontSize(14).fontColor(this.txtPri()).width(70)
-          TextInput({ text: this.aiCfg.key, placeholder: 'sk-...' })
+          TextInput({ text: this.aiCfg.key, placeholder: $r('app.string.ai_config_key_hint') })
             .type(this.aiKeyVisible ? InputType.Normal : InputType.Password)
             .fontSize(13).height(38).layoutWeight(1)
             .backgroundColor(this.cardBg())
@@ -5849,8 +6077,7 @@ tlog('download_start', 'name=' + fileName);    try {
         .width('100%')
 
         Row({ space: 8 }) {
-          Text($r('app.string.ai_model')).fontSize(14).fontColor(this.txtPri()).width(70)
-          TextInput({ text: this.aiCfg.model, placeholder: 'glm-4.5-air' })
+          TextInput({ text: this.aiCfg.model, placeholder: $r('app.string.ai_config_model_hint') })
             .fontSize(13).height(38).layoutWeight(1)
             .backgroundColor(this.cardBg())
             .border({ width: 1, color: this.divColor() })
@@ -5889,27 +6116,31 @@ tlog('download_start', 'name=' + fileName);    try {
         }
 
         Row({ space: 8 }) {
-          Text($r('app.string.ai_max_tokens')).fontSize(14).fontColor(this.txtPri()).width(70)
+          Text($r('app.string.ai_max_tokens')).fontSize(14).fontColor(this.txtPri())
           TextInput({ text: this.aiCfg.maxTokens + '' })
             .type(InputType.Number)
-            .fontSize(13).height(38).width(120)
+            .fontSize(13).height(38).layoutWeight(1)
             .backgroundColor(this.cardBg())
             .border({ width: 1, color: this.divColor() })
             .borderRadius(4)
             .onChange((v: string) => {
-              this.aiCfg.maxTokens = parseInt(v.length > 0 ? v : '0');
+              /* 0.9.57 review: parseInt('') is 0 but garbage is NaN, which
+               * slipped past the maxTokens<=0 save guard. */
+              const n = parseInt(v.length > 0 ? v : '0');
+              this.aiCfg.maxTokens = Number.isNaN(n) ? 0 : n;
             })
-          Blank()
-          Row({ space: 6 }) {
-            Text($r('app.string.ai_thinking')).fontSize(13).fontColor(this.txtPri())
-            Checkbox({ name: 'thinking' })
-              .select(this.aiCfg.thinking)
-              .selectedColor(this.thm())
-              .width(18).height(18)
-              .onChange((v: boolean) => {
-                this.aiCfg.thinking = v;
-              })
-          }
+        }
+        .width('100%')
+
+        Row({ space: 8 }) {
+          Checkbox({ name: 'aiThinking' })
+            .select(this.aiCfg.thinking)
+            .selectedColor(this.thm())
+            .width(18).height(18)
+            .onChange((v: boolean) => {
+              this.aiCfg.thinking = v;
+            })
+          Text($r('app.string.ai_thinking')).fontSize(13).fontColor(this.txtPri())
         }
         .width('100%')
 
@@ -5918,15 +6149,6 @@ tlog('download_start', 'name=' + fileName);    try {
           .width('100%')
           .onClick(() => {
             this.aiTestSend();
-          })
-
-        TextInput({ text: this.aiTestIn, placeholder: $r('app.string.ai_test_hint') })
-          .fontSize(13).height(38).width('100%')
-          .backgroundColor(this.cardBg())
-          .border({ width: 1, color: this.divColor() })
-          .borderRadius(4)
-          .onChange((v: string) => {
-            this.aiTestIn = v;
           })
 
         if (this.aiTestOut.length > 0 || this.aiBusy) {
@@ -5939,10 +6161,33 @@ tlog('download_start', 'name=' + fileName);    try {
             .borderRadius(4)
         }
 
+        Row({ space: 8 }) {
+          TextInput({ text: this.aiTestIn, placeholder: $r('app.string.ai_test_hint') })
+            .fontSize(13).height(38).layoutWeight(1)
+            .backgroundColor(this.cardBg())
+            .border({ width: 1, color: this.divColor() })
+            .borderRadius(4)
+            .onChange((v: string) => {
+              this.aiTestIn = v;
+            })
+          Text($r('app.string.aichat_send'))
+            .fontSize(14).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
+            .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+            .border({ width: 1, color: this.divColor() })
+            .borderRadius(4)
+            .onClick(() => {
+              this.aiTestSend();
+            })
+        }
+        .width('100%')
+
         }
         .width('100%')
         }
-        .layoutWeight(1)
+        /* 0.9.58: no layoutWeight — the card must hug its content so the
+         * Close/Save footer follows the send row (Android dialog parity). */
+        .width('100%')
+        .constraintSize({ maxHeight: 420 })
         .scrollBar(BarState.Auto)
 
         Row({ space: 12 }) {
@@ -5952,6 +6197,7 @@ tlog('download_start', 'name=' + fileName);    try {
             .backgroundColor(this.chipBg()).fontColor(this.txtPri())
             .onClick(() => {
               this.showAiDialog = false;
+              this.aiSheet = '';
             })
           Button($r('app.string.common_save'))
             .fontSize(14).height(36)
@@ -5967,9 +6213,98 @@ tlog('download_start', 'name=' + fileName);    try {
       .constraintSize({ maxHeight: '92%' })
       .backgroundColor(this.cardBg())
       .borderRadius(8)
+
+      /* 0.9.57: nested popup sheets (Android PopupMenu parity) —
+       * protocol picker / vendor picker / vendor-name prompt */
+      if (this.aiSheet.length > 0) {
+        Column()
+          .width('100%').height('100%')
+          .onClick(() => {
+            this.aiSheet = '';
+          })
+        Column({ space: 2 }) {
+          if (this.aiSheet === 'proto') {
+            ForEach([PROTOCOL_OPENAI, PROTOCOL_ANTHROPIC, PROTOCOL_GOOGLE], (p: string) => {
+              Text(p === PROTOCOL_OPENAI ? $r('app.string.ai_proto_openai')
+                : (p === PROTOCOL_ANTHROPIC ? $r('app.string.ai_proto_anthropic') : $r('app.string.ai_proto_google')))
+                .fontSize(14)
+                .fontColor(this.aiCfg.protocol === p ? this.thm() : this.txtPri())
+                .width('100%')
+                .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+                .onClick(() => {
+                  this.switchAiProtocol(p);
+                  this.aiSheet = '';
+                })
+            }, (p: string) => p)
+          } else if (this.aiSheet === 'vendor') {
+            ForEach(this.aiVendorNames, (n: string) => {
+              Text(n)
+                .fontSize(14)
+                .fontColor(this.aiVendorName === n ? this.thm() : this.txtPri())
+                .width('100%')
+                .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+                .onClick(() => {
+                  this.selectAiVendor(n);
+                  this.aiSheet = '';
+                })
+            }, (n: string) => n)
+            Divider().color(this.divColor()).margin({ left: 8, right: 8 })
+            Text($r('app.string.ai_profile_delete'))
+              .fontSize(14).fontColor('#d32f2f')
+              .width('100%')
+              .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+              .onClick(() => {
+                this.removeAiVendor();
+                this.aiSheet = '';
+              })
+            Text($r('app.string.ai_profile_add'))
+              .fontSize(14).fontColor('#00897B')
+              .width('100%')
+              .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+              .onClick(() => {
+                this.beginAddAiVendor();
+              })
+          } else {
+            Text($r('app.string.ai_profile_add'))
+              .fontSize(14).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
+              .width('100%')
+              .padding({ left: 4, right: 4, top: 6, bottom: 6 })
+            TextInput({ text: this.aiNewName, placeholder: $r('app.string.ai_profile_name_hint') })
+              .fontSize(13).height(38).width('100%')
+              .backgroundColor(this.inputBg())
+              .border({ width: 1, color: this.divColor() })
+              .borderRadius(4)
+              .onChange((v: string) => {
+                this.aiNewName = v;
+              })
+            Row({ space: 14 }) {
+              Blank()
+              Text($r('app.string.common_cancel'))
+                .fontSize(14).fontColor(this.txtPri())
+                .padding(6)
+                .onClick(() => {
+                  this.aiSheet = '';
+                })
+              Text($r('app.string.common_save'))
+                .fontSize(14).fontWeight(FontWeight.Bold).fontColor(this.thm())
+                .padding(6)
+                .onClick(() => {
+                  this.confirmAddAiVendor();
+                })
+            }
+            .width('100%')
+          }
+        }
+        .width('70%')
+        .constraintSize({ maxHeight: '62%' })
+        .backgroundColor(this.cardBg())
+        .borderRadius(8)
+        .padding({ top: 6, bottom: 6 })
+      }
     }
     .width('100%').height('100%')
   }
+
 
   /** hr19+hr17: AI 问答: ask the model about the book, show + save as AI note. */
   private startAiIntro(): void {
@@ -5983,8 +6318,7 @@ tlog('download_start', 'name=' + fileName);    try {
         if (!aiConfigReady(c)) {
           this.status = this.L($r('app.string.ai_not_configured'));
           this.refreshAiVendors();
-            this.showAiDialog = true;
-          loadAiConfig(getContext(this));
+          this.showAiDialog = true;
         } else {
           this.aiIntroRun(book);
         }
@@ -6001,7 +6335,7 @@ tlog('download_start', 'name=' + fileName);    try {
     this.aiIntroText = '';
     this.aiIntroBusy = true;
     this.showAiIntro = true;
-    const author = book.author.length > 0 ? book.author : $r('app.string.common_unknown');
+    const author = book.author.length > 0 ? this.fmtAuthor(book.author) : $r('app.string.common_unknown');
     const msgs: AiMessage[] = [
       { role: 'system', content: '\u4F60\u662F\u4E13\u4E1A\u7684\u9605\u8BFB\u52A9\u624B\uFF0C\u8BF7\u7528\u7B80\u4F53\u4E2D\u6587\u56DE\u7B54\u3002' },
       {
@@ -6128,7 +6462,22 @@ tlog('download_start', 'name=' + fileName);    try {
     }
     const ms = this.syncCfg.autoSyncMin * 60000;
     this.syncTimerId = setInterval(() => {
-      this.syncRunNow();
+      /* 0.9.57 review: the periodic sync must use the persisted config
+       * (android service reads AppState directly), never the in-dialog
+       * draft — while the dialog is open a tick would sync and save
+       * half-typed values. */
+      if (this.showSyncDialog || this.syncBusy) {
+        return;
+      }
+      loadSyncConfig(getContext(this)).then((c: SyncConfig) => {
+        if (!c.enabled || !c.autoSync || c.autoSyncMin <= 0 || this.showSyncDialog) {
+          return;
+        }
+        this.syncCfg = c;
+        this.syncRunNow();
+      }).catch((e: Object) => {
+        console.info('[Index] Auto-sync tick skipped: ' + String(e));
+      });
     }, ms);
     console.info('[Index] Auto-sync armed every ' + this.syncCfg.autoSyncMin + ' min');
   }
@@ -6147,7 +6496,9 @@ tlog('download_start', 'name=' + fileName);    try {
     }
     this.syncBusy = true;
     this.syncTestOut = '';
-    saveSyncConfig(getContext(this), this.syncCfg);
+    /* 0.9.57 review: android testConnection reads the typed fields without
+     * persisting (saveTyped runs on 立即同步/保存 only) — testing a half
+     * typed form no longer writes the draft to disk. */
     testSyncConnection(this.syncCfg, getContext(this)).then((out: string) => {
       this.syncTestOut = out;
       this.syncBusy = false;
@@ -6186,7 +6537,122 @@ tlog('download_start', 'name=' + fileName);    try {
     return iso.substring(0, 16).replace('T', ' ');
   }
 
-  /** hr09: WebDAV 同步 dialog (basic: progress + bookmarks, newer-wins). */
+  /* 0.9.57: 定时同步 popup label (Android webdav_sync_interval_*). */
+  private syncIntervalLabel(min: number): string {
+    if (min <= 0) {
+      return this.L($r('app.string.sync_iv_off'));
+    }
+    if (min === 5) {
+      return this.L($r('app.string.sync_iv_5'));
+    }
+    if (min === 15) {
+      return this.L($r('app.string.sync_iv_15'));
+    }
+    if (min === 30) {
+      return this.L($r('app.string.sync_iv_30'));
+    }
+    if (min === 60) {
+      return this.L($r('app.string.sync_iv_60'));
+    }
+    if (min === 180) {
+      return this.L($r('app.string.sync_iv_180'));
+    }
+    if (min === 360) {
+      return this.L($r('app.string.sync_iv_360'));
+    }
+    if (min === 1440) {
+      return this.L($r('app.string.sync_iv_1440'));
+    }
+    return this.L($r('app.string.sync_iv_fmt')).replace('%d', min + '');
+  }
+
+  private normRel(p: string): string {
+    return p.replace(/^\/+|\/+$/g, '');
+  }
+
+  private joinRel(rel: string, name: string): string {
+    return rel.length === 0 ? name : rel + '/' + name;
+  }
+
+  /** 0.9.57: open the server-folder picker for 同步路径
+   *  (Android WebDavPathPickerDialog entry; empty URL toasts 不正确的值). */
+  private openDavPicker(): void {
+    if (this.syncCfg.url.trim().length === 0) {
+      promptAction.showToast({ message: $r('app.string.sync_pick_bad') });
+      return;
+    }
+    this.davPickerRel = this.normRel(this.syncCfg.remotePath);
+    this.davPickerDirs = [];
+    this.davPickerMsg = '';
+    this.davPickerAdding = false;
+    this.davPickerName = '';
+    this.showDavPicker = true;
+    this.loadDavPickerDirs();
+  }
+
+  private loadDavPickerDirs(): void {
+    /* 0.9.57 review: latest navigation wins — clicks that arrived while a
+     * PROPFIND was in flight were swallowed; stale responses are dropped
+     * by comparing the folder the request was made for. */
+    const rel = this.davPickerRel;
+    this.davPickerBusy = true;
+    this.davPickerMsg = '';
+    davBrowseDirs(getContext(this), this.syncCfg, rel).then((dirs: string[] | null) => {
+      if (this.davPickerRel !== rel) {
+        return;
+      }
+      this.davPickerBusy = false;
+      if (dirs === null) {
+        this.davPickerMsg = this.L($r('app.string.common_test_failed'));
+        return;
+      }
+      this.davPickerDirs = dirs;
+    }).catch((e: Object) => {
+      if (this.davPickerRel !== rel) {
+        return;
+      }
+      this.davPickerBusy = false;
+      this.davPickerMsg = String(e);
+    });
+  }
+
+  private davPickerCreate(): void {
+    const name = this.davPickerName.trim();
+    if (name.length === 0 || this.davPickerBusy) {
+      return;
+    }
+    /* 0.9.57 review: MKCOL creates one level only — 'a/b', '.' and '..'
+     * produced a confusing failure after 新建; validate like android's
+     * incorrect_value guard. */
+    if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0 || name === '.' || name === '..') {
+      this.davPickerMsg = this.L($r('app.string.sync_pick_bad'));
+      return;
+    }
+    this.davPickerBusy = true;
+    davCreateDir(getContext(this), this.syncCfg, this.davPickerRel, name).then((ok: boolean) => {
+      this.davPickerBusy = false;
+      if (!ok) {
+        this.davPickerMsg = this.L($r('app.string.common_test_failed'));
+        return;
+      }
+      this.davPickerAdding = false;
+      this.davPickerName = '';
+      this.davPickerRel = this.joinRel(this.davPickerRel, name);
+      this.loadDavPickerDirs();
+    }).catch((e: Object) => {
+      this.davPickerBusy = false;
+      this.davPickerMsg = String(e);
+    });
+  }
+
+  private davPickerSelect(): void {
+    this.syncCfg.remotePath = this.davPickerRel;
+    this.showDavPicker = false;
+  }
+
+  /** 0.9.57: WebDAV 同步 dialog (Android WebDavSyncDialog parity): 同步路径
+   *  opens the server-folder picker, 进度冲突策略/定时同步 popups, status +
+   *  footer always visible, no ✕ — 关闭/保存 at the bottom right. */
   @Builder
   buildSyncDialog() {
     Stack({ alignContent: Alignment.Center }) {
@@ -6195,6 +6661,7 @@ tlog('download_start', 'name=' + fileName);    try {
         .backgroundColor('#66000000')
         .onClick(() => {
           this.showSyncDialog = false;
+          this.syncSheet = '';
         })
       Scroll() {
         Column({ space: 10 }) {
@@ -6202,11 +6669,6 @@ tlog('download_start', 'name=' + fileName);    try {
             Text($r('app.string.sync_title'))
               .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
               .layoutWeight(1)
-            Image($r('app.media.ic_close'))
-              .width(20).height(20).fillColor(this.txtHint())
-              .onClick(() => {
-                this.showSyncDialog = false;
-              })
           }
           .width('100%')
 
@@ -6260,63 +6722,45 @@ tlog('download_start', 'name=' + fileName);    try {
           }
           .width('100%')
 
+          /* 0.9.57: 同步路径 — click browses the server (no hand-typed field) */
           Row({ space: 8 }) {
-            Text($r('app.string.sync_path')).fontSize(14).fontColor(this.txtPri()).width(70)
-            TextInput({ text: this.syncCfg.remotePath })
-              .fontSize(13).height(38).layoutWeight(1)
-              .backgroundColor(this.cardBg())
-              .border({ width: 1, color: this.divColor() })
-              .borderRadius(4)
-              .onChange((v: string) => {
-                this.syncCfg.remotePath = v;
-              })
-          }
-          .width('100%')
-
-          Row({ space: 8 }) {
-            Text($r('app.string.sync_conflict')).fontSize(14).fontColor(this.txtPri()).width(70)
-            Select(SYNC_CONFLICTS.map((v: string) => {
-              const o: SelectOption = { value: v };
-              return o;
-            }))
-              .selected(SYNC_CONFLICTS.indexOf(this.syncCfg.conflict) < 0 ? 0 : SYNC_CONFLICTS.indexOf(this.syncCfg.conflict))
-              .value(this.syncCfg.conflict)
-              .font({ size: 13 })
+            Text($r('app.string.sync_path')).fontSize(14).fontColor(this.txtPri()).width(96)
+            Text('/' + this.normRel(this.syncCfg.remotePath))
+              .fontSize(14).fontColor(this.thm())
+              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
               .layoutWeight(1)
-              .onSelect((idx: number) => {
-                this.syncCfg.conflict = SYNC_CONFLICTS[idx];
-              })
+              .maxLines(1)
           }
           .width('100%')
+          .onClick(() => {
+            this.openDavPicker();
+          })
 
-          Row({ space: 6 }) {
-            Checkbox({ name: 'syncAuto' })
-              .width(18).height(18)
-              .selectedColor(this.thm())
-              .select(this.syncCfg.autoSync)
-              .onChange((v: boolean) => {
-                this.syncCfg.autoSync = v;
-              })
-            Text($r('app.string.sync_auto')).fontSize(13).fontColor(this.txtPri())
+          Row({ space: 8 }) {
+            Text($r('app.string.sync_conflict')).fontSize(14).fontColor(this.txtPri()).width(96)
+            Text(this.syncCfg.conflict)
+              .fontSize(14).fontColor(this.thm())
+              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+              .layoutWeight(1)
+              .maxLines(1)
           }
           .width('100%')
+          .onClick(() => {
+            this.syncSheet = this.syncSheet === 'conflict' ? '' : 'conflict';
+          })
 
-          if (this.syncCfg.autoSync) {
-            Row({ space: 8 }) {
-              Text($r('app.string.sync_interval')).fontSize(14).fontColor(this.txtPri()).width(70)
-              TextInput({ text: '' + this.syncCfg.autoSyncMin })
-                .fontSize(13).height(38).layoutWeight(1)
-                .backgroundColor(this.cardBg())
-                .border({ width: 1, color: this.divColor() })
-                .borderRadius(4)
-                .type(InputType.Number)
-                .onChange((v: string) => {
-                  const n = parseInt(v);
-                  this.syncCfg.autoSyncMin = n > 0 ? n : 5;
-                })
-            }
-            .width('100%')
+          Row({ space: 8 }) {
+            Text($r('app.string.sync_auto')).fontSize(14).fontColor(this.txtPri()).width(96)
+            Text(this.syncIntervalLabel(this.syncCfg.autoSync ? this.syncCfg.autoSyncMin : 0))
+              .fontSize(14).fontColor(this.thm())
+              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+              .layoutWeight(1)
+              .maxLines(1)
           }
+          .width('100%')
+          .onClick(() => {
+            this.syncSheet = this.syncSheet === 'interval' ? '' : 'interval';
+          })
 
           Row({ space: 16 }) {
             Text($r('app.string.common_test_connection'))
@@ -6347,14 +6791,19 @@ tlog('download_start', 'name=' + fileName);    try {
               .borderRadius(4)
           }
 
+          /* 0.9.57: status + footer always visible (Android parity) */
           if (this.syncCfg.lastSyncTime.length > 0) {
             Text(`\u4E0A\u6B21\u540C\u6B65\uFF1A${this.fmtLogTime(this.syncCfg.lastSyncTime)} \u00B7 \u2191${this.syncCfg.lastUp}\u672C \u00B7 \u5173\u8054${this.syncCfg.lastLinked} \u00B7 ${this.syncCfg.lastMs}ms`)
               .fontSize(12).fontColor(this.txtMid())
               .width('100%')
-            Text($r('app.string.sync_independent'))
-              .fontSize(11).fontColor(this.txtFaint())
+          } else {
+            Text($r('app.string.sync_last_never'))
+              .fontSize(12).fontColor(this.txtMid())
               .width('100%')
           }
+          Text($r('app.string.sync_independent'))
+            .fontSize(11).fontColor(this.txtFaint())
+            .width('100%')
 
           Row({ space: 12 }) {
             Blank()
@@ -6379,9 +6828,178 @@ tlog('download_start', 'name=' + fileName);    try {
         .borderRadius(8)
       }
       .width('100%').height('100%')
+
+      /* 0.9.57: nested popup sheet — 进度冲突策略 / 定时同步 */
+      if (this.syncSheet.length > 0) {
+        Column()
+          .width('100%').height('100%')
+          .onClick(() => {
+            this.syncSheet = '';
+          })
+        Column({ space: 2 }) {
+          if (this.syncSheet === 'conflict') {
+            ForEach(SYNC_CONFLICTS, (s: string) => {
+              Text(s)
+                .fontSize(14)
+                .fontColor(this.syncCfg.conflict === s ? this.thm() : this.txtPri())
+                .width('100%')
+                .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+                .onClick(() => {
+                  this.syncCfg.conflict = s;
+                  this.syncSheet = '';
+                })
+            }, (s: string) => s)
+          } else {
+            ForEach(SYNC_INTERVAL_MINUTES, (m: number) => {
+              Text(this.syncIntervalLabel(m))
+                .fontSize(14)
+                .fontColor((this.syncCfg.autoSync ? this.syncCfg.autoSyncMin : 0) === m ? this.thm() : this.txtPri())
+                .width('100%')
+                .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+                .onClick(() => {
+                  this.syncCfg.autoSync = m > 0;
+                  if (m > 0) {
+                    this.syncCfg.autoSyncMin = m;
+                  }
+                  this.syncSheet = '';
+                })
+            }, (m: number) => '' + m)
+          }
+        }
+        .width('70%')
+        .constraintSize({ maxHeight: '62%' })
+        .backgroundColor(this.cardBg())
+        .borderRadius(8)
+        .padding({ top: 6, bottom: 6 })
+      }
     }
     .width('100%').height('100%')
   }
+
+  /** 0.9.57: server-folder picker for 同步路径 (Android WebDavPathPickerDialog):
+   *  PROPFIND dir listing, tap to enter, '..' up, new-folder (MKCOL),
+   *  选择此目录 confirms back into the sync dialog. */
+  @Builder
+  buildDavPickerDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showDavPicker = false;
+        })
+      Column({ space: 10 }) {
+        Row() {
+          Text($r('app.string.sync_pick_title'))
+            .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
+            .layoutWeight(1)
+        }
+        .width('100%')
+
+        Text('/' + this.davPickerRel)
+          .fontSize(13).fontColor(this.thm())
+          .width('100%')
+          .maxLines(1)
+
+        if (this.davPickerAdding) {
+          Row({ space: 8 }) {
+            TextInput({ text: this.davPickerName, placeholder: $r('app.string.sync_pick_new') })
+              .fontSize(13).height(36).layoutWeight(1)
+              .backgroundColor(this.inputBg())
+              .border({ width: 1, color: this.divColor() })
+              .borderRadius(4)
+              .onChange((v: string) => {
+                this.davPickerName = v;
+              })
+            Button($r('app.string.common_ok'))
+              .fontSize(12).height(32)
+              .backgroundColor(this.thm()).fontColor(Color.White)
+              .onClick(() => {
+                this.davPickerCreate();
+              })
+            Button($r('app.string.common_cancel'))
+              .fontSize(12).height(32)
+              .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+              .onClick(() => {
+                this.davPickerAdding = false;
+                this.davPickerName = '';
+              })
+          }
+          .width('100%')
+        }
+
+        List({ space: 2 }) {
+          ListItem() {
+            Text('..')
+              .fontSize(14).fontColor(this.txtPri())
+              .width('100%')
+              .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+              .onClick(() => {
+                const idx: number = this.davPickerRel.lastIndexOf('/');
+                this.davPickerRel = idx <= 0 ? '' : this.davPickerRel.substring(0, idx);
+                this.loadDavPickerDirs();
+              })
+          }
+          ForEach(this.davPickerDirs, (d: string) => {
+            ListItem() {
+              Text(d)
+                .fontSize(14).fontColor(this.txtPri())
+                .width('100%')
+                .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+                .onClick(() => {
+                  this.davPickerRel = this.joinRel(this.davPickerRel, d);
+                  this.loadDavPickerDirs();
+                })
+            }
+          }, (d: string) => d)
+        }
+        .width('100%')
+        .constraintSize({ maxHeight: 340 })
+        .backgroundColor(this.inputBg())
+        .borderRadius(4)
+
+        if (this.davPickerBusy) {
+          Text($r('app.string.common_loading'))
+            .fontSize(12).fontColor(this.txtMid())
+            .width('100%')
+        }
+        if (this.davPickerMsg.length > 0) {
+          Text(this.davPickerMsg)
+            .fontSize(12).fontColor('#e57373')
+            .width('100%')
+            .maxLines(2)
+        }
+
+        Row({ space: 16 }) {
+          Text($r('app.string.sync_pick_new'))
+            .fontSize(13).fontColor('#00897B')
+            .onClick(() => {
+              this.davPickerAdding = true;
+              this.davPickerName = '';
+            })
+          Blank()
+          Text($r('app.string.common_close'))
+            .fontSize(13).fontColor(this.txtPri())
+            .onClick(() => {
+              this.showDavPicker = false;
+            })
+          Text($r('app.string.sync_pick_select'))
+            .fontSize(13).fontWeight(FontWeight.Bold).fontColor(this.thm())
+            .onClick(() => {
+              this.davPickerSelect();
+            })
+        }
+        .width('100%')
+      }
+      .width('86%')
+      .padding(14)
+      .constraintSize({ maxHeight: '88%' })
+      .backgroundColor(this.cardBg())
+      .borderRadius(8)
+    }
+    .width('100%').height('100%')
+  }
+
 
   /** hr09b: 同步日志 page (reverse chronological, per-book details). */
   @Builder
@@ -9417,8 +10035,9 @@ tlog('download_start', 'name=' + fileName);    try {
     if (target === 'remoteBatch' && this.settings.remoteBatchDir.length > 0) {
       start = this.settings.remoteBatchDir;
     }
-    if (target === 'fonts' || target === 'downloads') {
-      const cur: string = this.resolveFolderPath(target === 'fonts' ? this.settings.fontsFolder : this.settings.downloadsFolder);
+    if (target === 'fonts' || target === 'downloads' || target === 'tts') {
+      const cur: string = this.resolveFolderPath(target === 'fonts' ? this.settings.fontsFolder
+        : (target === 'tts' ? this.settings.ttsFolder : this.settings.downloadsFolder));
       if (cur.length > 0) {
         start = cur;
       }
@@ -9470,6 +10089,9 @@ tlog('download_start', 'name=' + fileName);    try {
       this.saveNow();
     } else if (this.dirPickTarget === 'downloads') {
       this.settings.downloadsFolder = this.dirPickPath;
+      this.saveNow();
+    } else if (this.dirPickTarget === 'tts') {
+      this.settings.ttsFolder = this.dirPickPath;
       this.saveNow();
     } else if (this.dirPickTarget === 'libFolder') {
       this.addLibFolder(this.dirPickPath);
@@ -9577,17 +10199,42 @@ tlog('download_start', 'name=' + fileName);    try {
         if (target.length === 0) {
           continue;
         }
+        /* 0.9.55: title/author derivation (Android BooksService parity):
+         * original filename, or the Calibre metadata.opf facts when enabled */
+        const base: string = hits[i].name.replace(/\.[^.]*$/, '');
+        let title: string = base;
+        let author: string = '';
+        let series: string = '';
+        let seriesIdx: number = 0;
+        if (!this.settings.showOnlyOriginalFileNames) {
+          const meta = this.settings.useCalibreOpf ? readCalibreMeta(hits[i].path) : null;
+          if (meta !== null) {
+            if (meta.title.length > 0) {
+              title = meta.title;
+            }
+            if (meta.author.length > 0) {
+              author = meta.author;
+            }
+            if (meta.series.length > 0) {
+              series = meta.series;
+              seriesIdx = meta.seriesIndex;
+            }
+          }
+        }
+        if (this.settings.seriesNumberInTitle && series.length > 0 && seriesIdx > 0) {
+          title = title + ' (#' + (seriesIdx % 1 === 0 ? String(Math.round(seriesIdx)) : String(seriesIdx)) + ')';
+        }
         const book: RecentBook = {
           path: target,
-          title: hits[i].name,
+          title: title,
           page: 0,
           totalPages: 0,
           lastRead: new Date().toISOString(),
           star: false,
           coverPath: '',
-          author: '',
+          author: author,
           tags: [],
-          series: '',
+          series: series,
           genre: '',
           status: 0
         };
@@ -9618,6 +10265,37 @@ tlog('download_start', 'name=' + fileName);    try {
 
   /** 备份配置 folder row: shows the value, click opens the directory picker
    *  (value read inside the body so @State refreshes after picking). */
+  /* 0.9.58: Android backupConfig path-row parity — label left, value right. */
+  @Builder
+  folderPrefRowLR(label: string, target: string) {
+    Row({ space: 8 }) {
+      Text(label)
+        .fontSize(13).fontColor(this.txtPri())
+        .width(110)
+      Text(this.folderPrefDisplay(target))
+        .fontSize(12).fontColor(this.thm())
+        .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+        .maxLines(1)
+        .textAlign(TextAlign.End)
+        .layoutWeight(1)
+      Text('\u203A').fontSize(14).fontColor(this.txtHint())
+    }
+    .width('100%')
+    .padding({ top: 5, bottom: 5 })
+    .onClick(() => {
+      this.openDirPick(target);
+    })
+  }
+
+  /* 0.9.58: '../HowRead' style display (Android TxtUtils.smallPathFormat). */
+  private folderPrefDisplay(target: string): string {
+    const v = this.folderPrefValue(target);
+    if (v.startsWith('/')) {
+      return v;
+    }
+    return '../' + v;
+  }
+
   @Builder
   folderPrefRow(target: string) {
     Row({ space: 6 }) {
@@ -9641,6 +10319,9 @@ tlog('download_start', 'name=' + fileName);    try {
     }
     if (target === 'fonts') {
       return this.settings.fontsFolder;
+    }
+    if (target === 'tts') {
+      return this.settings.ttsFolder;
     }
     return this.settings.downloadsFolder;
   }
@@ -9880,6 +10561,506 @@ tlog('download_start', 'name=' + fileName);    try {
     .padding({ left: 12, right: 12, top: 9, bottom: 9 })
   }
 
+  /* ---- 0.9.55 prefs alignment helpers ---- */
+
+  /** Screen width in dp (Android Dips.screenWidthDP). */
+  private screenWidthDp(): number {
+    try {
+      const d = display.getDefaultDisplaySync();
+      const density: number = d.densityDPI / 160;
+      return density > 0 ? Math.round(d.width / density) : 360;
+    } catch (e) {
+      return 360;
+    }
+  }
+
+  /** Cover-size slider max (Android CustomSeek: minWH/2 - 8dp). */
+  private seekMax(): number {
+    if (this.seekMaxCache <= 0) {
+      try {
+        const d = display.getDefaultDisplaySync();
+        const density: number = d.densityDPI / 160;
+        this.seekMaxCache = Math.max(160, Math.floor(Math.min(d.width, d.height) / density / 2) - 8);
+      } catch (e) {
+        this.seekMaxCache = 160;
+      }
+    }
+    return this.seekMaxCache;
+  }
+
+  /** Slider display floor (Android CustomSeek min 40). */
+  private seekClampLo(v: number): number {
+    return Math.max(40, v);
+  }
+
+  /** 列数 value: columns derived from the grid cover size (Android columsCount). */
+  private gridColumnsDerived(): number {
+    const w: number = this.screenWidthDp();
+    return Math.max(1, Math.floor(w / Math.max(40, this.settings.coverGridSize)));
+  }
+
+  /** Reset cover sizes to the Android defaults (Android columsDefaul). */
+  confirmSeekReset(): void {
+    AlertDialog.show({
+      title: this.L($r('app.string.set_reset')),
+      message: '恢复默认的列表(80)/网格(110)封面大小与列数？',
+      primaryButton: { value: this.L($r('app.string.common_cancel')), action: () => {} },
+      secondaryButton: {
+        value: this.L($r('app.string.set_reset')),
+        action: () => {
+          this.settings.coverListSize = 80;
+          this.settings.coverGridSize = 110;
+          this.settings.coverColumns = 3;
+          this.saveNow();
+        }
+      }
+    });
+  }
+
+  /** Display an author surname-first when the pref is on
+   *  (Android TxtUtils.replaceLastFirstNameSplit). */
+  fmtAuthor(name: string): string {
+    if (!this.settings.authorSurnameFirst || name.length === 0) {
+      return name;
+    }
+    const trimmed: string = name.trim();
+    const sp: number = trimmed.indexOf(' ');
+    if (sp <= 0 || trimmed.indexOf(';') >= 0 || trimmed.indexOf(',') >= 0) {
+      return name;
+    }
+    return trimmed.substring(sp + 1) + ' ' + trimmed.substring(0, sp);
+  }
+
+  /** True when the book title still equals its file name (no metadata title). */
+  private hasBareTitle(book: RecentBook): boolean {
+    const name: string = book.path.substring(book.path.lastIndexOf('/') + 1).replace(/\.[^.]*$/, '');
+    return book.title.toLowerCase() === name.toLowerCase();
+  }
+
+  /** 字体大小 value (Android getFontName): 小(-N)/正常/大(+N). */
+  private fontScaleNameOf(v: number): string {
+    if (v < 1) {
+      return this.L($r('app.string.set_font_small')) + ' (-' + Math.round((1 - v) * 10) + ')';
+    }
+    if (v > 1) {
+      return this.L($r('app.string.set_font_large')) + ' (+' + Math.round((v - 1) * 10) + ')';
+    }
+    return this.L($r('app.string.screen_normal'));
+  }
+
+  private fontScaleName(): string {
+    return this.fontScaleNameOf(this.settings.appFontScale);
+  }
+
+  /** 标签栏 value (Android tapPositionTop: top/bottom ± icons-only). */
+  private tabPosLabel(): string {
+    const top: boolean = this.settings.tabPositionTop;
+    const icons: boolean = this.settings.tabIconOnly;
+    if (top && icons) {
+      return this.L($r('app.string.tabpos_top_icons'));
+    }
+    if (top) {
+      return this.L($r('app.string.tabpos_top'));
+    }
+    if (icons) {
+      return this.L($r('app.string.tabpos_bottom_icons'));
+    }
+    return this.L($r('app.string.tabpos_bottom'));
+  }
+
+  /** 0.9.56: reorder tabs inline (Android DragLinearLayout parity). */
+  private moveTab(pos: number, dir: number): void {
+    const to: number = pos + dir;
+    if (to < 0 || to >= this.tabDisplay.length) {
+      return;
+    }
+    const arr: number[] = this.tabDisplay.slice();
+    const v: number = arr[pos];
+    arr[pos] = arr[to];
+    arr[to] = v;
+    this.settings.tabsOrder = JSON.stringify(arr);
+    this.saveNow();
+    this.loadTabOrder();
+  }
+
+  /** Swatch square for the color rows (Android item_color parity). */
+  @Builder
+  colorSwatch(hex: string, selected: boolean, target: number) {
+    Column() {
+      if (hex.length === 0) {
+        Text('+')
+          .fontSize(15).fontColor(this.txtSec())
+          .width('100%').height('100%')
+          .textAlign(TextAlign.Center)
+      }
+    }
+    .width(26).height(26)
+    .backgroundColor(hex.length > 0 ? hex : Color.Transparent)
+    .borderRadius(3)
+    .border({ width: 1, color: selected ? this.thm() : this.divColor() })
+    .onClick(() => {
+      if (hex.length === 0) {
+        this.colorTarget = target;
+        this.colorHexIn = '';
+        this.showColorPick = true;
+      } else {
+        this.setColor(target, hex);
+      }
+    })
+  }
+
+  /** Dashboard card source with the 显示/书籍数 prefs applied (Android widget). */
+  private widgetCardBooks(): RecentBook[] {
+    const src: RecentBook[] = this.settings.cardSource === 0 ? this.recentBooks : this.starredBooks;
+    return src.slice(0, Math.max(1, Math.min(6, this.settings.cardCount)));
+  }
+
+  /** 阅读时单击 value: preferred reading mode name (Android readingMode). */
+  private readingModeLabel(): string {
+    const v: number = this.settings.readingModePref;
+    return v === 0 ? this.L($r('app.string.set_select_mode'))
+      : v === 1 ? this.L($r('app.string.set_reading_scroll'))
+        : this.L($r('app.string.set_reading_horiz'));
+  }
+
+  /** 0.9.57: parse+clamp one numeric field (Android RemoteCacheDialog limits:
+   *  threshold >=0 default 20; window 1..90 default 20/30; retry 0..10
+   *  default 3; interval 0..30000 default 100). */
+  private clampInt(s: string, lo: number, hi: number, dflt: number): number {
+    const n = parseInt(s.trim(), 10);
+    if (isNaN(n)) {
+      return dflt;
+    }
+    return Math.max(lo, Math.min(hi, n));
+  }
+
+  private commitRemoteCfg(): void {
+    this.settings.remoteWholeBookThresholdMB = this.clampInt(this.remoteCfgThreshold, 0, 1000000, 20);
+    this.settings.remoteWindowBeforePct = this.clampInt(this.remoteCfgBefore, 1, 90, 20);
+    this.settings.remoteWindowAfterPct = this.clampInt(this.remoteCfgAfter, 1, 90, 30);
+    this.settings.remoteRetryCount = this.clampInt(this.remoteCfgRetry, 0, 10, 3);
+    this.settings.remoteRetryIntervalMs = this.clampInt(this.remoteCfgInterval, 0, 30000, 100);
+    this.saveNow();
+    this.showRemoteCfg = false;
+  }
+
+  /** 0.9.57: 在线阅读 dialog (Android RemoteCacheDialog parity): switch rows
+   *  save immediately, numeric fields are direct TextInputs (no per-field
+   *  popup), current-network note, 取消/确定 footer, no ✕. Usage + clear live
+   *  in the 缓存管理 dialog (Android parity). */
+  @Builder
+  buildRemoteCfgDialog() {
+    Column({ space: 6 }) {
+      Row() {
+        Text($r('app.string.remote_read_title'))
+          .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri()).layoutWeight(1)
+      }
+      .width('100%')
+
+      Row({ space: 10 }) {
+        Text($r('app.string.remote_online_first_row'))
+          .fontSize(14).fontColor(this.accentTextColor() ? this.acc() : this.txtPri()).layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.settings.remoteOnlineFirst })
+          .selectedColor(this.thm())
+          .onChange((v: boolean) => {
+            this.applyBoolPref('remoteOnlineFirst', v);
+          })
+      }
+      .width('100%')
+      .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+
+      Row({ space: 10 }) {
+        Text($r('app.string.remote_wifi_full'))
+          .fontSize(14).fontColor(this.accentTextColor() ? this.acc() : this.txtPri()).layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.settings.remotePrefetchWifiOnly })
+          .selectedColor(this.thm())
+          .onChange((v: boolean) => {
+            this.applyBoolPref('remotePrefetchWifiOnly', v);
+          })
+      }
+      .width('100%')
+      .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+
+      Text($r('app.string.remote_threshold_label'))
+        .fontSize(13).fontColor(this.txtSec())
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 6, bottom: 2 })
+      TextInput({ text: this.remoteCfgThreshold })
+        .type(InputType.Number)
+        .fontSize(14).height(38).width('100%')
+        .backgroundColor(this.inputBg())
+        .border({ width: 1, color: this.divColor() })
+        .borderRadius(4)
+        .onChange((v: string) => {
+          this.remoteCfgThreshold = v;
+        })
+
+      Row() {
+        Column({ space: 4 }) {
+          Text($r('app.string.remote_before_label')).fontSize(12).fontColor(this.txtSec())
+          TextInput({ text: this.remoteCfgBefore })
+            .type(InputType.Number)
+            .fontSize(14).height(38).width('100%')
+            .backgroundColor(this.inputBg())
+            .border({ width: 1, color: this.divColor() })
+            .borderRadius(4)
+            .onChange((v: string) => {
+              this.remoteCfgBefore = v;
+            })
+        }
+        .layoutWeight(1)
+        Column({ space: 4 }) {
+          Text($r('app.string.remote_after_label')).fontSize(12).fontColor(this.txtSec())
+          TextInput({ text: this.remoteCfgAfter })
+            .type(InputType.Number)
+            .fontSize(14).height(38).width('100%')
+            .backgroundColor(this.inputBg())
+            .border({ width: 1, color: this.divColor() })
+            .borderRadius(4)
+            .onChange((v: string) => {
+              this.remoteCfgAfter = v;
+            })
+        }
+        .layoutWeight(1)
+        .margin({ left: 10 })
+      }
+      .width('100%')
+      .padding({ left: 12, right: 12, top: 6, bottom: 2 })
+
+      Row() {
+        Column({ space: 4 }) {
+          Text($r('app.string.remote_retry_count_label')).fontSize(12).fontColor(this.txtSec())
+          TextInput({ text: this.remoteCfgRetry })
+            .type(InputType.Number)
+            .fontSize(14).height(38).width('100%')
+            .backgroundColor(this.inputBg())
+            .border({ width: 1, color: this.divColor() })
+            .borderRadius(4)
+            .onChange((v: string) => {
+              this.remoteCfgRetry = v;
+            })
+        }
+        .layoutWeight(1)
+        Column({ space: 4 }) {
+          Text($r('app.string.remote_retry_interval_label')).fontSize(12).fontColor(this.txtSec())
+          TextInput({ text: this.remoteCfgInterval })
+            .type(InputType.Number)
+            .fontSize(14).height(38).width('100%')
+            .backgroundColor(this.inputBg())
+            .border({ width: 1, color: this.divColor() })
+            .borderRadius(4)
+            .onChange((v: string) => {
+              this.remoteCfgInterval = v;
+            })
+        }
+        .layoutWeight(1)
+        .margin({ left: 10 })
+      }
+      .width('100%')
+      .padding({ left: 12, right: 12, top: 6, bottom: 2 })
+
+      Text(this.remoteNetMetered ? $r('app.string.remote_net_metered') : $r('app.string.remote_net_wifi'))
+        .fontSize(12).fontColor(this.txtSec())
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 8, bottom: 4 })
+
+      Row({ space: 18 }) {
+        Blank()
+        Text($r('app.string.common_cancel'))
+          .fontSize(14).fontColor(this.txtPri())
+          .padding({ left: 12, right: 6, top: 8, bottom: 8 })
+          .onClick(() => {
+            this.showRemoteCfg = false;
+          })
+        Text($r('app.string.common_ok'))
+          .fontSize(14).fontWeight(FontWeight.Bold).fontColor(this.thm())
+          .padding({ left: 6, right: 12, top: 8, bottom: 8 })
+          .onClick(() => {
+            this.commitRemoteCfg();
+          })
+      }
+      .width('100%')
+    }
+    .width('86%')
+    .backgroundColor(this.cardBg())
+    .borderRadius(12)
+    .padding(12)
+  }
+
+
+  /** 0.9.58: cache manager rebuilt to Android showAppCacheDialog — five
+   *  usage rows + size-cap editor + Clear all / Cancel / Save cap. */
+  @Builder
+  buildCacheMgrDialog() {
+    Column({ space: 8 }) {
+      Row() {
+        Text(this.L($r('app.string.app_cache_manage')))
+          .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri()).layoutWeight(1)
+        Text('\u2716')
+          .fontSize(18).fontColor(this.txtHint()).width(36).height(36).textAlign(TextAlign.Center)
+          .onClick(() => {
+            this.showCacheMgr = false;
+          })
+      }
+      .width('100%')
+      Text(this.L($r('app.string.cache_usage_online')) + this.remoteCacheUsage)
+        .fontSize(13).fontColor(this.txtPri()).width('100%')
+      Text(this.L($r('app.string.cache_usage_convert')) + this.convCacheUsage)
+        .fontSize(13).fontColor(this.txtPri()).width('100%')
+      Text(this.L($r('app.string.cache_usage_temp')) + this.tempCacheUsage)
+        .fontSize(13).fontColor(this.txtPri()).width('100%')
+      Text(this.L($r('app.string.cache_usage_runtime')) + this.appCacheUsage)
+        .fontSize(13).fontColor(this.txtPri()).width('100%')
+      Text(this.L($r('app.string.cache_usage_total')) + this.cacheTotalUsage)
+        .fontSize(13).fontWeight(FontWeight.Medium).fontColor(this.thm()).width('100%')
+      Text(this.L($r('app.string.cache_size_limit')))
+        .fontSize(13).fontColor(this.txtPri()).width('100%').margin({ top: 6 })
+      TextInput({ text: this.cacheMaxInput })
+        .type(InputType.Number)
+        .fontSize(14).height(38).width('100%')
+        .backgroundColor(this.inputBg())
+        .onChange((v: string) => {
+          this.cacheMaxInput = v;
+        })
+      Row({ space: 12 }) {
+        Text(this.L($r('app.string.cache_clear_all')))
+          .fontSize(14).fontColor(this.thm())
+          .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+          .onClick(() => {
+            AlertDialog.show({
+              title: this.L($r('app.string.cache_clear_all')),
+              message: this.L($r('app.string.cache_clear_warn')),
+              primaryButton: { value: this.L($r('app.string.common_cancel')), action: () => {} },
+              secondaryButton: {
+                value: this.L($r('app.string.cache_clear_all')),
+                action: () => {
+                  this.clearAllCaches();
+                }
+              }
+            });
+          })
+        Blank()
+        Button(this.L($r('app.string.common_cancel')))
+          .fontSize(14).height(36)
+          .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+          .onClick(() => {
+            this.showCacheMgr = false;
+          })
+        Button(this.L($r('app.string.cache_save_limit')))
+          .fontSize(14).height(36)
+          .backgroundColor(this.thm()).fontColor(Color.White)
+          .onClick(() => {
+            this.saveCacheCap();
+            this.showCacheMgr = false;
+          })
+      }
+      .width('100%')
+    }
+    .width('80%')
+    .backgroundColor(this.cardBg())
+    .borderRadius(12)
+    .padding(14)
+  }
+
+  /* 0.9.58: path-prefix migration dialog (Android migrationDialog parity). */
+  @Builder
+  buildMigrateDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showMigrate = false;
+        })
+      Column({ space: 10 }) {
+        Text(this.L($r('app.string.backup_migrate')))
+          .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri()).width('100%')
+        Text(this.L($r('app.string.msg_backup_warn')))
+          .fontSize(12).fontColor('#d32f2f').width('100%')
+        TextInput({ text: this.migrateFrom, placeholder: $r('app.string.migrate_from_hint') })
+          .fontSize(13).height(38).width('100%')
+          .backgroundColor(this.inputBg())
+          .onChange((v: string) => {
+            this.migrateFrom = v;
+          })
+        TextInput({ text: this.migrateTo, placeholder: $r('app.string.migrate_to_hint') })
+          .fontSize(13).height(38).width('100%')
+          .backgroundColor(this.inputBg())
+          .onChange((v: string) => {
+            this.migrateTo = v;
+          })
+        Row({ space: 12 }) {
+          Blank()
+          Button(this.L($r('app.string.common_cancel')))
+            .fontSize(14).height(36)
+            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+            .onClick(() => {
+              this.showMigrate = false;
+            })
+          Button(this.L($r('app.string.migrate_start')))
+            .fontSize(14).height(36)
+            .backgroundColor(this.thm()).fontColor(Color.White)
+            .onClick(() => {
+              this.doMigrate();
+            })
+        }
+        .width('100%')
+      }
+      .width('86%')
+      .padding(14)
+      .backgroundColor(this.cardBg())
+      .borderRadius(8)
+    }
+  }
+
+  /** 0.9.55: set/clear the app-lock password (Android PasswordDialog parity). */
+  @Builder
+  buildLockPassDialog() {
+    Column({ space: 10 }) {
+      Row() {
+        Text(this.L($r('app.string.set_password')))
+          .fontSize(16).fontWeight(FontWeight.Bold).fontColor(this.txtPri()).layoutWeight(1)
+        Text('\u2716')
+          .fontSize(18).fontColor(this.txtHint()).width(36).height(36).textAlign(TextAlign.Center)
+          .onClick(() => {
+            this.showLockPass = false;
+          })
+      }
+      .width('100%')
+      TextInput({ placeholder: this.L($r('app.string.set_password')), text: this.lockPassInput })
+        .fontSize(14).height(40).width('100%')
+        .onChange((v: string) => {
+          this.lockPassInput = v;
+        })
+      Row({ space: 16 }) {
+        Text('清除')
+          .fontSize(14).fontColor('#e57373')
+          .onClick(() => {
+            this.settings.appLockPass = '';
+            this.settings.appLockEnabled = false;
+            this.saveNow();
+            this.showLockPass = false;
+          })
+        Blank()
+        Text('确定')
+          .fontSize(14).fontColor(this.thm())
+          .onClick(() => {
+            this.settings.appLockPass = this.lockPassInput;
+            if (this.settings.appLockPass.length > 0) {
+              this.settings.appLockEnabled = true;
+            }
+            this.saveNow();
+            this.showLockPass = false;
+          })
+      }
+      .width('100%')
+    }
+    .width('70%')
+    .backgroundColor(this.cardBg())
+    .borderRadius(12)
+    .padding(14)
+  }
+
   /** Round 7: KV row that opens the option popup (Android ListPreference).
    *  Reads the value inside the body (by-value builder params do not refresh). */
   @Builder
@@ -9905,125 +11086,23 @@ tlog('download_start', 'name=' + fileName);    try {
    *  Reads the pref inside the body (by-value builder params do not refresh). */
   @Builder
   settingsToggleRow(label: string, prefKey: string, hint: string) {
-    Row({ space: 8 }) {
-      Text(label)
-        .fontSize(this.fsp(14)).fontColor(this.accentTextColor() ? this.acc() : this.txtPri())
-        .layoutWeight(1)
-      if (hint.length > 0) {
-        Text(hint).fontSize(10).fontColor(this.txtFaint())
-      }
-      Toggle({ type: ToggleType.Switch, isOn: this.boolPref(prefKey) })
+    /* 0.9.55: Android CheckBox row style — checkbox on the left */
+    Row({ space: 10 }) {
+      Checkbox({ name: 'chk_' + prefKey, group: 'prefs' })
+        .select(this.boolPref(prefKey))
         .selectedColor(this.thm())
         .onChange((v: boolean) => {
           this.applyBoolPref(prefKey, v);
         })
-    }
-    .width('100%')
-    .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-  }
-
-  /** Round 8: numeric pref row (tap -> input dialog, Android RemoteCacheDialog fields). */
-  @Builder
-  settingsNumRow(label: string, key: string, minV: number, maxV: number) {
-    Row() {
       Text(label)
-        .fontSize(14).fontColor(this.accentTextColor() ? this.acc() : this.txtPri()).layoutWeight(1)
-      Text(`${this.numPref(key)}`)
-        .fontSize(14).fontColor(this.thm())
-        .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+        .fontSize(this.fsp(13)).fontColor(this.accentTextColor() ? this.acc() : this.txtPri())
+        .layoutWeight(1)
+      if (hint.length > 0) {
+        Text(hint).fontSize(10).fontColor(this.txtFaint())
+      }
     }
     .width('100%')
-    .padding({ left: 12, right: 12, top: 9, bottom: 9 })
-    .onClick(() => {
-      this.openRemoteNum(key, minV, maxV);
-    })
-  }
-
-  private openRemoteNum(key: string, minV: number, maxV: number): void {
-    this.remoteNumKey = key;
-    this.remoteNumMin = minV;
-    this.remoteNumMax = maxV;
-    this.remoteNumValue = `${this.numPref(key)}`;
-    this.showRemoteNum = true;
-  }
-
-  /** 0.9.19: two numeric pref rows side by side (Android RemoteCacheDialog paired). */
-  @Builder
-  settingsNumRowPair(label1: string, key1: string, min1: number, max1: number,
-    label2: string, key2: string, min2: number, max2: number) {
-    Row() {
-      Row() {
-        Text(label1)
-          .fontSize(13).fontColor(this.accentTextColor() ? this.acc() : this.txtPri())
-          .maxLines(2)
-        Text(`${this.numPref(key1)}`)
-          .fontSize(13).fontColor(this.thm())
-          .decoration({ type: TextDecorationType.Underline, color: this.thm() })
-          .margin({ left: 6 })
-      }
-      .layoutWeight(1)
-      .onClick(() => { this.openRemoteNum(key1, min1, max1); })
-      Row() {
-        Text(label2)
-          .fontSize(13).fontColor(this.accentTextColor() ? this.acc() : this.txtPri())
-          .maxLines(2)
-        Text(`${this.numPref(key2)}`)
-          .fontSize(13).fontColor(this.thm())
-          .decoration({ type: TextDecorationType.Underline, color: this.thm() })
-          .margin({ left: 6 })
-      }
-      .layoutWeight(1)
-      .onClick(() => { this.openRemoteNum(key2, min2, max2); })
-    }
-    .width('100%')
-    .padding({ left: 12, right: 12, top: 9, bottom: 9 })
-  }
-
-  /** Round 7: color palette row (Android colorsLine + custom picker).
-   *  Reads settings inline (builder by-value params would not refresh). */
-  @Builder
-  settingsColorRow(label: string, target: number, presets: string[]) {
-    Column({ space: 6 }) {
-      Row({ space: 8 }) {
-        Text(label)
-          .fontSize(this.fsp(14)).fontColor(this.accentTextColor() ? this.acc() : this.txtPri())
-          .layoutWeight(1)
-        Text(target === 0
-          ? (this.settings.themeColor.length > 0 ? this.settings.themeColor : '#3949AB')
-          : (this.settings.accentColor.length > 0 ? this.settings.accentColor : '#03A9F4'))
-          .fontSize(11).fontColor(this.txtFaint())
-        Text(this.L($r('app.string.set_color_reset')))
-          .fontSize(11).fontColor(this.thm())
-          .decoration({ type: TextDecorationType.Underline, color: this.thm() })
-          .onClick(() => {
-            this.resetColor(target);
-          })
-      }
-      .width('100%')
-      Row({ space: 8 }) {
-        ForEach(presets, (hex: string) => {
-          Circle({ width: 24, height: 24 })
-            .fill(hex)
-            .onClick(() => {
-              this.setColor(target, hex);
-            })
-        }, (hex: string) => `${target}_${hex}`)
-        Circle({ width: 24, height: 24 })
-          .fill(Color.White)
-          .stroke(this.thm())
-          .strokeWidth(1)
-          .onClick(() => {
-            this.colorTarget = target;
-            this.colorHexIn = '';
-            this.showColorPick = true;
-          })
-        Text('+')
-          .fontSize(14).fontColor(this.thm())
-      }
-      .width('100%')
-    }
-    .width('100%')
-    .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+    .padding({ left: 12, right: 12, top: 4, bottom: 4 })
   }
 
   @Builder
@@ -10100,93 +11179,158 @@ tlog('download_start', 'name=' + fileName);    try {
           if (this.groupExp['fmt'] === true) {
             Column({ space: 2 }) {
               ForEach(FORMAT_ROWS, (row: string[]) => {
-                Row({ space: 8 }) {
-                  Text(row[1])
-                    .fontSize(this.fsp(13)).fontColor(this.txtPri()).layoutWeight(1)
-                  Text('' + this.fmtCount(row[0]))
-                    .fontSize(11).fontColor(this.txtHint())
-                  Toggle({ type: ToggleType.Switch, isOn: this.fmtIsOn(row[0]) })
+                Row({ space: 10 }) {
+                  Checkbox({ name: 'fmt_' + row[0], group: 'formats' })
+                    .select(this.fmtIsOn(row[0]))
                     .selectedColor(this.thm())
                     .onChange((v: boolean) => {
                       this.fmtToggle(row[0], v);
                     })
+                  Text(row[1])
+                    .fontSize(this.fsp(13)).fontColor(this.txtPri()).layoutWeight(1)
+                  Text('' + this.fmtCount(row[0]))
+                    .fontSize(12).fontColor(this.txtHint())
                 }
                 .width('100%')
-                .padding({ left: 22, right: 12, top: 4, bottom: 4 })
+                .padding({ left: 12, right: 14, top: 4, bottom: 4 })
               }, (row: string[]) => `fmt_${row[0]}`)
             }
             .width('100%')
-            Text($r('app.string.set_formats_hint'))
-              .fontSize(10).fontColor(this.txtFaint()).width('100%').padding({ left: 22, bottom: 6 })
           }
 
           /* --- 书库设置 (Android populateLibrarySettings) --- */
           this.settingsSubBar(this.L($r('app.string.set_library_group')), 'libset')
           if (this.groupExp['libset'] === true) {
             this.settingsToggleRow(this.L($r('app.string.set_autoscan')), 'autoScanOnStart', '')
-            this.settingsToggleRow(this.L($r('app.string.set_hide_read')), 'hideReadBooks', '')
-            this.settingsToggleRow(this.L($r('app.string.set_show_desc')), 'showBookDescription', this.L($r('app.string.set_reserved')))
-            this.settingsToggleRow(this.L($r('app.string.set_surname_first')), 'authorSurnameFirst', this.L($r('app.string.set_reserved')))
+            this.settingsToggleRow(this.L($r('app.string.set_surname_first')), 'authorSurnameFirst', '')
             this.settingsToggleRow(this.L($r('app.string.set_skip_nomedia')), 'skipNoMediaFolders', '')
+            this.settingsToggleRow(this.L($r('app.string.set_pdf_meta_title')), 'authorTitleFromMetaPDF', '')
+            this.settingsToggleRow(this.L($r('app.string.set_use_filename')), 'showOnlyOriginalFileNames', '')
+            this.settingsToggleRow(this.L($r('app.string.set_use_calibre_opf')), 'useCalibreOpf', '')
+            this.settingsToggleRow(this.L($r('app.string.set_show_desc')), 'showBookDescription', '')
+            this.settingsToggleRow(this.L($r('app.string.set_hide_read')), 'hideReadBooks', '')
+            this.settingsToggleRow(this.L($r('app.string.set_series_in_title')), 'seriesNumberInTitle', '')
+            this.settingsToggleRow(this.L($r('app.string.set_auto_add_lib')), 'autoAddToLibrary', '')
           }
 
           /* --- 书库显示配置 (Android libraryDisplayConfig) --- */
           this.settingsSubBar(this.L($r('app.string.set_lib_display')), 'libdisp')
           if (this.groupExp['libdisp'] === true) {
-            this.settingsKvSheet(this.L($r('app.string.set_cover_columns')), 'cols')
-            Row({ space: 8 }) {
-              Text(this.L($r('app.string.set_list_cover_size')))
-                .fontSize(this.fsp(13)).fontColor(this.txtSec())
-              Slider({ value: this.settings.coverListSize, min: 0, max: 120, step: 4 })
-                .layoutWeight(1)
-                .onChange((value: number, mode: SliderChangeMode) => {
-                  this.settings.coverListSize = value;
-                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                    this.saveNow();
-                  }
-                })
-              Text(this.settings.coverListSize === 0 ? this.L($r('app.string.set_auto')) : '' + this.settings.coverListSize + 'dp')
-                .fontSize(11).fontColor(this.txtHint()).width(52)
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-            Row({ space: 8 }) {
-              Text(this.L($r('app.string.set_grid_cover_size')))
-                .fontSize(this.fsp(13)).fontColor(this.txtSec())
-              Slider({ value: this.settings.coverGridSize, min: 0, max: 200, step: 4 })
-                .layoutWeight(1)
-                .onChange((value: number, mode: SliderChangeMode) => {
-                  this.settings.coverGridSize = value;
-                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                    this.saveNow();
-                  }
-                })
-              Text(this.settings.coverGridSize === 0 ? this.L($r('app.string.set_auto')) : '' + this.settings.coverGridSize + 'dp')
-                .fontSize(11).fontColor(this.txtHint()).width(52)
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-            this.settingsToggleRow(this.L($r('app.string.set_show_covers')), 'showBookCovers', '')
-            /* desktop card prefs (Round 6, Android widget rows) */
-            Row({ space: 8 }) {
-              Text($r('app.string.set_card'))
-                .fontSize(this.fsp(13)).fontColor(this.txtSec())
-              Button(this.settings.cardSource === 0 ? $r('app.string.sort_recent') : $r('app.string.card_starred'))
-                .fontSize(12).height(32)
-                .backgroundColor(this.thm()).fontColor(Color.White)
-                .onClick(() => {
-                  this.settings.cardSource = this.settings.cardSource === 0 ? 1 : 0;
-                  this.saveNow();
-                })
-              Button('' + this.settings.cardCount + ' \u672C')
-                .fontSize(12).height(32)
+            Row({ space: 6 }) {
+              Text(this.L($r('app.string.view_list')))
+                .fontSize(this.fsp(13)).fontColor(this.txtSec()).width(52)
+              Text('' + this.seekClampLo(this.settings.coverListSize))
+                .fontSize(13).fontColor(this.thm()).width(38).textAlign(TextAlign.End)
+              Button('\u2212')
+                .fontSize(13).width(28).height(28).padding(0)
                 .backgroundColor(this.chipBg()).fontColor(this.txtPri())
                 .onClick(() => {
-                  this.settings.cardCount = this.settings.cardCount >= 3 ? 1 : this.settings.cardCount + 1;
+                  this.settings.coverListSize = Math.max(40, this.settings.coverListSize - 2);
                   this.saveNow();
                 })
-              Text($r('app.string.set_card_hint'))
-                .fontSize(10).fontColor(this.txtFaint())
+              Slider({ value: this.seekClampLo(this.settings.coverListSize), min: 40, max: this.seekMax(), step: 2 })
+                .layoutWeight(1)
+                .onChange((value: number, mode: SliderChangeMode) => {
+                  this.settings.coverListSize = Math.round(value);
+                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                    this.saveNow();
+                  }
+                })
+              Button('+')
+                .fontSize(13).width(28).height(28).padding(0)
+                .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+                .onClick(() => {
+                  this.settings.coverListSize = Math.min(this.seekMax(), this.settings.coverListSize + 2);
+                  this.saveNow();
+                })
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            Row({ space: 6 }) {
+              Text(this.L($r('app.string.set_grid')))
+                .fontSize(this.fsp(13)).fontColor(this.txtSec()).width(52)
+              Text('' + this.seekClampLo(this.settings.coverGridSize))
+                .fontSize(13).fontColor(this.thm()).width(38).textAlign(TextAlign.End)
+              Button('\u2212')
+                .fontSize(13).width(28).height(28).padding(0)
+                .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+                .onClick(() => {
+                  this.settings.coverGridSize = Math.max(40, this.settings.coverGridSize - 2);
+                  this.saveNow();
+                })
+              Slider({ value: this.seekClampLo(this.settings.coverGridSize), min: 40, max: this.seekMax(), step: 2 })
+                .layoutWeight(1)
+                .onChange((value: number, mode: SliderChangeMode) => {
+                  this.settings.coverGridSize = Math.round(value);
+                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                    this.saveNow();
+                  }
+                })
+              Button('+')
+                .fontSize(13).width(28).height(28).padding(0)
+                .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+                .onClick(() => {
+                  this.settings.coverGridSize = Math.min(this.seekMax(), this.settings.coverGridSize + 2);
+                  this.saveNow();
+                })
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            Row({ space: 8 }) {
+              Text(this.L($r('app.string.set_cover_columns')))
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
+              Text('' + this.gridColumnsDerived())
+                .fontSize(14).fontColor(this.thm())
+                .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+                .onClick(() => {
+                  this.openOptSheet('cols');
+                })
+              Blank()
+              Text(this.L($r('app.string.set_reset')))
+                .fontSize(13).fontColor(this.thm())
+                .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+                .onClick(() => {
+                  this.confirmSeekReset();
+                })
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            Divider().color(this.divColor())
+              .margin({ left: 12, right: 12 })
+            this.settingsToggleRow(this.L($r('app.string.set_show_covers')), 'showBookCovers', '')
+            Row({ space: 8 }) {
+              Text(this.L($r('app.string.set_show_label')))
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
+              Text(this.settings.cardSource === 0 ? this.L($r('app.string.sort_recent')) : this.L($r('app.string.set_starred')))
+                .fontSize(14).fontColor(this.thm())
+                .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+                .onClick(() => {
+                  this.openOptSheet('widgetShow');
+                })
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            Row({ space: 8 }) {
+              Text(this.L($r('app.string.set_layout_label')))
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
+              Text(this.settings.widgetLayout === 1 ? this.L($r('app.string.set_grid')) : this.L($r('app.string.view_list')))
+                .fontSize(14).fontColor(this.thm())
+                .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+                .onClick(() => {
+                  this.openOptSheet('widgetLayout');
+                })
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            Row({ space: 8 }) {
+              Text(this.L($r('app.string.set_books_count')))
+                .fontSize(this.fsp(13)).fontColor(this.txtSec())
+              Text('' + this.settings.cardCount)
+                .fontSize(14).fontColor(this.thm())
+                .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+                .onClick(() => {
+                  this.openOptSheet('widgetCount');
+                })
             }
             .width('100%')
             .padding({ left: 12, right: 12, top: 6, bottom: 6 })
@@ -10203,434 +11347,44 @@ tlog('download_start', 'name=' + fileName);    try {
           /* --- 阅读配置 (Android readingConfig) --- */
           this.settingsSubBar(this.L($r('app.string.set_reading_cfg')), 'read')
           if (this.groupExp['read'] === true) {
-            this.settingsKvSheet(this.L($r('app.string.set_single_tap')), 'singleTap')
-            this.settingsKvSheet(this.L($r('app.string.set_long_tap')), 'longTap')
-            this.settingsKvSheet(this.L($r('app.string.set_volume_keys')), 'volKey')
-            this.settingsToggleRow(this.L($r('app.string.set_app_lock')), 'appLockEnabled', this.L($r('app.string.set_app_lock_hint')))
-            Row({ space: 8 }) {
-              Text($r('app.string.set_lock_pass'))
-                .fontSize(this.fsp(13)).fontColor(this.txtSec())
-              TextInput({ placeholder: $r('app.string.set_lock_pass_hint'), text: this.settings.appLockPass })
-                .fontSize(12).height(32).layoutWeight(1)
-                .onChange((v: string) => {
-                  this.settings.appLockPass = v;
-                  this.saveNow();
+            this.settingsKvSheet(this.L($r('app.string.set_single_tap')), 'readingSingle')
+            this.settingsKvSheet(this.L($r('app.string.set_reading_double')), 'readingDouble')
+            /* 打开应用时需输入密码 + 密码 (Android isAppPassword + appPassword) */
+            Row({ space: 10 }) {
+              Checkbox({ name: 'chk_appLockEnabled', group: 'prefs' })
+                .select(this.settings.appLockEnabled)
+                .selectedColor(this.thm())
+                .onChange((v: boolean) => {
+                  this.applyBoolPref('appLockEnabled', v);
+                })
+              Text(this.L($r('app.string.set_app_lock')))
+                .fontSize(this.fsp(13)).fontColor(this.accentTextColor() ? this.acc() : this.txtPri())
+                .layoutWeight(1)
+              Text(this.L($r('app.string.set_password')))
+                .fontSize(14).fontColor(this.thm())
+                .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+                .onClick(() => {
+                  this.lockPassInput = this.settings.appLockPass;
+                  this.showLockPass = true;
                 })
             }
             .width('100%')
-            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-            this.settingsToggleRow(this.L($r('app.string.pref_biometric')), 'appLockBiometric', this.L($r('app.string.set_biometric_hint')))
+            .padding({ left: 12, right: 12, top: 4, bottom: 4 })
             this.settingsToggleRow(this.L($r('app.string.set_open_last')), 'openLastBook', '')
             this.settingsToggleRow(this.L($r('app.string.set_always_p1')), 'alwaysPage1', '')
+            this.settingsToggleRow(this.L($r('app.string.set_restore_search')), 'restoreSearchQuery', '')
+            this.settingsToggleRow(this.L($r('app.string.set_lock_books')), 'lockBooksByDefault', '')
             this.settingsToggleRow(this.L($r('app.string.set_exit_confirm')), 'showExitDialog', '')
-            Row({ space: 8 }) {
-              Text($r('app.string.set_reminder'))
-                .fontSize(this.fsp(13)).fontColor(this.txtSec())
-              Button(this.settings.readReminderMinutes === 0 ? $r('app.string.common_off') : this.settings.readReminderMinutes + ' \u5206\u949F')
-                .fontSize(12).height(32)
-                .backgroundColor(this.settings.readReminderMinutes > 0 ? '#2a7' : this.chipBg())
-                .fontColor(this.settings.readReminderMinutes > 0 ? Color.White : this.txtPri())
-                .onClick(() => {
-                  this.settings.readReminderMinutes = this.settings.readReminderMinutes >= 120 ? 0 : (this.settings.readReminderMinutes === 0 ? 30 : this.settings.readReminderMinutes + 30);
-                  this.saveNow();
-                })
-              Text($r('app.string.set_reminder_hint'))
-                .fontSize(10).fontColor(this.txtFaint())
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-            Row({ space: 8 }) {
-              Text($r('app.string.set_quality'))
-                .fontSize(this.fsp(13)).fontColor(this.txtSec())
-              Button(this.settings.renderQuality === 0 ? $r('app.string.quality_fast') : (this.settings.renderQuality === 1 ? $r('app.string.quality_balanced') : $r('app.string.quality_high')))
-                .fontSize(12).height(32)
-                .backgroundColor(this.chipBg()).fontColor(this.txtPri())
-                .onClick(() => {
-                  this.settings.renderQuality = (this.settings.renderQuality + 1) % 3;
-                  this.saveNow();
-                })
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-            Row({ space: 8 }) {
-              Text($r('app.string.set_flip_anim'))
-                .fontSize(this.fsp(13)).fontColor(this.txtSec())
-              Button(this.settings.flipAnimation === 0 ? $r('app.string.anim_slide') : (this.settings.flipAnimation === 1 ? $r('app.string.anim_curl') : $r('app.string.anim_fade')))
-                .fontSize(12).height(32)
-                .backgroundColor(this.chipBg()).fontColor(this.txtPri())
-                .onClick(() => {
-                  this.settings.flipAnimation = (this.settings.flipAnimation + 1) % 3;
-                  this.saveNow();
-                })
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-            this.settingsToggleRow(this.L($r('app.string.pref_topbar_info')), 'showTopBarInfo', this.L($r('app.string.set_topbar_hint')))
-
-            Text($r('app.string.set_reader_params'))
-              .fontSize(12).fontColor(this.txtFaint()).width('100%').padding({ left: 22, top: 6 })
-            Row({ space: 8 }) {
-              Text($r('app.string.set_default_zoom'))
-                .fontSize(this.fsp(13)).fontColor(this.txtSec())
-              Slider({ value: this.settings.zoom, min: 0.5, max: 4, step: 0.25 })
-                .layoutWeight(1)
-                .onChange((value: number, mode: SliderChangeMode) => {
-                  this.settings.zoom = value;
-                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                    this.saveNow();
-                  }
-                })
-              Text(`${Math.round(this.settings.zoom * 100)}%`)
-                .fontSize(11).fontColor(this.txtHint()).width(40)
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12 })
-            Row({ space: 8 }) {
-              Text($r('app.string.set_page_turn'))
-                .fontSize(this.fsp(13)).fontColor(this.txtSec())
-              Button(this.settings.scrollMode === 0 ? $r('app.string.mode_horizontal') : $r('app.string.mode_vertical'))
-                .fontSize(12).height(32)
-                .backgroundColor(this.chipBg()).fontColor(this.txtPri())
-                .onClick(() => {
-                  this.settings.scrollMode = this.settings.scrollMode === 0 ? 1 : 0;
-                  this.saveNow();
-                })
-              Button(this.settings.pageMode === 0 ? $r('app.string.page_single') : (this.settings.pageMode === 1 ? $r('app.string.page_double') : $r('app.string.page_music')))
-                .fontSize(12).height(32)
-                .backgroundColor(this.chipBg()).fontColor(this.txtPri())
-                .onClick(() => {
-                  this.settings.pageMode = (this.settings.pageMode + 1) % 3;
-                  this.saveNow();
-                })
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12 })
-            Row({ space: 8 }) {
-              Text($r('app.string.reader_brightness'))
-                .fontSize(this.fsp(13)).fontColor(this.txtSec())
-              Slider({ value: this.settings.brightness, min: 1, max: 255, step: 4 })
-                .layoutWeight(1)
-                .onChange((value: number, mode: SliderChangeMode) => {
-                  this.settings.brightness = value;
-                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                    this.saveNow();
-                  }
-                })
-              Text(`${Math.round(this.settings.brightness / 2.55)}%`)
-                .fontSize(11).fontColor(this.txtHint()).width(36)
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12 })
-            Row({ space: 8 }) {
-              Text($r('app.string.reader_autoflip'))
-                .fontSize(this.fsp(13)).fontColor(this.txtSec())
-              Button(this.settings.autoFlip ? $r('app.string.common_on') : $r('app.string.common_off'))
-                .fontSize(12).height(32)
-                .backgroundColor(this.settings.autoFlip ? '#2a7' : this.chipBg())
-                .fontColor(this.settings.autoFlip ? Color.White : this.txtPri())
-                .onClick(() => {
-                  this.settings.autoFlip = !this.settings.autoFlip;
-                  this.saveNow();
-                })
-              Text(`${this.settings.autoFlipInterval}s`)
-                .fontSize(11).fontColor(this.txtHint())
-                .onClick(() => {
-                  this.settings.autoFlipInterval = this.settings.autoFlipInterval >= 5 ? 1 : this.settings.autoFlipInterval + 1;
-                  this.saveNow();
-                })
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12 })
-            Row({ space: 8 }) {
-              Text($r('app.string.set_tts_rate'))
-                .fontSize(this.fsp(13)).fontColor(this.txtSec())
-              Slider({ value: this.settings.ttsRate, min: 0.5, max: 2.0, step: 0.1 })
-                .layoutWeight(1)
-                .onChange((value: number, mode: SliderChangeMode) => {
-                  this.settings.ttsRate = value;
-                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                    this.saveNow();
-                  }
-                })
-              Text(`${this.settings.ttsRate.toFixed(1)}x`)
-                .fontSize(11).fontColor(this.txtHint()).width(36)
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12 })
-            Row({ space: 8 }) {
-              Text($r('app.string.set_tts_pitch'))
-                .fontSize(this.fsp(13)).fontColor(this.txtSec())
-              Slider({ value: this.settings.ttsPitch, min: 0.5, max: 2.0, step: 0.1 })
-                .layoutWeight(1)
-                .onChange((value: number, mode: SliderChangeMode) => {
-                  this.settings.ttsPitch = value;
-                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                    this.saveNow();
-                  }
-                })
-              Text(`${this.settings.ttsPitch.toFixed(1)}x`)
-                .fontSize(11).fontColor(this.txtHint()).width(36)
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12 })
-            Row({ space: 8 }) {
-              Text($r('app.string.set_rsvp'))
-                .fontSize(this.fsp(13)).fontColor(this.txtSec())
-              Slider({ value: this.settings.rsvpWpm, min: 100, max: 800, step: 50 })
-                .layoutWeight(1)
-                .onChange((value: number, mode: SliderChangeMode) => {
-                  this.settings.rsvpWpm = value;
-                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                    this.saveNow();
-                  }
-                })
-              Text(`${this.settings.rsvpWpm}`)
-                .fontSize(11).fontColor(this.txtHint()).width(36)
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12 })
-            Text($r('app.string.set_reflow_typography'))
-              .fontSize(12).fontColor(this.txtFaint()).width('100%').padding({ left: 22, top: 6 })
-            Row({ space: 8 }) {
-              Text($r('app.string.set_font_size'))
-                .fontSize(this.fsp(13)).fontColor(this.txtSec())
-              Slider({ value: this.settings.fontSize, min: 10, max: 28, step: 1 })
-                .layoutWeight(1)
-                .onChange((value: number, mode: SliderChangeMode) => {
-                  this.settings.fontSize = value;
-                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                    this.saveNow();
-                  }
-                })
-              Text(`${this.settings.fontSize}`)
-                .fontSize(11).fontColor(this.txtHint()).width(30)
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12 })
-            Row({ space: 8 }) {
-              Text($r('app.string.set_line_height'))
-                .fontSize(this.fsp(13)).fontColor(this.txtSec())
-              Slider({ value: this.settings.lineHeight, min: 1.0, max: 2.5, step: 0.1 })
-                .layoutWeight(1)
-                .onChange((value: number, mode: SliderChangeMode) => {
-                  this.settings.lineHeight = value;
-                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                    this.saveNow();
-                  }
-                })
-              Text(`${this.settings.lineHeight.toFixed(1)}`)
-                .fontSize(11).fontColor(this.txtHint()).width(30)
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12 })
-            Row({ space: 8 }) {
-              Text($r('app.string.set_margin'))
-                .fontSize(this.fsp(13)).fontColor(this.txtSec())
-              Slider({ value: this.settings.margin, min: 0, max: 80, step: 4 })
-                .layoutWeight(1)
-                .onChange((value: number, mode: SliderChangeMode) => {
-                  this.settings.margin = value;
-                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                    this.saveNow();
-                  }
-                })
-              Text(`${this.settings.margin}pt`)
-                .fontSize(11).fontColor(this.txtHint()).width(36)
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12, bottom: 6 })
+            this.settingsToggleRow(this.L($r('app.string.set_accessibility_mode')), 'accessibilityMode', '')
+            this.settingsToggleRow(this.L($r('app.string.set_context_menu')), 'contextMenuIntegration', '')
           }
         }
 
         /* ================= 2. 常规设置 (Android section2) ================= */
         this.settingsGroupBar(this.L($r('app.string.set_general')), 'gen')
         if (this.groupExp['gen'] === true) {
-          this.settingsToggleRow(this.L($r('app.string.set_fullscreen')), 'fullscreen', '')
-          this.settingsKvSheet(this.L($r('app.string.set_orientation')), 'orient')
-          this.settingsKvSheet(this.L($r('app.string.set_language')), 'lang')
-          Row() {
-            Text(this.L($r('app.string.sync_title')) + '(Pro)')
-              .fontSize(this.fsp(14)).fontColor(this.txtPri()).layoutWeight(1)
-            Text(this.syncCfg.enabled
-              ? (this.syncCfg.lastSyncTime.length > 0 ? '\u4E0A\u6B21\uFF1A' + this.syncCfg.lastSyncTime.substring(0, 16).replace('T', ' ') : $r('app.string.set_enabled'))
-              : $r('app.string.set_disabled'))
-              .fontSize(14).fontColor(this.thm())
-              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
-              .maxLines(2)
-              .textAlign(TextAlign.End)
-          }
-          .width('100%')
-          .padding({ left: 12, right: 12, top: 9, bottom: 9 })
-          .onClick(() => {
-            loadSyncConfig(getContext(this)).then((c: SyncConfig) => {
-              this.syncCfg = c;
-              this.syncTestOut = '';
-              this.showSyncDialog = true;
-            });
-          })
-          Row() {
-            Text(this.L($r('app.string.set_ai_model')) + '(Pro)')
-              .fontSize(this.fsp(14)).fontColor(this.txtPri()).layoutWeight(1)
-            Text(this.aiCfg.model.length > 0 ? this.aiCfg.provider + ' \u00B7 ' + this.aiCfg.model : $r('app.string.set_not_configured'))
-              .fontSize(14).fontColor(this.thm())
-              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
-              .maxLines(2)
-              .textAlign(TextAlign.End)
-          }
-          .width('100%')
-          .padding({ left: 12, right: 12, top: 9, bottom: 9 })
-          .onClick(() => {
-            loadAiConfig(getContext(this)).then((c: AiConfig) => {
-              this.aiCfg = c;
-              this.aiTestIn = '';
-              this.aiTestOut = '';
-              this.aiModels = [];
-              this.refreshAiVendors();
-            this.showAiDialog = true;
-            });
-          })
-          Row({ space: 8 }) {
-            Text($r('app.string.set_proxy'))
-              .fontSize(this.fsp(13)).fontColor(this.txtSec())
-            Button(this.settings.proxyType === 0 ? $r('app.string.common_off') : (this.settings.proxyType === 1 ? 'HTTP' : 'SOCKS'))
-              .fontSize(12).height(32)
-              .backgroundColor(this.settings.proxyType > 0 ? '#2a7' : this.chipBg())
-              .fontColor(this.settings.proxyType > 0 ? Color.White : this.txtPri())
-              .onClick(() => {
-                this.settings.proxyType = (this.settings.proxyType + 1) % 3;
-                this.saveNow();
-              })
-            if (this.settings.proxyType > 0) {
-              Text(`${this.settings.proxyHost}:${this.settings.proxyPort}`)
-                .fontSize(11).fontColor(this.txtHint())
-            }
-          }
-          .width('100%')
-          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-          /* 备份配置 (Android backupConfig; moved into 常规设置, 2026-09-18) */
-          this.settingsSubBar(this.L($r('app.string.set_backup')), 'backup')
-          if (this.groupExp['backup'] === true) {
-            Row({ space: 8 }) {
-              Button($r('app.string.backup_export'))
-                .fontSize(13).height(34).layoutWeight(1)
-                .backgroundColor('#2a7').fontColor(Color.White)
-                .onClick(() => this.doBackup())
-              Button($r('app.string.backup_restore'))
-                .fontSize(13).height(34).layoutWeight(1)
-                .backgroundColor('#ff9800').fontColor(Color.White)
-                .onClick(() => this.doRestore())
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-            if (this.backupText.length > 0) {
-              Text(this.backupText)
-                .fontSize(11).fontColor(this.txtHint()).textAlign(TextAlign.Center).width('100%')
-            }
-            Column({ space: 4 }) {
-              Text($r('app.string.set_root_folder'))
-                .fontSize(this.fsp(13)).fontColor(this.txtSec())
-              this.folderPrefRow('root')
-              Text($r('app.string.set_fonts_folder'))
-                .fontSize(this.fsp(13)).fontColor(this.txtSec())
-              this.folderPrefRow('fonts')
-              Text($r('app.string.set_dl_folder'))
-                .fontSize(this.fsp(13)).fontColor(this.txtSec())
-              this.folderPrefRow('downloads')
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-            .alignItems(HorizontalAlign.Start)
-          }
-
-          /* 在线阅读与缓存 (Round 8; moved into 常规设置, 2026-09-18) */
-          this.settingsSubBar('在线阅读(Pro)', 'remote')
-          if (this.groupExp['remote'] === true) {
-            this.settingsToggleRow('在线优先阅读', 'remoteOnlineFirst', '直开格式直接流式打开')
-            this.settingsToggleRow('仅 WiFi 下预取', 'remotePrefetchWifiOnly', '开：流量下暂停预取；关：流量与 WiFi 同等对待。整本缓存不受此开关限制（与安卓一致：小书任意网络整取，大书按窗口填充）')
-            this.settingsNumRowPair('缓存上限 (MB)', 'remoteCacheMaxMB', 50, 4096,
-              '整本缓存阈值 (MB)', 'remoteWholeBookThresholdMB', 0, 200)
-            this.settingsNumRowPair('窗口填充前 (%)', 'remoteWindowBeforePct', 0, 90,
-              '窗口填充后 (%)', 'remoteWindowAfterPct', 0, 90)
-            this.settingsNumRowPair('重试次数', 'remoteRetryCount', 0, 10,
-              '重试间隔 (ms)', 'remoteRetryIntervalMs', 0, 30000)
-            Row() {
-              Text(`缓存用量：${this.remoteCacheUsage}`)
-                .fontSize(14).fontColor(this.txtSec()).layoutWeight(1)
-              Text('清空缓存')
-                .fontSize(13).fontColor('#e57373')
-                .onClick(() => {
-                  AlertDialog.show({
-                    title: '清空远程缓存',
-                    message: '删除所有远程书籍的缓存块？已下载到本地的书不受影响。',
-                    primaryButton: {
-                      value: '取消',
-                      action: () => {}
-                    },
-                    secondaryButton: {
-                      value: '清空',
-                      action: () => {
-                        clearRemoteCacheAll(getContext(this)).then(() => {
-                          this.loadRemoteBooks();
-                          promptAction.showToast({ message: '已清空远程缓存' });
-                        });
-                      }
-                    }
-                  });
-                })
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12, top: 9, bottom: 9 })
-          }
-        }
-
-          /* 0.9.21: 缓存管理 (Android cache-manager entry, CHANGES 2026-10-05:
-           * one place shows the breakdown + total, clears everything) */
-          this.settingsSubBar('缓存管理', 'cachemgr')
-          if (this.groupExp['cachemgr'] === true) {
-            Row() {
-              Text('在线阅读缓存').fontSize(14).fontColor(this.accentTextColor() ? this.acc() : this.txtPri()).layoutWeight(1)
-              Text(this.remoteCacheUsage).fontSize(14).fontColor(this.txtSec())
-              Text('清空').fontSize(13).fontColor('#e57373').margin({ left: 12 })
-                .onClick(() => {
-                  AlertDialog.show({
-                    title: '清空远程缓存',
-                    message: '删除所有远程书籍的缓存块？已下载到本地的书不受影响。',
-                    primaryButton: { value: '取消', action: () => {} },
-                    secondaryButton: {
-                      value: '清空',
-                      action: () => {
-                        clearRemoteCacheAll(getContext(this)).then(() => {
-                          this.loadRemoteBooks();
-                          this.refreshCacheUsage();
-                          promptAction.showToast({ message: '已清空远程缓存' });
-                        });
-                      }
-                    }
-                  });
-                })
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12, top: 9, bottom: 9 })
-            Row() {
-              Text('应用缓存').fontSize(14).fontColor(this.accentTextColor() ? this.acc() : this.txtPri()).layoutWeight(1)
-              Text(this.appCacheUsage).fontSize(14).fontColor(this.txtSec())
-              Text('清空').fontSize(13).fontColor('#e57373').margin({ left: 12 })
-                .onClick(() => {
-                  this.confirmClearAppCache();
-                })
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12, top: 9, bottom: 9 })
-            Row() {
-              Text('合计占用').fontSize(14).fontWeight(FontWeight.Medium).fontColor(this.accentTextColor() ? this.acc() : this.txtPri()).layoutWeight(1)
-              Text(this.cacheTotalUsage).fontSize(14).fontColor(this.thm())
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12, top: 9, bottom: 9 })
-          }
-
-          /* 0.9.21: 调试日志 — collapsed row, export path shown on the right
-           * (Android CHANGES 2026-10-06 折叠式; switch/export/clear per 10-04) */
+          /* 调试日志 (Android debugLogHeader row + config container) — moved to
+           * the top of 常规设置 per the Android row order (0.9.55) */
           Row({ space: 10 }) {
             Image($r('app.media.ic_sliders'))
               .width(18).height(18).fillColor(this.isDark() ? this.thm() : '#00897B')
@@ -10638,7 +11392,7 @@ tlog('download_start', 'name=' + fileName);    try {
               .fontSize(this.fsp(15)).fontColor(this.isDark() ? this.thm() : '#00897B')
               .decoration({ type: TextDecorationType.Underline, color: this.isDark() ? this.thm() : '#00897B' })
               .layoutWeight(1)
-            Text(this.dbgLogExportHint())
+            Text('debug-log.txt')
               .fontSize(11).fontColor(this.txtFaint()).maxLines(1)
           }
           .width('100%')
@@ -10692,58 +11446,249 @@ tlog('download_start', 'name=' + fileName);    try {
             })
           }
 
-                /* ================= 4. UI 配置 (Android section4) ================= */
-        this.settingsGroupBar(this.L($r('app.string.set_ui')), 'ui')
-        if (this.groupExp['ui'] === true) {
-          /* --- 主题配置 (Android themeConfig) --- */
-          this.settingsSubBar(this.L($r('app.string.set_theme_cfg')), 'theme')
-          if (this.groupExp['theme'] === true) {
-            Row({ space: 8 }) {
-              Text($r('app.string.set_theme'))
-                .fontSize(this.fsp(13)).fontColor(this.txtSec())
-              ForEach(THEME_LABELS, (name: Resource, idx: number) => {
-                Button(name)
-                  .fontSize(12).height(32)
-                  .backgroundColor(this.settings.theme === idx ? '#2a7' : this.chipBg())
-                  .fontColor(this.settings.theme === idx ? Color.White : this.txtPri())
-                  .onClick(() => {
-                    this.settings.theme = idx;
-                    this.saveNow();
-                  })
-              }, (name: Resource, idx: number) => `theme_${idx}`)
+          this.settingsKvSheet(this.L($r('app.string.set_screen')), 'screen')
+          this.settingsKvSheet(this.L($r('app.string.set_orientation')), 'orient')
+          this.settingsKvSheet(this.L($r('app.string.set_language')), 'lang')
+          Row() {
+            Text(this.L($r('app.string.sync_title')) + '(Pro)')
+              .fontSize(this.fsp(14)).fontColor(this.txtPri()).layoutWeight(1)
+            Text(this.syncCfg.enabled
+              ? (this.syncCfg.lastSyncTime.length > 0 ? '\u4E0A\u6B21\uFF1A' + this.syncCfg.lastSyncTime.substring(0, 16).replace('T', ' ') : $r('app.string.set_enabled'))
+              : $r('app.string.set_disabled'))
+              .fontSize(14).fontColor(this.thm())
+              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+              .maxLines(2)
+              .textAlign(TextAlign.End)
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+          .onClick(() => {
+            loadSyncConfig(getContext(this)).then((c: SyncConfig) => {
+              this.syncCfg = c;
+              this.syncTestOut = '';
+              this.showSyncDialog = true;
+            });
+          })
+          Row() {
+            Text(this.L($r('app.string.set_ai_model')) + '(Pro)')
+              .fontSize(this.fsp(14)).fontColor(this.txtPri()).layoutWeight(1)
+            Text(this.aiCfg.model.length > 0 ? this.aiCfg.provider + ' \u00B7 ' + this.aiCfg.model : $r('app.string.set_not_configured'))
+              .fontSize(14).fontColor(this.thm())
+              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+              .maxLines(2)
+              .textAlign(TextAlign.End)
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+          .onClick(() => {
+            loadAiConfig(getContext(this)).then((c: AiConfig) => {
+              this.aiCfg = c;
+              this.aiTestIn = '';
+              this.aiTestOut = '';
+              this.aiModels = [];
+              this.refreshAiVendors();
+              this.showAiDialog = true;
+            });
+          })
+          /* 在线阅读(Pro): state row -> RemoteCacheDialog (Android remoteConfigRow) */
+          Row() {
+            Text('在线阅读(Pro)')
+              .fontSize(this.fsp(14)).fontColor(this.txtPri()).layoutWeight(1)
+            Text(this.settings.remoteOnlineFirst ? this.L($r('app.string.remote_state_on')) : this.L($r('app.string.remote_state_off')))
+              .fontSize(14).fontColor(this.thm())
+              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+          .onClick(() => {
+            this.remoteCfgThreshold = '' + this.settings.remoteWholeBookThresholdMB;
+            this.remoteCfgBefore = '' + this.settings.remoteWindowBeforePct;
+            this.remoteCfgAfter = '' + this.settings.remoteWindowAfterPct;
+            this.remoteCfgRetry = '' + this.settings.remoteRetryCount;
+            this.remoteCfgInterval = '' + this.settings.remoteRetryIntervalMs;
+            isMeteredNetwork().then((v: boolean) => {
+              this.remoteNetMetered = v;
+            });
+            this.showRemoteCfg = true;
+          })
+          /* 缓存管理: total-usage row -> cache manager dialog (Android appCacheManageRow) */
+          Row() {
+            Text(this.L($r('app.string.app_cache_manage')))
+              .fontSize(this.fsp(14)).fontColor(this.txtPri()).layoutWeight(1)
+            Text(this.cacheTotalUsage)
+              .fontSize(14).fontColor(this.thm())
+              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+          .onClick(() => {
+            promptAction.showToast({ message: this.L($r('app.string.cache_calculating')) });
+            this.cacheMaxInput = String(this.settings.remoteCacheMaxMB);
+            this.refreshCacheUsage();
+            this.showCacheMgr = true;
+          })
+          /* 备份配置 (Android backupConfig sub-bar; last row of 常规设置) */
+          this.settingsSubBar(this.L($r('app.string.set_backup')), 'backup')
+          if (this.groupExp['backup'] === true) {
+            /* 0.9.58: Android backupConfigContainer parity — description,
+             * Import/Export/Migrate links, then 4 label|value path rows. */
+            Text(this.L($r('app.string.msg_migration')))
+              .fontSize(11).fontColor(this.txtHint())
+              .width('100%')
+              .padding({ left: 12, right: 12, top: 2, bottom: 2 })
+            Row({ space: 24 }) {
+              Text(this.L($r('app.string.backup_import')))
+                .fontSize(13).fontColor(this.thm())
+                .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+                .onClick(() => {
+                  this.doRestore();
+                })
+              Text(this.L($r('app.string.backup_export')))
+                .fontSize(13).fontColor(this.thm())
+                .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+                .onClick(() => {
+                  this.doBackup();
+                })
+              Text(this.L($r('app.string.backup_migrate')))
+                .fontSize(13).fontColor(this.thm())
+                .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+                .onClick(() => {
+                  /* 0.9.58: seed with rootFolder's ABSOLUTE path —
+                   * resolveFolderPath appends a relative value under the
+                   * root, so passing rootFolder itself would double it
+                   * (…/HowRead/HowRead). */
+                  let rootAbs = this.settings.rootFolder;
+                  if (rootAbs.length === 0) {
+                    rootAbs = 'HowRead';
+                  }
+                  this.migrateFrom = rootAbs.startsWith('/')
+                    ? rootAbs
+                    : (getContext(this) as common.UIAbilityContext).filesDir + '/' + rootAbs;
+                  this.migrateTo = '';
+                  this.showMigrate = true;
+                })
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 4, bottom: 4 })
+            if (this.backupText.length > 0) {
+              Text(this.backupText)
+                .fontSize(11).fontColor(this.txtHint()).textAlign(TextAlign.Center).width('100%')
+            }
+            Column({ space: 2 }) {
+              this.folderPrefRowLR(this.L($r('app.string.set_root_folder')), 'root')
+              this.folderPrefRowLR(this.L($r('app.string.set_fonts_folder')), 'fonts')
+              this.folderPrefRowLR(this.L($r('app.string.set_dl_folder')), 'downloads')
+              this.folderPrefRowLR(this.L($r('app.string.set_audio_folder')), 'tts')
             }
             .width('100%')
             .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-            this.settingsColorRow(this.L($r('app.string.set_theme_color')), 0, THEME_PRESETS)
-            this.settingsColorRow(this.L($r('app.string.set_accent_color')), 1, ACCENT_PRESETS)
-            this.settingsToggleRow(this.L($r('app.string.set_accent_text')), 'accentTextColor', '')
-            this.settingsKvSheet(this.L($r('app.string.set_font_scale')), 'fontscale')
+            .alignItems(HorizontalAlign.Start)
+          }
+        }
+
+
+
+                /* ================= 4. UI 配置 (Android section4) ================= */
+        this.settingsGroupBar(this.L($r('app.string.set_ui')), 'ui')
+        if (this.groupExp['ui'] === true) {
+          /* --- 主题配置 (Android themeConfig; 0.9.56 row alignment:
+           *      主题/主题颜色/着重色/字体大小 label-left value-right) --- */
+          this.settingsSubBar(this.L($r('app.string.set_theme_cfg')), 'theme')
+          if (this.groupExp['theme'] === true) {
+            this.settingsKvSheet(this.L($r('app.string.set_theme')), 'themename')
+            Row({ space: 8 }) {
+              Text(this.L($r('app.string.set_theme_color')))
+                .fontSize(this.fsp(13)).fontColor(this.accentTextColor() ? this.acc() : this.txtPri())
+                .layoutWeight(1)
+              ForEach(STYLE_COLORS, (hex: string) => {
+                this.colorSwatch(hex, (this.settings.themeColor.length > 0 ? this.settings.themeColor : '#3949AB') === hex, 0)
+              }, (hex: string) => 'sc_' + hex)
+              this.colorSwatch('', false, 0)
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            Row({ space: 8 }) {
+              Text(this.L($r('app.string.set_accent')))
+                .fontSize(this.fsp(13)).fontColor(this.accentTextColor() ? this.acc() : this.txtPri())
+                .layoutWeight(1)
+              Checkbox({ name: 'chk_accentTextColor', group: 'prefs' })
+                .select(this.settings.accentTextColor)
+                .selectedColor(this.thm())
+                .onChange((v: boolean) => {
+                  this.applyBoolPref('accentTextColor', v);
+                })
+              ForEach(ACCENT_COLORS, (hex: string) => {
+                this.colorSwatch(hex, (this.settings.accentColor.length > 0 ? this.settings.accentColor : '#03A9F4') === hex, 1)
+              }, (hex: string) => 'ac_' + hex)
+              this.colorSwatch('', false, 1)
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            this.settingsKvSheet(this.L($r('app.string.set_font_size')), 'fontscale')
           }
 
-          /* --- 标签栏配置 (Android tabsConfig) --- */
+          /* --- 标签栏配置 (Android tabsConfig; 0.9.56 row alignment:
+           *      标签栏 KV + 显示动画 checkbox + per-tab 显示/⇅ + 重置/应用;
+           *      显示 checkbox 是安卓的"从栏里隐藏页签"，鸿蒙页签固定 4 个
+           *      不支持隐藏 → 按用户要求灰色锁定) --- */
           this.settingsSubBar(this.L($r('app.string.set_tabs_cfg')), 'tabs')
           if (this.groupExp['tabs'] === true) {
-            this.settingsToggleRow(this.L($r('app.string.pref_tab_pos')), 'tabPositionTop', this.L($r('app.string.set_tabpos_hint')))
-            this.settingsToggleRow(this.L($r('app.string.set_tab_icon_only')), 'tabIconOnly', '')
+            this.settingsKvSheet(this.L($r('app.string.tabs_position')), 'tabpos')
             this.settingsToggleRow(this.L($r('app.string.set_prefs_in_drawer')), 'showPrefsInDrawer', '')
+            ForEach(this.tabDisplay, (tabIdx: number, pos: number) => {
+              Row({ space: 10 }) {
+                Image(TAB_ICONS[tabIdx])
+                  .width(22).height(22).fillColor(this.txtSec())
+                Text(TAB_NAMES[tabIdx])
+                  .fontSize(this.fsp(13)).fontColor(this.txtPri()).layoutWeight(1)
+                Checkbox({ name: 'tabvis_' + pos, group: 'tabvis' })
+                  .select(true)
+                  .selectedColor('#BDBDBD')
+                  .enabled(false)
+                Text(this.L($r('app.string.set_visible')))
+                  .fontSize(12).fontColor(this.txtFaint())
+                Column({ space: 2 }) {
+                  Text('\u2191')
+                    .fontSize(13).fontColor(pos > 0 ? this.thm() : this.txtFaint())
+                    .width(26).height(20).textAlign(TextAlign.Center)
+                    .onClick(() => {
+                      this.moveTab(pos, -1);
+                    })
+                  Text('\u2193')
+                    .fontSize(13).fontColor(pos < this.tabDisplay.length - 1 ? this.thm() : this.txtFaint())
+                    .width(26).height(20).textAlign(TextAlign.Center)
+                    .onClick(() => {
+                      this.moveTab(pos, 1);
+                    })
+                }
+              }
+              .width('100%')
+              .padding({ left: 12, right: 12, top: 5, bottom: 5 })
+            }, (tabIdx: number, pos: number) => `tabrow_${pos}_${tabIdx}`)
             Row({ space: 8 }) {
-              Button($r('app.string.set_tabs_edit'))
-                .fontSize(12).height(32).layoutWeight(1)
-                .backgroundColor(this.thm()).fontColor(Color.White)
-                .onClick(() => {
-                  this.openTabsEdit();
-                })
-              Button($r('app.string.set_tabs_reset'))
-                .fontSize(12).height(32).layoutWeight(1)
-                .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+              Text(this.L($r('app.string.set_reset')))
+                .fontSize(14).fontColor(this.thm())
+                .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+                .layoutWeight(1)
                 .onClick(() => {
                   this.settings.tabsOrder = '';
                   this.saveNow();
                   this.loadTabOrder();
                 })
+              Text(this.L($r('app.string.set_apply')))
+                .fontSize(14).fontColor(this.thm())
+                .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+                .layoutWeight(1)
+                .textAlign(TextAlign.End)
+                .onClick(() => {
+                  this.saveNow();
+                  this.loadTabOrder();
+                  promptAction.showToast({ message: $r('app.string.set_applied') });
+                  tlog('tabs_apply');
+                })
             }
             .width('100%')
-            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            .padding({ left: 12, right: 12, top: 8, bottom: 6 })
           }
 
           /* 软件说明 (Android aboutSoftware row; 2026-09-18 移入 UI 配置组内) */
@@ -10987,6 +11932,12 @@ tlog('download_start', 'name=' + fileName);    try {
     } else if (key === 'coverBorderShadow') {
       this.settings.coverBorderShadow = v;
     } else if (key === 'appLockEnabled') {
+      /* Android parity: a password must exist before the switch turns on */
+      if (v && this.settings.appLockPass.length === 0) {
+        this.lockPassInput = '';
+        this.showLockPass = true;
+        return;
+      }
       this.settings.appLockEnabled = v;
     } else if (key === 'appLockBiometric') {
       if (!biometricAvailable()) {
@@ -11017,84 +11968,38 @@ tlog('download_start', 'name=' + fileName);    try {
       this.settings.remoteOnlineFirst = v;
     } else if (key === 'remotePrefetchWifiOnly') {
       this.settings.remotePrefetchWifiOnly = v;
+    } else if (key === 'authorTitleFromMetaPDF') {
+      this.settings.authorTitleFromMetaPDF = v;
+    } else if (key === 'showOnlyOriginalFileNames') {
+      this.settings.showOnlyOriginalFileNames = v;
+    } else if (key === 'useCalibreOpf') {
+      this.settings.useCalibreOpf = v;
+    } else if (key === 'seriesNumberInTitle') {
+      this.settings.seriesNumberInTitle = v;
+    } else if (key === 'autoAddToLibrary') {
+      this.settings.autoAddToLibrary = v;
+    } else if (key === 'restoreSearchQuery') {
+      this.settings.restoreSearchQuery = v;
+    } else if (key === 'lockBooksByDefault') {
+      this.settings.lockBooksByDefault = v;
+    } else if (key === 'contextMenuIntegration') {
+      this.settings.contextMenuIntegration = v;
+    } else if (key === 'accessibilityMode') {
+      /* Android accessibilityDefaults: top icon-only tabs + 1.1 UI scale;
+       * disabling resets the scale (BookCSS.appFontScale = 1.0 parity) */
+      this.settings.accessibilityMode = v;
+      if (v) {
+        this.settings.tabPositionTop = true;
+        this.settings.tabIconOnly = true;
+        this.settings.appFontScale = 1.1;
+      } else {
+        this.settings.appFontScale = 1.0;
+      }
+      AppStorage.setOrCreate<number>('fontScale', this.settings.appFontScale);
+      this.loadTabOrder();
     }
     this.saveNow();
     console.info(`[Index] Pref ${key} = ${v}`);
-  }
-
-  /** Round 8: read a numeric remote pref (used by settingsNumRow). */
-  private numPref(key: string): number {
-    if (key === 'remoteCacheMaxMB') {
-      return this.settings.remoteCacheMaxMB;
-    }
-    if (key === 'remoteWholeBookThresholdMB') {
-      return this.settings.remoteWholeBookThresholdMB;
-    }
-    if (key === 'remoteWindowBeforePct') {
-      return this.settings.remoteWindowBeforePct;
-    }
-    if (key === 'remoteWindowAfterPct') {
-      return this.settings.remoteWindowAfterPct;
-    }
-    if (key === 'remoteRetryCount') {
-      return this.settings.remoteRetryCount;
-    }
-    if (key === 'remoteRetryIntervalMs') {
-      return this.settings.remoteRetryIntervalMs;
-    }
-    return 0;
-  }
-
-  /** Round 8: apply a numeric remote pref from the input dialog. */
-  private applyNumPref(key: string, v: number): void {
-    if (key === 'remoteCacheMaxMB') {
-      this.settings.remoteCacheMaxMB = v;
-    } else if (key === 'remoteWholeBookThresholdMB') {
-      this.settings.remoteWholeBookThresholdMB = v;
-    } else if (key === 'remoteWindowBeforePct') {
-      this.settings.remoteWindowBeforePct = v;
-    } else if (key === 'remoteWindowAfterPct') {
-      this.settings.remoteWindowAfterPct = v;
-    } else if (key === 'remoteRetryCount') {
-      this.settings.remoteRetryCount = v;
-    } else if (key === 'remoteRetryIntervalMs') {
-      this.settings.remoteRetryIntervalMs = v;
-    }
-    this.saveNow();
-  }
-
-  /** Round 8: confirm the numeric pref dialog. */
-  private confirmRemoteNum(): void {
-    const v: number = parseInt(this.remoteNumValue, 10);
-    if (isNaN(v) || v < this.remoteNumMin || v > this.remoteNumMax) {
-      promptAction.showToast({ message: `请输入${this.remoteNumMin} - ${this.remoteNumMax} 之间的数值` });
-      return;
-    }
-    this.applyNumPref(this.remoteNumKey, v);
-    this.showRemoteNum = false;
-  }
-
-  /** Round 8: Chinese label for a remote numeric pref key. */
-  private remoteNumLabel(key: string): string {
-    if (key === 'remoteCacheMaxMB') {
-      return '磁盘缓存总上限 (MB)';
-    }
-    if (key === 'remoteWholeBookThresholdMB') {
-      return '小书整本缓存阈值 (MB，0=关闭)';
-    }
-    if (key === 'remoteWindowBeforePct') {
-      return '窗口填充前 (%，0=默认20)';
-    }
-    if (key === 'remoteWindowAfterPct') {
-      return '窗口填充后 (%，0=默认30)';
-    }
-    if (key === 'remoteRetryCount') {
-      return '网络失败重试次数';
-    }
-    if (key === 'remoteRetryIntervalMs') {
-      return '重试初始间隔 (ms，指数退避)';
-    }
-    return key;
   }
 
   /** Fullscreen: hide/show the system status bar (Android fullscreen popup). */
@@ -11149,20 +12054,32 @@ tlog('download_start', 'name=' + fileName);    try {
     if (target === 'lang') {
       return this.langLabel();
     }
-    if (target === 'cols') {
-      return '' + this.settings.coverColumns;
-    }
     if (target === 'fontscale') {
-      return this.settings.appFontScale.toFixed(1) + 'x';
+      return this.fontScaleName();
     }
-    if (target === 'singleTap') {
-      return this.singleTapLabel();
+    if (target === 'themename') {
+      return this.L(THEME_LABELS[Math.max(0, Math.min(3, this.settings.theme))]);
     }
-    if (target === 'longTap') {
-      return this.longTapLabel();
+    if (target === 'tabpos') {
+      return this.tabPosLabel();
     }
-    if (target === 'volKey') {
-      return this.volumeKeyLabel();
+    if (target === 'screen') {
+      return this.settings.fullscreen ? this.L($r('app.string.screen_full')) : this.L($r('app.string.screen_normal'));
+    }
+    if (target === 'readingSingle') {
+      return this.readingModeLabel();
+    }
+    if (target === 'readingDouble') {
+      return this.settings.doubleClickAction === 1 ? this.L($r('app.string.set_crop_borders')) : this.L($r('app.string.set_zoom_to_fit'));
+    }
+    if (target === 'widgetShow') {
+      return this.settings.cardSource === 0 ? this.L($r('app.string.sort_recent')) : this.L($r('app.string.set_starred'));
+    }
+    if (target === 'widgetLayout') {
+      return this.settings.widgetLayout === 1 ? this.L($r('app.string.set_grid')) : this.L($r('app.string.view_list'));
+    }
+    if (target === 'widgetCount') {
+      return '' + this.settings.cardCount;
     }
     return '';
   }
@@ -11235,6 +12152,33 @@ tlog('download_start', 'name=' + fileName);    try {
     if (key === 'remotePrefetchWifiOnly') {
       return this.settings.remotePrefetchWifiOnly;
     }
+    if (key === 'authorTitleFromMetaPDF') {
+      return this.settings.authorTitleFromMetaPDF;
+    }
+    if (key === 'showOnlyOriginalFileNames') {
+      return this.settings.showOnlyOriginalFileNames;
+    }
+    if (key === 'useCalibreOpf') {
+      return this.settings.useCalibreOpf;
+    }
+    if (key === 'seriesNumberInTitle') {
+      return this.settings.seriesNumberInTitle;
+    }
+    if (key === 'autoAddToLibrary') {
+      return this.settings.autoAddToLibrary;
+    }
+    if (key === 'restoreSearchQuery') {
+      return this.settings.restoreSearchQuery;
+    }
+    if (key === 'lockBooksByDefault') {
+      return this.settings.lockBooksByDefault;
+    }
+    if (key === 'accessibilityMode') {
+      return this.settings.accessibilityMode;
+    }
+    if (key === 'contextMenuIntegration') {
+      return this.settings.contextMenuIntegration;
+    }
     return false;
   }
 
@@ -11242,8 +12186,9 @@ tlog('download_start', 'name=' + fileName);    try {
     this.optTarget = target;
     if (target === 'orient') {
       this.optTitle = this.L($r('app.string.set_orientation'));
-      this.optLabels = [this.L($r('app.string.orient_auto')), this.L($r('app.string.orient_portrait')), this.L($r('app.string.orient_landscape'))];
-      this.optSel = this.settings.screenOrientation;
+      /* 0.9.55: Android DocumentController order minus the unsupported flips */
+      this.optLabels = [this.L($r('app.string.orient_system')), this.L($r('app.string.orient_auto')), this.L($r('app.string.orient_landscape')), this.L($r('app.string.orient_portrait'))];
+      this.optSel = Math.max(0, Math.min(3, this.settings.screenOrientation));
     } else if (target === 'lang') {
       this.optTitle = this.L($r('app.string.set_language'));
       this.optLabels = [this.L($r('app.string.set_lang_system')), '\u4E2D\u6587', 'English'];
@@ -11254,21 +12199,48 @@ tlog('download_start', 'name=' + fileName);    try {
       this.optSel = Math.max(1, Math.min(8, this.settings.coverColumns)) - 1;
     } else if (target === 'fontscale') {
       this.optTitle = this.L($r('app.string.set_font_scale'));
-      this.optLabels = ['0.7x', '0.8x', '0.9x', '1.0x', '1.1x', '1.2x', '1.3x', '1.4x', '1.5x', '1.6x', '1.7x', '1.8x', '1.9x', '2.0x'];
+      /* 0.9.56: Android popup labels use getFontName (小(-N)/正常/大(+N)) */
+      const labels: string[] = [];
+      for (let i = 0; i < 14; i++) {
+        labels.push(this.fontScaleNameOf(0.7 + i * 0.1));
+      }
+      this.optLabels = labels;
       const idx: number = Math.round((this.settings.appFontScale - 0.7) / 0.1);
       this.optSel = Math.max(0, Math.min(13, idx));
-    } else if (target === 'singleTap') {
+    } else if (target === 'themename') {
+      this.optTitle = this.L($r('app.string.set_theme'));
+      this.optLabels = [this.L(THEME_LABELS[0]), this.L(THEME_LABELS[1]), this.L(THEME_LABELS[2]), this.L(THEME_LABELS[3])];
+      this.optSel = Math.max(0, Math.min(3, this.settings.theme));
+    } else if (target === 'tabpos') {
+      this.optTitle = this.L($r('app.string.tabs_position'));
+      /* Android tapPositionTop popup order: top / bottom / top-icons / bottom-icons */
+      this.optLabels = [this.L($r('app.string.tabpos_top')), this.L($r('app.string.tabpos_bottom')),
+        this.L($r('app.string.tabpos_top_icons')), this.L($r('app.string.tabpos_bottom_icons'))];
+      this.optSel = this.settings.tabPositionTop ? (this.settings.tabIconOnly ? 2 : 0) : (this.settings.tabIconOnly ? 3 : 1);
+    } else if (target === 'screen') {
+      this.optTitle = this.L($r('app.string.set_screen'));
+      this.optLabels = [this.L($r('app.string.screen_normal')), this.L($r('app.string.screen_full'))];
+      this.optSel = this.settings.fullscreen ? 1 : 0;
+    } else if (target === 'readingSingle') {
       this.optTitle = this.L($r('app.string.set_single_tap'));
-      this.optLabels = [this.L($r('app.string.set_single_tap_page')), this.L($r('app.string.set_single_tap_menu')), this.L($r('app.string.set_action_none'))];
-      this.optSel = this.settings.singleTapAction;
-    } else if (target === 'longTap') {
-      this.optTitle = this.L($r('app.string.set_long_tap'));
-      this.optLabels = [this.L($r('app.string.set_long_tap_select')), this.L($r('app.string.set_long_tap_info')), this.L($r('app.string.set_single_tap_menu')), this.L($r('app.string.set_action_none'))];
-      this.optSel = this.settings.longTapAction;
-    } else if (target === 'volKey') {
-      this.optTitle = this.L($r('app.string.set_volume_keys'));
-      this.optLabels = [this.L($r('app.string.set_volkey_off')), this.L($r('app.string.set_volkey_page')), this.L($r('app.string.set_volkey_zoom'))];
-      this.optSel = this.settings.volumeKeyAction;
+      this.optLabels = [this.L($r('app.string.set_select_mode')), this.L($r('app.string.set_reading_scroll')), this.L($r('app.string.set_reading_horiz'))];
+      this.optSel = Math.max(0, Math.min(2, this.settings.readingModePref));
+    } else if (target === 'readingDouble') {
+      this.optTitle = this.L($r('app.string.set_reading_double'));
+      this.optLabels = [this.L($r('app.string.set_zoom_to_fit')), this.L($r('app.string.set_crop_borders'))];
+      this.optSel = Math.max(0, Math.min(1, this.settings.doubleClickAction));
+    } else if (target === 'widgetShow') {
+      this.optTitle = this.L($r('app.string.set_show_label'));
+      this.optLabels = [this.L($r('app.string.sort_recent')), this.L($r('app.string.set_starred'))];
+      this.optSel = this.settings.cardSource === 0 ? 0 : 1;
+    } else if (target === 'widgetLayout') {
+      this.optTitle = this.L($r('app.string.set_layout_label'));
+      this.optLabels = [this.L($r('app.string.view_list')), this.L($r('app.string.set_grid'))];
+      this.optSel = Math.max(0, Math.min(1, this.settings.widgetLayout));
+    } else if (target === 'widgetCount') {
+      this.optTitle = this.L($r('app.string.set_books_count'));
+      this.optLabels = ['1', '2', '3', '4', '5', '6'];
+      this.optSel = Math.max(1, Math.min(6, this.settings.cardCount)) - 1;
     }
     this.showOptSheet = true;
   }
@@ -11286,55 +12258,63 @@ tlog('download_start', 'name=' + fileName);    try {
       this.saveNow();
       this.applyAppLang(vals[idx]);
     } else if (t === 'cols') {
+      /* 0.9.55: Android parity — k columns derive the grid cover size
+       * from the screen width (coverBigSize = widthDp/k - 8) */
       this.settings.coverColumns = idx + 1;
+      this.settings.coverGridSize = Math.max(40, Math.floor(this.screenWidthDp() / (idx + 1)) - 8);
       this.saveNow();
     } else if (t === 'fontscale') {
       this.settings.appFontScale = 0.7 + idx * 0.1;
       AppStorage.setOrCreate<number>('fontScale', this.settings.appFontScale);
       this.saveNow();
-    } else if (t === 'singleTap') {
-      this.settings.singleTapAction = idx;
+    } else if (t === 'screen') {
+      this.settings.fullscreen = idx === 1;
       this.saveNow();
-    } else if (t === 'longTap') {
-      this.settings.longTapAction = idx;
+      this.applyFullscreen(this.settings.fullscreen);
+    } else if (t === 'readingSingle') {
+      /* Android readingMode: ask-on-open / vertical scroll / horizontal */
+      this.settings.readingModePref = idx;
+      if (idx === 1) {
+        this.settings.scrollMode = 1;
+      } else if (idx === 2) {
+        this.settings.scrollMode = 0;
+      }
       this.saveNow();
-    } else if (t === 'volKey') {
-      this.settings.volumeKeyAction = idx;
+    } else if (t === 'readingDouble') {
+      this.settings.doubleClickAction = idx;
+      this.saveNow();
+    } else if (t === 'themename') {
+      this.settings.theme = idx;
+      this.saveNow();
+    } else if (t === 'tabpos') {
+      /* Android tapPositionTop: 0=top 1=bottom 2=top-icons 3=bottom-icons */
+      this.settings.tabPositionTop = idx === 0 || idx === 2;
+      this.settings.tabIconOnly = idx >= 2;
+      this.saveNow();
+    } else if (t === 'widgetShow') {
+      this.settings.cardSource = idx;
+      this.saveNow();
+    } else if (t === 'widgetLayout') {
+      this.settings.widgetLayout = idx;
+      this.saveNow();
+    } else if (t === 'widgetCount') {
+      this.settings.cardCount = idx + 1;
       this.saveNow();
     }
     this.showOptSheet = false;
   }
 
   private orientLabel(): string {
-    return this.settings.screenOrientation === 0 ? this.L($r('app.string.orient_auto'))
-      : this.settings.screenOrientation === 1 ? this.L($r('app.string.orient_portrait'))
-        : this.L($r('app.string.orient_landscape'));
+    return this.settings.screenOrientation === 0 ? this.L($r('app.string.orient_system'))
+      : this.settings.screenOrientation === 1 ? this.L($r('app.string.orient_auto'))
+        : this.settings.screenOrientation === 2 ? this.L($r('app.string.orient_landscape'))
+          : this.L($r('app.string.orient_portrait'));
   }
 
   private langLabel(): string {
-    return this.settings.appLang === 'zh' ? '\u4E2D\u6587'
+    return this.settings.appLang === 'zh' ? '\u7B80\u4F53\u4E2D\u6587'
       : this.settings.appLang === 'en' ? 'English'
         : this.L($r('app.string.set_lang_system'));
-  }
-
-  private singleTapLabel(): string {
-    return this.settings.singleTapAction === 0 ? this.L($r('app.string.set_single_tap_page'))
-      : this.settings.singleTapAction === 1 ? this.L($r('app.string.set_single_tap_menu'))
-        : this.L($r('app.string.set_action_none'));
-  }
-
-  private longTapLabel(): string {
-    return this.settings.longTapAction === 0 ? this.L($r('app.string.set_long_tap_select'))
-      : this.settings.longTapAction === 1 ? this.L($r('app.string.set_long_tap_info'))
-        : this.settings.longTapAction === 2 ? this.L($r('app.string.set_single_tap_menu'))
-          : this.L($r('app.string.set_action_none'));
-  }
-
-  /* Round 9: volume-key action label (Android enable_volume_keys) */
-  private volumeKeyLabel(): string {
-    return this.settings.volumeKeyAction === 0 ? this.L($r('app.string.set_volkey_off'))
-      : this.settings.volumeKeyAction === 2 ? this.L($r('app.string.set_volkey_zoom'))
-        : this.L($r('app.string.set_volkey_page'));
   }
 
   @Builder
@@ -11395,16 +12375,6 @@ tlog('download_start', 'name=' + fileName);    try {
     console.info(`[Index] Color target ${target} = ${v}`);
   }
 
-  private resetColor(target: number): void {
-    if (target === 0) {
-      this.settings.themeColor = '';
-      AppStorage.setOrCreate<string>('themeColorHex', '#3949AB');
-    } else {
-      this.settings.accentColor = '';
-      AppStorage.setOrCreate<string>('accentColorHex', '#03A9F4');
-    }
-    this.saveNow();
-  }
 
   private confirmColorHex(): void {
     const v: string = this.colorHexIn.trim().toUpperCase();
@@ -11449,39 +12419,6 @@ tlog('download_start', 'name=' + fileName);    try {
     .borderRadius(12)
   }
 
-  /* ---- tab order editor (Android DragLinearLayout + apply) ---- */
-
-  private openTabsEdit(): void {
-    const d: number[] = [];
-    for (let i = 0; i < this.tabDisplay.length; i++) {
-      d.push(this.tabDisplay[i]);
-    }
-    this.tabsDraft = d;
-    this.showTabsEdit = true;
-  }
-
-  private moveTabDraft(from: number, to: number): void {
-    if (from === to || from < 0 || to < 0 || from >= this.tabsDraft.length || to >= this.tabsDraft.length) {
-      return;
-    }
-    const arr: number[] = this.tabsDraft.slice();
-    const v: number = arr[from];
-    arr.splice(from, 1);
-    arr.splice(to, 0, v);
-    this.tabsDraft = arr;
-  }
-
-  private tabArrow(idx: number, dir: number): void {
-    this.moveTabDraft(idx, idx + dir);
-  }
-
-  private applyTabsOrder(): void {
-    this.settings.tabsOrder = JSON.stringify(this.tabsDraft);
-    this.saveNow();
-    this.loadTabOrder();
-    this.showTabsEdit = false;
-    console.info(`[Index] Tabs order applied: ${this.settings.tabsOrder}`);
-  }
 
   /** Load the tab display order from prefs (fallback 0,1,2,3). */
   private loadTabOrder(): void {
@@ -11536,68 +12473,6 @@ tlog('download_start', 'name=' + fileName);    try {
     console.info(`[Index] Tab position ${pos} -> tab ${id}`);
   }
 
-  @Builder
-  buildTabsEdit() {
-    Column({ space: 10 }) {
-      Text($r('app.string.set_tabs_edit'))
-        .fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
-        .width('100%')
-      List({ space: 6 }) {
-        ForEach(this.tabsDraft, (id: number, idx: number) => {
-          ListItem() {
-            Row({ space: 10 }) {
-              Image($r('app.media.ic_drag'))
-                .width(18).height(18).fillColor(this.txtFaint())
-              Image(TAB_ICONS[id])
-                .width(20).height(20).fillColor(this.thm())
-              Text(TAB_NAMES[id])
-                .fontSize(14).fontColor(this.txtPri())
-                .layoutWeight(1)
-              Image($r('app.media.ic_chevron_up'))
-                .width(20).height(20).fillColor(this.txtHint())
-                .onClick(() => {
-                  this.tabArrow(idx, -1);
-                })
-              Image($r('app.media.ic_chevron_down'))
-                .width(20).height(20).fillColor(this.txtHint())
-                .onClick(() => {
-                  this.tabArrow(idx, 1);
-                })
-            }
-            .width('100%')
-            .padding(10)
-            .backgroundColor(this.inputBg())
-            .borderRadius(6)
-          }
-        }, (id: number) => `tab_${id}`)
-      }
-      .width('100%')
-      .height(220)
-      .onItemMove((from: number, to: number) => {
-        this.moveTabDraft(from, to);
-        return true;
-      })
-      Row({ space: 12 }) {
-        Button($r('app.string.common_cancel'))
-          .fontSize(13).height(36).layoutWeight(1)
-          .backgroundColor(this.chipBg()).fontColor(this.txtPri())
-          .onClick(() => {
-            this.showTabsEdit = false;
-          })
-        Button($r('app.string.set_tabs_apply'))
-          .fontSize(13).height(36).layoutWeight(1)
-          .backgroundColor(this.thm()).fontColor(Color.White)
-          .onClick(() => {
-            this.applyTabsOrder();
-          })
-      }
-      .width('100%')
-    }
-    .width('78%')
-    .padding(14)
-    .backgroundColor(this.cardBg())
-    .borderRadius(12)
-  }
 
   /* ---- exit confirmation (Android isShowCloseAppDialog) ---- */
 
@@ -11697,14 +12572,8 @@ tlog('download_start', 'name=' + fileName);    try {
   @Builder
   buildAboutOverlay() {
     Column() {
-      Row() {
-        Text('\u2716')
-          .fontSize(18).fontColor(this.txtHint()).width(36).height(36).textAlign(TextAlign.Center)
-          .onClick(() => {
-            this.activeOverlay = 0;
-          })
-      }
-      .width('100%').justifyContent(FlexAlign.End).padding({ left: 12, right: 6, top: 8 })
+      /* Android 软件说明 dialog: no title, no ✕ — content starts with the
+       * version bar and closes via the bottom-right 确定 (0.9.56). */
       Scroll() {
         Column({ space: 10 }) {
           /* 0.9.52: version bar (Android section6: full-width theme bar) */
@@ -11763,12 +12632,10 @@ tlog('download_start', 'name=' + fileName);    try {
           this.aboutRow($r('app.string.about_web'), '\u597D\u597D\u8BFBPro', (): void => {
             this.openExternal(HOME_URL);
           })
-          /* fork footnote + tagline */
+          /* fork footnote (Android translatable=false EN line) */
           Text($r('app.string.fork_of_librera'))
             .fontSize(11).fontColor(this.txtFaint())
             .textAlign(TextAlign.Center)
-          Text($r('app.string.drawer_tagline'))
-            .fontSize(15).fontColor(this.thm())
         }
         .width('100%')
         .padding(16)
@@ -11777,6 +12644,18 @@ tlog('download_start', 'name=' + fileName);    try {
       .width('100%')
       .height(360)
       .align(Alignment.Top)
+      /* Android dialog positive button: bottom-right 确定 closes the page */
+      Row() {
+        Blank()
+        Text(this.L($r('app.string.common_ok')))
+          .fontSize(15).fontColor(this.thm())
+          .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+          .padding({ top: 8, right: 6, bottom: 10 })
+          .onClick(() => {
+            this.activeOverlay = 0;
+          })
+      }
+      .width('100%')
     }
     .width('86%')
     .backgroundColor(this.cardBg())

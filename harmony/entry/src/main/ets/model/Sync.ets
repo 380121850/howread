@@ -45,11 +45,13 @@ import { exportStatsSyncPayload, importStatsSyncPayload } from './ReadingStats';
  * written again and never deleted.
  */
 
+/* 0.9.57: Android webdav_sync_policy_* order + verbatim zh labels
+ * (newer / farther / local / server). */
 export const SYNC_CONFLICTS: string[] = [
   '\u8F83\u65B0\u4F18\u5148\uFF08\u6309\u4FEE\u6539\u65F6\u95F4\uFF09',
+  '\u66F4\u9760\u524D\u4F18\u5148\uFF08\u6309\u9605\u8BFB\u8FDB\u5EA6\uFF09',
   '\u672C\u5730\u4F18\u5148',
-  '\u670D\u52A1\u5668\u4F18\u5148',
-  '\u8BFB\u5F97\u66F4\u8FDC\u4F18\u5148'
+  '\u670D\u52A1\u5668\u4F18\u5148'
 ];
 
 const SYNC_POLICY_LOCAL = 'local';
@@ -169,6 +171,15 @@ async function putStringPref(prefs: preferences.Preferences, key: string, value:
   await prefs.flush();
 }
 
+/* 0.9.57: pre-0.9.57 farther-policy label migrated to the Android verbatim
+ * one; newer/local/server labels are identical on both platforms. */
+function migrateConflict(v: string): string {
+  if (v === '\u8BFB\u5F97\u66F4\u8FDC\u4F18\u5148') {
+    return '\u66F4\u9760\u524D\u4F18\u5148\uFF08\u6309\u9605\u8BFB\u8FDB\u5EA6\uFF09';
+  }
+  return v;
+}
+
 export async function loadSyncConfig(ctx: Context): Promise<SyncConfig> {
   const d = defaultSyncConfig();
   try {
@@ -191,9 +202,11 @@ export async function loadSyncConfig(ctx: Context): Promise<SyncConfig> {
       user: typeof r['user'] === 'string' ? r['user'] as string : '',
       password: typeof r['password'] === 'string' ? r['password'] as string : '',
       trusted: r['trusted'] === true,
-      remotePath: rp.length > 0 ? rp : d.remotePath,
+      /* 0.9.57 review: '' = the server root deliberately chosen in the
+       * picker — the missing-key case already defaults via rp above. */
+      remotePath: rp,
       conflict: typeof r['conflict'] === 'string' && (r['conflict'] as string).length > 0
-        ? r['conflict'] as string : d.conflict,
+        ? migrateConflict(r['conflict'] as string) : d.conflict,
       autoSync: r['autoSync'] === true,
       autoSyncMin: typeof r['autoSyncMin'] === 'number' && (r['autoSyncMin'] as number) > 0
         ? r['autoSyncMin'] as number : d.autoSyncMin,
@@ -266,7 +279,9 @@ function syncRootUrl(c: SyncConfig): string {
   if (dir.length === 0) {
     return base;
   }
-  return base + '/' + dir;
+  /* 0.9.57 review: encode per segment like davBrowseDirs/davCreateDir —
+   * a raw '#' truncated the URL at the fragment for every verb. */
+  return base + '/' + davEncodePath(dir);
 }
 
 function booksUrlOf(c: SyncConfig): string {
@@ -465,12 +480,18 @@ async function davDelete(ctx: Context, c: SyncConfig, url: string): Promise<bool
   return (r.code >= 200 && r.code < 300) || r.code === 404;
 }
 
-async function davMkcol(ctx: Context, c: SyncConfig, url: string): Promise<boolean> {
+async function davMkcol(ctx: Context, c: SyncConfig, url: string, strict: boolean = false): Promise<boolean> {
   const r = await davExec(ctx, c, 'MKCOL', url);
   if (r === undefined) {
     return false;
   }
   /* 301 = exists on apache mod_dav (no trailing slash); 405 = exists per RFC */
+  if (strict) {
+    /* 0.9.57 review: creating one level below an existing parent — 409
+     * there means the server refused (parent gone / collection locked),
+     * reporting it as success showed a phantom created folder. */
+    return (r.code >= 200 && r.code < 300) || r.code === 301 || r.code === 405;
+  }
   return (r.code >= 200 && r.code < 300) || r.code === 301 || r.code === 405 || r.code === 409;
 }
 
@@ -486,7 +507,7 @@ async function davPropfind(ctx: Context, c: SyncConfig, url: string): Promise<st
   const re = /<(?:[A-Za-z0-9]+:)?href>\s*([^<]+)\s*<\/(?:[A-Za-z0-9]+:)?href>/gi;
   let m: RegExpExecArray | null = re.exec(r.body);
   while (m !== null) {
-    let href = m[1];
+    let href = xmlUnescape(m[1]);
     try {
       href = decodeURIComponent(href);
     } catch (e) {
@@ -501,6 +522,99 @@ async function davPropfind(ctx: Context, c: SyncConfig, url: string): Promise<st
     m = re.exec(r.body);
   }
   return out;
+}
+
+/* 0.9.57: percent-encode every path segment (server-provided names may
+ * contain spaces/'?'/non-ASCII); '/' separators are kept. */
+function davEncodePath(rel: string): string {
+  return rel.split('/').map((s: string) => encodeURIComponent(s)).join('/');
+}
+
+/* 0.9.57 review: multistatus hrefs are XML text — percent-decode alone
+ * left &amp;/&#...; entities undecoded (android reads them via XML). */
+function xmlUnescape(s: string): string {
+  let t = s.replace(/&#x([0-9A-Fa-f]+);/g, (m: string, h: string) => String.fromCodePoint(parseInt(h, 16)));
+  t = t.replace(/&#(\d+);/g, (m: string, d: string) => String.fromCodePoint(parseInt(d, 10)));
+  t = t.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+  t = t.replace(/&amp;/g, '&');
+  return t;
+}
+
+/* strip scheme+host from a href/URL so path-form and absolute-form hrefs
+ * compare equal when excluding the requested collection itself. */
+function davPathOnly(s: string): string {
+  const i = s.indexOf('://');
+  if (i > 0) {
+    const j = s.indexOf('/', i + 3);
+    if (j >= 0) {
+      return s.substring(j);
+    }
+  }
+  return s;
+}
+
+/** 0.9.57: PROPFIND Depth:1 directory listing for the sync-path picker
+ *  (Android WebDavPathPickerDialog parity) -> directory names sorted
+ *  case-insensitive, or null when the request failed. The requested
+ *  collection itself is excluded. */
+export async function davBrowseDirs(ctx: Context, c: SyncConfig,
+  relPath: string): Promise<string[] | null> {
+  const base = c.url.replace(/\/+$/, '');
+  const dir = relPath.replace(/^\/+|\/+$/g, '');
+  const target = base + (dir.length > 0 ? '/' + davEncodePath(dir) : '');
+  const r = await davExec(ctx, c, 'PROPFIND', target,
+    '<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:prop><D:resourcetype/></D:prop></D:propfind>');
+  if (r === undefined || r.code !== 207) {
+    return null;
+  }
+  const selfPath = davPathOnly(target.replace(/\/+$/, ''));
+  const out: string[] = [];
+  const re = /<(?:[A-Za-z0-9]+:)?href>\s*([^<]+)\s*<\/(?:[A-Za-z0-9]+:)?href>/gi;
+  let m: RegExpExecArray | null = re.exec(r.body);
+  while (m !== null) {
+    let href = xmlUnescape(m[1]);
+    try {
+      href = decodeURIComponent(href);
+    } catch (e) {
+      /* keep raw */
+    }
+    if (href.endsWith('/')) {
+      const stripped = href.replace(/\/+$/, '');
+      const i = stripped.lastIndexOf('/');
+      if (i >= 0 && i + 1 < stripped.length) {
+        const p = davPathOnly(stripped);
+        /* 0.9.57 review: selfPath keeps the request URL's percent-encoding
+         * while p comes from a decoded href — compare in one form, or a
+         * CJK current folder never matched itself and listed itself. */
+        if (davEncodePath(p) !== selfPath) {
+          out.push(stripped.substring(i + 1));
+        }
+      }
+    }
+    m = re.exec(r.body);
+  }
+  out.sort((a: string, b: string) => {
+    const la = a.toLowerCase();
+    const lb = b.toLowerCase();
+    if (la < lb) {
+      return -1;
+    }
+    if (la > lb) {
+      return 1;
+    }
+    return 0;
+  });
+  return out;
+}
+
+/** 0.9.57: MKCOL one folder inside the sync-path picker (Android parity). */
+export async function davCreateDir(ctx: Context, c: SyncConfig, relPath: string,
+  name: string): Promise<boolean> {
+  const base = c.url.replace(/\/+$/, '');
+  const dir = relPath.replace(/^\/+|\/+$/g, '');
+  const joined = dir.length === 0 ? name : dir + '/' + name;
+  const target = base + '/' + davEncodePath(joined);
+  return davMkcol(ctx, c, target, true);
 }
 
 /** Probe the server: GET the remote dir (a WebDAV dir answers 200/207 or a redirect). */
@@ -605,13 +719,13 @@ function adoptProgress(book: RecentBook, rp: Record<string, Object>): boolean {
 
 function policyOf(c: SyncConfig): string {
   if (c.conflict === SYNC_CONFLICTS[1]) {
-    return SYNC_POLICY_LOCAL;
+    return SYNC_POLICY_FARTHER;
   }
   if (c.conflict === SYNC_CONFLICTS[2]) {
-    return SYNC_POLICY_SERVER;
+    return SYNC_POLICY_LOCAL;
   }
   if (c.conflict === SYNC_CONFLICTS[3]) {
-    return SYNC_POLICY_FARTHER;
+    return SYNC_POLICY_SERVER;
   }
   return 'newer';
 }
@@ -2354,14 +2468,17 @@ function parseRec(text: string): Record<string, Object> {
 
 /** android webdavSyncPolicy token -> Harmony conflict label. */
 function policyLabelOf(token: string): string {
+  /* 0.9.57 review: exact inverse of policyOf() above — the previous
+   * positions came from the pre-0.9.57 enum and rotated the token by one
+   * slot through applyStateImport on every sync round. */
   if (token === SYNC_POLICY_LOCAL) {
-    return SYNC_CONFLICTS[1];
-  }
-  if (token === SYNC_POLICY_SERVER) {
     return SYNC_CONFLICTS[2];
   }
-  if (token === SYNC_POLICY_FARTHER) {
+  if (token === SYNC_POLICY_SERVER) {
     return SYNC_CONFLICTS[3];
+  }
+  if (token === SYNC_POLICY_FARTHER) {
+    return SYNC_CONFLICTS[1];
   }
   return SYNC_CONFLICTS[0];
 }

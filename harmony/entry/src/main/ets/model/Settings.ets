@@ -162,6 +162,8 @@ export interface ReaderSettings {
   fontsFolder: string;
   /** Downloads folder for fetched books ('' = default Download/HowRead) */
   downloadsFolder: string;
+  /** 0.9.58: TTS audio folder (Android BookCSS.ttsSpeakPath, Download/HowRead/TTS) */
+  ttsFolder: string;
 
   /* ---- Round 8: online cache reading (Android AppState.remote*) ---- */
   /** Online-first: open remote books streaming when the format supports it */
@@ -196,6 +198,109 @@ export interface ReaderSettings {
   tapLeftAction: number;
   tapCenterAction: number;
   tapRightAction: number;
+
+  /* ---- 0.9.55: prefs alignment (Android PrefFragment2 rows) ---- */
+  /** Extract title/author from PDF metadata (Android isAuthorTitleFromMetaPDF) */
+  authorTitleFromMetaPDF: boolean;
+  /** Show original file names instead of metadata (Android isShowOnlyOriginalFileNames) */
+  showOnlyOriginalFileNames: boolean;
+  /** Read Calibre metadata.opf sidecars (Android isUseCalibreOpf) */
+  useCalibreOpf: boolean;
+  /** Show the series number in the title (Android isShowSeriesNumberInTitle) */
+  seriesNumberInTitle: boolean;
+  /** Auto-add books opened from other apps to the library (Android isAutoAddToLibrary) */
+  autoAddToLibrary: boolean;
+  /** Restore the shelf search query at startup (Android isRestoreSearchQuery) */
+  restoreSearchQuery: boolean;
+  /** Books open with touch input locked (Android lockBooksByDefault) */
+  lockBooksByDefault: boolean;
+  /** Accessibility mode: top icon-only tabs + 1.1 UI scale (Android isEnableAccessibility) */
+  accessibilityMode: boolean;
+  /** Global context-menu integration (Android isMenuIntegration; stored, harmony share entry is static) */
+  contextMenuIntegration: boolean;
+  /** Preferred reading mode: 0=ask each open, 1=vertical scroll, 2=horizontal (Android readingMode) */
+  readingModePref: number;
+  /** Double-tap action: 0=zoom to fit, 1=crop white borders (Android doubleClickAction1) */
+  doubleClickAction: number;
+  /** Dashboard recent card layout: 0=list shelf, 1=grid (Android widgetType) */
+  widgetLayout: number;
+  /** Last shelf search query (restored at startup when restoreSearchQuery) */
+  lastLibQuery: string;
+
+  /* ---- 0.9.59: reader pref 4-tab dialog (Android dialog_reading_pref /
+   * dialog_adv_preferences / dialog_status_bar_settings / ControlOptionsDialog) ---- */
+  /** Status info row at the top of the reader */
+  showStatusBar: boolean;
+  showTitleTop: boolean;
+  showClockTop: boolean;
+  showBatteryTop: boolean;
+  /** Thin reading-progress line + chapter ticks */
+  showProgressBar: boolean;
+  showChapterTicks: boolean;
+  showSubChapterTicks: boolean;
+  /** Seek slider enabled (滑动进度条以导航) */
+  seekNav: boolean;
+  /** Status row background hex ('' = default); applied in day mode */
+  statusColorDay: string;
+  /** Status row base font size px (8..20) */
+  statusBarFontPx: number;
+  /** Thin progress line height px (2..10) */
+  progressBarH: number;
+  /** Seek-row numbers: 0=page numbers, 1=percent */
+  progressScale: number;
+  /** Chapter label format index (display) */
+  chapterFmtIdx: number;
+  /** Bookmarks strip toggles (stored; strip rendering is a later project) */
+  bmStripMusician: boolean;
+  bmStripVert: boolean;
+  bmStripHorz: boolean;
+  /** Edge tap-zone width % (10..40) */
+  tapEdgePercent: number;
+  /** Anti-aliasing level (stored; engine has no AA hook yet) */
+  antialiasLevel: number;
+  /** Auto screen-off minutes (stored; no public power API on HarmonyOS) */
+  autoOffMinutes: number;
+  mirrorMode: boolean;
+  allowTextSelection: boolean;
+  perCharSelect: boolean;
+  edgeBrightness: boolean;
+  allowZeroBright: boolean;
+  dayImageReplace: boolean;
+  amoledEnhance: boolean;
+  loopPaging: boolean;
+  zoomLockedPages: boolean;
+  backConfirmClose: boolean;
+  selectionVibrate: boolean;
+  /** Render thread pools (stored) */
+  decodeThreads: number;
+  drawThreads: number;
+  /** Reflow typography (persisted since 0.9.59; were session-only before) */
+  textAlign: number;
+  letterSpacing: number;
+  paragraphSpacing: number;
+  hyphenationEnabled: boolean;
+  hyphenLang: string;
+  hyphenLangDefault: boolean;
+  inlineNotes: boolean;
+  imageZoomEnabled: boolean;
+  imageZoomScale: number;
+  /** 0=doc styles, 1=user styles, 2=doc+user */
+  styleMode: number;
+  userCssName: string;
+  dictLookup: boolean;
+  useSystemBrightness: boolean;
+  invertVolume: boolean;
+  /** 4-way page margins (pt): top/bottom/left/right */
+  marginT: number;
+  marginB: number;
+  marginLeft: number;
+  marginRight: number;
+  /** Reflow link colors hex ('' = engine default) */
+  linkColorDay: string;
+  linkColorNight: string;
+  /** Top/bottom tap zones (vertical mode; same action codes as left/right) */
+  tapTopAction: number;
+  tapBottomAction: number;
 }
 
 const PREF_NAME = 'librera_settings';
@@ -258,11 +363,11 @@ export function defaultSettings(): ReaderSettings {
     hideReadBooks: false,
     coverColumns: 3,
     cardSource: 0,
-    cardCount: 3,
+    cardCount: 4,
     appLang: '',
     scanFormats: '',
-    coverListSize: 0,
-    coverGridSize: 0,
+    coverListSize: 80,
+    coverGridSize: 110,
     showBookCovers: true,
     coverEffect: false,
     cropCovers: true,
@@ -286,6 +391,7 @@ export function defaultSettings(): ReaderSettings {
     rootFolder: 'HowRead',
     fontsFolder: 'fonts',
     downloadsFolder: 'Download/HowRead',
+    ttsFolder: 'Download/HowRead/TTS',
     /* Round 8: online cache reading defaults (Android AppState.remote*) */
     remoteOnlineFirst: true,
     remoteCacheMaxMB: 500,
@@ -301,7 +407,76 @@ export function defaultSettings(): ReaderSettings {
     volumeKeyAction: 1,
     tapLeftAction: 0,
     tapCenterAction: 2,
-    tapRightAction: 1
+    tapRightAction: 1,
+    /* 0.9.55 prefs alignment defaults (Android AppState) */
+    authorTitleFromMetaPDF: false,
+    showOnlyOriginalFileNames: false,
+    useCalibreOpf: true,
+    seriesNumberInTitle: true,
+    autoAddToLibrary: true,
+    restoreSearchQuery: false,
+    lockBooksByDefault: true,
+    accessibilityMode: false,
+    contextMenuIntegration: false,
+    readingModePref: 2,
+    doubleClickAction: 0,
+    widgetLayout: 0,
+    lastLibQuery: '',
+      /* 0.9.59: reader pref 4-tab fields */
+      showStatusBar: true,
+      showTitleTop: true,
+      showClockTop: true,
+      showBatteryTop: true,
+      showProgressBar: true,
+      showChapterTicks: true,
+      showSubChapterTicks: false,
+      seekNav: true,
+      statusColorDay: '',
+      statusBarFontPx: 14,
+      progressBarH: 4,
+      progressScale: 0,
+      chapterFmtIdx: 0,
+      bmStripMusician: true,
+      bmStripVert: false,
+      bmStripHorz: false,
+      tapEdgePercent: 25,
+      antialiasLevel: 8,
+      autoOffMinutes: 5,
+      mirrorMode: false,
+      allowTextSelection: true,
+      perCharSelect: false,
+      edgeBrightness: true,
+      allowZeroBright: false,
+      dayImageReplace: false,
+      amoledEnhance: false,
+      loopPaging: false,
+      zoomLockedPages: true,
+      backConfirmClose: false,
+      selectionVibrate: true,
+      decodeThreads: 10,
+      drawThreads: 5,
+      textAlign: 0,
+      letterSpacing: 0,
+      paragraphSpacing: 8,
+      hyphenationEnabled: false,
+      hyphenLang: 'zh',
+      hyphenLangDefault: false,
+      inlineNotes: false,
+      imageZoomEnabled: true,
+      imageZoomScale: 2.0,
+      styleMode: 2,
+      userCssName: '',
+      dictLookup: false,
+      useSystemBrightness: false,
+      invertVolume: false,
+      marginT: 9,
+      marginB: 6,
+      marginLeft: 10,
+      marginRight: 10,
+      linkColorDay: '',
+      linkColorNight: '',
+      tapTopAction: 0,
+      tapBottomAction: 1
   };
 }
 
@@ -310,6 +485,35 @@ export function defaultSettings(): ReaderSettings {
  * wifi-only switch OFF. Not in ReaderSettings, so new saves drop it. */
 interface LegacyRemoteSettings {
   remoteWholeBookOnMetered?: boolean;
+}
+
+/* 0.9.56 review fix: the 0.9.55+ schema always serializes readingModePref;
+ * its ABSENCE marks a pre-0.9.55 (legacy-orientation-enum) store, which is
+ * the only case where migrateOrientation may run. Without this gate the
+ * NEW enum value 1 (自动) would be remapped to 3 (竖屏) on every reload. */
+interface LegacyOrientationSettings {
+  readingModePref?: number;
+}
+
+/* 0.9.55: orientation enum is now 0=system,1=auto,2=landscape,3=portrait
+ * (Android DocumentController order minus the platform-unsupported flips).
+ * Old harmony enum was 0=auto,1=portrait,2=landscape — migrate once here. */
+function migrateOrientation(v: number): number {
+  if (typeof v !== 'number') {
+    return 0;
+  }
+  if (v === 0) {
+    /* old harmony "auto" never locked the orientation — same behavior as
+     * Android 系统 (UNSPECIFIED), so it maps to the new 0 */
+    return 0;
+  }
+  if (v === 1) {
+    return 3;
+  }
+  if (v === 2) {
+    return 2;
+  }
+  return v >= 0 && v <= 3 ? v : 0;
 }
 
 export async function loadSettings(ctx: Context): Promise<ReaderSettings> {
@@ -362,7 +566,12 @@ export async function loadSettings(ctx: Context): Promise<ReaderSettings> {
       tabPositionTop: r.tabPositionTop === true,
       showTopBarInfo: r.showTopBarInfo === true,
       appLockBiometric: r.appLockBiometric === true,
-      screenOrientation: typeof r.screenOrientation === 'number' ? r.screenOrientation : d.screenOrientation,
+      /* 0.9.55: enum migration (legacy stores only — see LegacyOrientationSettings)
+       * + Android default (system) for fresh installs */
+      screenOrientation: typeof r.screenOrientation === 'number'
+        ? ((raw as LegacyOrientationSettings).readingModePref === undefined
+            ? migrateOrientation(r.screenOrientation) : r.screenOrientation)
+        : d.screenOrientation,
       autoScanOnStart: r.autoScanOnStart === true,
       hideReadBooks: r.hideReadBooks === true,
       coverColumns: typeof r.coverColumns === 'number' ? r.coverColumns : d.coverColumns,
@@ -370,8 +579,10 @@ export async function loadSettings(ctx: Context): Promise<ReaderSettings> {
       cardCount: typeof r.cardCount === 'number' ? r.cardCount : d.cardCount,
       appLang: typeof r.appLang === 'string' ? r.appLang : d.appLang,
       scanFormats: typeof r.scanFormats === 'string' ? r.scanFormats : d.scanFormats,
-      coverListSize: typeof r.coverListSize === 'number' ? r.coverListSize : d.coverListSize,
-      coverGridSize: typeof r.coverGridSize === 'number' ? r.coverGridSize : d.coverGridSize,
+      /* 0.9.55: Android CustomSeek range is 40..max with no "auto" — migrate
+       * the legacy 0=auto values to the Android defaults (80 / 110) */
+      coverListSize: typeof r.coverListSize === 'number' && r.coverListSize >= 40 ? r.coverListSize : 80,
+      coverGridSize: typeof r.coverGridSize === 'number' && r.coverGridSize >= 40 ? r.coverGridSize : 110,
       showBookCovers: r.showBookCovers !== false,
       coverEffect: r.coverEffect === true,
       cropCovers: r.cropCovers !== false,
@@ -396,6 +607,7 @@ export async function loadSettings(ctx: Context): Promise<ReaderSettings> {
       rootFolder: typeof r.rootFolder === 'string' && r.rootFolder.length > 0 ? r.rootFolder : d.rootFolder,
       fontsFolder: typeof r.fontsFolder === 'string' && r.fontsFolder.length > 0 ? r.fontsFolder : d.fontsFolder,
       downloadsFolder: typeof r.downloadsFolder === 'string' && r.downloadsFolder.length > 0 ? r.downloadsFolder : d.downloadsFolder,
+      ttsFolder: typeof r.ttsFolder === 'string' && r.ttsFolder.length > 0 ? r.ttsFolder : d.ttsFolder,
       remoteOnlineFirst: r.remoteOnlineFirst !== false,
       remoteCacheMaxMB: typeof r.remoteCacheMaxMB === 'number' ? r.remoteCacheMaxMB : d.remoteCacheMaxMB,
       remotePrefetchWifiOnly: (r.remotePrefetchWifiOnly !== false) && !(legacy.remoteWholeBookOnMetered === true),
@@ -416,7 +628,76 @@ export async function loadSettings(ctx: Context): Promise<ReaderSettings> {
       volumeKeyAction: typeof r.volumeKeyAction === 'number' ? r.volumeKeyAction : d.volumeKeyAction,
       tapLeftAction: typeof r.tapLeftAction === 'number' ? r.tapLeftAction : d.tapLeftAction,
       tapCenterAction: typeof r.tapCenterAction === 'number' ? r.tapCenterAction : d.tapCenterAction,
-      tapRightAction: typeof r.tapRightAction === 'number' ? r.tapRightAction : d.tapRightAction
+      tapRightAction: typeof r.tapRightAction === 'number' ? r.tapRightAction : d.tapRightAction,
+      /* 0.9.55 prefs alignment fields */
+      authorTitleFromMetaPDF: r.authorTitleFromMetaPDF === true,
+      showOnlyOriginalFileNames: r.showOnlyOriginalFileNames === true,
+      useCalibreOpf: r.useCalibreOpf !== false,
+      seriesNumberInTitle: r.seriesNumberInTitle !== false,
+      autoAddToLibrary: r.autoAddToLibrary !== false,
+      restoreSearchQuery: r.restoreSearchQuery === true,
+      lockBooksByDefault: r.lockBooksByDefault !== false,
+      accessibilityMode: r.accessibilityMode === true,
+      contextMenuIntegration: r.contextMenuIntegration === true,
+      readingModePref: typeof r.readingModePref === 'number' ? r.readingModePref : d.readingModePref,
+      doubleClickAction: typeof r.doubleClickAction === 'number' ? r.doubleClickAction : d.doubleClickAction,
+      widgetLayout: typeof r.widgetLayout === 'number' ? r.widgetLayout : d.widgetLayout,
+      lastLibQuery: typeof r.lastLibQuery === 'string' ? r.lastLibQuery : '',
+      /* 0.9.59: reader pref 4-tab fields */
+      showStatusBar: r.showStatusBar !== false,
+      showTitleTop: r.showTitleTop !== false,
+      showClockTop: r.showClockTop !== false,
+      showBatteryTop: r.showBatteryTop !== false,
+      showProgressBar: r.showProgressBar !== false,
+      showChapterTicks: r.showChapterTicks !== false,
+      showSubChapterTicks: r.showSubChapterTicks === true,
+      seekNav: r.seekNav !== false,
+      statusColorDay: typeof r.statusColorDay === 'string' ? r.statusColorDay : '',
+      statusBarFontPx: typeof r.statusBarFontPx === 'number' && r.statusBarFontPx >= 8 ? r.statusBarFontPx : 14,
+      progressBarH: typeof r.progressBarH === 'number' && r.progressBarH >= 2 ? r.progressBarH : 4,
+      progressScale: typeof r.progressScale === 'number' ? r.progressScale : 0,
+      chapterFmtIdx: typeof r.chapterFmtIdx === 'number' ? r.chapterFmtIdx : 0,
+      bmStripMusician: r.bmStripMusician !== false,
+      bmStripVert: r.bmStripVert === true,
+      bmStripHorz: r.bmStripHorz === true,
+      tapEdgePercent: typeof r.tapEdgePercent === 'number' && r.tapEdgePercent >= 5 ? r.tapEdgePercent : 25,
+      antialiasLevel: typeof r.antialiasLevel === 'number' ? r.antialiasLevel : 8,
+      autoOffMinutes: typeof r.autoOffMinutes === 'number' ? r.autoOffMinutes : 5,
+      mirrorMode: r.mirrorMode === true,
+      allowTextSelection: r.allowTextSelection !== false,
+      perCharSelect: r.perCharSelect === true,
+      edgeBrightness: r.edgeBrightness !== false,
+      allowZeroBright: r.allowZeroBright === true,
+      dayImageReplace: r.dayImageReplace === true,
+      amoledEnhance: r.amoledEnhance === true,
+      loopPaging: r.loopPaging === true,
+      zoomLockedPages: r.zoomLockedPages !== false,
+      backConfirmClose: r.backConfirmClose === true,
+      selectionVibrate: r.selectionVibrate !== false,
+      decodeThreads: typeof r.decodeThreads === 'number' ? r.decodeThreads : 10,
+      drawThreads: typeof r.drawThreads === 'number' ? r.drawThreads : 5,
+      textAlign: typeof r.textAlign === 'number' ? r.textAlign : 0,
+      letterSpacing: typeof r.letterSpacing === 'number' ? r.letterSpacing : 0,
+      paragraphSpacing: typeof r.paragraphSpacing === 'number' ? r.paragraphSpacing : 8,
+      hyphenationEnabled: r.hyphenationEnabled === true,
+      hyphenLang: typeof r.hyphenLang === 'string' ? r.hyphenLang : 'zh',
+      hyphenLangDefault: r.hyphenLangDefault === true,
+      inlineNotes: r.inlineNotes === true,
+      imageZoomEnabled: r.imageZoomEnabled !== false,
+      imageZoomScale: typeof r.imageZoomScale === 'number' ? r.imageZoomScale : 2.0,
+      styleMode: typeof r.styleMode === 'number' ? r.styleMode : 2,
+      userCssName: typeof r.userCssName === 'string' ? r.userCssName : '',
+      dictLookup: r.dictLookup === true,
+      useSystemBrightness: r.useSystemBrightness === true,
+      invertVolume: r.invertVolume === true,
+      marginT: typeof r.marginT === 'number' ? r.marginT : 9,
+      marginB: typeof r.marginB === 'number' ? r.marginB : 6,
+      marginLeft: typeof r.marginLeft === 'number' ? r.marginLeft : 10,
+      marginRight: typeof r.marginRight === 'number' ? r.marginRight : 10,
+      linkColorDay: typeof r.linkColorDay === 'string' ? r.linkColorDay : '',
+      linkColorNight: typeof r.linkColorNight === 'string' ? r.linkColorNight : '',
+      tapTopAction: typeof r.tapTopAction === 'number' ? r.tapTopAction : 0,
+      tapBottomAction: typeof r.tapBottomAction === 'number' ? r.tapBottomAction : 1
     };
     return s;
   } catch (e) {

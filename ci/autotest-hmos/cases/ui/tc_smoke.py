@@ -149,8 +149,9 @@ def sm04_open_pdf_and_flip(dev, case_id, cfg, fixtures):
 
 
 def _click_toggle_near(dev, label_text):
-    """Prefs rows pair a Text label with a Toggle on the right — click the
-    Toggle itself (clicking the label does nothing). Returns True/False."""
+    """Prefs rows pair a Text label with a checkbox (0.9.55 Checkbox style,
+    was a right-side Toggle) — click the checkbox node in the same row
+    (clicking the label does nothing). Returns True/False."""
     import re as _re
     label = dev.find(text=label_text)
     if not label:
@@ -162,7 +163,7 @@ def _click_toggle_near(dev, label_text):
     tree = dev.dump()
     for n in dev._walk(tree):
         a = n.get('attributes', {})
-        if a.get('type') != 'Toggle':
+        if a.get('type') not in ('Checkbox', 'Toggle'):
             continue
         m2 = _re.search(r'\[\d+,(\d+)\]\[\d+,(\d+)\]', a.get('bounds', ''))
         if not m2:
@@ -204,17 +205,17 @@ def sm05_exit_confirm(dev, case_id, cfg, fixtures):
     with dev.step(case_id, 'enable exit-confirm toggle'):
         # 2026-09-29: sub-groups start collapsed (Android parity); the
         # exit-confirm toggle lives inside 阅读配置
-        if not dev.exists_text('退出确认对话框'):
+        if not dev.exists_text('返回手势退出时需确认'):
             if not dev.click_text('阅读配置'):
                 dev.save_dump('reading_cfg_missing')
                 raise TestFail('阅读配置 sub-group not found in prefs')
             time.sleep(1.0)
-        if not _prefs_scroll_to(dev, '退出确认对话框'):
+        if not _prefs_scroll_to(dev, '返回手势退出时需确认'):
             dev.save_dump('toggle_not_found')
             raise TestFail('退出确认对话框 toggle not found in prefs')
         dev.hilog_clear()
-        if not _click_toggle_near(dev, '退出确认对话框'):
-            raise TestFail('Toggle control not found next to 退出确认对话框')
+        if not _click_toggle_near(dev, '返回手势退出时需确认'):
+            raise TestFail('Toggle control not found next to 返回手势退出时需确认')
         if not dev.wait_event('settings_saved', timeout=8):
             raise TestFail('settings_saved not fired after toggle')
     with dev.step(case_id, 'exit via 退出程序 shows dialog'):
@@ -232,12 +233,12 @@ def sm05_exit_confirm(dev, case_id, cfg, fixtures):
         if not dev.wait_text('书库设置', timeout=8):
             raise TestFail('app left prefs after cancel')
     with dev.step(case_id, 'restore toggle off'):
-        if not dev.exists_text('退出确认对话框'):
+        if not dev.exists_text('返回手势退出时需确认'):
             dev.click_text('阅读配置')
             time.sleep(1.0)
-        if _prefs_scroll_to(dev, '退出确认对话框'):
+        if _prefs_scroll_to(dev, '返回手势退出时需确认'):
             dev.hilog_clear()
-            _click_toggle_near(dev, '退出确认对话框')
+            _click_toggle_near(dev, '返回手势退出时需确认')
             dev.wait_event('settings_saved', timeout=8)
 
 

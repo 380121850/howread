@@ -19,7 +19,9 @@ import image from '@ohos.multimedia.image';
 import router from '@ohos.router';
 import brightness from '@system.brightness';
 import batteryInfo from '@ohos.batteryInfo';
+import display from '@ohos.display';
 import webview from '@ohos.web.webview';
+import window from '@ohos.window';
 import promptAction from '@ohos.promptAction';
 import picker from '@ohos.file.picker';
 import pasteboard from '@ohos.pasteboard';
@@ -41,9 +43,10 @@ import {
 } from 'libmupdf_napi.so';
 import { saveRecentBook, getPageForPath, getRecentBookForPath, RecentBook } from '../model/ReadingProgress';
 import { recordReadTime, recordPagesRead } from '../model/ReadingStats';
-import { getBookmarks, addBookmark, removeBookmark, recordBookmarkTombstone, Bookmark } from '../model/Bookmarks';
+import { getBookmarks, addBookmark, removeBookmark, replaceBookmarks, exportBookmarks, recordBookmarkTombstone, Bookmark } from '../model/Bookmarks';
 import { AiConfig, loadAiConfig, chatCompletion, chatCompletionStream, aiConfigReady, AiMessage, lastTruncated} from '../model/AiClient';
 import { getNotes, addNote, removeNote, AiNote } from '../model/Notes';
+import { getAllPlaylists, createPlaylist, addToPlaylist, PlaylistMeta } from '../model/Playlists';
 import { PdfPara, PdfTransSession, BiOverlay, buildPdfParagraphs,
   PDF_TRANS_PANEL, PDF_TRANS_FLOAT, PDF_TRANS_REFLOW, PDF_TRANS_REPLACE } from '../model/PdfTranslate';
 import { exportNotesFile, ExportData } from '../model/Export';
@@ -72,9 +75,35 @@ const RIGHT_ZONE_RATIO: number = 0.3;
 const MIN_ZOOM: number = 0.5;
 const MAX_ZOOM: number = 4.0;
 const ZOOM_STEP: number = 0.25;
-/** Layout page size (points) used for reflowable documents */
+/** Layout page size (points) used for reflowable documents. The width is
+ * fixed (type density); the height follows the screen aspect so a page
+ * fills the viewport (Android fit-viewport parity, 0.9.61). */
 const REFLOW_W: number = 595;
 const REFLOW_H: number = 842;
+
+/** Screen-aspect reflow height (portrait口径; falls back to A4). */
+function initialReflowH(): number {
+  try {
+    const d = display.getDefaultDisplaySync();
+    let w = d.width;
+    let h = d.height;
+    if (w > h) {
+      const t = w;
+      w = h;
+      h = t;
+    }
+    if (w > 0 && h > w) {
+      return Math.round(595 * h / w);
+    }
+  } catch (_e) { /* fall back to A4 */ }
+  return 842;
+}
+
+/** 0.9.61: one label/value row of the file-info dialog (Android parity) */
+interface FiRow {
+  label: string;
+  value: string;
+}
 /** Round 5: page-split halves (normalized crop rects) */
 const SPLIT_LEFT: CropRect = { x0: 0, y0: 0, x1: 0.5, y1: 1 };
 const SPLIT_RIGHT: CropRect = { x0: 0.5, y0: 0, x1: 1, y1: 1 };
@@ -820,6 +849,66 @@ struct Reader {
   @State currentPage: number = 0;
   @State totalPages: number = 0;
   @State showMenu: boolean = false;
+  /* ---- 0.9.59: reader pref dialog (4-tab 偏好) + bar visibility ---- */
+  @State showPref: boolean = false;
+  @State prefTab: number = 0;              /* 0=可视 1=排版 2=状态栏 3=控制 */
+  @State barsVisible: boolean = true;      /* center tap shows/hides both bars */
+  @State colorPickTarget: number = 0;      /* 1=link day 2=link night 3=status color */
+  @State showFontChips: boolean = false;
+  @State showStatusBar: boolean = true;
+  @State showTitleTop: boolean = true;
+  @State showClockTop: boolean = true;
+  @State showBatteryTop: boolean = true;
+  @State showProgressBar: boolean = true;
+  @State showChapterTicks: boolean = true;
+  @State showSubChapterTicks: boolean = false;
+  @State seekNav: boolean = true;
+  @State statusColorDay: string = '';
+  @State statusBarFontPx: number = 14;
+  @State progressBarH: number = 4;
+  @State progressScale: number = 0;
+  @State chapterFmtIdx: number = 0;
+  @State bmStripMusician: boolean = true;
+  @State bmStripVert: boolean = false;
+  @State bmStripHorz: boolean = false;
+  @State tapEdgePercent: number = 25;
+  @State antialiasLevel: number = 8;
+  @State autoOffMinutes: number = 5;
+  @State mirrorMode: boolean = false;
+  @State allowTextSelection: boolean = true;
+  @State perCharSelect: boolean = false;
+  @State edgeBrightness: boolean = true;
+  @State allowZeroBright: boolean = false;
+  @State dayImageReplace: boolean = false;
+  @State amoledEnhance: boolean = false;
+  @State loopPaging: boolean = false;
+  @State zoomLockedPages: boolean = true;
+  @State backConfirmClose: boolean = false;
+  @State selectionVibrate: boolean = true;
+  @State decodeThreads: number = 10;
+  @State drawThreads: number = 5;
+  @State letterSpacing: number = 0;
+  @State hyphenLang: string = 'zh';
+  @State hyphenLangDefault: boolean = false;
+  @State inlineNotes: boolean = false;
+  @State imageZoomEnabled: boolean = true;
+  @State imageZoomScale: number = 2.0;
+  @State styleMode: number = 2;
+  @State userCssName: string = '';
+  @State dictLookup: boolean = false;
+  @State useSystemBrightness: boolean = false;
+  @State invertVolume: boolean = false;
+  @State marginT: number = 9;
+  @State marginB: number = 6;
+  @State marginLeft: number = 10;
+  @State marginRight: number = 10;
+  @State linkColorDay: string = '';
+  @State linkColorNight: string = '';
+  @State scrOrient: number = 0;
+  @State restRemindMin: number = 0;
+  @State fontsFolderDisp: string = '';
+  @State tapTopAction: number = 0;         /* top tap zone (vertical mode) */
+  @State tapBottomAction: number = 1;      /* bottom tap zone (vertical mode) */
   @State pageList: number[] = [];
   @State docTitle: string = '';
   @State scrollMode: number = 0; /* 0=horizontal Swiper, 1=vertical List */
@@ -857,6 +946,13 @@ struct Reader {
   @State transResult: string = '';
   @State showTransPanel: boolean = false;   /* bottom sheet with the translation */
   @State aiNotes: AiNote[] = [];            /* AI notes for the bookmark panel (hr17) */
+  @State bmOnPage: boolean = false;         /* 0.9.61: current page bookmarked (🔖 highlight) */
+  @State showBmList: boolean = false;       /* 0.9.62: bookmark dialog (Android dialogShowBookmarks parity) */
+  @State showBmAdd: boolean = false;        /* 0.9.62: named-bookmark input dialog */
+  @State showBmSort: boolean = false;       /* 0.9.62: ⋮ sort/share menu of the bookmark dialog */
+  @State bmSearch: string = '';             /* 0.9.62: bookmark dialog search query */
+  @State bmAddName: string = '';            /* 0.9.62: named-bookmark input */
+  @State bmSortOrder: number = 0;           /* 0.9.62: 0 newest-first / 1 oldest-first / 2 page asc / 3 page desc */
   @State showExportDialog: boolean = false; /* notes/bookmarks export format picker (A) */
   @State transInPage: boolean = false;      /* in-page bilingual toggle (D, EPUB/TXT only) */
   private biOriginalPath: string = '';      /* set while reading the rebuilt bilingual file */
@@ -896,8 +992,17 @@ struct Reader {
   @State thumbBusy: boolean = false;
   /* Round 5: page-jump history (返回上一位置) */
   private pageHistory: number[] = [];
-  /* Round 6: reader UI alignment (document_title_bar / document_title_buttons) */
-  @State showToolRow: boolean = true;       /* secondary quick-buttons row under the top bar */
+  /* 0.9.60 (Android ShareDialog/NoteEditDialog parity): bottom-bar book menu,
+   * note editor, playlist picker, AI intro */
+  @State showBookMenu: boolean = false;    /* ShareDialog-style book menu (bottom-bar ⋮) */
+  @State showNoteEdit: boolean = false;    /* NoteEditDialog (bottom-bar ✏) */
+  @State noteEditText: string = '';
+  @State showPlPick: boolean = false;      /* add-to-playlist picker */
+  @State plNames: string[] = [];
+  @State plNewName: string = '';
+  @State showAiIntro: boolean = false;     /* AI book intro dialog */
+  @State aiIntroText: string = '';
+  @State aiIntroBusy: boolean = false;
   @State showJump: boolean = false;         /* jump-to-page dialog */
   @State jumpInput: string = '';            /* target page typed by the user */
   @State fastScrolling: boolean = false;    /* vertical fast-scroll rail active */
@@ -907,6 +1012,9 @@ struct Reader {
   @State pwdInput: string = '';
   @State renderEpoch: number = 0;           /* bumped after unlock to force re-render */
   private aiCfg: AiConfig = { protocol: 'openai', provider: '', url: '', key: '', model: '', maxTokens: 8192, thinking: false };
+  /* 0.9.61: reflow layout viewport (width fixed, height = screen aspect) */
+  private reflowW: number = 595;
+  private reflowH: number = initialReflowH();
   @State annotations: AnnotationInfo[] = []; /* current page annotations */
   @State drawMode: boolean = false;         /* freehand drawing mode */
   @State drawPoints: TextRect[] = [];
@@ -954,7 +1062,6 @@ struct Reader {
   private webController: webview.WebviewController = new webview.WebviewController();
 
   /* ---- Settings & theme (sprint E) ---- */
-  @State showSettings: boolean = false;
   @State theme: number = 0;             /* 0=light 1=dark 2=oled 3=ink */
   @State isReflow: boolean = false;     /* reflowable (EPUB/HTML) vs fixed (PDF) */
   @State fontSize: number = 16;         /* em, reflowable only */
@@ -976,7 +1083,9 @@ struct Reader {
 
   // ---- Sprint G6: File info dialog ----
   @State showFileInfo: boolean = false;
-  @State fileInfoText: string = '';
+  @State fiRows: FiRow[] = [];              /* 0.9.61: structured rows (Android dialog_file_info parity) */
+  @State fiCover: image.PixelMap | undefined = undefined;
+  @State fiCoverPath: string = '';         /* 0.9.61: shelf cover PNG (preferred) */
 
   // ---- Sprint H: Text selection + typography ----
   @State textRectsJson: string = '[]';
@@ -996,7 +1105,6 @@ struct Reader {
   private pageGlobalY: number = 0;
   private pageAreaW: number = 0;
   private pageAreaH: number = 0;
-  @State showTypographyPanel: boolean = false;
   @State textAlign: number = 0; /* 0=left, 1=center, 2=right, 3=justify */
   @State paragraphSpacing: number = 8;
   @State hyphenationEnabled: boolean = false;
@@ -1017,12 +1125,14 @@ struct Reader {
   @State bgImagePath: string = '';            /* I6: custom background image path */
   @State bgImageAlpha: number = 30;           /* I6: background opacity 0-100 */
   @State rtlEnabled: boolean = false;         /* I2: right-to-left reading direction */
-  @State showGestureConfig: boolean = false;  /* I4: gesture configuration dialog */
   /* Round 9: unified tap-zone action codes (shared across zones):
    * 0=prev 1=next 2=menu 3=toc 4=bookmark 5=brightness 6=fullscreen 7=none */
   @State tapLeftAction: number = 0;           /* default: previous page */
   /* Round 7: prefs long-press action: 0=text selection, 1=file info, 2=menu, 3=none */
   @State longTapActionPref: number = 0;
+  /* 0.9.55: 阅读配置 alignment — touch lock + double-tap action */
+  @State inputLocked: boolean = false;
+  @State doubleClickPref: number = 0;
   @State tapCenterAction: number = 2;         /* default: toggle menu */
   @State tapRightAction: number = 1;          /* default: next page */
   /* Round 9: logical source path — set when docx/rtf was converted to HTML,
@@ -1171,7 +1281,7 @@ struct Reader {
        * below counts the first window via docOp(15) - the exact local
        * openDoc model. Fixed-format docs keep the cheap full count. */
       const res: ESObject = await openDocumentRemoteAsync(this.remoteReaderId, magic, probe.size, true,
-        REFLOW_W, REFLOW_H, this.fontSize, css, true);
+        this.reflowW, this.reflowH, this.fontSize, css, true);
       const rec: Record<string, ESObject> = res as Record<string, ESObject>;
       const meta: Record<string, ESObject> = JSON.parse(String(rec['meta'])) as Record<string, ESObject>;
       let total: number = Number(meta['pageCount']);
@@ -1199,7 +1309,7 @@ struct Reader {
         const gen: number = ++this.stageGen;
         const target: number = Math.max(0, this.currentPage);
         this.layoutComplete = false;
-        const prog: string | undefined = await this.docOp(15, REFLOW_W, REFLOW_H, this.fontSize,
+        const prog: string | undefined = await this.docOp(15, this.reflowW, this.reflowH, this.fontSize,
           String(target + 400));
         const n1: number = parseInt(prog === undefined ? '-1' : prog);
         tlog('bench_stage1', 'remote=1 n1=' + n1 + ' from=' + target);
@@ -1220,7 +1330,7 @@ struct Reader {
           return;
         }
         /* no chapter support (odd reflow doc): one full layout+count */
-        const full: string | undefined = await this.docOp(3, REFLOW_W, REFLOW_H, this.fontSize, css);
+        const full: string | undefined = await this.docOp(3, this.reflowW, this.reflowH, this.fontSize, css);
         const nf: number = parseInt(full === undefined ? '-1' : full);
         console.info(`[Reader] Remote staged fallback full count: ${nf}`);
         total = nf >= 0 ? nf : 0;
@@ -1483,15 +1593,102 @@ struct Reader {
     }
     this.longTapActionPref = s.longTapAction;
     this.volumeKeyAction = s.volumeKeyAction;
+    /* 0.9.55: 阅读配置 alignment (Android lockBooksByDefault / doubleClickAction1 /
+     * readingMode SELECT_MODE ask-on-open) */
+    this.doubleClickPref = s.doubleClickAction;
+    this.inputLocked = s.lockBooksByDefault;
+    /* 0.9.59: 4-tab reader pref fields */
+    this.showStatusBar = s.showStatusBar;
+    this.showTitleTop = s.showTitleTop;
+    this.showClockTop = s.showClockTop;
+    this.showBatteryTop = s.showBatteryTop;
+    this.showProgressBar = s.showProgressBar;
+    this.showChapterTicks = s.showChapterTicks;
+    this.showSubChapterTicks = s.showSubChapterTicks;
+    this.seekNav = s.seekNav;
+    this.statusColorDay = s.statusColorDay;
+    this.statusBarFontPx = s.statusBarFontPx;
+    this.progressBarH = s.progressBarH;
+    this.progressScale = s.progressScale;
+    this.chapterFmtIdx = s.chapterFmtIdx;
+    this.bmStripMusician = s.bmStripMusician;
+    this.bmStripVert = s.bmStripVert;
+    this.bmStripHorz = s.bmStripHorz;
+    this.tapEdgePercent = s.tapEdgePercent;
+    this.antialiasLevel = s.antialiasLevel;
+    this.autoOffMinutes = s.autoOffMinutes;
+    this.mirrorMode = s.mirrorMode;
+    this.allowTextSelection = s.allowTextSelection;
+    this.perCharSelect = s.perCharSelect;
+    this.edgeBrightness = s.edgeBrightness;
+    this.allowZeroBright = s.allowZeroBright;
+    this.dayImageReplace = s.dayImageReplace;
+    this.amoledEnhance = s.amoledEnhance;
+    this.loopPaging = s.loopPaging;
+    this.zoomLockedPages = s.zoomLockedPages;
+    this.backConfirmClose = s.backConfirmClose;
+    this.selectionVibrate = s.selectionVibrate;
+    this.decodeThreads = s.decodeThreads;
+    this.drawThreads = s.drawThreads;
+    this.textAlign = s.textAlign;
+    this.letterSpacing = s.letterSpacing;
+    this.paragraphSpacing = s.paragraphSpacing;
+    this.hyphenationEnabled = s.hyphenationEnabled;
+    this.hyphenLang = s.hyphenLang;
+    this.hyphenLangDefault = s.hyphenLangDefault;
+    this.inlineNotes = s.inlineNotes;
+    this.imageZoomEnabled = s.imageZoomEnabled;
+    this.imageZoomScale = s.imageZoomScale;
+    this.styleMode = s.styleMode;
+    this.userCssName = s.userCssName;
+    this.dictLookup = s.dictLookup;
+    this.useSystemBrightness = s.useSystemBrightness;
+    this.invertVolume = s.invertVolume;
+    this.marginT = s.marginT;
+    this.marginB = s.marginB;
+    this.marginLeft = s.marginLeft;
+    this.marginRight = s.marginRight;
+    this.linkColorDay = s.linkColorDay;
+    this.linkColorNight = s.linkColorNight;
+    this.scrOrient = s.screenOrientation;
+    this.restRemindMin = s.readReminderMinutes;
+    this.fontsFolderDisp = s.fontsFolder;
+    this.tapTopAction = s.tapTopAction;
+    this.tapBottomAction = s.tapBottomAction;
+    if (s.readingModePref === 0) {
+      setTimeout(() => this.askReadingMode(), 500);
+    }
     this.dataSource.setZoom(this.zoomLevel);
     this.dataSource.setInvert(this.nightMode);
-    if (this.brightnessLevel > 0) {
+    if (this.brightnessLevel > 0 && !this.useSystemBrightness) {
       try {
         brightness.setValue({ value: this.brightnessLevel });
       } catch (e) {
         /* brightness may be unavailable on some devices */
       }
     }
+  }
+
+  /** 0.9.55: ask-on-open reading mode (Android READING_MODE_SELECT_MODE). */
+  private askReadingMode(): void {
+    AlertDialog.show({
+      title: '选择阅读模式',
+      message: '选择本次阅读的翻页方式（可在 偏好-阅读配置 里改为固定）',
+      primaryButton: {
+        value: '上下滚动',
+        action: () => {
+          this.scrollMode = 1;
+          console.info('[Reader] Session reading mode: vertical scroll');
+        }
+      },
+      secondaryButton: {
+        value: '左右翻页',
+        action: () => {
+          this.scrollMode = 0;
+          console.info('[Reader] Session reading mode: horizontal pages');
+        }
+      }
+    });
   }
 
   /** guard: true once initSettings has applied stored settings (prevents a
@@ -1512,6 +1709,7 @@ struct Reader {
     const qualityMults: number[] = [0.75, 1.0, 1.5];
     const qm: number = qualityMults[this.renderQualityLevel] !== undefined ? qualityMults[this.renderQualityLevel] : 1.0;
     const s: ReaderSettings = {
+      ttsFolder: cur.ttsFolder,
       theme: this.theme,
       zoom: qm > 0 ? this.zoomLevel / qm : this.zoomLevel,
       scrollMode: this.scrollMode,
@@ -1530,7 +1728,7 @@ struct Reader {
       margin: this.pageMargin,
       appLockEnabled: cur.appLockEnabled,
       appLockPass: cur.appLockPass,
-      readReminderMinutes: cur.readReminderMinutes,
+      readReminderMinutes: this.restRemindMin,
       blueLightFilter: this.blueLightFilter,
       bgImagePath: this.bgImagePath,
       proxyHost: cur.proxyHost,
@@ -1549,7 +1747,7 @@ struct Reader {
       tabPositionTop: cur.tabPositionTop,
       showTopBarInfo: this.showTopBarInfo,
       appLockBiometric: cur.appLockBiometric,
-      screenOrientation: cur.screenOrientation,
+      screenOrientation: this.scrOrient,
       autoScanOnStart: cur.autoScanOnStart,
       hideReadBooks: cur.hideReadBooks,
       coverColumns: cur.coverColumns,
@@ -1596,7 +1794,76 @@ struct Reader {
       tapLeftAction: this.tapLeftAction,
       tapCenterAction: this.tapCenterAction,
       tapRightAction: this.tapRightAction,
-      volumeKeyAction: this.volumeKeyAction
+      volumeKeyAction: this.volumeKeyAction,
+      /* 0.9.55 prefs-alignment fields pass through unchanged */
+      authorTitleFromMetaPDF: cur.authorTitleFromMetaPDF,
+      showOnlyOriginalFileNames: cur.showOnlyOriginalFileNames,
+      useCalibreOpf: cur.useCalibreOpf,
+      seriesNumberInTitle: cur.seriesNumberInTitle,
+      autoAddToLibrary: cur.autoAddToLibrary,
+      restoreSearchQuery: cur.restoreSearchQuery,
+      lockBooksByDefault: cur.lockBooksByDefault,
+      accessibilityMode: cur.accessibilityMode,
+      contextMenuIntegration: cur.contextMenuIntegration,
+      readingModePref: cur.readingModePref,
+      doubleClickAction: cur.doubleClickAction,
+      widgetLayout: cur.widgetLayout,
+      lastLibQuery: cur.lastLibQuery,
+      /* 0.9.59: reader pref 4-tab fields */
+      showStatusBar: this.showStatusBar,
+      showTitleTop: this.showTitleTop,
+      showClockTop: this.showClockTop,
+      showBatteryTop: this.showBatteryTop,
+      showProgressBar: this.showProgressBar,
+      showChapterTicks: this.showChapterTicks,
+      showSubChapterTicks: this.showSubChapterTicks,
+      seekNav: this.seekNav,
+      statusColorDay: this.statusColorDay,
+      statusBarFontPx: this.statusBarFontPx,
+      progressBarH: this.progressBarH,
+      progressScale: this.progressScale,
+      chapterFmtIdx: this.chapterFmtIdx,
+      bmStripMusician: this.bmStripMusician,
+      bmStripVert: this.bmStripVert,
+      bmStripHorz: this.bmStripHorz,
+      tapEdgePercent: this.tapEdgePercent,
+      antialiasLevel: this.antialiasLevel,
+      autoOffMinutes: this.autoOffMinutes,
+      mirrorMode: this.mirrorMode,
+      allowTextSelection: this.allowTextSelection,
+      perCharSelect: this.perCharSelect,
+      edgeBrightness: this.edgeBrightness,
+      allowZeroBright: this.allowZeroBright,
+      dayImageReplace: this.dayImageReplace,
+      amoledEnhance: this.amoledEnhance,
+      loopPaging: this.loopPaging,
+      zoomLockedPages: this.zoomLockedPages,
+      backConfirmClose: this.backConfirmClose,
+      selectionVibrate: this.selectionVibrate,
+      decodeThreads: this.decodeThreads,
+      drawThreads: this.drawThreads,
+      textAlign: this.textAlign,
+      letterSpacing: this.letterSpacing,
+      paragraphSpacing: this.paragraphSpacing,
+      hyphenationEnabled: this.hyphenationEnabled,
+      hyphenLang: this.hyphenLang,
+      hyphenLangDefault: this.hyphenLangDefault,
+      inlineNotes: this.inlineNotes,
+      imageZoomEnabled: this.imageZoomEnabled,
+      imageZoomScale: this.imageZoomScale,
+      styleMode: this.styleMode,
+      userCssName: this.userCssName,
+      dictLookup: this.dictLookup,
+      useSystemBrightness: this.useSystemBrightness,
+      invertVolume: this.invertVolume,
+      marginT: this.marginT,
+      marginB: this.marginB,
+      marginLeft: this.marginLeft,
+      marginRight: this.marginRight,
+      linkColorDay: this.linkColorDay,
+      linkColorNight: this.linkColorNight,
+      tapTopAction: this.tapTopAction,
+      tapBottomAction: this.tapBottomAction
     };
     await saveSettings(ctx, s);
   }
@@ -1681,12 +1948,12 @@ struct Reader {
       const css = this.buildCss();
       let newTotal = -1;
       if (this.isRemote) {
-        const r = await this.docOp(3, REFLOW_W, REFLOW_H, this.fontSize, css);
+        const r = await this.docOp(3, this.reflowW, this.reflowH, this.fontSize, css);
         if (r !== undefined) {
           newTotal = parseInt(r, 10);
         }
       } else {
-        layoutDocument(handle, REFLOW_W, REFLOW_H, this.fontSize, css);
+        layoutDocument(handle, this.reflowW, this.reflowH, this.fontSize, css);
         newTotal = pageCount(handle);
       }
       if (newTotal >= 0) {
@@ -1841,7 +2108,7 @@ struct Reader {
       } catch (_e) { /* best effort */ }
       const target: number = Math.max(0, this.currentPage);
       this.layoutComplete = false; /* the count below is a window, not the era total */
-      const prog = await this.docOp(15, REFLOW_W, REFLOW_H, this.fontSize, String(target + 400));
+      const prog = await this.docOp(15, this.reflowW, this.reflowH, this.fontSize, String(target + 400));
       const n1: number = parseInt(prog === undefined ? '-1' : prog);
       tlog('bench_stage1', 'ms=' + (Date.now() - benchT0) + ' n1=' + n1 + ' from=' + target);
       if (isNaN(n1) || n1 < 0) {
@@ -1850,7 +2117,7 @@ struct Reader {
         if (handle2 !== undefined) {
           try {
             const css = `body{margin:${this.pageMargin}pt;line-height:${this.lineHeight.toFixed(2)}}`;
-            layoutDocument(handle2, REFLOW_W, REFLOW_H, this.fontSize, css);
+            layoutDocument(handle2, this.reflowW, this.reflowH, this.fontSize, css);
           } catch (e) {
             console.error('[Reader] Reflow layout failed');
           }
@@ -1926,7 +2193,7 @@ struct Reader {
   private accelPathOf(p: string): string {
     try {
       const st = fs.statSync(p);
-      const key: string = `${p}#${st.size}#${Math.floor(st.mtime)}#${this.fontSize}#${this.lineHeight.toFixed(2)}#${Math.round(this.pageMargin)}`;
+      const key: string = `${p}#${st.size}#${Math.floor(st.mtime)}#${this.fontSize}#${this.lineHeight.toFixed(2)}#${Math.round(this.pageMargin)}#${this.reflowW}x${this.reflowH}`;
       return getContext(this).cacheDir + '/accels/' + sha256Hex(key) + '.accel';
     } catch (e) {
       return '';
@@ -2005,7 +2272,7 @@ struct Reader {
     let total: number = this.totalPages;
     let requested: number = total + 400;
     while (gen === this.stageGen) {
-      const ns = await this.docOp(15, REFLOW_W, REFLOW_H, this.fontSize, String(requested));
+      const ns = await this.docOp(15, this.reflowW, this.reflowH, this.fontSize, String(requested));
       const n: number = parseInt(ns === undefined ? '-1' : ns);
       if (gen !== this.stageGen || isNaN(n) || n < 0 || n <= total) {
         break;
@@ -2223,6 +2490,7 @@ struct Reader {
     }
     this.saveProgress(index);
     this.refreshAnnotations();
+    this.refreshBmOnPage();
     /* Re-anchor active reading modes (TTS / RSVP) to the new page */
     if (this.showTts && !this.ttsStopped && !this.ttsAdvancing) {
       this.ttsAdvancing = true;
@@ -2309,6 +2577,7 @@ struct Reader {
       this.dataSource.setInvert(this.nightMode);
     }
     this.persistSettings();
+    tlog('night_mode', this.nightMode ? 'on' : 'off');
     console.info(`[Reader] Night mode: ${this.nightMode ? 'ON' : 'OFF'} (theme=${THEME_NAMES[this.theme]})`);
   }
 
@@ -2450,6 +2719,18 @@ struct Reader {
   }
 
   // ---- Bookmarks (C4) ----
+  /** 0.9.61: derive the 🔖 highlight from the current page's bookmark. */
+  private refreshBmOnPage(): void {
+    let on = false;
+    for (let i = 0; i < this.bookmarks.length; i++) {
+      if (this.bookmarks[i].page === this.currentPage) {
+        on = true;
+        break;
+      }
+    }
+    this.bmOnPage = on;
+  }
+
   private async toggleBookmark(): Promise<void> {
     const ctx = getContext(this);
     if (this.documentPath.length === 0) {
@@ -2467,11 +2748,13 @@ struct Reader {
       await removeBookmark(ctx, this.documentPath, this.currentPage);
       console.info(`[Reader] Bookmark removed at page ${this.currentPage + 1}`);
       tlog('bookmark_removed', 'page=' + (this.currentPage + 1));
+      promptAction.showToast({ message: $r('app.string.bm_removed') });
     } else {
       const ok = await addBookmark(ctx, this.documentPath, this.currentPage, '', this.layoutComplete ? this.totalPages : -1);
       if (ok) {
         console.info(`[Reader] Bookmark added at page ${this.currentPage + 1}`);
         tlog('bookmark_added', 'page=' + (this.currentPage + 1));
+        promptAction.showToast({ message: $r('app.string.bm_added') });
       }
     }
     await this.loadBookmarks();
@@ -2488,6 +2771,123 @@ struct Reader {
     this.loadAiNotes();
     console.info(`[Reader] Bookmarks loaded: ${this.bookmarks.length}`);
     tlog('bookmark_list_loaded', 'n=' + this.bookmarks.length);
+    this.refreshBmOnPage();
+  }
+
+  /* 0.9.62: meta line for the named-bookmark dialog (第 X / N 页). */
+  private bmPageMeta(): string {
+    const pages = this.layoutComplete ? this.totalPages : 0;
+    return pages > 0 ? `第 ${this.currentPage + 1} / ${pages} 页` : `第 ${this.currentPage + 1} 页`;
+  }
+
+  /* 0.9.62 (Android BookmarksAdapter parity): dialog rows — while searching,
+   * quick bookmarks are excluded (Android parity); sort order 0 newest-first /
+   * 1 oldest-first / 2 page asc / 3 page desc. */
+  private bmRows(): Bookmark[] {
+    const quick = this.L($r('app.string.fast_bookmark')).toLowerCase();
+    const query = this.bmSearch.trim().toLowerCase();
+    const rows: Bookmark[] = this.bookmarks.filter((bm: Bookmark): boolean => {
+      if (query.length === 0) {
+        return true;
+      }
+      const text = (bm.label.length > 0 ? bm.label : this.L($r('app.string.reader_bookmark'))).toLowerCase();
+      return text !== quick && text.includes(query);
+    });
+    if (this.bmSortOrder === 1) {
+      rows.sort((a: Bookmark, b: Bookmark): number => Date.parse(a.date) - Date.parse(b.date));
+    } else if (this.bmSortOrder === 2) {
+      rows.sort((a: Bookmark, b: Bookmark): number => a.page - b.page);
+    } else if (this.bmSortOrder === 3) {
+      rows.sort((a: Bookmark, b: Bookmark): number => b.page - a.page);
+    } else {
+      rows.sort((a: Bookmark, b: Bookmark): number => Date.parse(b.date) - Date.parse(a.date));
+    }
+    return rows;
+  }
+
+  /* 0.9.62 (Android TTSEngine.fastTTSBookmakr parity): the quick bookmark
+   * lands only when the page has none; the dialog closes either way. */
+  private async quickAddBookmark(): Promise<void> {
+    const ctx = getContext(this);
+    if (this.documentPath.length === 0) {
+      return;
+    }
+    const list = await getBookmarks(ctx, this.documentPath);
+    let found = false;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].page === this.currentPage) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      const ok = await addBookmark(ctx, this.documentPath, this.currentPage, this.L($r('app.string.fast_bookmark')), this.layoutComplete ? this.totalPages : -1);
+      if (ok) {
+        console.info(`[Reader] Quick bookmark added at page ${this.currentPage + 1}`);
+        tlog('bookmark_added', 'page=' + (this.currentPage + 1) + ' src=dialog');
+        promptAction.showToast({ message: `${this.L($r('app.string.fast_bookmark'))} — 第 ${this.currentPage + 1} 页` });
+      }
+    } else {
+      console.info('[Reader] Quick bookmark skipped: page already bookmarked');
+    }
+    await this.loadBookmarks();
+    this.showBmList = false;
+  }
+
+  /* 0.9.62 (Android ListBoxHelper.showAddDialog parity): named bookmark on
+   * the current page (the floating-bookmark checkbox has no HarmonyOS port). */
+  private async addNamedBookmark(): Promise<void> {
+    const ctx = getContext(this);
+    const name = this.bmAddName.trim();
+    if (this.documentPath.length === 0 || name.length === 0) {
+      promptAction.showToast({ message: $r('app.string.incorrect_value') });
+      return;
+    }
+    const ok = await addBookmark(ctx, this.documentPath, this.currentPage, name, this.layoutComplete ? this.totalPages : -1);
+    if (ok) {
+      console.info(`[Reader] Named bookmark added at page ${this.currentPage + 1}`);
+      tlog('bookmark_added', 'page=' + (this.currentPage + 1) + ' src=named');
+      promptAction.showToast({ message: $r('app.string.bm_added') });
+    }
+    this.bmAddName = '';
+    this.showBmAdd = false;
+    await this.loadBookmarks();
+  }
+
+  /* 0.9.62: per-row delete (Android BookmarksAdapter remove2 parity). */
+  private async deleteBm(bm: Bookmark): Promise<void> {
+    await removeBookmark(getContext(this), bm.path, bm.page);
+    console.info(`[Reader] Bookmark deleted at page ${bm.page + 1}`);
+    tlog('bookmark_removed', 'page=' + (bm.page + 1) + ' src=dialog');
+    await this.loadBookmarks();
+  }
+
+  /* 0.9.62 (Android ExtUtils.sendBookmarksTo parity): share the bookmark
+   * list as text via the system share sheet. */
+  private bmShare(): void {
+    try {
+      if (this.documentPath.length === 0) {
+        return;
+      }
+      const lines: string[] = [];
+      const rows = this.bmRows();
+      for (let i = 0; i < rows.length; i++) {
+        const label = rows[i].label.length > 0 ? rows[i].label : this.L($r('app.string.reader_bookmark'));
+        lines.push(`${rows[i].page + 1}: ${label}`);
+      }
+      const rec: systemShare.SharedRecord = {
+        utd: 'general.text',
+        content: this.docTitle + '\n' + lines.join('\n'),
+        title: this.docTitle
+      };
+      const data = new systemShare.SharedData(rec);
+      const controller = new systemShare.ShareController(data);
+      controller.show(getContext(this) as common.UIAbilityContext, {}).catch(() => {
+      });
+      console.info(`[Reader] Share bookmarks: ${lines.length} rows`);
+    } catch (e) {
+      console.error('[Reader] Share bookmarks failed: ' + JSON.stringify(e));
+    }
   }
 
   /* 0.9.23 (Android 10-09 parity): a bookmark's absolute page is a valid
@@ -2931,7 +3331,11 @@ struct Reader {
   }
 
   private setBrightness(level: number): void {
-    this.brightnessLevel = Math.max(1, Math.min(255, Math.round(level)));
+    if (this.useSystemBrightness) {
+      console.info('[Reader] Brightness: system-managed, skip override');
+      return;
+    }
+    this.brightnessLevel = Math.max(this.allowZeroBright ? 0 : 1, Math.min(255, Math.round(level)));
     try {
       brightness.setValue({ value: this.brightnessLevel });
       console.info(`[Reader] Brightness: ${this.brightnessLevel}`);
@@ -3623,22 +4027,28 @@ struct Reader {
   }
 
   private buildCss(): string {
-    const m = Math.round(this.pageMargin);
+    /* 0.9.59: 4-way page margins (Android dialog_reading_pref 页边距) */
+    const mt = Math.round(this.marginT);
+    const mb = Math.round(this.marginB);
+    const ml = Math.round(this.marginLeft);
+    const mr = Math.round(this.marginRight);
+    const ls = Math.round(this.letterSpacing);
     const alignNames: string[] = ['left', 'center', 'right', 'justify'];
     const fontFamilies: string[] = ['inherit', 'serif', 'sans-serif', 'monospace'];
+    const lsCss: string = ls > 0 ? ` letter-spacing: ${ls}px;` : '';
     let css = '';
     if (this.userFontPath.length > 0) {
       /* 0.9.33 P2-11: the engine resolves the font file itself
        * (fz_add_css_font_face falls back to fz_read_file on the raw src) */
       css += `@font-face { font-family: 'custom'; src: url('${this.userFontPath}'); }`;
-      css += ` body { margin: ${m}pt;`;
+      css += ` body { margin: ${mt}pt ${mr}pt ${mb}pt ${ml}pt;`;
       css += ` line-height: ${this.lineHeight.toFixed(2)};`;
-      css += ` text-align: ${alignNames[this.textAlign]};`;
+      css += ` text-align: ${alignNames[this.textAlign]};${lsCss}`;
       css += ` font-family: 'custom', serif;`;
     } else {
-      css += `body { margin: ${m}pt;`;
+      css += `body { margin: ${mt}pt ${mr}pt ${mb}pt ${ml}pt;`;
       css += ` line-height: ${this.lineHeight.toFixed(2)};`;
-      css += ` text-align: ${alignNames[this.textAlign]};`;
+      css += ` text-align: ${alignNames[this.textAlign]};${lsCss}`;
       css += ` font-family: ${fontFamilies[this.fontFamilyIdx]};`;
     }
     if (this.hyphenationEnabled) {
@@ -3659,11 +4069,14 @@ struct Reader {
         const fg: string = this.theme === 2 ? '#b0b0b0' : '#d0d0d0';
         css += `html { background-color: ${bg} !important; }`;
         css += `body { background-color: ${bg} !important; color: ${fg} !important; }`;
-        css += `a { color: #7aa2ff !important; }`;
+        css += this.linkColorNight.length > 0 ? ` a { color: ${this.linkColorNight} !important; }` : ` a { color: #7aa2ff !important; }`;
       } else if (this.theme === 3) {
         css += `html { background-color: #eaddc3 !important; }`;
         css += `body { background-color: #eaddc3 !important; color: #2a2118 !important; }`;
       }
+    }
+    if (this.linkColorDay.length > 0 && !this.nightMode && this.theme !== 3) {
+      css += ` a { color: ${this.linkColorDay} !important; }`;
     }
     return css;
   }
@@ -3678,12 +4091,12 @@ struct Reader {
       console.info(`[Reader] Typography applied: align=${this.textAlign} para=${this.paragraphSpacing} indent=${this.textIndent} dropcap=${this.dropCapEnabled} font=${this.fontFamilyIdx}`);
       let newTotal = -1;
       if (this.isRemote) {
-        const r = await this.docOp(3, REFLOW_W, REFLOW_H, this.fontSize, css);
+        const r = await this.docOp(3, this.reflowW, this.reflowH, this.fontSize, css);
         if (r !== undefined) {
           newTotal = parseInt(r, 10);
         }
       } else {
-        layoutDocument(h, REFLOW_W, REFLOW_H, this.fontSize, css);
+        layoutDocument(h, this.reflowW, this.reflowH, this.fontSize, css);
         /* L2: refresh page count after re-layout */
         newTotal = pageCount(h);
       }
@@ -3951,11 +4364,29 @@ struct Reader {
   }
 
   /** Round 9: labels for the unified tap-zone action codes (index = code). */
-  private zoneActionRes(): Array<Resource> {
+  /** Execute a tap-zone action. Round 9: unified action codes shared by all
+   *  zones (and by the volume keys): 0=prev 1=next 2=menu 3=toc 4=bookmark
+   *  5=brightness 6=fullscreen 7=none. */
+  /* ---- 0.9.59: 4-tab reader pref helpers ---- */
+
+  private edgeRatio(): number {
+    return this.tapEdgePercent >= 5 && this.tapEdgePercent <= 45 ? this.tapEdgePercent / 100 : 0.25;
+  }
+
+  private prefTabs(): Array<Resource> {
+    return [
+      $r('app.string.pf_visual'),
+      $r('app.string.pf_layout'),
+      $r('app.string.pf_status'),
+      $r('app.string.pf_controls')
+    ];
+  }
+
+  private zoneActionNames(): Array<Resource> {
     return [
       $r('app.string.action_prev_page'),
       $r('app.string.action_next_page'),
-      $r('app.string.reader_menu'),
+      $r('app.string.pf_a_bars'),
       $r('app.string.reader_contents'),
       $r('app.string.reader_bookmark'),
       $r('app.string.reader_brightness_n'),
@@ -3964,14 +4395,216 @@ struct Reader {
     ];
   }
 
-  /** Execute a tap-zone action. Round 9: unified action codes shared by all
-   *  zones (and by the volume keys): 0=prev 1=next 2=menu 3=toc 4=bookmark
-   *  5=brightness 6=fullscreen 7=none. */
-  private onTapZoneAction(action: number): void {
+  private actionName(i: number): string {
+    const arr: Array<Resource> = this.zoneActionNames();
+    return this.L(arr[Math.max(0, Math.min(arr.length - 1, i))]);
+  }
+
+  private orientName(): string {
+    if (this.scrOrient === 2) {
+      return this.L($r('app.string.orient_landscape'));
+    }
+    if (this.scrOrient === 3) {
+      return this.L($r('app.string.orient_portrait'));
+    }
+    return this.L($r('app.string.orient_system'));
+  }
+
+  private cycleOrientation(): void {
+    this.scrOrient = this.scrOrient === 0 ? 2 : (this.scrOrient === 2 ? 3 : 0);
+    this.persistSettings();
+    this.applyOrientationNow();
+    console.info(`[Reader] Screen orientation: ${this.scrOrient}`);
+  }
+
+  private applyOrientationNow(): void {
+    try {
+      window.getLastWindow(getContext(this)).then((win: window.Window) => {
+        const o: number = this.scrOrient;
+        const target = o === 2 ? window.Orientation.LANDSCAPE
+          : o === 3 ? window.Orientation.PORTRAIT
+            : window.Orientation.UNSPECIFIED;
+        win.setPreferredOrientation(target).catch((err: Error) => {
+          console.error('[Reader] setPreferredOrientation failed');
+        });
+      });
+    } catch (e) {
+      console.error('[Reader] orientation apply failed');
+    }
+  }
+
+  private restName(): string {
+    return this.restRemindMin === 0 ? this.L($r('app.string.pf_never')) : `${this.restRemindMin} min`;
+  }
+
+  private cycleRestReminder(): void {
+    const steps: number[] = [0, 15, 30, 60];
+    const idx: number = steps.indexOf(this.restRemindMin);
+    this.restRemindMin = steps[(idx + 1) % steps.length];
+    this.restartReminder();
+    this.persistSettings();
+  }
+
+  private restartReminder(): void {
+    if (this.reminderTimerId >= 0) {
+      clearTimeout(this.reminderTimerId);
+      this.reminderTimerId = -1;
+    }
+    if (this.restRemindMin > 0) {
+      const mins: number = this.restRemindMin;
+      this.reminderTimerId = setTimeout(() => {
+        try {
+          promptAction.showToast({ message: '已连续阅读 ' + mins + ' 分钟，建议休息一下' });
+        } catch (e) {
+          console.error('[Reader] reminder toast failed');
+        }
+        this.reminderTimerId = -1;
+      }, mins * 60000);
+    }
+  }
+
+  private doubleName(): string {
+    return this.doubleClickPref === 1 ? this.L($r('app.string.pf_crop_borders')) : this.L($r('app.string.pf_fit_page'));
+  }
+
+  private volKeyName(): string {
+    return this.volumeKeyAction === 0 ? this.L($r('app.string.pf_disabled')) : this.L($r('app.string.pf_enabled'));
+  }
+
+  private tapEdgeName(): string {
+    return `${this.tapEdgePercent}% ${this.L($r('app.string.pf_customize'))}`;
+  }
+
+  private cycleTapEdge(): void {
+    const steps: number[] = [10, 15, 20, 25, 30, 40];
+    const idx: number = steps.indexOf(this.tapEdgePercent);
+    this.tapEdgePercent = steps[(idx + 1) % steps.length];
+    this.persistSettings();
+  }
+
+  private progressScaleName(): string {
+    return this.progressScale === 1 ? this.L($r('app.string.pf_percent')) : this.L($r('app.string.pf_number'));
+  }
+
+  private chapterFmtName(): string {
+    return this.chapterFmtIdx === 1 ? '第2章 – 3 / 20' : 'Chapter II – 3 / 20';
+  }
+
+  private alignName(): string {
+    const names: Array<Resource> = [$r('app.string.pf_align_left'), $r('app.string.pf_align_center'), $r('app.string.pf_align_right'), $r('app.string.pf_align_justify')];
+    return this.L(names[Math.max(0, Math.min(3, this.textAlign))]);
+  }
+
+  private famName(idx: number): string {
+    const names: Array<Resource> = [$r('app.string.pf_font_default'), $r('app.string.pf_font_serif'), $r('app.string.pf_font_sans'), $r('app.string.pf_font_mono')];
+    return this.L(names[Math.max(0, Math.min(3, idx))]);
+  }
+
+  private fontDisplayName(): string {
+    if (this.userFontName.length > 0) {
+      return this.userFontName;
+    }
+    return this.famName(this.fontFamilyIdx);
+  }
+
+  private styleName(): string {
+    if (this.styleMode === 0) {
+      return this.L($r('app.string.pf_style_doc'));
+    }
+    if (this.styleMode === 1) {
+      return this.L($r('app.string.pf_style_user'));
+    }
+    return this.L($r('app.string.pf_style_doc_user'));
+  }
+
+  private hyphenLangName(): string {
+    return this.hyphenLangDefault ? this.L($r('app.string.pf_default_value')) : this.L($r('app.string.pf_lang_zh'));
+  }
+
+  private resetTab0(): void {
+    this.fontSize = 16;
+    this.lineHeight = 1.6;
+    this.letterSpacing = 0;
+    this.paragraphSpacing = 8;
+    this.textIndent = 2;
+    this.marginT = 9;
+    this.marginB = 6;
+    this.marginLeft = 10;
+    this.marginRight = 10;
+    this.textAlign = 0;
+    this.hyphenationEnabled = false;
+    this.hyphenLangDefault = false;
+    this.imageZoomScale = 2.0;
+    this.styleMode = 2;
+    this.userCssName = '';
+    this.linkColorDay = '';
+    this.linkColorNight = '';
+    this.colorPickTarget = 0;
+    this.applyReflow();
+  }
+
+  private resetTab1(): void {
+    this.tapEdgePercent = 25;
+    this.restRemindMin = 0;
+    this.restartReminder();
+    this.doubleClickPref = 0;
+    this.autoScrollSpeed = 2;
+    this.autoOffMinutes = 5;
+    this.antialiasLevel = 8;
+    this.dropCapEnabled = false;
+    this.mirrorMode = false;
+    this.allowTextSelection = true;
+    this.perCharSelect = false;
+    this.edgeBrightness = true;
+    this.allowZeroBright = false;
+    this.dayImageReplace = false;
+    this.amoledEnhance = false;
+    this.loopPaging = false;
+    this.zoomLockedPages = true;
+    this.backConfirmClose = false;
+    this.selectionVibrate = true;
+    this.decodeThreads = 10;
+    this.drawThreads = 5;
+    this.persistSettings();
+  }
+
+  /* 0.9.59: 返回手势关闭书籍时需确认 (排版选项; Android showTheBookCloseDialog) */
+  onBackPress(): boolean {
+    if (!this.backConfirmClose) {
+      return false;
+    }
+    AlertDialog.show({
+      title: this.L($r('app.string.pf_close_book')),
+      message: this.L($r('app.string.pf_back_confirm')),
+      primaryButton: {
+        value: this.L($r('app.string.common_cancel')),
+        action: (): void => {
+        }
+      },
+      secondaryButton: {
+        value: this.L($r('app.string.pf_confirm')),
+        action: (): void => {
+          router.back();
+        }
+      }
+    });
+    return true;
+  }
+
+  private onTapZoneAction(action: number, fromVolume: boolean = false): void {
+    /* 0.9.55: locked books ignore TOUCH tap zones; the hardware volume keys
+     * still turn pages (Android isLocked semantics; SM-04/FN-02) */
+    if (this.inputLocked && !fromVolume) {
+      promptAction.showToast({ message: $r('app.string.reader_locked') });
+      return;
+    }
     if (action === 0) {
-      /* previous page */
+      /* previous page (0.9.59: 循环翻页 wraps at the ends) */
       if (this.currentPage > 0) {
         this.currentPage = this.currentPage - 1;
+        this.onPageChanged(this.currentPage);
+      } else if (this.loopPaging && this.totalPages > 1) {
+        this.currentPage = this.totalPages - 1;
         this.onPageChanged(this.currentPage);
       }
     } else if (action === 1) {
@@ -3979,9 +4612,14 @@ struct Reader {
       if (this.totalPages > 0 && this.currentPage < this.totalPages - 1) {
         this.currentPage = this.currentPage + 1;
         this.onPageChanged(this.currentPage);
+      } else if (this.loopPaging && this.totalPages > 1) {
+        this.currentPage = 0;
+        this.onPageChanged(this.currentPage);
       }
     } else if (action === 2) {
-      this.showMenu = !this.showMenu;
+      /* 0.9.59: center tap shows/hides the top+bottom bars (Android hideShow) */
+      this.barsVisible = !this.barsVisible;
+      console.info(`[Reader] Bars toggled: ${this.barsVisible}`);
     } else if (action === 3) {
       this.showToc = true;
     } else if (action === 4) {
@@ -4007,8 +4645,10 @@ struct Reader {
     return this.showJump || this.showPwd || this.showToc || this.showBookmarks
       || this.showMenu || this.showThumbs || this.showTrans || this.showTransPanel
       || this.showExportDialog || this.showAnnPanel || this.showSearch
-      || this.showSelNoteInput || this.showFileInfo || this.showGestureConfig
-      || this.showTextReplace || this.showTypographyPanel;
+      || this.showSelNoteInput || this.showFileInfo || this.showPref
+      || this.showTextReplace || this.showBookMenu || this.showNoteEdit
+      || this.showPlPick || this.showAiIntro
+      || this.showBmList || this.showBmAdd || this.showBmSort;
   }
 
   private onVolumeKey(keyCode: number): boolean {
@@ -4036,8 +4676,10 @@ struct Reader {
       }
       return true;
     }
-    /* page turn (default) */
-    this.onTapZoneAction(volUp ? 0 : 1);
+    /* page turn (default) — bypasses the touch lock (hardware keys);
+     * 0.9.59: 反转键位 swaps up/down */
+    const up: boolean = this.invertVolume ? !volUp : volUp;
+    this.onTapZoneAction(up ? 0 : 1, true);
     console.info(`[Reader] Volume key: ${volUp ? 'prev' : 'next'} page`);
     return true;
   }
@@ -4114,74 +4756,82 @@ struct Reader {
     }, 1500);
   }
 
-  private openFileInfo(): void {
+  private async openFileInfo(): Promise<void> {
+    const rows: FiRow[] = [];
     try {
-      const parts: string[] = [];
-      parts.push(`文件名: ${this.docTitle}`);
-
-      if (this.isRemote) {
-        /* remote:// docs: show the remote URI instead of stat'ing a local file */
-        parts.push(`来源: 远程（在线缓存阅读）`);
-        parts.push(`路径: ${this.prettyRemoteUri(this.remoteUri)}`);
-      }
-
-      /* Try to get document info via NAPI (handle lives in dataSource) */
+      /* 0.9.61: structured file info (Android FileInformationDialog parity) */
+      const meta: Record<string, string> = {};
       const h: ESObject | undefined = this.dataSource.getDocHandle();
       if (h !== undefined) {
         if (this.isRemote) {
-          this.docOp(8).then((j: string | undefined) => {
+          try {
+            const j = await this.docOp(8);
             if (j !== undefined) {
-              try {
-                const info = JSON.parse(j) as Record<string, string>;
-                if (info['title'] && info['title'].length > 0) {
-                  parts.push(`标题: ${info['title']}`);
-                }
-                if (info['author'] && info['author'].length > 0) {
-                  parts.push(`作者: ${info['author']}`);
-                }
-              } catch (_e) { /* ignore */ }
-              this.fileInfoText = parts.join('\n');
+              const info = JSON.parse(j) as Record<string, string>;
+              meta['title'] = info['title'] !== undefined ? String(info['title']) : '';
+              meta['author'] = info['author'] !== undefined ? String(info['author']) : '';
+              meta['subject'] = info['subject'] !== undefined ? String(info['subject']) : '';
+              meta['producer'] = info['producer'] !== undefined ? String(info['producer']) : '';
+              meta['creationDate'] = info['creationDate'] !== undefined ? String(info['creationDate']) : '';
             }
-          });
+          } catch (_e) { /* ignore */ }
         } else {
           try {
             const info: DocumentInfo = getDocumentInfo(h);
-            if (info.title && info.title.length > 0) {
-              parts.push(`标题: ${info.title}`);
-            }
-            if (info.author && info.author.length > 0) {
-              parts.push(`作者: ${info.author}`);
-            }
-            if (info.producer && info.producer.length > 0) {
-              parts.push(`生成器: ${info.producer}`);
-            }
-          } catch (_e) {}
+            meta['title'] = info.title !== undefined ? info.title : '';
+            meta['author'] = info.author !== undefined ? info.author : '';
+            meta['subject'] = info.subject !== undefined ? info.subject : '';
+            meta['producer'] = info.producer !== undefined ? info.producer : '';
+            meta['creationDate'] = info.creationDate !== undefined ? info.creationDate : '';
+          } catch (_e) { /* ignore */ }
         }
       }
-
-      parts.push(`页数: ${this.totalPages > 0 ? this.totalPages + ' 页' : this.L($r('app.string.common_unknown'))}`);
-      parts.push(`当前页: p${this.currentPage + 1}`);
-
-      /* File size */
-      if (!this.isRemote) {
+      const cd = meta['creationDate'] || '';
+      const yi = cd.search(/\d{4}/);
+      const year = yi >= 0 ? cd.substring(yi, yi + 4) : '';
+      rows.push({ label: this.L($r('app.string.fi_label_title')), value: meta['title'] || this.docTitle });
+      rows.push({ label: this.L($r('app.string.fi_label_author')), value: meta['author'] });
+      rows.push({ label: this.L($r('app.string.fi_label_subject')), value: meta['subject'] });
+      rows.push({ label: this.L($r('app.string.fi_label_year')), value: year });
+      rows.push({ label: this.L($r('app.string.fi_label_publisher')), value: meta['producer'] });
+      rows.push({ label: this.L($r('app.string.fi_label_isbn')), value: '' });
+      if (this.isRemote) {
+        rows.push({ label: this.L($r('app.string.fi_remote_source')), value: this.prettyRemoteUri(this.remoteUri) });
+      } else {
         try {
           const stat = fs.statSync(this.documentPath);
-          const sizeKB = Math.round(stat.size / 1024);
-          parts.push(`大小: ${sizeKB} KB`);
-        } catch (_e) {}
-      }
-
-      /* Format (from extension) */
-      if (!this.isRemote) {
+          rows.push({ label: this.L($r('app.string.fi_label_size')), value: Math.round(stat.size / 1024) + ' KB' });
+        } catch (_e) { /* ignore */ }
         const dotIdx = this.documentPath.lastIndexOf('.');
         const ext = dotIdx >= 0 ? this.documentPath.substring(dotIdx + 1).toUpperCase() : 'UNKNOWN';
-        parts.push(`格式: ${ext}`);
+        rows.push({ label: this.L($r('app.string.fi_label_format')), value: ext });
       }
-
-      this.fileInfoText = parts.join('\n');
+      rows.push({ label: this.L($r('app.string.fi_label_pages')), value: this.totalPages > 0 ? String(this.totalPages) : this.L($r('app.string.common_unknown')) });
+      this.fiRows = rows;
       console.info(`[Reader] File info generated for ${this.docTitle}`);
     } catch (e) {
-      this.fileInfoText = this.L($r('app.string.info_failed'));
+      this.fiRows = [];
+    }
+    /* cover (Android dialog_file_info shows the cover): prefer the shelf
+     * cover PNG, fall back to rendering page 0 */
+    this.fiCoverPath = '';
+    this.fiCover = undefined;
+    try {
+      const rec: RecentBook | undefined = await getRecentBookForPath(getContext(this), this.logicalPath.length > 0 ? this.logicalPath : this.documentPath);
+      if (rec !== undefined && rec.coverPath.length > 0) {
+        this.fiCoverPath = rec.coverPath;
+      }
+    } catch (_e) { /* ignore */ }
+    if (this.fiCoverPath.length === 0) {
+      try {
+        const h2: ESObject | undefined = this.dataSource.getDocHandle();
+        if (h2 !== undefined) {
+          const res: RenderResult = await renderPageAsync(h2, 0, { zoom: 0.18 });
+          this.fiCover = await image.createPixelMap(res.data, { size: { width: res.width, height: res.height } });
+        }
+      } catch (_e) {
+        this.fiCover = undefined;
+      }
     }
   }
 
@@ -4210,6 +4860,190 @@ struct Reader {
         promptAction.showToast({ message: msg });
         this.showExportDialog = false;
         this.showBookmarks = false;
+      }
+    });
+  }
+
+  /* ===== 0.9.60: Android ShareDialog/NoteEditDialog parity ===== */
+
+  /** Android NoteEditDialog parity: open the note editor prefilled with the
+   * current page's bookmark label (the note text is the bookmark label). */
+  private openNoteEdit(): void {
+    this.noteEditText = '';
+    getBookmarks(getContext(this), this.documentPath).then((list: Bookmark[]) => {
+      for (let i = 0; i < list.length; i++) {
+        if (list[i].page === this.currentPage) {
+          this.noteEditText = list[i].label;
+          break;
+        }
+      }
+    });
+    this.showNoteEdit = true;
+    console.info(`[Reader] Note editor opened on page ${this.currentPage + 1}`);
+  }
+
+  /** Save the typed note as/into the bookmark of the current page. */
+  private async saveNoteEdit(): Promise<void> {
+    const txt: string = this.noteEditText.trim();
+    if (txt.length === 0) {
+      promptAction.showToast({ message: $r('app.string.incorrect_value') });
+      return;
+    }
+    const ctx = getContext(this);
+    try {
+      const all: Bookmark[] = await exportBookmarks(ctx);
+      let hit = -1;
+      for (let i = 0; i < all.length; i++) {
+        if (all[i].path === this.documentPath && all[i].page === this.currentPage) {
+          hit = i;
+          break;
+        }
+      }
+      if (hit >= 0) {
+        const b: Bookmark = all[hit];
+        const updated: Bookmark = {
+          path: b.path,
+          page: b.page,
+          label: txt,
+          date: b.date,
+          pgs: b.pgs,
+          isAiNote: b.isAiNote,
+          aiAnswer: b.aiAnswer
+        };
+        all[hit] = updated;
+        await replaceBookmarks(ctx, all);
+        console.info(`[Reader] Note updated on page ${this.currentPage + 1}`);
+      } else {
+        await addBookmark(ctx, this.documentPath, this.currentPage, txt, this.layoutComplete ? this.totalPages : -1);
+        tlog('bookmark_added', 'page=' + (this.currentPage + 1));
+      }
+      tlog('note_saved', 'page=' + (this.currentPage + 1));
+      promptAction.showToast({ message: $r('app.string.note_saved') });
+      this.showNoteEdit = false;
+      this.loadBookmarks();
+    } catch (e) {
+      console.error('[Reader] Note save failed: ' + JSON.stringify(e));
+    }
+  }
+
+  /** Meta line of the note editor: date · 第 X / N 页 (Android noteEditMeta). */
+  private noteMetaLine(): string {
+    const d = new Date();
+    const p = (n: number): string => (n < 10 ? '0' + n : '' + n);
+    const dateStr = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    const pages = this.layoutComplete ? this.totalPages : 0;
+    const pagePart = pages > 0 ? `第 ${this.currentPage + 1} / ${pages} 页` : '';
+    return pagePart.length > 0 ? `${dateStr} · ${pagePart}` : dateStr;
+  }
+
+  /** Android ExtUtils.sendFileTo parity: hand the book to the system share
+   * sheet (sandbox files cannot leave the app as raw URIs, so the record
+   * carries name + path as text). */
+  private sendBookFile(): void {
+    try {
+      if (this.documentPath.length === 0) {
+        return;
+      }
+      const rec: systemShare.SharedRecord = {
+        utd: 'general.text',
+        content: this.docTitle + '\n' + this.documentPath,
+        title: this.docTitle
+      };
+      const data = new systemShare.SharedData(rec);
+      const controller = new systemShare.ShareController(data);
+      controller.show(getContext(this) as common.UIAbilityContext, {}).catch(() => {
+      });
+      console.info(`[Reader] Send file via share sheet: ${this.docTitle}`);
+    } catch (e) {
+      console.error('[Reader] Send file failed: ' + JSON.stringify(e));
+    }
+  }
+
+  /** Android DialogsPlaylist parity: playlist picker for the current book. */
+  private openPlPick(): void {
+    const metas: PlaylistMeta[] = getAllPlaylists(getContext(this));
+    const names: string[] = [];
+    for (let i = 0; i < metas.length; i++) {
+      names.push(metas[i].name);
+    }
+    this.plNames = names;
+    this.plNewName = '';
+    this.showPlPick = true;
+  }
+
+  private plAdd(name: string): void {
+    const n = name.trim();
+    if (n.length === 0) {
+      return;
+    }
+    const ok: boolean = addToPlaylist(getContext(this), n, this.documentPath);
+    promptAction.showToast({ message: ok ? $r('app.string.bm_pl_added') : $r('app.string.bm_pl_exists') });
+    if (ok) {
+      this.showPlPick = false;
+    }
+  }
+
+  private plCreateAndAdd(): void {
+    const name: string = this.plNewName.trim();
+    if (name.length === 0) {
+      promptAction.showToast({ message: $r('app.string.incorrect_value') });
+      return;
+    }
+    createPlaylist(getContext(this), name);
+    this.plAdd(name);
+  }
+
+  /** Android ShareDialog.showAiIntro parity: AI book intro (Pro). */
+  private startAiIntro(): void {
+    if (this.aiIntroBusy) {
+      return;
+    }
+    loadAiConfig(getContext(this)).then((c: AiConfig) => {
+      this.aiCfg = c;
+      if (!aiConfigReady(this.aiCfg)) {
+        promptAction.showToast({ message: $r('app.string.ai_not_configured') });
+        return;
+      }
+      this.aiIntroBusy = true;
+      this.aiIntroText = this.L($r('app.string.ai_intro_saving'));
+      this.showAiIntro = true;
+      this.pageText(0).then((t: string) => {
+        const head: string = t.length > 800 ? t.substring(0, 800) : t;
+        const msgs: AiMessage[] = [
+          { role: 'user', content: '请根据以下书籍信息写一段简介，不需要思考，直接输出回答：\n书名：' + this.docTitle + '\n正文开头：\n' + head }
+        ];
+        chatCompletion(this.aiCfg, msgs, 1024).then((reply: string) => {
+          this.aiIntroText = reply;
+          this.aiIntroBusy = false;
+        }).catch(() => {
+          this.aiIntroText = this.L($r('app.string.common_save_failed'));
+          this.aiIntroBusy = false;
+        });
+      }).catch(() => {
+        this.aiIntroText = this.L($r('app.string.common_save_failed'));
+        this.aiIntroBusy = false;
+      });
+    });
+  }
+
+  /** 保存到笔记 of the AI intro dialog (AiNote kind=AI简介). */
+  private saveAiIntroNote(): void {
+    if (this.aiIntroText.length === 0 || this.aiIntroBusy) {
+      return;
+    }
+    const n: AiNote = {
+      path: this.documentPath,
+      title: this.docTitle,
+      page: 0,
+      date: new Date().toISOString(),
+      kind: 'AI简介',
+      text: this.aiIntroText
+    };
+    addNote(getContext(this), n).then((ok: boolean) => {
+      promptAction.showToast({ message: ok ? $r('app.string.trans_saved') : $r('app.string.common_save_failed') });
+      if (ok) {
+        this.loadAiNotes();
+        this.showAiIntro = false;
       }
     });
   }
@@ -4273,7 +5107,7 @@ struct Reader {
         if (this.isReflow) {
           try {
             const css = `body{margin:${this.pageMargin}pt;line-height:${this.lineHeight.toFixed(2)}}`;
-            layoutDocument(handle, REFLOW_W, REFLOW_H, this.fontSize, css);
+            layoutDocument(handle, this.reflowW, this.reflowH, this.fontSize, css);
           } catch (e) {
             console.error('[Reader] swapDoc reflow layout failed');
           }
@@ -5149,193 +5983,1241 @@ struct Reader {
     }
   }
 
-  build() {
-    Stack({ alignContent: Alignment.TopStart }) {
-      /* Main content area */
+  /* ---- 0.9.59: 4-tab reader preference dialog (偏好) ---- */
+
+  @Builder
+  prefLinkRow(label: Resource, getValue: () => string, onTap: () => void) {
+    Row() {
+      Text(label).fontSize(13).fontColor('#333').layoutWeight(1).maxLines(2)
+      Text(getValue()).fontSize(13).fontColor('#1a6aa8').textAlign(TextAlign.End)
+        .constraintSize({ maxWidth: '58%' })
+        .onClick(() => {
+          onTap();
+        })
+    }
+    .width('100%').height(34)
+  }
+
+  @Builder
+  prefCheckRow(label: Resource, get: () => boolean, onTap: () => void) {
+    Row({ space: 8 }) {
+      Text(get() ? '☑' : '☐')
+        .fontSize(17).fontColor(get() ? '#1a6aa8' : '#999999')
+        .onClick(() => {
+          onTap();
+        })
+      Text(label).fontSize(13).fontColor('#333').layoutWeight(1)
+        .onClick(() => {
+          onTap();
+        })
+    }
+    .width('100%').height(32)
+  }
+
+  @Builder
+  prefCheckRowSub(label: Resource, get: () => boolean, onTap: () => void) {
+    Row({ space: 8 }) {
+      Text(get() ? '☑' : '☐')
+        .fontSize(17).fontColor(get() ? '#1a6aa8' : '#999999')
+        .onClick(() => {
+          onTap();
+        })
+      Text(label).fontSize(13).fontColor('#555').layoutWeight(1)
+        .onClick(() => {
+          onTap();
+        })
+    }
+    .width('100%').height(32)
+    .padding({ left: 24 })
+  }
+
+  @Builder
+  prefSliderRow(label: Resource, min: number, max: number, step: number, get: () => number, set: (v: number) => void, suffix: string) {
+    Row({ space: 6 }) {
+      Text(label).fontSize(13).fontColor('#333').layoutWeight(1).maxLines(2)
+      Text(`${get()}${suffix}`)
+        .fontSize(12).fontColor('#555').width(42).textAlign(TextAlign.Center)
+      Slider({ value: get(), min: min, max: max, step: step })
+        .layoutWeight(1).height(24)
+        .selectedColor('#3949AB').trackColor('#c5cae9').blockColor('#3949AB')
+        .onChange((value: number, mode: SliderChangeMode) => {
+          if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+            set(Math.max(min, Math.min(max, value)));
+          }
+        })
+      Text('-')
+        .fontSize(16).fontColor('#333')
+        .width(30).height(28).textAlign(TextAlign.Center)
+        .backgroundColor('#e0e0e0').borderRadius(14)
+        .onClick(() => {
+          set(Math.max(min, get() - step));
+        })
+      Text('+')
+        .fontSize(16).fontColor('#333')
+        .width(30).height(28).textAlign(TextAlign.Center)
+        .backgroundColor('#e0e0e0').borderRadius(14)
+        .onClick(() => {
+          set(Math.min(max, get() + step));
+        })
+    }
+    .width('100%').height(36)
+  }
+
+  @Builder
+  prefColorRow(label: Resource, target: number, get: () => string) {
+    Row({ space: 8 }) {
+      Text(label).fontSize(13).fontColor('#333').layoutWeight(1)
+      Text('')
+        .width(36).height(20).borderRadius(3)
+        .backgroundColor(get().length > 0 ? get() : '#8a8a8a')
+        .onClick(() => {
+          this.colorPickTarget = this.colorPickTarget === target ? 0 : target;
+        })
+    }
+    .width('100%').height(34)
+    if (this.colorPickTarget === target) {
+      Row({ space: 8 }) {
+        ForEach(['', '#1a237e', '#0d47a1', '#b71c1c', '#1565c0', '#00695c', '#37474f'], (c: string) => {
+          Text(c.length === 0 ? this.L($r('app.string.pf_default_value')) : '')
+            .fontSize(10).fontColor('#333')
+            .width(32).height(22).textAlign(TextAlign.Center)
+            .borderRadius(3)
+            .backgroundColor(c.length === 0 ? '#eeeeee' : c)
+            .onClick(() => {
+              this.applyColorPick(target, c);
+            })
+        }, (c: string) => `PC${c}`)
+      }
+      .width('100%')
+      .padding({ left: 24, top: 4, bottom: 4 })
+    }
+  }
+
+  private applyColorPick(target: number, c: string): void {
+    if (target === 1) {
+      this.linkColorDay = c;
+    } else if (target === 2) {
+      this.linkColorNight = c;
+    } else if (target === 3) {
+      this.statusColorDay = c;
+    }
+    this.colorPickTarget = 0;
+    this.applyTypography();
+    this.persistSettings();
+  }
+
+  /* 0.9.59: reader preference dialog — 4 tabs (可视选项/排版选项/状态栏/控制选项,
+   * Android dialog_reading_pref / dialog_adv_preferences / dialog_status_bar_settings
+   * / ControlOptionsDialog parity; ⚙ opens it, content reads state inline so
+   * every row refreshes live) */
+  @Builder
+  buildPrefDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showPref = false;
+        })
+
       Column() {
-        // Top bar - single row (Android hr10/11): title + TOC/brightness/fullscreen/AI/settings/close
         Row() {
-          Column({ space: 1 }) {
-            Text(this.docTitle.length > 16 ? this.docTitle.substring(0, 16) + '…' : (this.docTitle.length > 0 ? this.docTitle : ''))
-              .fontSize(14).fontColor(Color.White).maxLines(1).fontWeight(FontWeight.Medium)
-            Text(this.totalPages > 0 ? `${this.currentPage + 1}/${this.totalPages}` : '...')
-              .fontSize(10).fontColor('#c5cae9')
-          }
-          .alignItems(HorizontalAlign.Start)
-          .layoutWeight(1)
-
-          if (this.showTopBarInfo) {
-            Row({ space: 4 }) {
-              Image($r('app.media.ic_clock'))
-                .width(14).height(14).fillColor('#c5cae9')
-              Text(this.topClock)
-                .fontSize(11).fontColor('#c5cae9')
-              Image($r('app.media.ic_battery'))
-                .width(14).height(14).fillColor('#c5cae9').margin({ left: 8 })
-              Text(this.topBattery)
-                .fontSize(11).fontColor('#c5cae9')
-            }
-            .margin({ right: 12 })
-          }
-
-          Image($r('app.media.ic_page_fit'))
-            .width(22).height(22).fillColor(Color.White).margin({ right: 14 })
-            .onClick(() => {
-              this.jumpInput = String(this.currentPage + 1);
-              this.showJump = true;
-              console.info('[Reader] Jump-to-page dialog opened (top bar)');
-            })
-          Image($r('app.media.ic_headphones'))
-            .width(22).height(22).fillColor(Color.White).margin({ right: 14 })
-            .onClick(() => {
-              this.openTtsPanel();
-            })
-          Image($r('app.media.ic_sliders'))
-            .width(22).height(22).fillColor(this.showToolRow ? '#ffd54f' : Color.White).margin({ right: 14 })
-            .onClick(() => {
-              this.showToolRow = !this.showToolRow;
-              console.info(`[Reader] Tool row toggled: ${this.showToolRow}`);
-            })
-          Image($r('app.media.ic_toc'))
-            .width(22).height(22).fillColor(Color.White).margin({ right: 14 })
-            .onClick(() => {
-              this.showToc = true;
-              console.info('[Reader] TOC opened (top bar)');
-            })
-          Image($r('app.media.ic_brightness'))
-            .width(22).height(22).fillColor(Color.White).margin({ right: 14 })
-            .onClick(() => {
-              this.brightnessLevel = this.brightnessLevel > 200 ? 64 : this.brightnessLevel + 32;
-              this.setBrightness(this.brightnessLevel);
-            })
-          Image($r('app.media.ic_fullscreen'))
-            .width(22).height(22).fillColor(Color.White).margin({ right: 14 })
-            .onClick(() => {
-              this.toggleFullscreen();
-            })
-          Image($r('app.media.ic_ai'))
-            .width(22).height(22).fillColor(Color.White).margin({ right: 14 })
-            .id('reader_btn_ai')
-            .onClick(() => {
-              this.openTransDialog();
-            })
-          Image($r('app.media.ic_settings'))
-            .width(22).height(22).fillColor(Color.White).margin({ right: 14 })
-            .onClick(() => {
-              this.showMenu = !this.showMenu;
-              console.info(`[Reader] Menu toggled (top bar): ${this.showMenu}`);
-            })
+          Text($r('app.string.reader_settings'))
+            .fontSize(16).fontWeight(FontWeight.Bold).fontColor(Color.White).layoutWeight(1)
           Image($r('app.media.ic_close'))
-            .width(22).height(22).fillColor(Color.White)
+            .width(20).height(20).fillColor(Color.White)
+            .id('pf_close')
             .onClick(() => {
-              router.back();
-              console.info('[Reader] Close reader');
+              this.showPref = false;
             })
         }
-        .width('100%').height(46)
-        .padding({ left: 12, right: 12 })
-        .backgroundColor(this.barBg())
+        .width('100%').height(44)
+        .padding({ left: 14, right: 12 })
+        .backgroundColor('#3949AB')
 
-        /* Round 6: thin reading-progress line under the title bar (Android
-         * ProgressDraw). 0.9.19: the track now always shows plus chapter
-         * ticks at TOC page positions (Android ProgressDraw parity). */
-        Stack({ alignContent: Alignment.Start }) {
-          Progress({ value: this.totalPages > 0 ? this.currentPage + 1 : 0, total: this.totalPages > 0 ? this.totalPages : 1, type: ProgressType.Linear })
-            .width('100%').height(6)
-            .style({ strokeWidth: 2 })
-            .color(Color.White)
-            .backgroundColor('#5c6bc0')
-          if (this.totalPages > 0 && this.tocEntries.length > 1 && this.tocEntries.length <= 120) {
-            ForEach(this.tocEntries, (t: TocEntry) => {
-              Row()
-                .width(1).height(6)
-                .backgroundColor('#59FFFFFF')
-                .position({ x: `${Math.min(100, Math.round(t.page * 100 / this.totalPages))}%`, y: 0 })
-            }, (t: TocEntry) => `tick_${t.page}_${t.title}`)
-          }
-        }
-        .width('100%').height(6)
-
-        /* Round 6: secondary quick-buttons row (Android document_title_buttons) */
-        if (this.showToolRow) {
-          Row({ space: 12 }) {
-            Image($r('app.media.ic_zoom_out'))
-              .width(18).height(18).fillColor(Color.White)
-              .onClick(() => this.zoomOut())
-            Image($r('app.media.ic_zoom_in'))
-              .width(18).height(18).fillColor(Color.White)
-              .onClick(() => this.zoomIn())
-            Image($r('app.media.ic_brightness'))
-              .width(16).height(16).fillColor(Color.White)
-            Slider({ value: this.brightnessLevel, min: 1, max: 255, step: 1 })
-              .layoutWeight(1).height(22)
-              .selectedColor(Color.White).trackColor('#5c6bc0').blockColor(Color.White)
-              .onChange((value: number, mode: SliderChangeMode) => {
-                if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                  this.brightnessLevel = Math.round(value);
-                  this.setBrightness(this.brightnessLevel);
-                }
-              })
-            Image($r('app.media.ic_circle_half'))
-              .width(16).height(16).fillColor(Color.White)
-            Slider({ value: this.contrastLevel, min: 0, max: 100, step: 5 })
-              .layoutWeight(1).height(22)
-              .selectedColor(Color.White).trackColor('#5c6bc0').blockColor(Color.White)
-              .onChange((value: number, mode: SliderChangeMode) => {
-                if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                  this.contrastLevel = Math.round(value);
-                }
-              })
-            Image($r('app.media.ic_page_split'))
-              .width(18).height(18).fillColor(this.pageSplit ? '#ffd54f' : Color.White)
+        Row() {
+          ForEach(this.prefTabs(), (t: Resource, idx: number) => {
+            Text(t)
+              .fontSize(13)
+              .fontColor(this.prefTab === idx ? '#1a237e' : Color.White)
+              .fontWeight(this.prefTab === idx ? FontWeight.Medium : FontWeight.Normal)
+              .textAlign(TextAlign.Center)
+              .layoutWeight(1).height(38)
+              .backgroundColor(this.prefTab === idx ? Color.White : '#00000000')
               .onClick(() => {
-                this.pageSplit = !this.pageSplit;
-                console.info(`[Reader] Page split toggled (tool row): ${this.pageSplit}`);
+                this.prefTab = idx;
               })
+          }, (t: Resource, idx: number) => `PT${idx}_${this.prefTab}`)
+        }
+        .width('100%').height(38)
+        .backgroundColor('#3949AB')
+
+        Scroll() {
+          Column({ space: 12 }) {
+            if (this.prefTab === 0) {
+              this.prefLinkRow($r('app.string.pf_orientation'), (): string => { return this.orientName(); }, (): void => { this.cycleOrientation(); })
+              /* 字体大小 (dedicated row: CI id hooks on the -/+ buttons) */
+              Row({ space: 6 }) {
+                Text($r('app.string.set_font_size')).fontSize(13).fontColor('#333').layoutWeight(1)
+                Text(`${this.fontSize}pt`)
+                  .fontSize(12).fontColor('#555').width(48).textAlign(TextAlign.Center)
+                Slider({ value: this.fontSize, min: 10, max: 28, step: 1 })
+                  .layoutWeight(1).height(24)
+                  .selectedColor('#3949AB').trackColor('#c5cae9').blockColor('#3949AB')
+                  .onChange((value: number, mode: SliderChangeMode) => {
+                    if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                      this.fontSize = Math.round(value);
+                      this.applyReflow();
+                    }
+                  })
+                Text('-')
+                  .fontSize(16).fontColor('#333')
+                  .width(30).height(28).textAlign(TextAlign.Center)
+                  .backgroundColor('#e0e0e0').borderRadius(14)
+                  .id('pf_font_minus')
+                  .onClick(() => {
+                    this.fontSize = Math.max(10, this.fontSize - 1);
+                    this.applyReflow();
+                  })
+                Text('+')
+                  .fontSize(16).fontColor('#333')
+                  .width(30).height(28).textAlign(TextAlign.Center)
+                  .backgroundColor('#e0e0e0').borderRadius(14)
+                  .id('pf_font_plus')
+                  .onClick(() => {
+                    this.fontSize = Math.min(28, this.fontSize + 1);
+                    this.applyReflow();
+                  })
+              }
+              .width('100%').height(36)
+              this.prefLinkRow($r('app.string.pf_font_name'), (): string => { return this.fontDisplayName(); }, (): void => { this.showFontChips = !this.showFontChips; })
+              if (this.showFontChips) {
+                Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
+                  ForEach(['default', 'serif', 'sans-serif', 'monospace'], (fam: string, idx: number) => {
+                    Text(this.famName(idx))
+                      .fontSize(12).height(26)
+                      .padding({ left: 10, right: 10 })
+                      .borderRadius(13)
+                      .margin(3)
+                      .backgroundColor(this.fontFamilyIdx === idx && this.userFontPath.length === 0 ? '#3949AB' : '#e0e0e0')
+                      .fontColor(this.fontFamilyIdx === idx && this.userFontPath.length === 0 ? Color.White : '#333')
+                      .onClick(() => {
+                        this.fontFamilyIdx = idx;
+                        this.userFontPath = '';
+                        this.userFontName = '';
+                        this.applyTypography();
+                        this.persistSettings();
+                      })
+                  }, (fam: string) => fam)
+                  ForEach(this.userFonts, (f: UserFontRec) => {
+                    Text(f.name)
+                      .fontSize(12).height(26)
+                      .padding({ left: 10, right: 10 })
+                      .borderRadius(13)
+                      .margin(3)
+                      .backgroundColor(this.userFontPath === f.path ? '#3949AB' : '#e0e0e0')
+                      .fontColor(this.userFontPath === f.path ? Color.White : '#333')
+                      .onClick(() => {
+                        this.selectUserFont(f);
+                      })
+                  }, (f: UserFontRec) => f.path)
+                }
+                .width('100%')
+              }
+              Text($r('app.string.pf_text_bg_color')).fontSize(13).fontColor('#333').width('100%')
+              Row({ space: 8 }) {
+                Button(this.L($r('app.string.pf_day')))
+                  .fontSize(12).height(30)
+                  .backgroundColor(!this.nightMode ? '#3949AB' : '#e0e0e0')
+                  .fontColor(!this.nightMode ? Color.White : '#333')
+                  .onClick(() => {
+                    this.setTheme(0);
+                    this.persistSettings();
+                  })
+                Button(this.L($r('app.string.pf_night')))
+                  .fontSize(12).height(30)
+                  .backgroundColor(this.nightMode ? '#3949AB' : '#e0e0e0')
+                  .fontColor(this.nightMode ? Color.White : '#333')
+                  .onClick(() => {
+                    this.setTheme(1);
+                    this.persistSettings();
+                  })
+                ForEach([3, 1, 2], (tidx: number) => {
+                  Text('')
+                    .width(24).height(24).borderRadius(12)
+                    .backgroundColor(tidx === 3 ? '#eaddc3' : (tidx === 2 ? '#000000' : '#101010'))
+                    .border({ width: 1, color: '#cccccc' })
+                    .onClick(() => {
+                      this.setTheme(tidx);
+                      this.persistSettings();
+                    })
+                }, (tidx: number) => `TH${tidx}`)
+              }
+              .width('100%')
+              /* 亮度: 系统亮度 + slider + -/+ */
+              Row({ space: 6 }) {
+                Text(this.useSystemBrightness ? '☑' : '☐')
+                  .fontSize(17).fontColor(this.useSystemBrightness ? '#1a6aa8' : '#999999')
+                  .onClick(() => {
+                    this.useSystemBrightness = !this.useSystemBrightness;
+                    if (!this.useSystemBrightness) {
+                      this.setBrightness(this.brightnessLevel);
+                    }
+                    this.persistSettings();
+                  })
+                Text($r('app.string.pf_system_brightness')).fontSize(13).fontColor('#333')
+                Slider({ value: this.brightnessLevel, min: this.allowZeroBright ? 0 : 1, max: 255, step: 1 })
+                  .layoutWeight(1).height(24)
+                  .selectedColor('#3949AB').trackColor('#c5cae9').blockColor('#3949AB')
+                  .enabled(!this.useSystemBrightness)
+                  .onChange((value: number, mode: SliderChangeMode) => {
+                    if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                      this.brightnessLevel = Math.round(value);
+                      this.setBrightness(this.brightnessLevel);
+                      this.persistSettings();
+                    }
+                  })
+                Text(`${this.brightnessLevel}`)
+                  .fontSize(12).fontColor('#555').width(30).textAlign(TextAlign.Center)
+                Text('-')
+                  .fontSize(16).fontColor('#333')
+                  .width(30).height(28).textAlign(TextAlign.Center)
+                  .backgroundColor('#e0e0e0').borderRadius(14)
+                  .onClick(() => {
+                    this.setBrightness(Math.max(this.allowZeroBright ? 0 : 1, this.brightnessLevel - 16));
+                  })
+                Text('+')
+                  .fontSize(16).fontColor('#333')
+                  .width(30).height(28).textAlign(TextAlign.Center)
+                  .backgroundColor('#e0e0e0').borderRadius(14)
+                  .onClick(() => {
+                    this.setBrightness(Math.min(255, this.brightnessLevel + 16));
+                  })
+              }
+              .width('100%').height(36)
+              this.prefCheckRow($r('app.string.pf_dict_lookup'), (): boolean => { return this.dictLookup; }, (): void => {
+                this.dictLookup = !this.dictLookup;
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_bluelight_f'), (): boolean => { return this.blueLightFilter > 0; }, (): void => {
+                this.blueLightFilter = this.blueLightFilter > 0 ? 0 : 30;
+                this.persistSettings();
+              })
+              Divider().color('#e0e0e0').width('100%').strokeWidth(1)
+              this.prefLinkRow($r('app.string.set_fonts_folder'), (): string => { return this.fontsFolderDisp.length > 0 ? this.fontsFolderDisp : this.L($r('app.string.pf_default_value')); }, (): void => {
+                promptAction.showToast({ message: this.L($r('app.string.pf_fonts_hint')) });
+              })
+              this.prefLinkRow($r('app.string.pf_text_align'), (): string => { return this.alignName(); }, (): void => {
+                this.textAlign = (this.textAlign + 1) % 4;
+                this.applyReflow();
+              })
+              this.prefLinkRow($r('app.string.pf_style'), (): string => { return this.styleName(); }, (): void => {
+                this.styleMode = (this.styleMode + 1) % 3;
+                this.persistSettings();
+              })
+              this.prefLinkRow($r('app.string.pf_style_user'), (): string => { return this.userCssName.length > 0 ? this.userCssName : this.L($r('app.string.pf_none')); }, (): void => {
+                this.userCssName = this.userCssName.length > 0 ? '' : 'custom.css';
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_hyphen'), (): boolean => { return this.hyphenationEnabled; }, (): void => {
+                this.hyphenationEnabled = !this.hyphenationEnabled;
+                this.applyReflow();
+              })
+              this.prefLinkRow($r('app.string.pf_hyphen_lang'), (): string => { return this.hyphenLangName(); }, (): void => {
+                this.hyphenLangDefault = !this.hyphenLangDefault;
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_inline_notes'), (): boolean => { return this.inlineNotes; }, (): void => {
+                this.inlineNotes = !this.inlineNotes;
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_image_zoom'), (): boolean => { return this.imageZoomEnabled; }, (): void => {
+                this.imageZoomEnabled = !this.imageZoomEnabled;
+                this.persistSettings();
+              })
+              this.prefSliderRow($r('app.string.pf_image_scale'), 1, 4, 0.1, (): number => { return this.imageZoomScale; }, (v: number): void => {
+                this.imageZoomScale = Math.round(v * 10) / 10;
+                this.persistSettings();
+              }, 'x')
+              this.prefSliderRow($r('app.string.set_line_height'), 1.0, 2.5, 0.1, (): number => { return this.lineHeight; }, (v: number): void => {
+                this.lineHeight = Math.round(v * 10) / 10;
+                this.applyReflow();
+              }, '')
+              this.prefSliderRow($r('app.string.pf_letter_spacing'), 0, 10, 1, (): number => { return this.letterSpacing; }, (v: number): void => {
+                this.letterSpacing = Math.round(v);
+                this.applyReflow();
+              }, 'px')
+              this.prefSliderRow($r('app.string.pf_para_spacing'), 0, 40, 1, (): number => { return this.paragraphSpacing; }, (v: number): void => {
+                this.paragraphSpacing = Math.round(v);
+                this.applyReflow();
+              }, 'px')
+              this.prefSliderRow($r('app.string.pf_indent'), 0, 8, 1, (): number => { return this.textIndent; }, (v: number): void => {
+                this.textIndent = Math.round(v);
+                this.applyReflow();
+              }, 'em')
+              Text($r('app.string.pf_page_margin')).fontSize(13).fontWeight(FontWeight.Medium).fontColor('#333').width('100%')
+              this.prefSliderRow($r('app.string.pf_side_top'), 0, 40, 1, (): number => { return this.marginT; }, (v: number): void => {
+                this.marginT = Math.round(v);
+                this.applyReflow();
+              }, 'pt')
+              this.prefSliderRow($r('app.string.pf_side_bottom'), 0, 40, 1, (): number => { return this.marginB; }, (v: number): void => {
+                this.marginB = Math.round(v);
+                this.applyReflow();
+              }, 'pt')
+              this.prefSliderRow($r('app.string.pf_side_left'), 0, 40, 1, (): number => { return this.marginLeft; }, (v: number): void => {
+                this.marginLeft = Math.round(v);
+                this.applyReflow();
+              }, 'pt')
+              this.prefSliderRow($r('app.string.pf_side_right'), 0, 40, 1, (): number => { return this.marginRight; }, (v: number): void => {
+                this.marginRight = Math.round(v);
+                this.applyReflow();
+              }, 'pt')
+              this.prefColorRow($r('app.string.pf_link_day'), 1, (): string => { return this.linkColorDay; })
+              this.prefColorRow($r('app.string.pf_link_night'), 2, (): string => { return this.linkColorNight; })
+              Text($r('app.string.common_reset'))
+                .fontSize(14).fontColor('#1a6aa8')
+                .onClick(() => {
+                  this.resetTab0();
+                })
+            }
+            if (this.prefTab === 1) {
+              this.prefLinkRow($r('app.string.pf_tap_zone'), (): string => { return this.tapEdgeName(); }, (): void => { this.cycleTapEdge(); })
+              this.prefLinkRow($r('app.string.pf_rest_remind'), (): string => { return this.restName(); }, (): void => { this.cycleRestReminder(); })
+              this.prefLinkRow($r('app.string.pf_double_center'), (): string => { return this.doubleName(); }, (): void => {
+                this.doubleClickPref = this.doubleClickPref === 1 ? 0 : 1;
+                this.persistSettings();
+              })
+              this.prefSliderRow($r('app.string.pf_scroll_speed'), 2, 10, 1, (): number => { return this.autoScrollSpeed; }, (v: number): void => {
+                this.autoScrollSpeed = Math.round(v);
+                this.persistSettings();
+              }, '')
+              this.prefSliderRow($r('app.string.pf_auto_off'), 0, 30, 1, (): number => { return this.autoOffMinutes; }, (v: number): void => {
+                this.autoOffMinutes = Math.round(v);
+                this.persistSettings();
+              }, '')
+              this.prefSliderRow($r('app.string.pf_antialias'), 0, 8, 1, (): number => { return this.antialiasLevel; }, (v: number): void => {
+                this.antialiasLevel = Math.round(v);
+                this.persistSettings();
+              }, '')
+              this.prefCheckRow($r('app.string.pf_dropcap'), (): boolean => { return this.dropCapEnabled; }, (): void => {
+                this.dropCapEnabled = !this.dropCapEnabled;
+                this.applyReflow();
+              })
+              this.prefCheckRow($r('app.string.pf_mirror'), (): boolean => { return this.mirrorMode; }, (): void => {
+                this.mirrorMode = !this.mirrorMode;
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_allow_select'), (): boolean => { return this.allowTextSelection; }, (): void => {
+                this.allowTextSelection = !this.allowTextSelection;
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_perchar'), (): boolean => { return this.perCharSelect; }, (): void => {
+                this.perCharSelect = !this.perCharSelect;
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_edge_bright'), (): boolean => { return this.edgeBrightness; }, (): void => {
+                this.edgeBrightness = !this.edgeBrightness;
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_zero_bright'), (): boolean => { return this.allowZeroBright; }, (): void => {
+                this.allowZeroBright = !this.allowZeroBright;
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_day_replace'), (): boolean => { return this.dayImageReplace; }, (): void => {
+                this.dayImageReplace = !this.dayImageReplace;
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_amoled'), (): boolean => { return this.amoledEnhance; }, (): void => {
+                this.amoledEnhance = !this.amoledEnhance;
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_loop'), (): boolean => { return this.loopPaging; }, (): void => {
+                this.loopPaging = !this.loopPaging;
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_vol_zoom'), (): boolean => { return this.volumeKeyAction === 2; }, (): void => {
+                this.volumeKeyAction = this.volumeKeyAction === 2 ? 1 : 2;
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_zoom_locked'), (): boolean => { return this.zoomLockedPages; }, (): void => {
+                this.zoomLockedPages = !this.zoomLockedPages;
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_back_confirm'), (): boolean => { return this.backConfirmClose; }, (): void => {
+                this.backConfirmClose = !this.backConfirmClose;
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_vibrate'), (): boolean => { return this.selectionVibrate; }, (): void => {
+                this.selectionVibrate = !this.selectionVibrate;
+                this.persistSettings();
+              })
+              this.prefSliderRow($r('app.string.pf_decode_thr'), 1, 16, 1, (): number => { return this.decodeThreads; }, (v: number): void => {
+                this.decodeThreads = Math.round(v);
+                this.persistSettings();
+              }, '')
+              this.prefSliderRow($r('app.string.pf_draw_thr'), 1, 16, 1, (): number => { return this.drawThreads; }, (v: number): void => {
+                this.drawThreads = Math.round(v);
+                this.persistSettings();
+              }, '')
+              Text($r('app.string.common_reset'))
+                .fontSize(14).fontColor('#1a6aa8')
+                .onClick(() => {
+                  this.resetTab1();
+                })
+            }
+            if (this.prefTab === 2) {
+              this.prefColorRow($r('app.string.pf_status_color'), 3, (): string => { return this.statusColorDay; })
+              this.prefCheckRow($r('app.string.pf_show_status'), (): boolean => { return this.showStatusBar; }, (): void => {
+                this.showStatusBar = !this.showStatusBar;
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_show_title'), (): boolean => { return this.showTitleTop; }, (): void => {
+                this.showTitleTop = !this.showTitleTop;
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_show_progress'), (): boolean => { return this.showProgressBar; }, (): void => {
+                this.showProgressBar = !this.showProgressBar;
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_chapter_ticks'), (): boolean => { return this.showChapterTicks; }, (): void => {
+                this.showChapterTicks = !this.showChapterTicks;
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_sub_ticks'), (): boolean => { return this.showSubChapterTicks; }, (): void => {
+                this.showSubChapterTicks = !this.showSubChapterTicks;
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_show_time'), (): boolean => { return this.showClockTop; }, (): void => {
+                this.showClockTop = !this.showClockTop;
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_show_battery'), (): boolean => { return this.showBatteryTop; }, (): void => {
+                this.showBatteryTop = !this.showBatteryTop;
+                this.persistSettings();
+              })
+              this.prefCheckRow($r('app.string.pf_seek_nav'), (): boolean => { return this.seekNav; }, (): void => {
+                this.seekNav = !this.seekNav;
+                this.persistSettings();
+              })
+              Text($r('app.string.pf_show_bmbar')).fontSize(13).fontColor('#333').width('100%')
+              this.prefCheckRowSub($r('app.string.pf_musician'), (): boolean => { return this.bmStripMusician; }, (): void => {
+                this.bmStripMusician = !this.bmStripMusician;
+                this.persistSettings();
+              })
+              this.prefCheckRowSub($r('app.string.pf_vert_flip'), (): boolean => { return this.bmStripVert; }, (): void => {
+                this.bmStripVert = !this.bmStripVert;
+                this.persistSettings();
+              })
+              this.prefCheckRowSub($r('app.string.pf_horz_flip'), (): boolean => { return this.bmStripHorz; }, (): void => {
+                this.bmStripHorz = !this.bmStripHorz;
+                this.persistSettings();
+              })
+              this.prefLinkRow($r('app.string.pf_scale'), (): string => { return this.progressScaleName(); }, (): void => {
+                this.progressScale = this.progressScale === 1 ? 0 : 1;
+                this.persistSettings();
+              })
+              this.prefLinkRow($r('app.string.pf_chapter_fmt'), (): string => { return this.chapterFmtName(); }, (): void => {
+                this.chapterFmtIdx = this.chapterFmtIdx === 1 ? 0 : 1;
+                this.persistSettings();
+              })
+              this.prefSliderRow($r('app.string.set_font_size'), 8, 20, 1, (): number => { return this.statusBarFontPx; }, (v: number): void => {
+                this.statusBarFontPx = Math.round(v);
+                this.persistSettings();
+              }, '')
+              this.prefSliderRow($r('app.string.pf_progress_h'), 2, 10, 1, (): number => { return this.progressBarH; }, (v: number): void => {
+                this.progressBarH = Math.round(v);
+                this.persistSettings();
+              }, '')
+            }
+            if (this.prefTab === 3) {
+              this.prefLinkRow($r('app.string.pf_left_side'), (): string => { return this.actionName(this.tapLeftAction); }, (): void => {
+                this.tapLeftAction = (this.tapLeftAction + 1) % 8;
+                this.persistSettings();
+              })
+              this.prefLinkRow($r('app.string.pf_right_side'), (): string => { return this.actionName(this.tapRightAction); }, (): void => {
+                this.tapRightAction = (this.tapRightAction + 1) % 8;
+                this.persistSettings();
+              })
+              this.prefLinkRow($r('app.string.pf_top_side'), (): string => { return this.actionName(this.tapTopAction); }, (): void => {
+                this.tapTopAction = (this.tapTopAction + 1) % 8;
+                this.persistSettings();
+              })
+              this.prefLinkRow($r('app.string.pf_bottom_side'), (): string => { return this.actionName(this.tapBottomAction); }, (): void => {
+                this.tapBottomAction = (this.tapBottomAction + 1) % 8;
+                this.persistSettings();
+              })
+              this.prefLinkRow($r('app.string.pf_double_center'), (): string => { return this.doubleName(); }, (): void => {
+                this.doubleClickPref = this.doubleClickPref === 1 ? 0 : 1;
+                this.persistSettings();
+              })
+              this.prefLinkRow($r('app.string.pf_vol_keys'), (): string => { return this.volKeyName(); }, (): void => {
+                this.volumeKeyAction = this.volumeKeyAction === 0 ? 1 : 0;
+                this.persistSettings();
+              })
+              this.prefLinkRow($r('app.string.pf_invert_keys'), (): string => { return this.invertVolume ? this.L($r('app.string.pf_enabled')) : this.L($r('app.string.pf_disabled')); }, (): void => {
+                this.invertVolume = !this.invertVolume;
+                this.persistSettings();
+              })
+              Row() {
+                Blank().layoutWeight(1)
+                Text($r('app.string.common_close'))
+                  .fontSize(14).fontColor('#1a6aa8')
+                  .onClick(() => {
+                    this.showPref = false;
+                  })
+              }
+              .width('100%')
+            }
           }
           .width('100%')
-          .padding({ left: 12, right: 12, top: 2, bottom: 2 })
-          .backgroundColor(this.barBg())
+          .padding({ left: 12, right: 12, top: 10, bottom: 16 })
         }
+        .width('100%')
+        .constraintSize({ maxHeight: '52%' })
+        .align(Alignment.Top)
+        .scrollBar(BarState.Auto)
+      }
+      .width('88%')
+      .borderRadius(10)
+      .backgroundColor(Color.White)
+      .clip(true)
+      .shadow({ radius: 16, color: '#40000000', offsetX: 0, offsetY: 4 })
+    }
+  }
 
-        /* v1.3.4 parity: how to adjust brightness while reading */
-        Text($r('app.string.brightness_edge_hint'))
-          .fontSize(10).fontColor('#808080')
-          .width('100%').textAlign(TextAlign.Start)
-          .padding({ left: 14, bottom: 2 })
+  /* ===== 0.9.62 builders: bookmark dialog (Android dialogShowBookmarks parity) ===== */
 
-        // Search bar (visible when opened)
-        if (this.showSearch) {
-          Row({ space: 8 }) {
-            TextInput({ placeholder: $r('app.string.search_placeholder'), text: this.searchQuery })
-              .layoutWeight(1)
-              .height(36)
-              .fontSize(14)
-              .backgroundColor('#fff')
-              .borderRadius(4)
-              .onChange((value: string) => {
-                this.searchQuery = value;
-              })
-            Button($r('app.string.common_search'))
-              .fontSize(13).height(36)
-              .backgroundColor('#2a7').fontColor(Color.White)
+  @Builder
+  buildBmListDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showBmList = false;
+        })
+
+      Column() {
+        Row({ space: 10 }) {
+          Text($r('app.string.reader_bookmark'))
+            .fontSize(16).fontWeight(FontWeight.Bold).fontColor(Color.White)
+            .layoutWeight(1)
+          Text('⋮')
+            .fontSize(18).fontColor(Color.White)
+            .padding(4)
+            .id('reader_bm_menu')
+            .onClick(() => {
+              this.showBmSort = true;
+            })
+          Text('✕')
+            .fontSize(16).fontColor(Color.White)
+            .padding(4)
+            .id('reader_bm_close')
+            .onClick(() => {
+              this.showBmList = false;
+            })
+        }
+        .width('100%')
+        .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+        .backgroundColor(this.barBg())
+
+        Row({ space: 8 }) {
+          TextInput({ placeholder: $r('app.string.bm_search_placeholder'), text: this.bmSearch })
+            .layoutWeight(1)
+            .height(40)
+            .fontSize(14)
+            .backgroundColor(Color.White)
+            .onChange((value: string) => {
+              this.bmSearch = value;
+            })
+          if (this.bmSearch.length > 0) {
+            Text('✕')
+              .fontSize(14).fontColor('#999')
+              .padding(6)
+              .id('reader_bm_search_clear')
               .onClick(() => {
-                this.doSearch();
+                this.bmSearch = '';
               })
-            Button('▾')
-              .fontSize(13).height(36).width(40)
+          }
+        }
+        .width('100%')
+        .padding({ left: 14, right: 14, top: 12 })
+
+        Row({ space: 10 }) {
+          Button($r('app.string.common_add'))
+            .fontSize(14).height(38).layoutWeight(1)
+            .backgroundColor('#e0e0e0').fontColor('#333')
+            .id('reader_bm_add')
+            .onClick(() => {
+              this.bmAddName = '';
+              this.showBmAdd = true;
+            })
+          Button($r('app.string.fast_bookmark'))
+            .fontSize(14).height(38).layoutWeight(1)
+            .backgroundColor('#e0e0e0').fontColor('#333')
+            .id('reader_bm_quick')
+            .onClick(() => {
+              this.quickAddBookmark();
+            })
+        }
+        .width('100%')
+        .padding({ left: 14, right: 14, top: 10 })
+
+        if (this.bmRows().length === 0) {
+          Text($r('app.string.bookmarks_empty'))
+            .fontSize(13).fontColor(Color.Gray)
+            .width('100%')
+            .textAlign(TextAlign.Center)
+            .padding({ top: 24, bottom: 24 })
+        } else {
+          List() {
+            ForEach(this.bmRows(), (bm: Bookmark) => {
+              ListItem() {
+                Row() {
+                  Text(`${bm.page + 1}: ${bm.label.length > 0 ? bm.label : this.L($r('app.string.reader_bookmark'))}`)
+                    .fontSize(14).fontColor('#333')
+                    .maxLines(3)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    .layoutWeight(1)
+                    .onClick(() => {
+                      this.showBmList = false;
+                      this.jumpToBookmark(bm);
+                    })
+                  Text('✕')
+                    .fontSize(16).fontColor('#e57373')
+                    .padding(6)
+                    .id('reader_bm_del')
+                    .onClick(() => {
+                      this.deleteBm(bm);
+                    })
+                }
+                .width('100%')
+                .padding({ top: 8, bottom: 8 })
+              }
+            }, (bm: Bookmark) => `${bm.page}_${bm.date}`)
+          }
+          .width('100%')
+          .height(280)
+          .padding({ left: 14, right: 14, bottom: 10 })
+        }
+      }
+      .width('86%')
+      .backgroundColor(Color.White)
+      .borderRadius(6)
+      .clip(true)
+      .shadow({ radius: 12, color: '#40000000', offsetX: 0, offsetY: 3 })
+    }
+    .width('100%').height('100%')
+  }
+
+  @Builder
+  buildBmAddDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showBmAdd = false;
+        })
+
+      Column() {
+        Text($r('app.string.reader_bookmark'))
+          .fontSize(16).fontWeight(FontWeight.Bold).fontColor(Color.White)
+          .width('100%')
+          .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+          .backgroundColor(this.barBg())
+        Text(this.bmPageMeta())
+          .fontSize(12).fontColor('#666')
+          .width('100%')
+          .padding({ left: 14, right: 14, top: 10, bottom: 4 })
+        TextInput({ placeholder: $r('app.string.bm_name_hint'), text: this.bmAddName })
+          .fontSize(14)
+          .width('100%')
+          .height(44)
+          .margin({ left: 14, right: 14 })
+          .backgroundColor('#fafafa')
+          .onChange((v: string) => {
+            this.bmAddName = v;
+          })
+        Row({ space: 16 }) {
+          Button($r('app.string.common_cancel'))
+            .fontSize(14).height(40).width(110)
+            .backgroundColor(Color.White).fontColor('#26a69a')
+            .border({ width: 1, color: '#26a69a' })
+            .onClick(() => {
+              this.showBmAdd = false;
+            })
+          Button($r('app.string.common_add'))
+            .fontSize(14).height(40).width(140)
+            .backgroundColor(Color.White).fontColor('#26a69a')
+            .border({ width: 1, color: '#26a69a' })
+            .onClick(() => {
+              this.addNamedBookmark();
+            })
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.Center)
+        .padding({ top: 12, bottom: 14 })
+      }
+      .width('86%')
+      .backgroundColor(Color.White)
+      .borderRadius(6)
+      .clip(true)
+    }
+    .width('100%').height('100%')
+  }
+
+  @Builder
+  buildBmSortMenu() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#33000000')
+        .onClick(() => {
+          this.showBmSort = false;
+        })
+
+      Column() {
+        this.bmRow($r('app.string.bm_share_bms'), (): void => {
+          this.showBmSort = false;
+          this.bmShare();
+        })
+        this.bmRow($r('app.string.bm_sort_pasc'), (): void => {
+          this.bmSortOrder = 2;
+          this.showBmSort = false;
+        })
+        this.bmRow($r('app.string.bm_sort_pdesc'), (): void => {
+          this.bmSortOrder = 3;
+          this.showBmSort = false;
+        })
+        this.bmRow($r('app.string.bm_sort_new'), (): void => {
+          this.bmSortOrder = 0;
+          this.showBmSort = false;
+        })
+        this.bmRow($r('app.string.bm_sort_old'), (): void => {
+          this.bmSortOrder = 1;
+          this.showBmSort = false;
+        })
+      }
+      .width('62%')
+      .padding({ top: 8, bottom: 8 })
+      .backgroundColor(Color.White)
+      .borderRadius(8)
+      .clip(true)
+    }
+    .width('100%').height('100%')
+  }
+
+  /* ===== 0.9.61 builders: search popup / file info ===== */
+
+  @Builder
+  buildSearchDialog() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      /* click-catcher: tap anywhere outside the card closes (no dim) */
+      Column()
+        .width('100%').height('100%')
+        .onClick(() => {
+          this.closeSearch();
+        })
+
+      Column() {
+        Row({ space: 8 }) {
+          Text($r('app.string.common_search'))
+            .fontSize(16).fontWeight(FontWeight.Bold).fontColor(Color.White)
+            .layoutWeight(1)
+          Text('✕')
+            .fontSize(16).fontColor(Color.White)
+            .padding(4)
+            .onClick(() => {
+              this.closeSearch();
+            })
+        }
+        .width('100%')
+        .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+        .backgroundColor(this.barBg())
+
+        Row({ space: 8 }) {
+          TextInput({ placeholder: $r('app.string.search_placeholder'), text: this.searchQuery })
+            .layoutWeight(1)
+            .height(40)
+            .fontSize(14)
+            .backgroundColor(Color.White)
+            .onChange((value: string) => {
+              this.searchQuery = value;
+            })
+          Text('✕')
+            .fontSize(14).fontColor('#999')
+            .padding(6)
+            .onClick(() => {
+              this.searchQuery = '';
+            })
+        }
+        .width('100%')
+        .padding({ left: 14, right: 14, top: 12 })
+
+        Row({ space: 10 }) {
+          Button($r('app.string.common_search'))
+            .fontSize(14).height(38)
+            .backgroundColor('#2a7').fontColor(Color.White)
+            .onClick(() => {
+              this.doSearch();
+            })
+          if (this.searchTotalHits > 0) {
+            Text(`${this.searchCurrentIdx + 1}/${this.searchTotalHits}`)
+              .fontSize(13).fontColor('#555')
+            Button('◀')
+              .fontSize(13).height(34).width(40)
+              .backgroundColor('#e0e0e0').fontColor('#333')
+              .onClick(() => this.prevHitPage())
+            Button('▶')
+              .fontSize(13).height(34).width(40)
               .backgroundColor('#e0e0e0').fontColor('#333')
               .onClick(() => this.nextHitPage())
-            Button('✕')
-              .fontSize(13).height(36).width(40)
-              .backgroundColor('#e0e0e0').fontColor('#333')
-              .onClick(() => this.closeSearch())
           }
-          .width('96%')
-          .padding({ top: 6, bottom: 6 })
-          .backgroundColor(this.nightMode ? '#222' : '#f0f0f0')
         }
+        .width('100%')
+        .padding({ left: 14, right: 14, top: 10, bottom: 14 })
+        .justifyContent(FlexAlign.Start)
+      }
+      .width('86%')
+      .margin({ top: 95 })
+      .backgroundColor(Color.White)
+      .borderRadius(6)
+      .clip(true)
+      .shadow({ radius: 12, color: '#40000000', offsetX: 0, offsetY: 3 })
+    }
+    .width('100%').height('100%')
+  }
 
+  @Builder
+  buildFileInfoDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showFileInfo = false;
+        })
+
+      Column() {
+        Scroll() {
+          Column() {
+            if (this.fiCoverPath.length > 0) {
+              Image(this.fiCoverPath)
+                .width('44%')
+                .height(300)
+                .objectFit(ImageFit.Cover)
+                .margin({ top: 14 })
+                .border({ width: 1, color: '#eeeeee' })
+            } else if (this.fiCover !== undefined) {
+              Image(this.fiCover)
+                .width('44%')
+                .height(300)
+                .objectFit(ImageFit.Cover)
+                .margin({ top: 14 })
+                .border({ width: 1, color: '#eeeeee' })
+            }
+            ForEach(this.fiRows, (r: FiRow) => {
+              Column() {
+                Text(r.label)
+                  .fontSize(13).fontColor('#555')
+                  .width('100%')
+                  .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+                  .backgroundColor('#f0f0f0')
+                Text(r.value.length > 0 ? r.value : '—')
+                  .fontSize(14).fontColor('#222')
+                  .width('100%')
+                  .padding({ left: 14, right: 14, top: 6, bottom: 6 })
+              }
+              .width('100%')
+            }, (r: FiRow) => r.label)
+            Row() {
+              Text(this.L($r('app.string.fi_label_tags')))
+                .fontSize(13).fontColor('#555')
+                .layoutWeight(1)
+              Text(this.L($r('app.string.fi_create_tag')))
+                .fontSize(13).fontColor('#2a7')
+                .padding(6)
+                .onClick(() => {
+                  promptAction.showToast({ message: $r('app.string.fi_tag_unsupported') });
+                })
+            }
+            .width('100%')
+            .padding({ left: 14, right: 14, top: 6, bottom: 6 })
+          }
+          .width('100%')
+        }
+        .width('100%')
+        .height(430)
+
+        Row({ space: 14 }) {
+          Button($r('app.string.common_close'))
+            .fontSize(14).height(40).layoutWeight(1)
+            .backgroundColor('#f0f0f0').fontColor('#555')
+            .onClick(() => {
+              this.showFileInfo = false;
+            })
+          Button($r('app.string.fi_read'))
+            .fontSize(14).height(40).layoutWeight(1)
+            .backgroundColor('#2a7').fontColor(Color.White)
+            .onClick(() => {
+              this.showFileInfo = false;
+            })
+        }
+        .width('100%')
+        .padding({ left: 14, right: 14, top: 10, bottom: 14 })
+      }
+      .width('82%')
+      .backgroundColor(Color.White)
+      .borderRadius(8)
+      .clip(true)
+    }
+    .width('100%').height('100%')
+  }
+
+  /* ===== 0.9.60 builders: book menu / note editor / playlist picker / AI intro ===== */
+
+  @Builder
+  bmRow(label: Resource, onTap: () => void) {
+    Row() {
+      Text(label)
+        .fontSize(15).fontColor('#333')
+        .layoutWeight(1)
+    }
+    .width('100%')
+    .height(44)
+    .padding({ left: 16, right: 16 })
+    .onClick(() => {
+      onTap();
+    })
+  }
+
+  @Builder
+  buildBookMenuDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showBookMenu = false;
+        })
+
+      Column() {
+        this.bmRow(this.scrollMode === 0 ? $r('app.string.bm_mode_book') : $r('app.string.bm_mode_scroll'), (): void => {
+          this.showBookMenu = false;
+          this.toggleScrollMode();
+        })
+        this.bmRow($r('app.string.bm_musician'), (): void => {
+          this.showBookMenu = false;
+          this.pageMode = 2;
+          console.info('[Reader] Page mode: musician (book menu)');
+        })
+        this.bmRow($r('app.string.bm_rsvp'), (): void => {
+          this.showBookMenu = false;
+          this.openRsvpPanel();
+        })
+        this.bmRow($r('app.string.bm_open_with'), (): void => {
+          this.showBookMenu = false;
+          promptAction.showToast({ message: $r('app.string.bm_open_with_unsupported') });
+        })
+        this.bmRow($r('app.string.bm_send'), (): void => {
+          this.showBookMenu = false;
+          this.sendBookFile();
+        })
+        this.bmRow($r('app.string.bm_playlist'), (): void => {
+          this.showBookMenu = false;
+          this.openPlPick();
+        })
+        this.bmRow($r('app.string.bm_ai_intro'), (): void => {
+          this.showBookMenu = false;
+          this.startAiIntro();
+        })
+        this.bmRow($r('app.string.bm_file_info'), (): void => {
+          this.showBookMenu = false;
+          this.openFileInfo();
+          this.showFileInfo = true;
+        })
+      }
+      .width('78%')
+      .padding({ top: 8, bottom: 8 })
+      .backgroundColor(Color.White)
+      .borderRadius(8)
+      .clip(true)
+    }
+    .width('100%').height('100%')
+  }
+
+  @Builder
+  buildNoteEditDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showNoteEdit = false;
+        })
+
+      Column() {
+        Text($r('app.string.reading_note'))
+          .fontSize(16).fontWeight(FontWeight.Bold).fontColor(Color.White)
+          .width('100%')
+          .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+          .backgroundColor(this.barBg())
+        Text(this.noteMetaLine())
+          .fontSize(12).fontColor('#666')
+          .width('100%')
+          .padding({ left: 14, right: 14, top: 10, bottom: 4 })
+        TextArea({ text: this.noteEditText, placeholder: $r('app.string.note_edit_hint') })
+          .fontSize(14)
+          .width('100%')
+          .height(260)
+          .backgroundColor('#fafafa')
+          .onChange((v: string) => {
+            this.noteEditText = v;
+          })
+        Row({ space: 16 }) {
+          Button($r('app.string.common_cancel'))
+            .fontSize(14).height(40).width(110)
+            .backgroundColor(Color.White).fontColor('#26a69a')
+            .border({ width: 1, color: '#26a69a' })
+            .onClick(() => {
+              this.showNoteEdit = false;
+            })
+          Button($r('app.string.note_edit_save'))
+            .fontSize(14).height(40).width(140)
+            .backgroundColor(Color.White).fontColor('#26a69a')
+            .border({ width: 1, color: '#26a69a' })
+            .onClick(() => {
+              this.saveNoteEdit();
+            })
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.Center)
+        .padding({ top: 12, bottom: 14 })
+      }
+      .width('86%')
+      .backgroundColor(Color.White)
+      .borderRadius(6)
+      .clip(true)
+    }
+    .width('100%').height('100%')
+  }
+
+  @Builder
+  buildPlPickDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showPlPick = false;
+        })
+
+      Column({ space: 10 }) {
+        Text($r('app.string.bm_pl_title'))
+          .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
+        if (this.plNames.length === 0) {
+          Text($r('app.string.bm_pl_empty'))
+            .fontSize(13).fontColor('#999')
+            .width('100%')
+        } else {
+          Column() {
+            ForEach(this.plNames, (n: string) => {
+              Row() {
+                Text(n)
+                  .fontSize(14).fontColor('#333')
+                  .layoutWeight(1)
+              }
+              .width('100%')
+              .height(40)
+              .onClick(() => {
+                this.plAdd(n);
+              })
+            }, (n: string) => n)
+          }
+          .width('100%')
+          .constraintSize({ maxHeight: 220 })
+        }
+        Row({ space: 8 }) {
+          TextInput({ placeholder: $r('app.string.bm_pl_new_hint'), text: this.plNewName })
+            .layoutWeight(1)
+            .height(38)
+            .fontSize(14)
+            .onChange((v: string) => {
+              this.plNewName = v;
+            })
+          Button($r('app.string.bm_pl_create'))
+            .fontSize(13).height(38)
+            .backgroundColor('#5c6bc0').fontColor(Color.White)
+            .onClick(() => {
+              this.plCreateAndAdd();
+            })
+        }
+        .width('100%')
+      }
+      .width('78%')
+      .padding(16)
+      .backgroundColor(Color.White)
+      .borderRadius(8)
+    }
+    .width('100%').height('100%')
+  }
+
+  @Builder
+  buildAiIntroDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          if (!this.aiIntroBusy) {
+            this.showAiIntro = false;
+          }
+        })
+
+      Column({ space: 10 }) {
+        Text($r('app.string.ai_intro_title'))
+          .fontSize(16).fontWeight(FontWeight.Bold).fontColor('#333')
+        Scroll() {
+          Text(this.aiIntroText)
+            .fontSize(14).fontColor('#444')
+            .width('100%')
+        }
+        .width('100%')
+        .height(300)
+        .backgroundColor('#fafafa')
+        .borderRadius(6)
+        Row({ space: 12 }) {
+          Button($r('app.string.ai_intro_save_note'))
+            .fontSize(14).height(40)
+            .backgroundColor('#26a69a').fontColor(Color.White)
+            .onClick(() => {
+              this.saveAiIntroNote();
+            })
+          Button($r('app.string.common_close'))
+            .fontSize(14).height(40)
+            .backgroundColor('#f0f0f0').fontColor('#555')
+            .onClick(() => {
+              this.showAiIntro = false;
+            })
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.Center)
+      }
+      .width('82%')
+      .padding(16)
+      .backgroundColor(Color.White)
+      .borderRadius(8)
+    }
+    .width('100%').height('100%')
+  }
+
+  build() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      /* 0.9.60 (Android activity_vertical_view parity): the reading area is
+       * full-screen and the toolbars below are overlay siblings (盖遮) —
+       * show/hide never re-layouts the content (no blank half when hidden). */
+      Column() {
         // Main reading area
         if (this.scrollMode === 0) {
           /* Horizontal Swiper mode */
@@ -5398,6 +7280,7 @@ struct Reader {
             .index(this.rtlEnabled ? (this.totalPages - 1 - this.currentPage) : this.currentPage)
             .width('100%').height('100%')
             .loop(false).indicator(false).autoPlay(false)
+            .disableSwipe(this.inputLocked)
             .cachedCount(1)
             .onChange((index: number) => {
               this.onPageChanged(index);
@@ -5426,7 +7309,11 @@ struct Reader {
 
             // Left tap zone (configurable action, sprint I4)
             Row()
-              .width(`${LEFT_ZONE_RATIO * 100}%`).height('100%')
+              .width(`${this.edgeRatio() * 100}%`).height('100%')
+              /* 0.9.62: pin to the left edge — Stack default alignment
+               * centered this row (dump-proven), so edge taps fell into the
+               * pinch layer's no-op tap and never fired. */
+              .position({ x: 0, y: 0 })
               .backgroundColor(Color.Transparent)
               .hitTestBehavior(this.zonesDisabled() ? HitTestMode.None : HitTestMode.Default)
               .onClick(() => {
@@ -5435,8 +7322,11 @@ struct Reader {
 
             // Right tap zone (configurable action, sprint I4)
             Row()
-              .width(`${RIGHT_ZONE_RATIO * 100}%`).height('100%')
-              .align(Alignment.End)
+              .width(`${this.edgeRatio() * 100}%`).height('100%')
+              /* 0.9.62: pin to the right edge — .align(Alignment.End) is
+               * content alignment, not position-in-parent (dump-proven the row
+               * sat centered); explicit percent position works. */
+              .position({ x: `${(1 - this.edgeRatio()) * 100}%`, y: 0 })
               .backgroundColor(Color.Transparent)
               .hitTestBehavior(this.zonesDisabled() ? HitTestMode.None : HitTestMode.Default)
               .onClick(() => {
@@ -5445,21 +7335,31 @@ struct Reader {
 
             // Center tap zone (toggle menu) + long-press for text selection (sprint H2)
             Row()
-              .width(`${(1 - LEFT_ZONE_RATIO - RIGHT_ZONE_RATIO) * 100}%`).height('100%')
-              .align(Alignment.Center)
+              .width(`${(1 - 2 * this.edgeRatio()) * 100}%`).height('100%')
+              /* 0.9.62: pinned explicitly (centered by default anyway, but do
+               * not rely on Stack alignment — see the left/right zone fix). */
+              .position({ x: `${this.edgeRatio() * 100}%`, y: 0 })
               .backgroundColor(Color.Transparent)
               .hitTestBehavior(this.zonesDisabled() ? HitTestMode.None : HitTestMode.Default)
               .gesture(
                 GestureGroup(GestureMode.Exclusive,
                   TapGesture({ count: 2 })
                     .onAction(() => {
-                      this.doubleTapFit();
+                      /* 0.9.55: 阅读时双击 pref — zoom-to-fit or crop toggle */
+                      if (this.doubleClickPref === 1) {
+                        this.cropEnabled = !this.cropEnabled;
+                        this.reflowVersion++;
+                        console.info(`[Reader] Double-tap crop: ${this.cropEnabled}`);
+                      } else {
+                        this.doubleTapFit();
+                      }
                     }),
                   LongPressGesture({ repeat: false, duration: 600 })
                   .onAction((event: LongPressGestureEvent) => {
                     /* Round 7: prefs longTapAction: 0=selection, 1=file info, 2=menu, 3=none */
                     if (this.longTapActionPref === 1) {
                       this.openFileInfo();
+                      this.showFileInfo = true;
                       return;
                     }
                     if (this.longTapActionPref === 2) {
@@ -5498,6 +7398,7 @@ struct Reader {
             .width(32).height('100%')
             .position({ x: 0, y: 0 })
             .hitTestBehavior(HitTestMode.Transparent)
+            .visibility(this.edgeBrightness ? Visibility.Visible : Visibility.None)
             .gesture(
               PanGesture({ fingers: 1, distance: 5, direction: PanDirection.Vertical })
                 .onActionStart(() => {
@@ -5536,7 +7437,7 @@ struct Reader {
                 )
             }
           }
-          .width('100%').layoutWeight(1)
+          .width('100%').height('100%')
           .onAreaChange((oldArea: Area, newArea: Area) => {
             this.pageAreaW = typeof newArea.width === 'number' ? newArea.width : 0;
             this.pageAreaH = typeof newArea.height === 'number' ? newArea.height : 0;
@@ -5577,6 +7478,7 @@ struct Reader {
             .cachedCount(1)
             .scrollBar(BarState.Auto)
             .edgeEffect(EdgeEffect.Spring)
+            .enableScrollInteraction(!this.inputLocked)
             .onScrollIndex((index: number) => {
               if (index !== this.currentPage) {
                 this.onPageChanged(index);
@@ -5621,6 +7523,43 @@ struct Reader {
                 })
             )
 
+            /* 0.9.62: center tap zone (vertical mode) — without it the bars
+             * could never be hidden in vertical scroll mode. Single tap runs
+             * tapCenterAction (default 2 = bars hide/show). Transparent hit
+             * mode keeps the List scroll (and the fast-scroll rail under it)
+             * alive through the zone. */
+            Row()
+              .width('100%').height(`${(1 - 2 * this.edgeRatio()) * 100}%`)
+              .position({ x: 0, y: `${this.edgeRatio() * 100}%` })
+              .backgroundColor(Color.Transparent)
+              .hitTestBehavior(this.zonesDisabled() ? HitTestMode.None : HitTestMode.Transparent)
+              .onClick(() => {
+                this.onTapZoneAction(this.tapCenterAction);
+              })
+
+            /* 0.9.59: top/bottom tap zones (控制选项 顶部/底部); the bottom
+             * strip rides the Stack's End alignment */
+            Row()
+              .width('100%').height(`${this.edgeRatio() * 100}%`)
+              .position({ x: 0, y: 0 })
+              .backgroundColor(Color.Transparent)
+              .hitTestBehavior(this.zonesDisabled() ? HitTestMode.None : HitTestMode.Default)
+              .onClick(() => {
+                this.onTapZoneAction(this.tapTopAction);
+              })
+            Row()
+              .width('100%').height(`${this.edgeRatio() * 100}%`)
+              /* 0.9.62: pin to the real bottom — neither the Stack-level
+               * alignContent:End nor child .align(End) moved this row (dump
+               * showed it centered since 0.9.59, eating the middle taps);
+               * explicit percent position is the dump-proven mechanism here. */
+              .position({ x: 0, y: `${(1 - this.edgeRatio()) * 100}%` })
+              .backgroundColor(Color.Transparent)
+              .hitTestBehavior(this.zonesDisabled() ? HitTestMode.None : HitTestMode.Default)
+              .onClick(() => {
+                this.onTapZoneAction(this.tapBottomAction);
+              })
+
             /* v1.3.4 parity: left-edge brightness strip (vertical mode) */
             Stack({ alignContent: Alignment.Center }) {
               if (this.brightHintShow) {
@@ -5635,6 +7574,7 @@ struct Reader {
             .width(32).height('100%')
             .position({ x: 0, y: 0 })
             .hitTestBehavior(HitTestMode.Transparent)
+            .visibility(this.edgeBrightness ? Visibility.Visible : Visibility.None)
             .gesture(
               PanGesture({ fingers: 1, distance: 5, direction: PanDirection.Vertical })
                 .onActionStart(() => {
@@ -5648,13 +7588,132 @@ struct Reader {
                 })
             )
           }
-          .width('100%').layoutWeight(1)
+          .width('100%').height('100%')
           .onAreaChange((oldArea: Area, newArea: Area) => {
             this.pageAreaW = typeof newArea.width === 'number' ? newArea.width : 0;
             this.pageAreaH = typeof newArea.height === 'number' ? newArea.height : 0;
           })
         }
+      }
+      .width('100%').height('100%')
+      .backgroundColor(this.chromeBg())
 
+      /* Top chrome overlay (Android titleBar + menuLayout parity): floats over
+       * the content; HitTestMode.None keeps the wrapper click-through so the
+       * rows themselves still consume their own taps. */
+      Column() {
+        /* 0.9.59 (Android document_title + document_title_buttons parity):
+         * the top chrome is two rows — status info row + right-aligned icon
+         * band; both bars show/hide with a single center tap (barsVisible). */
+        if (this.barsVisible && this.showStatusBar) {
+          Row() {
+            Column({ space: 1 }) {
+              Text(this.docTitle.length > 16 ? this.docTitle.substring(0, 16) + '…' : (this.docTitle.length > 0 ? this.docTitle : ''))
+                .fontSize(this.statusBarFontPx).fontColor(Color.White).maxLines(1).fontWeight(FontWeight.Medium)
+              Text(this.totalPages > 0 ? `${this.currentPage + 1}/${this.totalPages}` : '...')
+                .fontSize(Math.max(9, this.statusBarFontPx - 4)).fontColor('#c5cae9')
+            }
+            .alignItems(HorizontalAlign.Start)
+            .layoutWeight(1)
+
+            if (this.showClockTop || this.showBatteryTop) {
+              Row({ space: 4 }) {
+                if (this.showClockTop) {
+                  Image($r('app.media.ic_clock'))
+                    .width(14).height(14).fillColor('#c5cae9')
+                  Text(this.topClock)
+                    .fontSize(Math.max(9, this.statusBarFontPx - 3)).fontColor('#c5cae9')
+                }
+                if (this.showBatteryTop) {
+                  Image($r('app.media.ic_battery'))
+                    .width(14).height(14).fillColor('#c5cae9').margin({ left: 8 })
+                  Text(this.topBattery)
+                    .fontSize(Math.max(9, this.statusBarFontPx - 3)).fontColor('#c5cae9')
+                }
+              }
+              .margin({ right: 12 })
+            }
+          }
+          .width('100%').height(40)
+          .padding({ left: 12, right: 12 })
+          .backgroundColor(this.statusColorDay.length > 0 && !this.nightMode ? this.statusColorDay : this.barBg())
+        }
+        /* icon band — 6 keys, right-aligned (Android menuLayout:
+         * 对齐文档/日夜切换/全屏/AI 对照翻译/阅读偏好/关书) */
+        if (this.barsVisible) {
+          Row({ space: 20 }) {
+            Image($r('app.media.ic_rdr_align'))
+              .width(22).height(22).fillColor(Color.White)
+              .id('reader_btn_align')
+              .onClick(() => {
+                this.doubleTapFit();
+                console.info('[Reader] Align document (top band)');
+              })
+            Image(this.nightMode ? $r('app.media.ic_rdr_moon') : $r('app.media.ic_rdr_sun'))
+              .width(22).height(22).fillColor(Color.White)
+              .id('reader_btn_night')
+              .onClick(() => {
+                this.toggleNightMode();
+              })
+            Image($r('app.media.ic_rdr_full'))
+              .width(22).height(22).fillColor(Color.White)
+              .id('reader_btn_full')
+              .onClick(() => {
+                this.toggleFullscreen();
+              })
+            Image($r('app.media.ic_rdr_ai'))
+              .width(22).height(22)
+              .id('reader_btn_ai')
+              .onClick(() => {
+                this.openTransDialog();
+              })
+            Image($r('app.media.ic_rdr_pref'))
+              .width(22).height(22).fillColor(Color.White)
+              .id('reader_btn_pref')
+              .onClick(() => {
+                this.showPref = true;
+                console.info('[Reader] Pref dialog opened (top band)');
+              })
+            Image($r('app.media.ic_rdr_close'))
+              .width(22).height(22).fillColor(Color.White)
+              .id('reader_btn_close')
+              .onClick(() => {
+                router.back();
+                console.info('[Reader] Close reader');
+              })
+          }
+          .width('100%').height(44)
+          .padding({ left: 12, right: 14 })
+          .justifyContent(FlexAlign.End)
+          .backgroundColor(this.barBg())
+        }
+        /* thin reading-progress line + chapter ticks (Android ProgressDraw);
+         * 0.9.59: gated by 显示进度条/章节进度条, height = 进度条高度 */
+        if (this.barsVisible && this.showProgressBar) {
+          Stack({ alignContent: Alignment.Start }) {
+            Progress({ value: this.totalPages > 0 ? this.currentPage + 1 : 0, total: this.totalPages > 0 ? this.totalPages : 1, type: ProgressType.Linear })
+              .width('100%').height(this.progressBarH)
+              .style({ strokeWidth: Math.max(2, Math.round(this.progressBarH / 2)) })
+              .color(Color.White)
+              .backgroundColor('#5c6bc0')
+            if (this.totalPages > 0 && this.showChapterTicks && this.tocEntries.length > 1 && this.tocEntries.length <= 120) {
+              ForEach(this.tocEntries, (t: TocEntry) => {
+                Row()
+                  .width(1).height(this.progressBarH)
+                  .backgroundColor('#59FFFFFF')
+                  .position({ x: `${Math.min(100, Math.round(t.page * 100 / this.totalPages))}%`, y: 0 })
+              }, (t: TocEntry) => `tick_${t.page}_${t.title}`)
+            }
+          }
+          .width('100%').height(this.progressBarH)
+        }
+      }
+      .width('100%')
+      .hitTestBehavior(HitTestMode.None)
+
+      /* Bottom chrome overlay (Android bottomBar/document_footer parity): floats
+       * over the content, packed to the bottom edge. */
+      Column() {
         /* 0.9.25 P0-3: whole-book cache progress banner (Android remote
          * progress banner) - visible while the P3 filler runs */
         if (this.isRemote && this.remoteFillPercent >= 0 && this.remoteFillPercent < 100) {
@@ -5666,9 +7725,17 @@ struct Reader {
         }
         /* 0.9.23 (Android 10-10 parity): the page seek row moved ABOVE the
          * icon row (document_footer.xml order). */
+        if (this.barsVisible) {
         Row({ space: 10 }) {
-          Text(this.totalPages > 0 ? '' + (this.currentPage + 1) : '0')
+          Text(this.totalPages > 0 ? (this.progressScale === 1 ? `${Math.round((this.currentPage + 1) * 100 / this.totalPages)}%` : '' + (this.currentPage + 1)) : '0')
             .fontSize(12).fontColor(Color.White).width(36).textAlign(TextAlign.Center)
+            .id('reader_seek_cur')
+            .onClick(() => {
+              this.jumpInput = String(this.currentPage + 1);
+              this.showJump = true;
+              console.info('[Reader] Jump-to-page dialog opened (seek row)');
+            })
+          if (this.seekNav) {
           Slider({ value: this.currentPage, min: 0, max: Math.max(this.totalPages - 1, 1), step: 1 })
             .layoutWeight(1).height(24)
             .selectedColor(Color.White)
@@ -5691,95 +7758,81 @@ struct Reader {
                 }
               }
             })
+          } else {
+            Blank().layoutWeight(1)
+          }
           Text(this.totalPages > 0 ? '' + this.totalPages : '0')
             .fontSize(12).fontColor(Color.White).width(36).textAlign(TextAlign.Center)
         }
         .width('100%')
         .padding({ left: 8, right: 8, top: 2, bottom: 6 })
         .backgroundColor(this.barBg())
-
-        // Bottom toolbar (Android hr10/11: brand blue bar, white icons; Round 6: scrollable + full icon set)
-        Scroll() {
-          Row() {
-            Image($r('app.media.ic_search'))
-              .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
+        }
+        /* 0.9.59 (Android document_footer parity): right-aligned 6-key row —
+         * 搜索/选择/书签开关/目录/触摸锁定/书籍菜单; the extra keys moved to
+         * the book menu (TTS/缩略图/历史/滚动模式) */
+        if (this.barsVisible) {
+          Row({ space: 22 }) {
+            Image($r('app.media.ic_rdr_search'))
+              .width(22).height(22).fillColor(Color.White)
+              .id('reader_btn_search')
               .onClick(() => this.openSearch())
 
-            Image($r('app.media.ic_edit'))
-              .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
+            Image($r('app.media.ic_rdr_note'))
+              .width(22).height(22).fillColor(Color.White)
+              .id('reader_btn_edit')
               .onClick(() => {
-                this.loadTextRects();
-                this.parseSelLines();
-                this.selMode = true;
-                console.info(`[Reader] Selection mode (bottom bar) on page ${this.currentPage}`);
+                /* 0.9.60 (Android editTop2 parity): the pencil is the note editor */
+                this.openNoteEdit();
               })
 
-            Image($r('app.media.ic_bookmark'))
-              .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
+            Image($r('app.media.ic_rdr_bookmark'))
+              .width(22).height(22).fillColor(this.bmOnPage ? '#ffd54f' : Color.White)
               .id('reader_btn_bm_toggle')
               .onClick(() => {
-                this.toggleBookmark();
-              })
-
-            Image($r('app.media.ic_list'))
-              .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
-              .onClick(() => {
+                /* 0.9.62 (Android dialogShowBookmarks parity): the bookmark
+                 * key opens the bookmark dialog — add / quick add / list */
                 this.loadBookmarks().then(() => {
-                  this.showBookmarks = true;
-                  console.info('[Reader] Bookmark panel opened (bottom bar)');
+                  this.bmSearch = '';
+                  this.showBmList = true;
                 });
               })
 
-            Image($r('app.media.ic_rewind'))
-              .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
-              .onClick(() => {
-                this.popPageHistory();
-              })
-
-            Image($r('app.media.ic_thumbnails'))
-              .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
-              .onClick(() => {
-                this.openThumbs();
-              })
-
-            Image($r('app.media.ic_headphones'))
-              .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
-              .onClick(() => {
-                this.openTtsPanel();
-              })
-
-            Image($r('app.media.ic_exchange'))
-              .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
-              .onClick(() => {
-                this.toggleScrollMode();
-                console.info(`[Reader] Scroll mode switched (bottom bar): ${this.scrollMode}`);
-              })
-
-            Blank()
-
-            Image($r('app.media.ic_lock'))
-              .width(22).height(22).fillColor(Color.White).margin({ right: 18 })
-              .onClick(() => {
-                this.toggleFullscreen();
-                console.info('[Reader] Lock/fullscreen toggled (bottom bar)');
-              })
-
-            Image($r('app.media.ic_more_vert'))
+            Image($r('app.media.ic_rdr_toc'))
               .width(22).height(22).fillColor(Color.White)
+              .id('reader_btn_doc_toc')
               .onClick(() => {
-                this.showMenu = !this.showMenu;
-                console.info(`[Reader] Menu toggled (bottom bar): ${this.showMenu}`);
+                this.showToc = true;
+                console.info('[Reader] TOC opened (bottom bar)');
+              })
+
+            Image(this.inputLocked ? $r('app.media.ic_rdr_lock') : $r('app.media.ic_rdr_lock_open'))
+              .width(22).height(22).fillColor(this.inputLocked ? '#ffd54f' : Color.White)
+              .id('reader_btn_lock')
+              .onClick(() => {
+                /* 0.9.55: real touch-lock toggle (Android lock button parity) */
+                this.inputLocked = !this.inputLocked;
+                promptAction.showToast({ message: this.inputLocked ? $r('app.string.reader_locked') : $r('app.string.reader_unlocked') });
+                console.info(`[Reader] Touch lock toggled: ${this.inputLocked}`);
+              })
+
+            Image($r('app.media.ic_rdr_more'))
+              .width(22).height(22).fillColor(Color.White)
+              .id('reader_btn_more')
+              .onClick(() => {
+                /* 0.9.60 (Android bookMenu parity): the dots open the ShareDialog-style menu */
+                this.showBookMenu = true;
               })
           }
+          .width('100%').height(44)
+          .padding({ left: 16, right: 16 })
+          .justifyContent(FlexAlign.End)
+          .backgroundColor(this.barBg())
         }
-        .scrollable(ScrollDirection.Horizontal)
-        .scrollBar(BarState.Off)
-        .width('100%').height(44)
-        .padding({ left: 16, right: 16 })
-        .backgroundColor(this.barBg())
       }
       .width('100%').height('100%')
-      .backgroundColor(this.chromeBg())
+      .justifyContent(FlexAlign.End)
+      .hitTestBehavior(HitTestMode.None)
 
       /* I5: Blue light filter overlay (warm color, touches pass through) */
       if (this.blueLightFilter > 0) {
@@ -5978,24 +8031,6 @@ struct Reader {
               .onClick(() => this.toggleNightMode())
           }
 
-          // Brightness slider
-          Row({ space: 8 }) {
-            Text($r('app.string.reader_brightness'))
-              .fontSize(13).fontColor('#555')
-            Slider({
-              value: this.brightnessLevel,
-              min: 1,
-              max: 255,
-              step: 4
-            })
-              .layoutWeight(1)
-              .onChange((value: number) => {
-                this.setBrightness(value);
-              })
-            Text(`${Math.round(this.brightnessLevel / 2.55)}%`)
-              .fontSize(11).fontColor('#777').width(36)
-          }
-
           // Auto-flip toggle
           Row({ space: 8 }) {
             Text($r('app.string.reader_autoflip'))
@@ -6087,23 +8122,6 @@ struct Reader {
               })
           }
 
-          /* I5: Blue light filter */
-          Row({ space: 8 }) {
-            Text($r('app.string.reader_bluelight'))
-              .fontSize(13).fontColor('#555')
-            Slider({ value: this.blueLightFilter, min: 0, max: 100, step: 5 })
-              .layoutWeight(1)
-              .onChange((value: number, mode: SliderChangeMode) => {
-                this.blueLightFilter = Math.round(value);
-                if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                  console.info(`[Reader] Blue light filter: ${this.blueLightFilter}%`);
-                  this.persistSettings();
-                }
-              })
-            Text(this.blueLightFilter > 0 ? `${this.blueLightFilter}%` : $r('app.string.common_off'))
-              .fontSize(11).fontColor('#777').width(36)
-          }
-
           /* I2: RTL reading direction */
           Row({ space: 8 }) {
             Text('RTL:')
@@ -6120,18 +8138,6 @@ struct Reader {
                 }
                 /* For Swiper, the RTL is handled by reverse() in UI */
                 console.info(`[Reader] RTL mode: ${this.rtlEnabled ? 'ON' : 'OFF'}`);
-              })
-          }
-
-          /* I4: Gesture configuration */
-          Row({ space: 8 }) {
-            Button($r('app.string.reader_gestures'))
-              .fontSize(12).height(32)
-              .backgroundColor('#7e57c2').fontColor(Color.White)
-              .onClick(() => {
-                this.showMenu = false;
-                this.showGestureConfig = true;
-                console.info('[Reader] Gesture config opened');
               })
           }
 
@@ -6231,6 +8237,20 @@ struct Reader {
               .fontSize(11).fontColor('#777').width(24)
           }
 
+          /* 0.9.59: bookmark panel entry (the bottom row is the right-aligned
+           * 6-key set now; 🔖 there is the quick-add toggle) */
+          Row({ space: 8 }) {
+            Button($r('app.string.reader_bm_panel'))
+              .fontSize(12).height(32)
+              .backgroundColor('#5c6bc0').fontColor(Color.White)
+              .onClick(() => {
+                this.showMenu = false;
+                this.loadBookmarks().then(() => {
+                  this.showBookmarks = true;
+                });
+              })
+          }
+
           // TTS & RSVP entries (sprint D)
           Row({ space: 8 }) {
             Button($r('app.string.menu_tts'))
@@ -6247,33 +8267,6 @@ struct Reader {
                 this.showMenu = false;
                 this.openRsvpPanel();
               })
-          }
-
-          // Settings button (sprint E)
-          Row({ space: 8 }) {
-            Button($r('app.string.menu_settings'))
-              .fontSize(12).height(32)
-              .backgroundColor('#607d8b').fontColor(Color.White)
-              .onClick(() => {
-                this.showMenu = false;
-                this.showSettings = true;
-                console.info('[Reader] Settings panel opened');
-              })
-          }
-
-          // Typography panel toggle (sprint H4/H5) - only for reflowable docs
-          if (this.isReflow) {
-            Row({ space: 8 }) {
-              Button($r('app.string.reader_typography'))
-                .fontSize(12).height(32)
-                .backgroundColor('#ff7043').fontColor(Color.White)
-                .onClick(() => {
-                  this.showMenu = false;
-                  this.refreshUserFonts();
-                  this.showTypographyPanel = true;
-                  console.info('[Reader] Typography panel opened');
-                })
-            }
           }
 
           // TOC button
@@ -6331,93 +8324,6 @@ struct Reader {
         }
       }
 
-      /* I4: Gesture configuration dialog */
-      if (this.showGestureConfig) {
-        Stack({ alignContent: Alignment.Center }) {
-          Column()
-            .width('100%').height('100%')
-            .backgroundColor('#66000000')
-            .onClick(() => { this.showGestureConfig = false; })
-
-          Scroll() {
-            Column({ space: 12 }) {
-              Text($r('app.string.reader_gestures'))
-                .fontSize(15).fontWeight(FontWeight.Bold)
-
-              /* Round 9: all three zones share the unified 8-action list;
-               * Flex-wrap keeps all chips visible on narrow screens */
-              Row() {
-                Text($r('app.string.reader_zone_left'))
-                  .fontSize(12).fontColor('#555').width(40)
-                Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
-                  ForEach(this.zoneActionRes(), (res: Resource, idx: number) => {
-                    Button(res).fontSize(11).height(28)
-                      .backgroundColor(this.tapLeftAction === idx ? '#2a7' : '#e0e0e0')
-                      .fontColor(this.tapLeftAction === idx ? Color.White : '#333')
-                      .margin(3)
-                      .onClick(() => { this.tapLeftAction = idx; })
-                  }, (res: Resource, idx: number) => `L${idx}_${this.tapLeftAction}`)
-                }
-                .layoutWeight(1)
-              }
-              .width('100%')
-
-              /* Center tap zone */
-              Row() {
-                Text($r('app.string.reader_zone_center'))
-                  .fontSize(12).fontColor('#555').width(40)
-                Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
-                  ForEach(this.zoneActionRes(), (res: Resource, idx: number) => {
-                    Button(res).fontSize(11).height(28)
-                      .backgroundColor(this.tapCenterAction === idx ? '#2a7' : '#e0e0e0')
-                      .fontColor(this.tapCenterAction === idx ? Color.White : '#333')
-                      .margin(3)
-                      .onClick(() => { this.tapCenterAction = idx; })
-                  }, (res: Resource, idx: number) => `C${idx}_${this.tapCenterAction}`)
-                }
-                .layoutWeight(1)
-              }
-              .width('100%')
-
-              /* Right tap zone */
-              Row() {
-                Text($r('app.string.reader_zone_right'))
-                  .fontSize(12).fontColor('#555').width(40)
-                Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
-                  ForEach(this.zoneActionRes(), (res: Resource, idx: number) => {
-                    Button(res).fontSize(11).height(28)
-                      .backgroundColor(this.tapRightAction === idx ? '#2a7' : '#e0e0e0')
-                      .fontColor(this.tapRightAction === idx ? Color.White : '#333')
-                      .margin(3)
-                      .onClick(() => { this.tapRightAction = idx; })
-                  }, (res: Resource, idx: number) => `R${idx}_${this.tapRightAction}`)
-                }
-                .layoutWeight(1)
-              }
-              .width('100%')
-
-              Button($r('app.string.common_save'))
-                .fontSize(13).height(34)
-                .backgroundColor('#2a7').fontColor(Color.White)
-                .margin({ top: 8 })
-                .onClick(() => {
-                  this.showGestureConfig = false;
-                  /* Round 9: actually persist the zone actions (was log-only) */
-                  this.persistSettings();
-                  console.info(`[Reader] Gestures saved: L=${this.tapLeftAction} C=${this.tapCenterAction} R=${this.tapRightAction}`);
-                })
-            }
-            .width('100%')
-            .padding(20)
-            .backgroundColor(Color.White)
-          }
-          .width('80%')
-          .height('55%')
-          .borderRadius(12)
-        }
-      }
-
-      /* I7: Text replacement panel */
       if (this.showTextReplace) {
         Stack({ alignContent: Alignment.Center }) {
           Column()
@@ -6468,196 +8374,9 @@ struct Reader {
         }
       }
 
-      /* Typography settings panel (sprint H4/H5) */
-      if (this.showTypographyPanel) {
-        Stack({ alignContent: Alignment.Center }) {
-          Column()
-            .width('100%').height('100%')
-            .backgroundColor('#66000000')
-            .onClick(() => {
-              this.showTypographyPanel = false;
-            })
-
-          Scroll() {
-            Column({ space: 12 }) {
-              Text($r('app.string.typo_title'))
-                .fontSize(15).fontWeight(FontWeight.Bold)
-
-              /* H4: Text alignment */
-              Row({ space: 6 }) {
-                Text($r('app.string.typo_align'))
-                  .fontSize(12).fontColor('#555')
-                Button($r('app.string.typo_left')).fontSize(11).height(30)
-                  .backgroundColor(this.textAlign === 0 ? '#2a7' : '#e0e0e0')
-                  .fontColor(this.textAlign === 0 ? Color.White : '#333')
-                  .onClick(() => { this.textAlign = 0; this.applyTypography(); })
-                Button($r('app.string.typo_center')).fontSize(11).height(30)
-                  .backgroundColor(this.textAlign === 1 ? '#2a7' : '#e0e0e0')
-                  .fontColor(this.textAlign === 1 ? Color.White : '#333')
-                  .onClick(() => { this.textAlign = 1; this.applyTypography(); })
-                Button($r('app.string.typo_right')).fontSize(11).height(30)
-                  .backgroundColor(this.textAlign === 2 ? '#2a7' : '#e0e0e0')
-                  .fontColor(this.textAlign === 2 ? Color.White : '#333')
-                  .onClick(() => { this.textAlign = 2; this.applyTypography(); })
-                Button($r('app.string.typo_justify')).fontSize(11).height(30)
-                  .backgroundColor(this.textAlign === 3 ? '#2a7' : '#e0e0e0')
-                  .fontColor(this.textAlign === 3 ? Color.White : '#333')
-                  .onClick(() => { this.textAlign = 3; this.applyTypography(); })
-              }
-
-              /* H4: Paragraph spacing */
-              Row({ space: 8 }) {
-                Text($r('app.string.typo_indent'))
-                  .fontSize(12).fontColor('#555')
-                Slider({ value: this.paragraphSpacing, min: 0, max: 32, step: 2 })
-                  .layoutWeight(1)
-                  .onChange((value: number, mode: SliderChangeMode) => {
-                    this.paragraphSpacing = Math.round(value);
-                    if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                      this.applyTypography();
-                    }
-                  })
-                Text(`${this.paragraphSpacing}px`)
-                  .fontSize(11).fontColor('#777').width(36)
-              }
-
-              /* H5: Hyphenation toggle */
-              Row({ space: 8 }) {
-                Text($r('app.string.typo_hyphen'))
-                  .fontSize(12).fontColor('#555')
-                Button(this.hyphenationEnabled ? $r('app.string.common_on') : $r('app.string.common_off'))
-                  .fontSize(12).height(30)
-                  .backgroundColor(this.hyphenationEnabled ? '#2a7' : '#e0e0e0')
-                  .fontColor(this.hyphenationEnabled ? Color.White : '#333')
-                  .onClick(() => {
-                    this.hyphenationEnabled = !this.hyphenationEnabled;
-                    this.applyTypography();
-                  })
-                Text($r('app.string.typo_hyphen_en'))
-                  .fontSize(10).fontColor('#999')
-              }
-
-                /* Sprint L: text indent slider */
-                Row() {
-                  Text($r('app.string.typo_indent_n')).fontSize(12).fontColor('#555').width(50)
-                  Slider({ value: this.textIndent, min: 0, max: 4, step: 0.5 })
-                    .layoutWeight(1)
-                    .onChange((v: number) => { this.textIndent = v; })
-                }.width('90%').margin({ top: 8 })
-
-                /* Sprint L: drop cap toggle */
-                Row() {
-                  Text($r('app.string.typo_dropcap')).fontSize(12).fontColor('#555')
-                  Button(this.dropCapEnabled ? $r('app.string.common_on') : $r('app.string.common_off'))
-                    .fontSize(12).height(30)
-                    .backgroundColor(this.dropCapEnabled ? '#2a7' : '#e0e0e0')
-                    .fontColor(this.dropCapEnabled ? Color.White : '#333')
-                    .onClick(() => {
-                      this.dropCapEnabled = !this.dropCapEnabled;
-                      this.applyTypography();
-                    })
-                }.width('90%').margin({ top: 8 })
-
-                /* Sprint L: font family selector */
-                Row() {
-                  Text($r('app.string.typo_font')).fontSize(12).fontColor('#555').width(50)
-                  Button($r('app.string.common_default'))
-                    .height(28).fontSize(11).layoutWeight(1)
-                    .backgroundColor(this.fontFamilyIdx === 0 ? '#2a7' : '#e0e0e0')
-                    .fontColor(this.fontFamilyIdx === 0 ? Color.White : '#333')
-                    .onClick(() => { this.fontFamilyIdx = 0; this.userFontPath = ''; this.userFontName = ''; this.applyTypography(); this.persistSettings(); })
-                  Button($r('app.string.font_serif'))
-                    .height(28).fontSize(11).layoutWeight(1).margin({ left: 4 })
-                    .backgroundColor(this.fontFamilyIdx === 1 ? '#2a7' : '#e0e0e0')
-                    .fontColor(this.fontFamilyIdx === 1 ? Color.White : '#333')
-                    .onClick(() => { this.fontFamilyIdx = 1; this.userFontPath = ''; this.userFontName = ''; this.applyTypography(); this.persistSettings(); })
-                  Button($r('app.string.font_sans'))
-                    .height(28).fontSize(11).layoutWeight(1).margin({ left: 4 })
-                    .backgroundColor(this.fontFamilyIdx === 2 ? '#2a7' : '#e0e0e0')
-                    .fontColor(this.fontFamilyIdx === 2 ? Color.White : '#333')
-                    .onClick(() => { this.fontFamilyIdx = 2; this.userFontPath = ''; this.userFontName = ''; this.applyTypography(); this.persistSettings(); })
-                  Button($r('app.string.font_mono'))
-                    .height(28).fontSize(11).layoutWeight(1).margin({ left: 4 })
-                    .backgroundColor(this.fontFamilyIdx === 3 ? '#2a7' : '#e0e0e0')
-                    .fontColor(this.fontFamilyIdx === 3 ? Color.White : '#333')
-                    .onClick(() => { this.fontFamilyIdx = 3; this.userFontPath = ''; this.userFontName = ''; this.applyTypography(); this.persistSettings(); })
-                }.width('90%').margin({ top: 8 })
-
-                /* 0.9.33 P2-11: imported user fonts (+ = pick a TTF/OTF/TTC) */
-                Row() {
-                  Text('').fontSize(12).width(50)
-                  Scroll() {
-                    Row() {
-                      ForEach(this.userFonts, (f: UserFontRec) => {
-                        Button(f.name)
-                          .height(28).fontSize(11).margin({ right: 4 })
-                          .backgroundColor(this.userFontName === f.name ? '#2a7' : '#e0e0e0')
-                          .fontColor(this.userFontName === f.name ? Color.White : '#333')
-                          .onClick(() => { this.selectUserFont(f); })
-                      }, (f: UserFontRec) => f.path)
-                      Button('+')
-                        .height(28).fontSize(13).padding({ left: 12, right: 12 })
-                        .backgroundColor('#e0e0e0').fontColor('#333')
-                        .onClick(() => { this.importUserFont(); })
-                    }
-                  }.layoutWeight(1).scrollBar(BarState.Off)
-                }.width('90%').margin({ top: 8 })
-              Button($r('app.string.common_done'))
-                .fontSize(13).height(34)
-                .backgroundColor('#e0e0e0').fontColor('#333')
-                .margin({ top: 8 })
-                .onClick(() => {
-                  this.showTypographyPanel = false;
-                })
-            }
-            .width('100%')
-            .padding(20)
-            .backgroundColor(Color.White)
-          }
-          .width('75%')
-          .height('60%')
-          .borderRadius(12)
-        }
-      }
-
-      /* File info dialog (sprint G6) */
+      /* 0.9.61: file info (Android FileInformationDialog parity) */
       if (this.showFileInfo) {
-        Stack({ alignContent: Alignment.Center }) {
-          Column()
-            .width('100%').height('100%')
-            .backgroundColor('#66000000')
-            .onClick(() => {
-              this.showFileInfo = false;
-              console.info('[Reader] File info closed');
-            })
-
-          Column({ space: 10 }) {
-            Text($r('app.string.reader_file_info'))
-              .fontSize(16).fontWeight(FontWeight.Bold)
-
-            if (this.fileInfoText.length > 0) {
-              Text(this.fileInfoText)
-                .fontSize(12).fontColor('#444')
-                .width('100%')
-                .textAlign(TextAlign.Start)
-            } else {
-              Text($r('app.string.common_loading'))
-                .fontSize(13).fontColor('#999')
-            }
-
-            Button($r('app.string.common_close'))
-              .fontSize(13).height(34)
-              .backgroundColor('#e0e0e0').fontColor('#333')
-              .margin({ top: 8 })
-              .onClick(() => {
-                this.showFileInfo = false;
-              })
-          }
-          .width('75%')
-          .padding(20)
-          .backgroundColor(Color.White)
-          .borderRadius(12)
-        }
+        this.buildFileInfoDialog()
       }
 
       /* TOC sidebar (slides in from right) */
@@ -7249,106 +8968,42 @@ struct Reader {
         }
       }
 
-      /* Settings panel (modal, sprint E) */
-      if (this.showSettings) {
-        Stack({ alignContent: Alignment.Center }) {
-          /* dim background to close the panel */
-          Column()
-            .width('100%').height('100%')
-            .backgroundColor('#66000000')
-            .onClick(() => {
-              this.showSettings = false;
-              console.info('[Reader] Settings panel closed');
-            })
+      /* 0.9.59: 4-tab reader preference dialog (偏好) */
+      if (this.showPref) {
+        this.buildPrefDialog()
+      }
 
-          Scroll() {
-            Column({ space: 12 }) {
-              Text($r('app.string.reader_settings'))
-                .fontSize(16).fontWeight(FontWeight.Bold)
-
-              Row({ space: 8 }) {
-                Text($r('app.string.set_theme'))
-                  .fontSize(13).fontColor('#555')
-                ForEach(THEME_NAMES, (name: string, idx: number) => {
-                  Button(name)
-                    .fontSize(12).height(32)
-                    .backgroundColor(this.theme === idx ? '#2a7' : '#e0e0e0')
-                    .fontColor(this.theme === idx ? Color.White : '#333')
-                    .onClick(() => this.setTheme(idx))
-                }, (name: string, idx: number) => `t_${idx}`)
-              }
-
-              if (this.isReflow) {
-                Row({ space: 8 }) {
-                  Text($r('app.string.set_font_size'))
-                    .fontSize(13).fontColor('#555')
-                  Slider({ value: this.fontSize, min: 10, max: 28, step: 1 })
-                    .layoutWeight(1)
-                    .onChange((value: number, mode: SliderChangeMode) => {
-                      this.fontSize = value;
-                      if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                        this.applyReflow();
-                      }
-                    })
-                  Text(`${this.fontSize}`)
-                    .fontSize(11).fontColor('#777').width(30)
-                }
-
-                Row({ space: 8 }) {
-                  Text($r('app.string.set_line_height'))
-                    .fontSize(13).fontColor('#555')
-                  Slider({ value: this.lineHeight, min: 1.0, max: 2.5, step: 0.1 })
-                    .layoutWeight(1)
-                    .onChange((value: number, mode: SliderChangeMode) => {
-                      this.lineHeight = value;
-                      if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                        this.applyReflow();
-                      }
-                    })
-                  Text(`${this.lineHeight.toFixed(1)}`)
-                    .fontSize(11).fontColor('#777').width(30)
-                }
-
-                Row({ space: 8 }) {
-                  Text($r('app.string.set_margin'))
-                    .fontSize(13).fontColor('#555')
-                  Slider({ value: this.pageMargin, min: 0, max: 80, step: 4 })
-                    .layoutWeight(1)
-                    .onChange((value: number, mode: SliderChangeMode) => {
-                      this.pageMargin = value;
-                      if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                        this.applyReflow();
-                      }
-                    })
-                  Text(`${this.pageMargin}pt`)
-                    .fontSize(11).fontColor('#777').width(36)
-                }
-              } else {
-                Text($r('app.string.set_pdf_fixed_hint'))
-                  .fontSize(11).fontColor('#888').textAlign(TextAlign.Center)
-              }
-
-              Text($r('app.string.set_theme_hint'))
-                .fontSize(11).fontColor('#999').textAlign(TextAlign.Center)
-
-              Button($r('app.string.common_close'))
-                .fontSize(13).height(36)
-                .backgroundColor('#f0f0f0').fontColor('#555')
-                .onClick(() => {
-                  this.showSettings = false;
-                  console.info('[Reader] Settings panel closed');
-                })
-            }
-            .width('100%')
-            .padding(20)
-          }
-          .width('85%')
-          .height('70%')
-          .align(Alignment.Center)
-          .backgroundColor(Color.White)
-          .borderRadius(12)
-          .shadow({ radius: 16, color: '#40000000', offsetX: 0, offsetY: 4 })
-        }
+      /* 0.9.60 (Android ShareDialog parity): bottom-bar ⋮ book menu */
+      if (this.showBookMenu) {
+        this.buildBookMenuDialog()
+      }
+      /* 0.9.60 (Android NoteEditDialog parity): bottom-bar ✏ note editor */
+      if (this.showNoteEdit) {
+        this.buildNoteEditDialog()
+      }
+      /* 0.9.60: add-to-playlist picker */
+      if (this.showPlPick) {
+        this.buildPlPickDialog()
+      }
+      /* 0.9.60 (Android ai_intro_book parity): AI book intro */
+      if (this.showAiIntro) {
+        this.buildAiIntroDialog()
+      }
+      /* 0.9.61 (Android search popup parity) */
+      if (this.showSearch) {
+        this.buildSearchDialog()
+      }
+      /* 0.9.62 (Android dialogShowBookmarks parity): bookmark dialog */
+      if (this.showBmList) {
+        this.buildBmListDialog()
+      }
+      /* 0.9.62: named-bookmark input dialog */
+      if (this.showBmAdd) {
+        this.buildBmAddDialog()
+      }
+      /* 0.9.62: bookmark sort/share menu */
+      if (this.showBmSort) {
+        this.buildBmSortMenu()
       }
 
       /* Round 8: remote streaming open overlay */

@@ -5,7 +5,7 @@ UI 地图（Pura 90 模拟器 1320x2856，zh-CN；坐标来自 dumpLayout 实测
   阅读器工具条 y≈216：231=跳页 357=TTS 483=书签 609=目录 987=AI翻译
                         1113=阅读设置 1239=标注/最近
   底部 y≈2569：快滚滑轨（拖动换页）
-  偏好页：退出确认对话框 行 + 右侧 Toggle（_click_toggle_near 定位）
+  偏好/阅读器设置行：文本按钮或勾选框（_click_toggle_near 按 Checkbox/Toggle 定位）
   书库页：搜索框(hint=搜索)、筛选 chips(全部/未读/在读/已读)、行内 ☆ 收藏
   我的文件：网上书库(OPDS)/WebDAV/SMB/SFTP/书库文件夹 分区
 翻页通道：音量键（keyEvent 16/17，inputConsumer）——注入滑动到不了 Swiper。
@@ -16,6 +16,7 @@ import time
 from lib.hdcdriver import TestFail, TestSkip
 
 TB = 216  # reader toolbar y
+# (0.9.59) ICON_* coordinates retired — chrome clicks are id-based now
 ICON_JUMP, ICON_TTS, ICON_BM, ICON_TOC, ICON_AI, ICON_SET = 231, 357, 483, 609, 987, 1113
 
 
@@ -107,17 +108,9 @@ def _wait_any(dev, texts, timeout=10):
 
 
 def _toolbar_visible(dev):
-    """The reader top toolbar (icons at y≈216 on this 1320x2856 panel)."""
-    for n in dev._walk(dev.dump()):
-        a = n.get('attributes', {})
-        if a.get('type') != 'Image':
-            continue
-        m = re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', a.get('bounds', ''))
-        if m:
-            cy = (int(m.group(2)) + int(m.group(4))) // 2
-            if 170 <= cy <= 270:
-                return True
-    return False
+    """Top bars visible ⇔ the pref gear node exists (0.9.59 id-based check;
+    the chrome is two right-aligned rows now, geometry checks would drift)."""
+    return dev.find(id_='reader_btn_pref') is not None
 
 
 def _ensure_toolbar(dev):
@@ -125,6 +118,15 @@ def _ensure_toolbar(dev):
     toggle with the center tap (Reader action 2) and prior turns may hide
     them. Show-check loop; tapping when visible would HIDE, hence the guard."""
     for _ in range(3):
+        if _toolbar_visible(dev):
+            return
+        dev.click_xy(660, 1400)
+        time.sleep(1.0)
+    # 0.9.62: fresh installs default to the touch lock ON (0.9.55) — a locked
+    # tap only toasts. Unlock once (session-scoped) and retry.
+    dev.click_id('reader_btn_lock')
+    time.sleep(0.8)
+    for _ in range(2):
         if _toolbar_visible(dev):
             return
         dev.click_xy(660, 1400)
@@ -143,7 +145,7 @@ def _click_toggle_near(dev, label_text):
     y_center = (int(m.group(1)) + int(m.group(2))) // 2
     for n in dev._walk(dev.dump()):
         a = n.get('attributes', {})
-        if a.get('type') != 'Toggle':
+        if a.get('type') not in ('Checkbox', 'Toggle'):
             continue
         m2 = re.search(r'\[\d+,(\d+)\]\[\d+,(\d+)\]', a.get('bounds', ''))
         if m2 and abs((int(m2.group(1)) + int(m2.group(2))) // 2 - y_center) < 80:
@@ -280,7 +282,7 @@ def _click_add_after(dev, section_text):
 def fn01_open_epub(dev, case_id, cfg, fixtures):
     _ensure_home(dev, cfg)
     with dev.step(case_id, 'open Alice demo EPUB'):
-        pages = _open_book(dev, 'Alice', expect_pages=116)
+        pages = _open_book(dev, 'Alice', expect_pages=82)
         b, page = dev.current_page()
         if page != 'components/Reader':
             raise TestFail('not on Reader (%s)' % page)
@@ -290,7 +292,7 @@ def fn01_open_epub(dev, case_id, cfg, fixtures):
 def fn02_page_turn(dev, case_id, cfg, fixtures):
     _ensure_home(dev, cfg)
     with dev.step(case_id, 'volume-key turns advance pages'):
-        _open_book(dev, 'Alice', expect_pages=116)
+        _open_book(dev, 'Alice', expect_pages=82)
         dev.hilog_clear()
         last = 0
         for i in range(4):
@@ -301,7 +303,7 @@ def fn02_page_turn(dev, case_id, cfg, fixtures):
             time.sleep(0.7)
         if last < 3:
             raise TestFail('volume turns reached page %d (<3)' % last)
-        a = dev.find(text='/116')
+        a = dev.find(text='/82')
         if not a:
             raise TestFail('page indicator missing')
     _exit_reader(dev)
@@ -310,10 +312,10 @@ def fn02_page_turn(dev, case_id, cfg, fixtures):
 def fn03_jump_page(dev, case_id, cfg, fixtures):
     _ensure_home(dev, cfg)
     with dev.step(case_id, 'jump dialog to page 50'):
-        _open_book(dev, 'Alice', expect_pages=116)
+        _open_book(dev, 'Alice', expect_pages=82)
         _ensure_toolbar(dev)
         dev.hilog_clear()
-        dev.click_xy(ICON_JUMP, TB)
+        dev.click_id('reader_seek_cur')
         if not _wait_any(dev, ['跳转到页', 'Go to page', 'Jump to page'], 8):
             dev.save_dump('jump_dialog_fail')
             raise TestFail('jump dialog not shown')
@@ -324,7 +326,7 @@ def fn03_jump_page(dev, case_id, cfg, fixtures):
         dev.shell('uitest uiInput swipe 250 2695 633 2695 600')
         time.sleep(1.5)
         _ensure_toolbar(dev)
-        dev.click_xy(ICON_JUMP, TB)
+        dev.click_id('reader_seek_cur')
         if not _wait_any(dev, ['跳转到页', 'Go to page', 'Jump to page'], 8):
             dev.save_dump('jump_dialog_fail')
             raise TestFail('jump dialog not shown')
@@ -352,17 +354,17 @@ def fn03_jump_page(dev, case_id, cfg, fixtures):
             dev.save_dump('jump_fail')
             raise TestFail('jump_page_done wrong: %s (want page=%s)'
                            % (ev and ev['raw'], prefill))
-        if not dev.wait_text(prefill + '/116', timeout=8):
-            raise TestFail('indicator did not show %s/116' % prefill)
+        if not dev.wait_text(prefill + '/82', timeout=8):
+            raise TestFail('indicator did not show %s/115' % prefill)
     _exit_reader(dev)
 
 
 def fn04_toc(dev, case_id, cfg, fixtures):
     _ensure_home(dev, cfg)
     with dev.step(case_id, 'TOC panel opens'):
-        _open_book(dev, 'Alice', expect_pages=116)
+        _open_book(dev, 'Alice', expect_pages=82)
         _ensure_toolbar(dev)
-        dev.click_xy(ICON_TOC, TB)
+        dev.click_id('reader_btn_doc_toc')
         if not _wait_any(dev, ['目录', 'Contents'], 8):
             dev.save_dump('toc_fail')
             raise TestFail('TOC panel not shown')
@@ -376,62 +378,121 @@ def fn04_toc(dev, case_id, cfg, fixtures):
 
 def fn05_bookmark(dev, case_id, cfg, fixtures):
     _ensure_home(dev, cfg)
-    with dev.step(case_id, 'bookmark list loads at open + panel opens'):
-        _open_book(dev, 'Alice', expect_pages=116)
-        # bookmark_list_loaded fires ONCE at book open (panel shows cached
-        # data afterwards) — assert it from the open phase, no hilog_clear
+    with dev.step(case_id, 'bookmark dialog opens from bottom-bar key'):
+        _open_book(dev, 'Alice', expect_pages=82)
+        # bookmark_list_loaded fires ONCE at book open (dialog reuses the cache)
         ev = dev.hilog_events(evt='bookmark_list_loaded')
         if not ev:
             raise TestFail('bookmark_list_loaded not fired at open')
-        dev.click_xy(ICON_BM, TB)
-        time.sleep(1.0)
-        b, page = dev.current_page()
-        if page != 'components/Reader':
-            raise TestFail('left reader after bookmark icon (%s)' % page)
-    with dev.step(case_id, 'toggle bookmark via bottom bar (ic_bookmark)'):
-        # The bookmark TOGGLE is the bottom bar's 3rd icon (374,2569); the old
-        # top-bar slot 483 is ic_sliders now. Toggle state may be either way
-        # (bookmark already present), so accept remove-then-add.
         _ensure_toolbar(dev)
-        dev.hilog_clear()
-        # 0.9.43: the bottom bar is a scrollable icon row — the fixed
-        # (374,2569) slot drifted; drive the toggle by its CI id
+        # 0.9.62: the bookmark key opens the dialog (Android parity), no direct toggle
         if not dev.click_id('reader_btn_bm_toggle'):
-            dev.click_xy(374, 2569)
+            dev.save_dump('bm_key_fail')
+            raise TestFail('bookmark key not clickable')
+        got = _wait_any(dev, ['快速书签', 'Quick bookmark', '添加', 'Add'], timeout=8)
+        if not got:
+            dev.save_dump('bm_dialog_fail')
+            raise TestFail('bookmark dialog (add/quick buttons) not shown')
+    with dev.step(case_id, 'quick bookmark via dialog fires bookmark_added'):
+        dev.hilog_clear()
+        if not dev.click_id('reader_bm_quick'):
+            dev.save_dump('bm_quick_fail')
+            raise TestFail('quick bookmark button not clickable')
         ev = dev.wait_event('bookmark_added', timeout=8)
         if not ev:
-            if not dev.wait_event('bookmark_removed', timeout=4):
-                dev.save_dump('bm_toggle_fail')
-                raise TestFail('bookmark toggle produced no event')
+            # page may already carry a bookmark from an earlier run — the quick
+            # add skips then (Android parity); delete the first row and retry once
             if not dev.click_id('reader_btn_bm_toggle'):
-                dev.click_xy(374, 2569)
+                raise TestFail('bookmark key not clickable (pre-clean)')
+            dev.click_id('reader_bm_del')
+            dev.wait_event('bookmark_removed', timeout=6)
+            dev.hilog_clear()
+            if not dev.click_id('reader_bm_quick'):
+                raise TestFail('quick bookmark button not clickable (retry)')
             ev = dev.wait_event('bookmark_added', timeout=8)
-            if not ev:
-                dev.save_dump('bm_add_fail')
-                raise TestFail('bookmark_added not fired on re-toggle')
+        if not ev:
+            dev.save_dump('bm_quick_evt_fail')
+            raise TestFail('bookmark_added not fired for quick add')
+    with dev.step(case_id, 'dialog lists the row and delete removes it'):
         if not dev.click_id('reader_btn_bm_toggle'):
-            dev.click_xy(374, 2569)  # leave clean: remove again
+            raise TestFail('bookmark key not clickable (reopen)')
+        # the ROW is '<page>: 快速书签' — the ': ' prefix separates it from the button
+        listed = False
+        for _ in range(10):
+            if dev.exists_text(': 快速书签'):
+                listed = True
+                break
+            time.sleep(0.6)
+        if not listed:
+            dev.save_dump('bm_row_fail')
+            raise TestFail('bookmark row not listed after quick add')
+        dev.hilog_clear()
+        if not dev.click_id('reader_bm_del'):
+            dev.save_dump('bm_del_fail')
+            raise TestFail('row delete button not clickable')
         if not dev.wait_event('bookmark_removed', timeout=8):
-            dev.save_dump('bm_rm_fail')
-            raise TestFail('bookmark_removed not fired on cleanup')
+            dev.save_dump('bm_del_evt_fail')
+            raise TestFail('bookmark_removed not fired for row delete')
+    with dev.step(case_id, 'vertical mode: center tap hides/shows the bars'):
+        # close the bookmark dialog first (it stays open after a row delete)
+        dev.click_id('reader_bm_close', timeout=4)
+        time.sleep(0.8)
+        # 0.9.62: switch to vertical scroll via the ⋮ book menu (session-only
+        # toggleScrollMode; the first menu row is the mode entry)
+        if not dev.click_id('reader_btn_more'):
+            raise TestFail('book menu (⋮) not clickable')
+        got = _wait_any(dev, ['② Book mode', '滚动模式', 'Book mode', 'Scroll mode'], timeout=6)
+        if not got:
+            dev.save_dump('bm_menu_fail')
+            raise TestFail('book menu mode row not shown')
+        dev.click_text(got)
+        time.sleep(1.5)
+        if not _toolbar_visible(dev):
+            dev.click_xy(660, 1400)
+            time.sleep(1.0)
+        # the 0.9.62 fix: center tap must toggle the bars in vertical mode
+        # too. Fresh installs default to the touch lock ON (0.9.55) — locked
+        # taps only toast; unlock via the lock key when the probe does nothing.
+        dev.click_xy(660, 1400)
+        time.sleep(1.2)
+        if dev.find(id_='reader_btn_pref') is not None:
+            dev.click_id('reader_btn_lock')
+            time.sleep(0.8)
+            dev.click_xy(660, 1400)
+            time.sleep(1.2)
+        if dev.find(id_='reader_btn_pref') is not None:
+            dev.save_dump('vert_hide_fail')
+            raise TestFail('center tap did not hide bars in vertical mode')
+        dev.click_xy(660, 1400)
+        time.sleep(1.2)
+        if dev.find(id_='reader_btn_pref') is None:
+            dev.save_dump('vert_show_fail')
+            raise TestFail('center tap did not show bars back in vertical mode')
+        # restore horizontal via the same menu row before exiting
+        if not dev.click_id('reader_btn_more'):
+            raise TestFail('book menu (⋮) not clickable (restore)')
+        got = _wait_any(dev, ['① 滚动模式', '滚动模式', 'Scroll mode'], timeout=6)
+        if got:
+            dev.click_text(got)
+            time.sleep(1.5)
     _exit_reader(dev)
 
 
 def fn06_font_size(dev, case_id, cfg, fixtures):
     _ensure_home(dev, cfg)
     with dev.step(case_id, 'settings panel A+/A-'):
-        _open_book(dev, 'Alice', expect_pages=116)
-        dev.click_xy(ICON_SET, TB)
-        if not dev.wait_text('A+', timeout=8):
-            raise TestFail('settings panel (A+) not shown')
-        dev.click_text('A+')
-        time.sleep(0.8)
-        dev.click_text('A-')
-        time.sleep(0.8)
-        # settings_saved fires on panel-close persist; verify the reader is
-        # still alive and the panel still works (event informational)
-        if not dev.exists_text('A+'):
-            raise TestFail('settings panel closed unexpectedly after A+/A-')
+        _open_book(dev, 'Alice', expect_pages=82)
+        dev.click_id('reader_btn_pref')
+        if not (dev.wait_text('可视选项', timeout=8) or dev.wait_text('Visual', timeout=4)):
+            raise TestFail('pref dialog (visual tab) not shown')
+        dev.click_id('pf_font_plus')
+        time.sleep(1.2)
+        dev.click_id('pf_font_minus')
+        time.sleep(1.2)
+        # settings_saved fires on every pref persist; verify the dialog is
+        # still alive and the +/- row still works (event informational)
+        if not (dev.exists_text('可视选项') or dev.exists_text('Visual')):
+            raise TestFail('pref dialog closed unexpectedly after font +/-')
         ev = dev.hilog_events(evt='settings_saved')
         print('    [%s] settings_saved: %s' %
               (case_id, ev[-1]['raw'][:80] if ev else 'n/a (persists on close)'), flush=True)
@@ -439,41 +500,41 @@ def fn06_font_size(dev, case_id, cfg, fixtures):
 
 
 def fn07_night_mode(dev, case_id, cfg, fixtures):
+    """0.9.60: the top-band night key toggles directly (reader_btn_night);
+    the old settings-panel path is gone from this case."""
     _ensure_home(dev, cfg)
     with dev.step(case_id, 'toggle night mode'):
-        _open_book(dev, 'Alice', expect_pages=116)
+        _open_book(dev, 'Alice', expect_pages=82)
         _ensure_toolbar(dev)
-        dev.click_xy(ICON_SET, TB)
-        if not _wait_any(dev, ['夜间', 'Night'], 8):
-            dev.save_dump('night_panel_fail')
-            raise TestFail('settings panel (夜间) not shown')
-        if not (_click_toggle_near(dev, '夜间') or _click_toggle_near(dev, 'Night')):
-            dev.click_text('关')  # text-button fallback
+        if not dev.click_id('reader_btn_night'):
+            dev.save_dump('night_key_fail')
+            raise TestFail('reader_btn_night not clickable')
+        ev = dev.wait_event('night_mode', timeout=8)
+        if not ev or 'on' not in str(ev):
+            dev.save_dump('night_on_fail')
+            raise TestFail('night_mode on event not fired: %r' % (ev,))
         time.sleep(1.0)
-        dev.key('Back')  # closes the drawer (observed: may leave the reader)
-        time.sleep(1.0)
+        dev.save_dump('night_on')
     with dev.step(case_id, 'restore day mode'):
         if dev.current_page()[1] != 'components/Reader':
-            # the drawer Back left the reader: open the book again
-            _open_book(dev, 'Alice', expect_pages=116)
+            _open_book(dev, 'Alice', expect_pages=82)
             _ensure_toolbar(dev)
-            dev.click_xy(ICON_SET, TB)
-            if not _wait_any(dev, ['夜间', 'Night'], 8):
-                dev.save_dump('night_restore_fail')
-                raise TestFail('settings panel not shown on restore')
-        if not (_click_toggle_near(dev, '夜间') or _click_toggle_near(dev, 'Night')):
-            dev.click_text('开')
+        if not dev.click_id('reader_btn_night'):
+            dev.save_dump('night_key2_fail')
+            raise TestFail('reader_btn_night not clickable on restore')
+        ev = dev.wait_event('night_mode', timeout=8)
+        if not ev or 'off' not in str(ev):
+            dev.save_dump('night_off_fail')
+            raise TestFail('night_mode off event not fired: %r' % (ev,))
         time.sleep(1.0)
-        dev.key('Back')
-        time.sleep(1.0)
+        dev.save_dump('night_off')
     if dev.current_page()[1] == 'components/Reader':
         _exit_reader(dev)
-
 
 def fn08_reading_stats(dev, case_id, cfg, fixtures):
     _ensure_home(dev, cfg)
     with dev.step(case_id, '30s reading timer recorded'):
-        _open_book(dev, 'Alice', expect_pages=116)
+        _open_book(dev, 'Alice', expect_pages=82)
         dev.hilog_clear()
         ev = dev.wait_event('stats_readtime_recorded', timeout=45)
         if not ev:

@@ -1,8 +1,6 @@
 package com.foobnix.pdf.info.widget;
 
-import android.app.AlertDialog;
 import android.content.Context;
-import android.content.DialogInterface;
 import android.graphics.Color;
 import android.view.Gravity;
 import android.view.MenuItem;
@@ -24,7 +22,7 @@ import java.util.List;
 
 public class ControlOptionsDialog {
 
-    public static void show(final Context c) {
+    public static ScrollView buildContentView(final Context c) {
         ScrollView scroll = new ScrollView(c);
         LinearLayout root = new LinearLayout(c);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -107,15 +105,7 @@ public class ControlOptionsDialog {
             }
         });
 
-        final AlertDialog.Builder builder = new AlertDialog.Builder(c);
-        builder.setTitle(R.string.moon_control_options);
-        builder.setView(scroll);
-        builder.setNegativeButton(R.string.close, new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-            }
-        });
-        builder.show();
+        return scroll;
     }
 
     private interface ValueSetter {

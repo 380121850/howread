@@ -2473,15 +2473,22 @@ def fn13_tags(dev, case_id, cfg=None, fixtures=None):
                 break
             time.sleep(2)
         if add_tags is None:
-            for kw in ("Add tags", "添加标签", "标签"):
+            for kw in ("Add tags", "添加标签"):  # 「标签」是分区头文本,命中行头点击无效(2026-11-15 KSA 实锤,且会短路 tagsID/滚动兜底)
                 el = dev.d(textContains=kw)
                 if el.exists:
                     add_tags = el
                     break
         if add_tags is None or not add_tags.exists:
-            # 小屏(KSA)信息对话框无 addTags 链接,有「标签」行(tagsID)——点它进标签对话框
-            t = dev.d(resourceId=_rid(dev, "tagsID"))
-            add_tags = t if t.exists else None
+            # 2026-11-15 KSA 实锤:信息对话框内容可滚动,addTags 在首屏折叠线下方
+            # (tagsID 行可见但为只读展示,点击不弹标签对话框)——对话框内上滑后按 id 重查
+            _w0, _h0 = dev.d.window_size()
+            for _ in range(3):
+                dev.d.swipe(0.5 * _w0, int(0.75 * _h0), 0.5 * _w0, int(0.55 * _h0), 0.4)
+                time.sleep(1.5)
+                el = dev.d(resourceId=_rid(dev, "addTags"))
+                if _safe_exists(dev, el):
+                    add_tags = el
+                    break
         if add_tags is None or not add_tags.exists:
             # 2026-10-24 P30 a11y 假阴性兑底:u2 查不到时 legacy dump 找 addTags/tagsID
             lx = _legacy_dump_text(dev)
@@ -4794,15 +4801,26 @@ def fn45_settings_backup(dev, case_id, cfg=None, fixtures=None):
         _ensure_home(dev)
         _goto_tab_or_fail(dev, "偏好")
         hdr = dev.d(resourceId=_rid(dev, "backupConfigHeader"))
-        if hdr.exists:
+        hdr_clicked = False
+        if _safe_exists(dev, hdr):
             hdr.click()  # [备份配置]分区默认折叠(gone),导出/导入行展开后才在树里
+            hdr_clicked = True
             time.sleep(1.5)
         export_btn = None
-        for _ in range(6):
+        for _ in range(8):
             el = dev.d(resourceId=_rid(dev, "exportButton"))
             if el.exists:
                 export_btn = el
                 break
+            if not hdr_clicked:
+                # 2026-11-15 KSA 实锤:偏好页打开停在顶部,[备份配置]分区在首屏外,
+                # 只查一次首屏必 SKIP——滚动途中查到分区头先展开再继续找 exportButton
+                h2 = dev.d(resourceId=_rid(dev, "backupConfigHeader"))
+                if _safe_exists(dev, h2):
+                    h2.click()
+                    hdr_clicked = True
+                    time.sleep(1.5)
+                    continue
             w, h = dev.d.window_size()
             dev.d.swipe(0.5 * w, 0.7 * h, 0.5 * w, 0.4 * h, 0.3)
             time.sleep(1)

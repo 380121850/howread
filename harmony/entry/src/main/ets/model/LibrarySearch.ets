@@ -14,18 +14,20 @@ import { RecentBook } from './ReadingProgress';
  */
 
 /** File extensions treated as books during the device scan. */
-const BOOK_EXTS: string[] = ['pdf', 'epub', 'txt', 'html', 'htm', 'mobi', 'azw', 'azw3', 'prc', 'pdb', 'fb2', 'docx', 'rtf', 'md', 'cbz'];
+const BOOK_EXTS: string[] = ['pdf', 'epub', 'txt', 'html', 'htm', 'xhtml', 'mhtml', 'shtml', 'mobi', 'azw', 'azw3', 'prc', 'pdb', 'fb2', 'docx', 'doc', 'rtf', 'md', 'cbz', 'cbr', 'odt', 'xps', 'oxps', 'djvu', 'djv'];
 
 /** Round 7: scan-format families (Android AppState.support* -> ExtUtils.seachExts).
  *  The whitelist only filters scanning/import, never decoding ability. */
+/* 0.9.55: HTML/TXT merged into one family (Android HTML/TXT row: txt/html/
+ * xhtml/mhtml/shtml/md); legacy 'html' key folds into 'txtmd' on parse. */
 export const FORMAT_KEYS: string[] =
-  ['pdf', 'epub', 'fb2', 'txtmd', 'mobi', 'djvu', 'xps', 'doc', 'rtf', 'odt', 'cbz', 'zip', 'html'];
+  ['pdf', 'epub', 'fb2', 'txtmd', 'mobi', 'djvu', 'xps', 'doc', 'rtf', 'odt', 'cbz', 'zip'];
 
 export const FORMAT_EXTS: Record<string, string[]> = {
   'pdf': ['pdf'],
   'epub': ['epub'],
   'fb2': ['fb2'],
-  'txtmd': ['txt', 'md'],
+  'txtmd': ['txt', 'md', 'html', 'htm', 'xhtml', 'mhtml', 'shtml'],
   'mobi': ['mobi', 'azw', 'azw3', 'prc', 'pdb'],
   'djvu': ['djvu', 'djv'],
   'xps': ['xps', 'oxps'],
@@ -33,8 +35,7 @@ export const FORMAT_EXTS: Record<string, string[]> = {
   'rtf': ['rtf'],
   'odt': ['odt'],
   'cbz': ['cbz', 'cbr'],
-  'zip': ['zip'],
-  'html': ['html', 'htm']
+  'zip': ['zip']
 };
 
 /** Parse the persisted whitelist JSON; an empty string = no filter (all allowed). */
@@ -48,12 +49,64 @@ export function parseScanFormats(json: string): Record<string, boolean> {
     const m: Record<string, boolean> = o as Record<string, boolean>;
     const keys: string[] = Object.keys(o);
     for (let i = 0; i < keys.length; i++) {
+      if (keys[i] === 'html') {
+        continue; /* legacy key merged into txtmd below */
+      }
       r[keys[i]] = m[keys[i]] === true;
+    }
+    if (m['html'] !== undefined) {
+      /* 0.9.55: HTML/TXT merged — stays on unless BOTH legacy keys were
+       * explicitly off (e.g. {"html":false} with txtmd unset keeps txt on) */
+      r['txtmd'] = (m['txtmd'] !== false) || (m['html'] !== false);
     }
   } catch (e) {
     return {};
   }
   return r;
+}
+
+/** Calibre metadata.opf sidecar facts (title/creator/series). */
+export interface CalibreMeta {
+  title: string;
+  author: string;
+  series: string;
+  seriesIndex: number;
+}
+
+/** Read the Calibre metadata.opf sidecar next to `bookPath` (Android
+ *  isUseCalibreOpf parity). Returns null when missing/unreadable/empty. */
+export function readCalibreMeta(bookPath: string): CalibreMeta | null {
+  const dot: number = bookPath.lastIndexOf('.');
+  if (dot < 0 || dot <= bookPath.lastIndexOf('/')) {
+    return null;
+  }
+  const opfPath: string = bookPath.substring(0, dot) + '.opf';
+  let text: string = '';
+  try {
+    if (!fs.accessSync(opfPath)) {
+      return null;
+    }
+    text = fs.readTextSync(opfPath);
+  } catch (e) {
+    return null;
+  }
+  if (text.length === 0) {
+    return null;
+  }
+  const titleM: RegExpMatchArray | null = text.match(/<dc:title[^>]*>([\s\S]*?)<\/dc:title>/);
+  const creatorM: RegExpMatchArray | null = text.match(/<dc:creator[^>]*>([\s\S]*?)<\/dc:creator>/);
+  const seriesM: RegExpMatchArray | null = text.match(/name="calibre:series"\s+content="([^"]*)"/);
+  const idxM: RegExpMatchArray | null = text.match(/name="calibre:series_index"\s+content="([^"]*)"/);
+  const meta: CalibreMeta = {
+    title: titleM !== null ? titleM[1].trim() : '',
+    author: creatorM !== null ? creatorM[1].trim() : '',
+    series: seriesM !== null ? seriesM[1].trim() : '',
+    seriesIndex: idxM !== null ? parseFloat(idxM[1]) : 0
+  };
+  if (meta.title.length === 0 && meta.author.length === 0) {
+    return null;
+  }
+  return meta;
 }
 
 /** Is `ext` allowed under the whitelist? Empty map = everything allowed. */

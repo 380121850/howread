@@ -4111,6 +4111,28 @@ public class DragingDialogs {
         dialog.show(DragingPopup.PREF + "_statusBarSettings");
     }
 
+    /** 控制选项:作为偏好的下一级页(与可视/排版/状态栏一致,同锚换页),不再弹独立对话框. */
+    public static void dialogControlOptions(final FrameLayout anchor,
+                                            final DocumentController controller,
+                                            final Runnable onRefresh,
+                                            final Runnable updateUIRefresh) {
+        DragingPopup dialog = new DragingPopup(R.string.moon_control_options, anchor, PREF_WIDTH, PREF_HEIGHT) {
+            @Override public void beforeCreate() {
+                titleAction = controller.getString(R.string.preferences);
+                titleRunnable = new Runnable() {
+                    @Override public void run() {
+                        dialogPreferences(anchor, controller, onRefresh, updateUIRefresh);
+                    }
+                };
+            }
+
+            @Override public View getContentView(final LayoutInflater inflater) {
+                return ControlOptionsDialog.buildContentView(controller.getActivity());
+            }
+        };
+        dialog.show(DragingPopup.PREF + "_controlOptions");
+    }
+
     public static void dialogPerformanceSettings(final FrameLayout anchor,
                                                  final DocumentController controller,
                                                  final Runnable onRefresh,
@@ -5696,8 +5718,7 @@ public class DragingDialogs {
                         TxtUtils.underlineTextView(inflate.findViewById(R.id.controlOptionsSettings));
                 controlOptionsSettings.setOnClickListener(new OnClickListener() {
                     @Override public void onClick(View v) {
-                        closeDialog();
-                        ControlOptionsDialog.show(controller.getActivity());
+                        dialogControlOptions(anchor, controller, onRefresh, updateUIRefresh);
                     }
                 });
 
