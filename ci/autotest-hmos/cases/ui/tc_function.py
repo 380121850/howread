@@ -441,7 +441,7 @@ def fn05_bookmark(dev, case_id, cfg, fixtures):
         # toggleScrollMode; the first menu row is the mode entry)
         if not dev.click_id('reader_btn_more'):
             raise TestFail('book menu (⋮) not clickable')
-        got = _wait_any(dev, ['② Book mode', '滚动模式', 'Book mode', 'Scroll mode'], timeout=6)
+        got = _wait_any(dev, ['Book 模式', '② Book mode', '滚动模式', 'Book mode', 'Scroll mode'], timeout=6)
         if not got:
             dev.save_dump('bm_menu_fail')
             raise TestFail('book menu mode row not shown')

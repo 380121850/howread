@@ -71,14 +71,14 @@ public class BookmarksAdapter extends BaseAdapter {
         view.setBackgroundColor(Color.TRANSPARENT);
 
         String pageNumber = TxtUtils.deltaPage(AppSP.get().isCut ?
-                                               bookmark.getPage(controller.getPageCount()) * 2 :
-                                               bookmark.getPage(controller.getPageCount()));
+                                               com.foobnix.pdf.info.wrapper.ListBoxHelper.resolveLandingPage(controller, bookmark, controller.getPageCount()) * 2 :
+                                               com.foobnix.pdf.info.wrapper.ListBoxHelper.resolveLandingPage(controller, bookmark, controller.getPageCount()));
         titleView.setVisibility(View.GONE);
 
         if (bookmark.isF) {
-            textView.setText("{" + bookmark.getPage(controller.getPageCount()) + "}" + ": " + bookmark.text);
+            textView.setText("{" + com.foobnix.pdf.info.wrapper.ListBoxHelper.resolveLandingPage(controller, bookmark, controller.getPageCount()) + "}" + ": " + bookmark.text);
         } else {
-            textView.setText(bookmark.getPage(controller.getPageCount()) + ": " + bookmark.text);
+            textView.setText(com.foobnix.pdf.info.wrapper.ListBoxHelper.resolveLandingPage(controller, bookmark, controller.getPageCount()) + ": " + bookmark.text);
         }
 
         pageView.setText(pageNumber);

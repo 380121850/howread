@@ -23,6 +23,21 @@ export interface Bookmark {
    *  (AppBookmark isAiNote/aiAnswer parity; absent = normal bookmark). */
   isAiNote?: boolean;
   aiAnswer?: string;
+  /* 0.9.67 (Android 1.3.21 AppBookmark sec/sr/st parity): chapter anchor
+   * captured at add time - sec = index into the device-local TOC,
+   * sr = in-chapter ratio [0,1), st = chapter title fingerprint. Chapters
+   * are content structure, so the fold survives phone/PAD page-count
+   * differences and re-layouts; absent/invalid = percent fallback. */
+  sec?: number;
+  sr?: number;
+  st?: string;
+}
+
+/** 0.9.67: freshly captured anchor passed to addBookmark (undefined = none). */
+export interface BmAnchor {
+  sec: number;
+  sr: number;
+  st: string;
 }
 
 const PREF_NAME = 'librera_bookmarks';
@@ -156,6 +171,17 @@ export async function getBookmarks(ctx: Context, path: string): Promise<Bookmark
           /* 0.9.23: legacy entries have no epoch - -1 keeps the absolute anchor */
           pgs: typeof b.pgs === 'number' ? b.pgs : -1
         };
+        /* 0.9.67: carry the chapter anchor through the load-time clean step
+         * (fields absent on legacy rows and on percent-only entries) */
+        if (typeof b.sec === 'number' && b.sec >= 0) {
+          clean.sec = b.sec;
+        }
+        if (typeof b.sr === 'number' && b.sr >= 0) {
+          clean.sr = b.sr;
+        }
+        if (typeof b.st === 'string' && b.st.length > 0) {
+          clean.st = b.st;
+        }
         list.push(clean);
       }
     }
@@ -167,7 +193,7 @@ export async function getBookmarks(ctx: Context, path: string): Promise<Bookmark
   }
 }
 
-export async function addBookmark(ctx: Context, path: string, page: number, label: string, pgs: number = -1): Promise<boolean> {
+export async function addBookmark(ctx: Context, path: string, page: number, label: string, pgs: number = -1, anchor?: BmAnchor): Promise<boolean> {
   try {
     const prefs = await getPrefs(ctx);
     const json: string = await prefs.get(KEY_BOOKMARKS, '[]') as string;
@@ -186,6 +212,13 @@ export async function addBookmark(ctx: Context, path: string, page: number, labe
       date: new Date().toISOString(),
       pgs: pgs
     };
+    /* 0.9.67 (Android captureSectionAnchor parity): store the chapter anchor
+     * only when fully captured; absent = percent fallback semantics. */
+    if (anchor !== undefined && anchor.sec >= 0 && anchor.sr >= 0 && anchor.sr < 1 && anchor.st.length > 0) {
+      bm.sec = anchor.sec;
+      bm.sr = anchor.sr;
+      bm.st = anchor.st;
+    }
     list.push(bm);
     while (list.length > MAX_BOOKMARKS) {
       list.shift();

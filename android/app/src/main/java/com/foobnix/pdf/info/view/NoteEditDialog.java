@@ -96,6 +96,7 @@ public class NoteEditDialog {
                 note.pg = Math.max(0, dc.getCurentPageFirst1() - 1);
                 note.pgs = com.foobnix.sys.TempHolder.layoutComplete
                         ? dc.getPageCount() : AppBookmark.PGS_WINDOW;
+                com.foobnix.pdf.info.wrapper.ListBoxHelper.captureSectionAnchor(dc, note);
                 BookmarksData.get().add(note);
                 Toast.makeText(a, R.string.note_saved, Toast.LENGTH_SHORT).show();
                 Keyboards.close(a);

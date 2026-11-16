@@ -95,11 +95,15 @@ public class TTSEngine {
 
     public static AppBookmark fastTTSBookmakr(DocumentController dc) {
         return fastTTSBookmakr(dc.getActivity(), dc.getCurrentBook()
-                                                   .getPath(), dc.getCurentPageFirst1(), dc.getPageCount());
+                                                   .getPath(), dc.getCurentPageFirst1(), dc.getPageCount(), dc);
 
     }
 
     public static AppBookmark fastTTSBookmakr(Context c, String bookPath, int page, int pages) {
+        return fastTTSBookmakr(c, bookPath, page, pages, null);
+    }
+
+    public static AppBookmark fastTTSBookmakr(Context c, String bookPath, int page, int pages, DocumentController dc) {
         LOG.d("fastTTSBookmakr", page, pages);
 
         if (pages == 0) {
@@ -117,6 +121,10 @@ public class TTSEngine {
             // finisher rewrites pgs/p once the count is final
             bookmark.pgs = com.foobnix.sys.TempHolder.layoutComplete
                     ? pages : AppBookmark.PGS_WINDOW;
+            if (dc != null) {
+                // 章节锚（B锚）：有阅读器上下文时补记章节身份
+                com.foobnix.pdf.info.wrapper.ListBoxHelper.captureSectionAnchor(dc, bookmark);
+            }
             BookmarksData.get()
                          .add(bookmark);
 

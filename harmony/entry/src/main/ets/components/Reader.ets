@@ -31,6 +31,7 @@ import { OpenPrefetch, OpenPrefetchEntry } from '../model/OpenPrefetch';
 import inputConsumer from '@ohos.multimodalInput.inputConsumer';
 import mmiKeyEvent from '@ohos.multimodalInput.keyEvent';
 import { systemShare } from '@kit.ShareKit';
+import { fileUri } from '@kit.CoreFileKit';
 import { importUriToSandbox } from '../model/FileImport';
 import {
   version, openDocument, pageCount, renderPageAsync, closeDocument, getToc, getPageSize, saveAccelerator,
@@ -43,7 +44,7 @@ import {
 } from 'libmupdf_napi.so';
 import { saveRecentBook, getPageForPath, getRecentBookForPath, RecentBook } from '../model/ReadingProgress';
 import { recordReadTime, recordPagesRead } from '../model/ReadingStats';
-import { getBookmarks, addBookmark, removeBookmark, replaceBookmarks, exportBookmarks, recordBookmarkTombstone, Bookmark } from '../model/Bookmarks';
+import { getBookmarks, addBookmark, removeBookmark, replaceBookmarks, exportBookmarks, recordBookmarkTombstone, Bookmark, BmAnchor } from '../model/Bookmarks';
 import { AiConfig, loadAiConfig, chatCompletion, chatCompletionStream, aiConfigReady, AiMessage, lastTruncated} from '../model/AiClient';
 import { getNotes, addNote, removeNote, AiNote } from '../model/Notes';
 import { getAllPlaylists, createPlaylist, addToPlaylist, PlaylistMeta } from '../model/Playlists';
@@ -1076,9 +1077,11 @@ struct Reader {
    * current layout era is known (phase two done / full layout / reflow).
    * Until then this.totalPages is only a moving window end. */
   private layoutComplete: boolean = false;
-  /* 0.9.23: pending deep-jump wait (lands when the canvas has grown) */
-  private jumpWaitTimer: number = -1;
-  private jumpWaitStart: number = 0;
+  /* 0.9.23: pending deep-jump waits (lands when the canvas has grown).
+   * 0.9.65: an array — the old single jumpWaitTimer handle was overwritten
+   * when a second wait started, silently dropping the first wait's
+   * completion and leaking its interval. */
+  private jumpWaitTimers: number[] = [];
   @State reflowVersion: number = 0;
 
   // ---- Sprint G6: File info dialog ----
@@ -1677,7 +1680,14 @@ struct Reader {
       primaryButton: {
         value: '上下滚动',
         action: () => {
+          /* 0.9.65: same position carry as toggleScrollMode — answering
+           * after the book has landed (the normal case) otherwise leaves
+           * the List at page 1 and rewrites the saved progress. */
+          const keep: number = this.currentPage;
           this.scrollMode = 1;
+          if (this.totalPages > 0) {
+            this.landAfterModeSwitch(keep);
+          }
           console.info('[Reader] Session reading mode: vertical scroll');
         }
       },
@@ -1965,7 +1975,10 @@ struct Reader {
         this.layoutComplete = true; /* full re-layout done - new era */
         this.currentPage = Math.min(this.currentPage, newTotal - 1);
         this.reflowVersion++;
-        this.onPageChanged(this.currentPage);
+        /* 0.9.65: seekToPage = onPageChanged + vertical List alignment (the
+         * List has no index binding; onPageChanged alone left it wherever
+         * the rebuild parked it) */
+        this.seekToPage(this.currentPage, true);
         this.loadToc();
         this.persistSettings();
         this.saveAccel(); /* 0.9.27: the new era's accelerator replaces the old */
@@ -2160,20 +2173,40 @@ struct Reader {
     if (this.currentPage <= 0) {
       return;
     }
+    /* 0.9.64: capture the restored target at open time — a stray
+     * mount-time onChange/onScrollIndex(0) must not redirect the landing. */
+    const target: number = this.currentPage;
     setTimeout(() => {
-      if (this.currentPage <= 0 || this.totalPages <= 0) {
+      if (target <= 0 || this.totalPages <= 0) {
         return;
       }
-      const target: number = this.currentPage;
+      if (this.scrollMode === 1) {
+        /* 0.9.64: the vertical List has no .index() binding — the 0.9.22
+         * nudge below only fixed the horizontal Swiper, so a book reopened
+         * in scroll mode always showed page 1. Scroll the List once it
+         * holds the target (staged opens may still be growing the canvas). */
+        this.whenCanvasReady(() => this.totalPages > target, (): void => {
+          this.seekToPage(target, true);
+          console.info(`[Reader] Landed on restored page ${this.currentPage + 1} (vertical)`);
+          tlog('restore_land', 'page=' + (this.currentPage + 1) + ' mode=v');
+          /* belt & braces: the Scroller may attach a beat later than the
+           * first scroll; a second no-animation scroll to the same index
+           * is idempotent */
+          setTimeout((): void => {
+            try {
+              this.vScroller.scrollToIndex(Math.min(target, this.totalPages - 1), false);
+            } catch (_e) { /* scroller not attached */ }
+          }, 500);
+        });
+        return;
+      }
       /* .index() only re-applies when the state VALUE changes; at open it
        * was already the restored value at the Swiper's first (empty)
        * build. Nudge 0 -> target: the Swiper is at 0, so the intermediate
-       * value causes no visible move. */
+       * value causes no visible move. (0.9.22 fix2) */
       this.currentPage = 0;
       setTimeout(() => {
         this.currentPage = target;
-        setTimeout(() => {
-        }, 400);
       }, 50);
     }, 200);
   }
@@ -2243,7 +2276,12 @@ struct Reader {
     if (base.length === 0) {
       return '';
     }
-    const hex: string = await sha256Hex(base);
+    /* 0.9.67: append the layout-era salt (accelPathOf parity) — a re-layout
+     * with different parameters (font/line-height/margins/viewport) must
+     * never serve a stale TOC: the 0.9.27 key predated the 0.9.61 salt
+     * lesson, and stale TOC page numbers would also poison the 0.9.67
+     * section anchors (capture + fold both read this.tocEntries). */
+    const hex: string = await sha256Hex(base + '#' + this.fontSize + '#' + this.lineHeight.toFixed(2) + '#' + Math.round(this.pageMargin) + '#' + this.reflowW + 'x' + this.reflowH);
     return getContext(this).cacheDir + '/toc/' + hex + '.json';
   }
 
@@ -2317,9 +2355,12 @@ struct Reader {
             } catch (e) { /* corrupt entry: fall through to the live load */ }
           }
         }
-        if (this.isRemote || this.stagedOpen) {
-          /* async docOp: the chunked-fb2 outline lays out chunks in the
-           * engine - keep that off the JS/main thread (appfreeze fix) */
+        /* 0.9.67 rev2: reflow outlines are computed by laying the book out in
+         * the engine, so the era-salted cache (frequent live loads now) must
+         * never pay that on the main thread — THREAD_BLOCK_6S appfreeze at
+         * open. Local reflow joins the remote/staged async docOp path; only
+         * fixed-layout books (cheap page-table outline) keep the sync call. */
+        if (this.isRemote || this.stagedOpen || this.isReflow) {
           const j = await this.docOp(1);
           this.tocEntries = j !== undefined ? JSON.parse(j) as TocEntry[] : [];
         } else {
@@ -2385,10 +2426,10 @@ struct Reader {
   aboutToDisappear(): void {
     this.openSettled = false;
     this.layoutComplete = false;
-    if (this.jumpWaitTimer >= 0) {
-      clearInterval(this.jumpWaitTimer);
-      this.jumpWaitTimer = -1;
+    for (const t of this.jumpWaitTimers) {
+      clearInterval(t);
     }
+    this.jumpWaitTimers = [];
     this.stageGen++; /* cancel a running staged-layout loop (0.9.16) */
     this.unregisterVolumeKeys();
     if (this.readTimerId >= 0) {
@@ -2581,8 +2622,33 @@ struct Reader {
     console.info(`[Reader] Night mode: ${this.nightMode ? 'ON' : 'OFF'} (theme=${THEME_NAMES[this.theme]})`);
   }
 
+  /* 0.9.65: shared vertical-mode landing for every scrollMode 0→1 entry
+   * (menu-row toggle, ask-reading-mode dialog). The vertical List mounts at
+   * offset 0 — without this a mount-time onScrollIndex(0) rewrites both the
+   * page and the saved progress to page 1 (the reopen / bookmark-jump bug
+   * family). Seek right away, then re-scroll once with a raw no-animation
+   * scrollToIndex in case the Scroller attached a beat later than the first
+   * attempt (same belt & braces as landOnRestoredPage). */
+  private landAfterModeSwitch(keep: number): void {
+    setTimeout(() => {
+      this.seekToPage(keep, true);
+    }, 200);
+    setTimeout(() => {
+      try {
+        this.vScroller.scrollToIndex(Math.min(keep, this.totalPages - 1), false);
+      } catch (_e) { /* scroller not attached */ }
+    }, 700);
+  }
+
   private toggleScrollMode(): void {
+    /* 0.9.64: carry the reading position across the switch — the vertical
+     * List has no index binding, so switching into it previously always
+     * showed page 1 (same root as the bookmark-jump / reopen reports). */
+    const keep: number = this.currentPage;
     this.scrollMode = this.scrollMode === 0 ? 1 : 0;
+    if (this.scrollMode === 1 && this.totalPages > 0) {
+      this.landAfterModeSwitch(keep);
+    }
     console.info(`[Reader] Scroll mode: ${this.scrollMode === 0 ? 'horizontal' : 'vertical'}`);
   }
 
@@ -2691,8 +2757,7 @@ struct Reader {
       }
       this.searchHits = norm;
       this.searchHitPage = pageIdx;
-      this.currentPage = pageIdx;
-      this.onPageChanged(pageIdx);
+      this.seekToPage(pageIdx);
     } catch (e) {
       console.error('[Reader] highlightPageHits failed');
     }
@@ -2750,7 +2815,8 @@ struct Reader {
       tlog('bookmark_removed', 'page=' + (this.currentPage + 1));
       promptAction.showToast({ message: $r('app.string.bm_removed') });
     } else {
-      const ok = await addBookmark(ctx, this.documentPath, this.currentPage, '', this.layoutComplete ? this.totalPages : -1);
+      /* 0.9.67: capture the chapter anchor at add time (Android ListBoxHelper.addBookmark parity) */
+      const ok = await addBookmark(ctx, this.documentPath, this.currentPage, '', this.layoutComplete ? this.totalPages : -1, this.captureBmAnchor());
       if (ok) {
         console.info(`[Reader] Bookmark added at page ${this.currentPage + 1}`);
         tlog('bookmark_added', 'page=' + (this.currentPage + 1));
@@ -2821,7 +2887,8 @@ struct Reader {
       }
     }
     if (!found) {
-      const ok = await addBookmark(ctx, this.documentPath, this.currentPage, this.L($r('app.string.fast_bookmark')), this.layoutComplete ? this.totalPages : -1);
+      /* 0.9.67: capture the chapter anchor (Android TTSEngine.fastTTSBookmakr parity) */
+      const ok = await addBookmark(ctx, this.documentPath, this.currentPage, this.L($r('app.string.fast_bookmark')), this.layoutComplete ? this.totalPages : -1, this.captureBmAnchor());
       if (ok) {
         console.info(`[Reader] Quick bookmark added at page ${this.currentPage + 1}`);
         tlog('bookmark_added', 'page=' + (this.currentPage + 1) + ' src=dialog');
@@ -2843,7 +2910,8 @@ struct Reader {
       promptAction.showToast({ message: $r('app.string.incorrect_value') });
       return;
     }
-    const ok = await addBookmark(ctx, this.documentPath, this.currentPage, name, this.layoutComplete ? this.totalPages : -1);
+    /* 0.9.67: capture the chapter anchor (Android ListBoxHelper.showAddDialog parity) */
+    const ok = await addBookmark(ctx, this.documentPath, this.currentPage, name, this.layoutComplete ? this.totalPages : -1, this.captureBmAnchor());
     if (ok) {
       console.info(`[Reader] Named bookmark added at page ${this.currentPage + 1}`);
       tlog('bookmark_added', 'page=' + (this.currentPage + 1) + ' src=named');
@@ -2873,7 +2941,7 @@ struct Reader {
       const rows = this.bmRows();
       for (let i = 0; i < rows.length; i++) {
         const label = rows[i].label.length > 0 ? rows[i].label : this.L($r('app.string.reader_bookmark'));
-        lines.push(`${rows[i].page + 1}: ${label}`);
+        lines.push(`${this.bmLandingPage(rows[i]) + 1}: ${label}`);
       }
       const rec: systemShare.SharedRecord = {
         utd: 'general.text',
@@ -2890,6 +2958,118 @@ struct Reader {
     }
   }
 
+  /* 0.9.67 (Android ListBoxHelper.captureSectionAnchor parity): record the
+   * chapter identity of the current page at add time — chapter index in the
+   * device-local TOC + in-chapter ratio + title fingerprint. The fold is
+   * resolved on the reading device (possibly another phone/PAD with a
+   * different page count), so precision rises from "whole-book percent" to
+   * "in-chapter ratio". Skipped — keeping plain percent semantics — when the
+   * TOC is absent/unloaded, before the first chapter, or the entry has no
+   * usable title fingerprint. */
+  private captureBmAnchor(): BmAnchor | undefined {
+    try {
+      const pages: number = this.totalPages;
+      if (this.tocEntries.length === 0 || pages <= 0 || this.currentPage < 0) {
+        return undefined;
+      }
+      let best: number = -1;
+      for (let i = 0; i < this.tocEntries.length; i++) {
+        const tp: number = this.tocEntries[i].page;
+        if (tp >= 0 && tp <= this.currentPage) {
+          best = i; /* last match wins: same-page nested entries → deeper level */
+        }
+      }
+      if (best < 0) {
+        return undefined; /* before the first chapter (cover/colophon) */
+      }
+      const title: string = this.tocEntries[best].title;
+      if (title.length === 0) {
+        return undefined; /* no fingerprint → no trustworthy anchor */
+      }
+      const start0: number = this.tocEntries[best].page;
+      let end0: number = pages; /* last chapter: section ends at book end */
+      for (let j = best + 1; j < this.tocEntries.length; j++) {
+        const tpj: number = this.tocEntries[j].page;
+        if (tpj > start0) {
+          end0 = tpj;
+          break;
+        }
+      }
+      if (end0 <= start0 || this.currentPage >= end0) {
+        return undefined; /* TOC page numbers unusable */
+      }
+      const sr: number = (this.currentPage - start0) / (end0 - start0);
+      tlog('bookmark_anchor_captured', 'sec=' + best + ' sr=' + sr.toFixed(6) + ' pg=' + (this.currentPage + 1) + ' pgs=' + pages);
+      console.info(`[Reader] Bookmark anchor captured: sec=${best} sr=${sr.toFixed(6)} pg=${this.currentPage + 1}/${pages}`);
+      const anchor: BmAnchor = { sec: best, sr: sr, st: title };
+      return anchor;
+    } catch (e) {
+      return undefined;
+    }
+  }
+
+  /* 0.9.67 (Android ListBoxHelper.resolveSectionLanding parity): fold the
+   * chapter anchor back to a page on THIS device. -1 = unusable (TOC not
+   * loaded / entry missing / title fingerprint mismatch / bad interval) —
+   * the caller falls back to percent. The fingerprint check is the safety
+   * boundary: the two ends may have different TOC entry counts, so only a
+   * title match allows indexing the interval by ordinal. */
+  private resolveSectionLanding(bm: Bookmark): number {
+    try {
+      if (this.totalPages <= 0 || this.tocEntries.length === 0) {
+        return -1;
+      }
+      const sec: number = bm.sec !== undefined ? bm.sec : -1;
+      const sr: number = bm.sr !== undefined ? bm.sr : -1;
+      const st: string = bm.st !== undefined ? bm.st : '';
+      if (sec < 0 || sr < 0 || sr >= 1 || sec >= this.tocEntries.length) {
+        return -1;
+      }
+      const item: TocEntry = this.tocEntries[sec];
+      if (st.length === 0 || st !== item.title) {
+        return -1; /* fingerprint mismatch */
+      }
+      const start0: number = item.page;
+      if (start0 < 0 || start0 >= this.totalPages) {
+        return -1;
+      }
+      let end0: number = this.totalPages;
+      for (let j = sec + 1; j < this.tocEntries.length; j++) {
+        const tpj: number = this.tocEntries[j].page;
+        if (tpj > start0) {
+          end0 = tpj;
+          break;
+        }
+      }
+      if (end0 <= start0) {
+        return -1;
+      }
+      const target: number = start0 + Math.round(sr * (end0 - start0));
+      return Math.max(start0, Math.min(end0 - 1, Math.min(target, this.totalPages - 1)));
+    } catch (e) {
+      return -1;
+    }
+  }
+
+  /* 0.9.67 (Android ListBoxHelper.resolveLandingPage parity): landing
+   * priority — era-exact absolute page → chapter anchor → percent fallback.
+   * Shared by the jump and every displayed bookmark page number so the shown
+   * page always equals the landing. */
+  private bmLandingPage(bm: Bookmark): number {
+    if (bm.pgs > 0 && bm.pgs === this.totalPages && bm.page >= 0 && bm.page < this.totalPages) {
+      return bm.page;
+    }
+    const bySec: number = this.resolveSectionLanding(bm);
+    if (bySec >= 0) {
+      return bySec;
+    }
+    if (bm.pgs > 0) {
+      const target: number = Math.round(Math.max(0, Math.min(bm.page / bm.pgs, 0.999)) * this.totalPages);
+      return Math.max(0, Math.min(target, this.totalPages - 1));
+    }
+    return Math.max(0, Math.min(bm.page, Math.max(this.totalPages - 1, 0)));
+  }
+
   /* 0.9.23 (Android 10-09 parity): a bookmark's absolute page is a valid
    * anchor only inside its layout era. pgs = the total the book had when
    * the bookmark was made; -1 = legacy (no epoch, absolute anchor).
@@ -2903,49 +3083,66 @@ struct Reader {
     };
     const land: (t: number) => void = (t: number) => {
       this.pushPageHistory();
-      this.currentPage = Math.max(0, Math.min(t, this.totalPages - 1));
-      this.onPageChanged(this.currentPage);
+      this.seekToPage(t);
       closePanel();
     };
-    const era: boolean = bm.pgs > 0 && bm.pgs !== this.totalPages;
-    if (era) {
-      const landEra: () => void = () => {
+    /* 0.9.67 (Android ListBoxHelper.jumpToBookmark/resolveLandingPage parity):
+     * landing priority — era-exact absolute page → chapter anchor (survives
+     * phone/PAD page-count differences and re-layouts) → percent fallback.
+     * Any non-exact landing needs the final layout, so wait for phase two
+     * (whenCanvasReady: 15s cap, then best effort with the current canvas). */
+    const landResolved: () => void = (): void => {
+      if (bm.pgs > 0 && bm.pgs === this.totalPages && bm.page >= 0 && bm.page < this.totalPages) {
+        tlog('bookmark_jump', 'page=' + (bm.page + 1) + ' pgs=' + bm.pgs);
+        console.info(`[Reader] Jumped to bookmark page ${bm.page + 1}`);
+        land(bm.page);
+        return;
+      }
+      const bySec: number = this.resolveSectionLanding(bm);
+      if (bySec >= 0) {
+        const secN: number = bm.sec !== undefined ? bm.sec : -1;
+        tlog('bookmark_anchor_jump', 'sec=' + secN + ' from=' + (bm.page + 1) + ' to=' + (bySec + 1) + ' full=' + this.totalPages);
+        console.info(`[Reader] Bookmark anchor jump: sec ${secN} -> page ${bySec + 1}/${this.totalPages}`);
+        land(bySec);
+        return;
+      }
+      if (bm.pgs > 0) {
         const target: number = Math.max(0, Math.min(
           Math.round(Math.max(0, Math.min(bm.page / bm.pgs, 0.999)) * this.totalPages),
           this.totalPages - 1));
         tlog('bookmark_era_jump', 'from=' + (bm.page + 1) + ' pgs=' + bm.pgs + ' to=' + (target + 1) + ' full=' + this.totalPages);
         console.info(`[Reader] Bookmark era jump: page ${bm.page + 1}/${bm.pgs} -> ${target + 1}/${this.totalPages}`);
         land(target);
-      };
-      if (this.layoutComplete) {
-        landEra();
-      } else {
-        /* the era landing needs the full count - wait for phase two */
-        this.whenCanvasReady(() => this.layoutComplete, landEra);
+        return;
       }
-      return;
+      /* legacy no-epoch bookmark: best effort inside the current layout */
+      land(Math.max(0, Math.min(bm.page, this.totalPages - 1)));
+    };
+    if (this.layoutComplete) {
+      landResolved();
+    } else {
+      this.whenCanvasReady(() => this.layoutComplete, landResolved);
     }
-    if (bm.page < this.totalPages) {
-      tlog('bookmark_jump', 'page=' + (bm.page + 1) + ' pgs=' + bm.pgs);
-      console.info(`[Reader] Jumped to bookmark page ${bm.page + 1}`);
-      land(bm.page);
-      return;
-    }
-    /* beyond the still-growing staged canvas - land when it reaches it */
-    this.whenCanvasReady(() => this.totalPages > bm.page, () => {
-      tlog('bookmark_jump', 'page=' + (bm.page + 1) + ' deferred=1');
-      land(bm.page);
-    });
   }
 
   /* 0.9.23: run onDone once the staged canvas satisfies pred(); polls every
    * 500ms with a 15s cap, then fires on whatever the canvas holds (the same
    * clamp a user sees when the book genuinely ends early). */
   private whenCanvasReady(pred: () => boolean, onDone: () => void): void {
+    /* 0.9.65: local timer tracked in jumpWaitTimers — concurrent waits no
+     * longer overwrite each other's handle (the old shared jumpWaitTimer
+     * made the second wait drop the first one's completion and leak its
+     * interval). */
+    let timer: number = -1;
+    const start: number = Date.now();
     const fire: () => void = () => {
-      if (this.jumpWaitTimer >= 0) {
-        clearInterval(this.jumpWaitTimer);
-        this.jumpWaitTimer = -1;
+      if (timer >= 0) {
+        clearInterval(timer);
+        const idx: number = this.jumpWaitTimers.indexOf(timer);
+        if (idx >= 0) {
+          this.jumpWaitTimers.splice(idx, 1);
+        }
+        timer = -1;
       }
       onDone();
     };
@@ -2953,12 +3150,12 @@ struct Reader {
       fire();
       return;
     }
-    this.jumpWaitStart = Date.now();
-    this.jumpWaitTimer = setInterval(() => {
-      if (pred() || Date.now() - this.jumpWaitStart >= 15000) {
+    timer = setInterval(() => {
+      if (pred() || Date.now() - start >= 15000) {
         fire();
       }
     }, 500);
+    this.jumpWaitTimers.push(timer);
   }
 
   /* 0.9.23 (Android 10-09 pgc era-restore parity): the phase-two full count
@@ -2984,8 +3181,7 @@ struct Reader {
         Math.round(book.page / epoch * fullTotal), fullTotal - 1));
       if (landAt !== this.currentPage) {
         tlog('era_restore', 'from=' + (this.currentPage + 1) + ' to=' + (landAt + 1) + ' epoch=' + epoch + ' full=' + fullTotal);
-        this.currentPage = landAt;
-        this.onPageChanged(landAt);
+        this.seekToPage(landAt);
       }
     }
     const settled: RecentBook = {
@@ -3151,8 +3347,7 @@ struct Reader {
       const deferred: number = this.totalPages > p ? 0 : 1;
       this.showAnnPanel = false;
       tlog('ann_jump', 'page=' + (p + 1) + ' deferred=' + deferred);
-      this.currentPage = Math.max(0, Math.min(p, this.totalPages - 1));
-      this.onPageChanged(this.currentPage);
+      this.seekToPage(p);
       console.info(`[Reader] Jump to annotation page ${this.currentPage + 1}`);
     });
   }
@@ -3175,9 +3370,31 @@ struct Reader {
       return;
     }
     const p: number = this.pageHistory.pop() as number;
-    this.currentPage = Math.min(p, this.totalPages - 1);
-    this.onPageChanged(this.currentPage);
+    this.seekToPage(p);
     console.info(`[Reader] Back to page ${this.currentPage + 1} (history)`);
+  }
+
+  /* 0.9.64: the single programmatic seek used by every jump entry (jump
+   * dialog, bookmarks, TOC, thumbnails, search hits, annotation list, page
+   * history, seek slider, tap zones / volume keys, auto-flip, TTS / RSVP).
+   * Horizontal flips through the Swiper .index() value-change replay; the
+   * vertical List has no index binding, so it needs an explicit
+   * scrollToIndex — without it only the progress bar moved while the page
+   * stayed put (bookmark-jump / reopen-position reports). */
+  private seekToPage(target: number, forceScroll: boolean = false): void {
+    const t: number = Math.max(0, Math.min(target, this.totalPages - 1));
+    if (this.scrollMode === 1 && (forceScroll || t !== this.currentPage)) {
+      try {
+        this.vScroller.scrollToIndex(t, false);
+      } catch (_e) {
+        /* scroller not attached yet (List still mounting): the state below
+         * lands the indicator, but the List itself stays where it mounted —
+         * callers add an idempotent re-scroll to recover (landOnRestoredPage
+         * / landAfterModeSwitch) */
+      }
+    }
+    this.currentPage = t;
+    this.onPageChanged(t);
   }
 
   /* ---- Round 6: jump-to-page dialog + vertical fast-scroll rail ---- */
@@ -3192,8 +3409,7 @@ struct Reader {
     this.pushPageHistory();
     this.showJump = false;
     const target: number = n - 1;
-    this.currentPage = target;
-    this.onPageChanged(target);
+    this.seekToPage(target);
     console.info(`[Reader] Jump to page ${n}`);
     tlog('jump_page_done', 'page=' + n);
   }
@@ -3204,10 +3420,11 @@ struct Reader {
     const delta: number = Math.round(offsetY / Math.max(railH, 1) * this.totalPages);
     const target: number = Math.max(0, Math.min(this.fastStartPage + delta, this.totalPages - 1));
     if (target !== this.currentPage) {
-      this.currentPage = target;
-      this.onPageChanged(target);
+      this.seekToPage(target);
     }
-    this.vScroller.scrollToIndex(target, false);
+    try {
+      this.vScroller.scrollToIndex(target, false);
+    } catch (_e) { /* scroller not attached */ }
   }
 
   /** Round 6: try to unlock the encrypted document with the typed password. */
@@ -3358,8 +3575,7 @@ struct Reader {
     this.stopAutoFlip();
     this.flipTimerId = setInterval(() => {
       if (this.totalPages > 0 && this.currentPage < this.totalPages - 1) {
-        this.currentPage = this.currentPage + 1;
-        this.onPageChanged(this.currentPage);
+        this.seekToPage(this.currentPage + 1);
       } else {
         /* reached the end: stop */
         this.autoFlip = false;
@@ -3682,9 +3898,8 @@ struct Reader {
       console.info('[Reader] TTS finished (last page)');
       return;
     }
-    this.currentPage = this.currentPage + 1;
     this.ttsAdvancing = true;
-    this.onPageChanged(this.currentPage);
+    this.seekToPage(this.currentPage + 1);
     this.ttsAdvancing = false;
     this.ttsIndex = 0;
     this.loadTtsSentences(this.currentPage).then(() => {
@@ -3858,9 +4073,8 @@ struct Reader {
       console.info('[Reader] RSVP finished (last page)');
       return;
     }
-    this.currentPage = this.currentPage + 1;
     this.rsvpAdvancing = true;
-    this.onPageChanged(this.currentPage);
+    this.seekToPage(this.currentPage + 1);
     this.rsvpAdvancing = false;
     this.rsvpIndex = 0;
     this.loadRsvpTokens(this.currentPage).then(() => {
@@ -4110,6 +4324,20 @@ struct Reader {
       this.totalPages = newTotal;
       this.currentPage = Math.min(this.currentPage, newTotal - 1);
       this.reflowVersion++;
+      /* 0.9.65: parity with applyReflow — notify the indicator/progress when
+       * the clamp moved the page and force the vertical List (no index
+       * binding) onto the clamped page (the scroll part no-ops horizontally) */
+      this.seekToPage(this.currentPage, true);
+      /* 0.9.65 rev2: parity with applyReflow — persist the new era's
+       * accelerator, or the next first-open lays out from the STALE accel
+       * and lands in a mismatched era (observed 80 vs 82 on emulator) */
+      this.saveAccel();
+      /* 0.9.66: finish applyReflow parity — refresh the TOC page numbers
+       * for the new era and persist the typography right away (before this,
+       * the change lived only in component state until exit, and TOC kept
+       * the old era's page numbers) */
+      this.loadToc();
+      this.persistSettings();
     } catch (e) {
       console.error('[Reader] applyTypography failed');
     }
@@ -4601,20 +4829,16 @@ struct Reader {
     if (action === 0) {
       /* previous page (0.9.59: 循环翻页 wraps at the ends) */
       if (this.currentPage > 0) {
-        this.currentPage = this.currentPage - 1;
-        this.onPageChanged(this.currentPage);
+        this.seekToPage(this.currentPage - 1);
       } else if (this.loopPaging && this.totalPages > 1) {
-        this.currentPage = this.totalPages - 1;
-        this.onPageChanged(this.currentPage);
+        this.seekToPage(this.totalPages - 1);
       }
     } else if (action === 1) {
       /* next page */
       if (this.totalPages > 0 && this.currentPage < this.totalPages - 1) {
-        this.currentPage = this.currentPage + 1;
-        this.onPageChanged(this.currentPage);
+        this.seekToPage(this.currentPage + 1);
       } else if (this.loopPaging && this.totalPages > 1) {
-        this.currentPage = 0;
-        this.onPageChanged(this.currentPage);
+        this.seekToPage(0);
       }
     } else if (action === 2) {
       /* 0.9.59: center tap shows/hides the top+bottom bars (Android hideShow) */
@@ -4901,6 +5125,8 @@ struct Reader {
       }
       if (hit >= 0) {
         const b: Bookmark = all[hit];
+        /* 0.9.67 (Android showEditDeleteDialog parity): editing keeps the
+         * anchor captured at add time — no re-capture here. */
         const updated: Bookmark = {
           path: b.path,
           page: b.page,
@@ -4908,13 +5134,17 @@ struct Reader {
           date: b.date,
           pgs: b.pgs,
           isAiNote: b.isAiNote,
-          aiAnswer: b.aiAnswer
+          aiAnswer: b.aiAnswer,
+          sec: b.sec,
+          sr: b.sr,
+          st: b.st
         };
         all[hit] = updated;
         await replaceBookmarks(ctx, all);
         console.info(`[Reader] Note updated on page ${this.currentPage + 1}`);
       } else {
-        await addBookmark(ctx, this.documentPath, this.currentPage, txt, this.layoutComplete ? this.totalPages : -1);
+        /* 0.9.67: capture the chapter anchor (Android NoteEditDialog parity) */
+        await addBookmark(ctx, this.documentPath, this.currentPage, txt, this.layoutComplete ? this.totalPages : -1, this.captureBmAnchor());
         tlog('bookmark_added', 'page=' + (this.currentPage + 1));
       }
       tlog('note_saved', 'page=' + (this.currentPage + 1));
@@ -4936,20 +5166,31 @@ struct Reader {
     return pagePart.length > 0 ? `${dateStr} · ${pagePart}` : dateStr;
   }
 
-  /** Android ExtUtils.sendFileTo parity: hand the book to the system share
-   * sheet (sandbox files cannot leave the app as raw URIs, so the record
-   * carries name + path as text). */
+  /** Android ExtUtils.sendFileTo parity: hand the book file itself to the
+   * system share sheet (0.9.65: systemShare grants the receiver temporary
+   * read access to the app-sandbox file; a rejected file record falls back
+   * to the old name+path text record). */
   private sendBookFile(): void {
     try {
       if (this.documentPath.length === 0) {
         return;
       }
-      const rec: systemShare.SharedRecord = {
-        utd: 'general.text',
-        content: this.docTitle + '\n' + this.documentPath,
-        title: this.docTitle
-      };
-      const data = new systemShare.SharedData(rec);
+      let data: systemShare.SharedData;
+      try {
+        const fileRec: systemShare.SharedRecord = {
+          utd: 'general.file',
+          uri: fileUri.getUriFromPath(this.documentPath),
+          title: this.docTitle
+        };
+        data = new systemShare.SharedData(fileRec);
+      } catch (_e) {
+        const rec: systemShare.SharedRecord = {
+          utd: 'general.text',
+          content: this.docTitle + '\n' + this.documentPath,
+          title: this.docTitle
+        };
+        data = new systemShare.SharedData(rec);
+      }
       const controller = new systemShare.ShareController(data);
       controller.show(getContext(this) as common.UIAbilityContext, {}).catch(() => {
       });
@@ -5120,7 +5361,8 @@ struct Reader {
       }
       this.reflowVersion++;
       this.currentPage = Math.min(this.currentPage, this.totalPages - 1);
-      this.onPageChanged(this.currentPage);
+      /* 0.9.65: seekToPage = onPageChanged + vertical List alignment */
+      this.seekToPage(this.currentPage, true);
       this.loadToc();
       this.loadBookmarks();
     } catch (e) {
@@ -5643,8 +5885,7 @@ struct Reader {
                 .onClick(() => {
                   const target: number = this.thumbStart + idx;
                   this.pushPageHistory();
-                  this.currentPage = target;
-                  this.onPageChanged(target);
+                  this.seekToPage(target);
                   this.showThumbs = false;
                   console.info(`[Reader] Thumbnail jump to page ${target + 1}`);
                 })
@@ -6674,7 +6915,7 @@ struct Reader {
             ForEach(this.bmRows(), (bm: Bookmark) => {
               ListItem() {
                 Row() {
-                  Text(`${bm.page + 1}: ${bm.label.length > 0 ? bm.label : this.L($r('app.string.reader_bookmark'))}`)
+                  Text(`${this.bmLandingPage(bm) + 1}: ${bm.label.length > 0 ? bm.label : this.L($r('app.string.reader_bookmark'))}`)
                     .fontSize(14).fontColor('#333')
                     .maxLines(3)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -7009,8 +7250,14 @@ struct Reader {
         })
         this.bmRow($r('app.string.bm_musician'), (): void => {
           this.showBookMenu = false;
-          this.pageMode = 2;
-          console.info('[Reader] Page mode: musician (book menu)');
+          /* 0.9.66: toggle — musician mode previously had no UI exit (the
+           * only other caller of togglePageMode lives in the unreachable
+           * legacy panel) and pageMode persists, stranding the user in the
+           * layout. Enter and exit through the same row; clamp in both
+           * directions like togglePageMode does. */
+          this.pageMode = this.pageMode === 2 ? 0 : 2;
+          this.currentPage = Math.min(this.currentPage, this.totalPages - 1);
+          console.info(`[Reader] Page mode: ${this.pageMode === 2 ? 'musician' : 'single'} (book menu)`);
         })
         this.bmRow($r('app.string.bm_rsvp'), (): void => {
           this.showBookMenu = false;
@@ -7283,7 +7530,11 @@ struct Reader {
             .disableSwipe(this.inputLocked)
             .cachedCount(1)
             .onChange((index: number) => {
-              this.onPageChanged(index);
+              /* 0.9.65: un-mirror the physical index — .index() above binds
+               * the RTL mirrored position, so the raw callback must be
+               * mapped back before it becomes currentPage, or the first
+               * swipe desyncs the binding */
+              this.onPageChanged(this.rtlEnabled ? this.totalPages - 1 - index : index);
             })
 
             /* Pinch gesture for zoom */
@@ -7752,8 +8003,7 @@ struct Reader {
                 const target: number = Math.max(0, Math.min(Math.round(value), this.totalPages - 1));
                 if (target !== this.currentPage) {
                   this.pushPageHistory();
-                  this.currentPage = target;
-                  this.onPageChanged(target);
+                  this.seekToPage(target);
                   console.info(`[Reader] Seek to page ${target + 1}`);
                 }
               }
@@ -7971,7 +8221,11 @@ struct Reader {
         .width('100%').height('100%')
       }
 
-      /* Menu overlay (modal: full-screen dim + centered panel) */
+      /* Menu overlay (modal: full-screen dim + centered panel).
+       * 0.9.63: the book-menu 更多设置 entry was removed, so this legacy
+       * full settings panel has no regular entry any more — only the
+       * restore-only longTapActionPref===2 long-press can open it. Code
+       * kept for zero loss; entry migration is a pending decision. */
       if (this.showMenu) {
         Stack({ alignContent: Alignment.Center }) {
           /* dim background to close menu */
@@ -8136,7 +8390,9 @@ struct Reader {
                 if (this.isReflow) {
                   this.applyTypography();
                 }
-                /* For Swiper, the RTL is handled by reverse() in UI */
+                /* RTL is the mirrored .index() binding at the Swiper
+                 * (.index(totalPages-1-currentPage)) plus the matching
+                 * un-mirror in onChange (0.9.65) */
                 console.info(`[Reader] RTL mode: ${this.rtlEnabled ? 'ON' : 'OFF'}`);
               })
           }
@@ -8275,6 +8531,7 @@ struct Reader {
               .fontSize(13).height(36)
               .backgroundColor('#2a7').fontColor(Color.White)
               .onClick(() => {
+                this.showMenu = false; /* 0.9.65: parity with the panel's other entry rows */
                 this.showToc = true;
                 console.info('[Reader] TOC panel opened');
               })
@@ -8396,8 +8653,7 @@ struct Reader {
             tocEntries: this.tocEntries,
             onJumpPage: (page: number) => {
               this.pushPageHistory();
-              this.currentPage = page;
-              this.onPageChanged(page);
+              this.seekToPage(page);
               this.showToc = false;
             }
           })
@@ -8440,7 +8696,7 @@ struct Reader {
                 ForEach(this.bookmarks, (bm: Bookmark) => {
                   ListItem() {
                     Row() {
-                      Text(`p${bm.page + 1}  ${bm.label.length > 0 ? bm.label : this.L($r('app.string.reader_bookmark'))}`)
+                      Text(`p${this.bmLandingPage(bm) + 1}  ${bm.label.length > 0 ? bm.label : this.L($r('app.string.reader_bookmark'))}`)
                         .fontSize(13).fontColor('#333')
                         .layoutWeight(1)
                         .onClick(() => {

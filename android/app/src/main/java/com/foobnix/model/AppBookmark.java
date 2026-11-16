@@ -24,6 +24,18 @@ public class AppBookmark implements MyPath.RelativePath {
      * still growing — pg is exact (phase two only appends), pgs unknown until
      * the phase-two finisher rewrites it with the final count. */
     public static final int PGS_WINDOW = 0;
+
+    // HowRead 章节锚（B锚）：加签时记录当前页所属章节的目录身份。章节是内容
+    // 固有结构，与设备无关——跨设备（手机/平板总页数不同）或跨排版纪元（改字号
+    // 重排）时 pg/pgs 的绝对页码失效，改按"章节内比例"在对端本机目录上折算，
+    // 精度远高于全书百分比（全书每页内容量不均，百分比会漂移数页）。
+    // sec = 加签时本机目录列表的下标；sr = 段内比例 [0,1)；st = 章节标题指纹，
+    // 跳转端校验通过才使用（两端目录条目可能不同）。未捕获（无目录/首章之前）
+    // 保持 -1，走原百分比回落。字段随 WebDAV 同步自然携带，旧数据完全兼容。
+    public int sec = -1;
+    public float sr = -1f;
+    public String st = null;
+
     public long t;
     public boolean isF = false;
 

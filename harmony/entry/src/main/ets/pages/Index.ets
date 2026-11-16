@@ -632,6 +632,20 @@ struct Index {
     }
     this.consumeCardOpen();
     this.consumeSharedText();
+    /* 0.9.66: refresh the in-memory settings copy after returning from the
+     * reader router page. The reader persists typography/scroll-mode/... to
+     * disk on its own; a stale snapshot here would silently revert those on
+     * the next saveNow (observed: typography era flip-flopped 71/80 pages
+     * across warm reopens on the emulator). The short delay lets the
+     * reader's exit-time async persist land first; Index saves every change
+     * immediately, so there is no unsaved in-memory state to lose. */
+    setTimeout((): void => {
+      loadSettings(getContext(this)).then((s: ReaderSettings): void => {
+        this.settings = s;
+      }).catch((_e: Error) => {
+        /* disk read failed — keep the current copy */
+      });
+    }, 500);
   }
 
   /** Round 5: save text received via system share as a TXT book. */

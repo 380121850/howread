@@ -70,7 +70,7 @@ public class BookmarkPanel {
         });
         for (final AppBookmark appBookmark : all) {
 
-            final int num = appBookmark.getPage(dc.getPageCount());
+            final int num = ListBoxHelper.resolveLandingPage(dc, appBookmark, dc.getPageCount());
             TextView t = new TextView(pageshelper.getContext());
             boolean isQuick = appBookmark.text.equals(quickBookmark);
             if (AppState.get().isShowBookmarsPanelText && !isQuick) {
@@ -82,7 +82,7 @@ public class BookmarkPanel {
             }
 
             if (appBookmark.isF) {
-                t.setText(t.getText() + " :{" + appBookmark.getPage(dc.getPageCount()) + "}");
+                t.setText(t.getText() + " :{" + ListBoxHelper.resolveLandingPage(dc, appBookmark, dc.getPageCount()) + "}");
             }
 
             t.setSingleLine();

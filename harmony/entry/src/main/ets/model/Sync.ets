@@ -444,6 +444,9 @@ async function davExec(ctx: Context, c: SyncConfig, method: string, url: string,
     const out: DavResp = { code: resp.responseCode, body: text };
     return out;
   } catch (e) {
+    /* 0.9.67 rev3 (diag): make transport failures visible - the silent
+     * undefined degraded every caller into the generic 网络错误 path */
+    console.error('[Sync] davExec ' + method + ' fail: ' + String(e));
     return undefined;
   } finally {
     client.destroy();
@@ -676,6 +679,16 @@ function entryFromBookmark(bm: Bookmark, ms: number): Record<string, Object> {
   if (bm.aiAnswer !== undefined && bm.aiAnswer.length > 0) {
     e['aiAnswer'] = bm.aiAnswer;
   }
+  /* 0.9.67 (Android 1.3.21 chapter-anchor parity): sec/sr/st ride the wire
+   * with the same field names as android's Gson serialization; written only
+   * when captured (missing keys = -1/null defaults on the android read side). */
+  const secOut = bm.sec;
+  const stOut = bm.st;
+  if (secOut !== undefined && secOut >= 0 && stOut !== undefined && stOut.length > 0) {
+    e['sec'] = secOut;
+    e['sr'] = bm.sr !== undefined ? bm.sr : -1;
+    e['st'] = stOut;
+  }
   return e;
 }
 
@@ -758,6 +771,17 @@ function bookmarkOf(key: string, e: Record<string, Object>, path: string): Bookm
   const ans = recStr(e, 'aiAnswer', '');
   if (ans.length > 0) {
     bm.aiAnswer = ans;
+  }
+  /* 0.9.67: adopt the chapter anchor (android sec/sr/st) - sane values only;
+   * the title fingerprint is re-verified against the local TOC at resolve
+   * time, so a mismatched pair simply falls back to percent. */
+  const secN: number = recNum(e, 'sec', -1);
+  const srN: number = recNum(e, 'sr', -1);
+  const stS: string = recStr(e, 'st', '');
+  if (secN >= 0 && srN >= 0 && srN < 1 && stS.length > 0) {
+    bm.sec = secN;
+    bm.sr = srN;
+    bm.st = stS;
   }
   return bm;
 }
