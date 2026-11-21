@@ -155,6 +155,13 @@ int main(int argc, char **argv)
     bool themeSmoke = false; /* v0.79.0 V4 主题色槽位无头回归 */
     bool sshSmoke = false, opdsSmoke = false, statsSmoke = false, coverSmoke = false;
     bool rsHook = false;
+    bool davSmoke = false; /* v1.1.0：WebDAV Digest 鉴权无头回归 */
+    bool dumpSmoke = false; /* v1.2.0：--dumpmeta/--dumpbm 无头数据检查 */
+    bool noteSmoke = false; /* v1.6.0：--notesmoke 笔记生产端无头回归 */
+    bool scrollSmoke = false; /* v1.6.1：--scrollsmoke 滚动模式 phase2 增页空白页无头回归 */
+    QVector<int> scrollPages;
+    QString dumpMode;
+    QString noteBook;
     QString sshDir;
     QString book, outPng, libDir, remoteArg2, remoteArg3, syncUser, syncPass;
     QString smbArg1, smbArg2, smbArg4;
@@ -198,6 +205,41 @@ int main(int argc, char **argv)
             syncUser = QString::fromLocal8Bit(argv[i + 4]);
             syncPass = QString::fromLocal8Bit(argv[i + 5]);
             i += 5;
+        }
+        else if (a == "--notesmoke" && i + 6 < argc)
+        {
+            /* v1.6.0：笔记冒烟——baseUrl 远程目录 policy user pass 本地书 */
+            noteSmoke = true;
+            book = QString::fromLocal8Bit(argv[i + 1]);
+            remoteArg2 = QString::fromLocal8Bit(argv[i + 2]);
+            remoteArg3 = QString::fromLocal8Bit(argv[i + 3]);
+            syncUser = QString::fromLocal8Bit(argv[i + 4]);
+            syncPass = QString::fromLocal8Bit(argv[i + 5]);
+            noteBook = QString::fromLocal8Bit(argv[i + 6]);
+            i += 6;
+        }
+        else if (a == "--scrollsmoke" && i + 1 < argc)
+        {
+            /* v1.6.1：滚动栈空白页回归——book [页1 页2 ...]（1 起，缺省按 30/50/70/95% 自动取点） */
+            scrollSmoke = true;
+            book = QString::fromLocal8Bit(argv[++i]);
+            while (i + 1 < argc) scrollPages << QString::fromLocal8Bit(argv[++i]).toInt();
+        }
+        else if (a == "--davsmoke" && i + 3 < argc)
+        {
+            /* v1.1.0：WebDAV Digest 鉴权回归（401+Digest 挑战 → 自动重试） */
+            davSmoke = true;
+            book = QString::fromLocal8Bit(argv[i + 1]); /* GET 目标 URL */
+            remoteArg2 = QString::fromLocal8Bit(argv[i + 2]); /* user */
+            remoteArg3 = QString::fromLocal8Bit(argv[i + 3]); /* pass */
+            i += 3;
+        }
+        else if (a == "--dumpmeta" || a == "--dumpbm")
+        {
+            /* v1.2.0：无头数据检查（书库路径 / 书签键面 isF/isAiNote/pgs） */
+            dumpSmoke = true;
+            dumpMode = a;
+            i += 1;
         }
         else if (a == "--selsmoke" && i + 1 < argc)
         {
@@ -349,6 +391,41 @@ int main(int argc, char **argv)
     Db::open();
     hr::importAndroidCssIfNeeded(); /* 批次三：安卓 app-CSS.json/app-State.json 导入（mtime 门控） */
     evt("app_start", QString("v=%1 qt=%2").arg(appVersion()).arg(QT_VERSION_STR));
+
+    /* v1.2.0：无头数据检查——同步冒烟后核对下行键面落库 */
+    if (dumpSmoke)
+    {
+        if (dumpMode == QLatin1String("--dumpmeta"))
+        {
+            int n = 0;
+            for (const Db::MetaRow &m : Db::listLibrary())
+            {
+                if (m.path.startsWith(QString::fromLatin1("remote://"))) continue;
+                evt("meta_dump", QString("path=%1 pages=%2").arg(m.path.left(120)).arg(m.pages));
+                n++;
+            }
+            evt("meta_dump_done", QString("n=%1").arg(n));
+        }
+        else
+        {
+            int n = 0, fN = 0, aiN = 0;
+            for (const hr::BookmarkRow &bm : Db::allBookmarks())
+            {
+                if (bm.isF) fN++;
+                if (bm.isAiNote) aiN++;
+                evt("bm_dump",
+                    QString("label=%1 page=%2 isF=%3 ai=%4 pgs=%5 sec=%6 note=%7 ans=%8")
+                        .arg(bm.label.left(24)).arg(bm.page).arg(bm.isF).arg(bm.isAiNote)
+                        .arg(bm.pgs).arg(bm.sec)
+                        .arg(bm.note.left(16))
+                        .arg(bm.isAiNote ? bm.aiAnswer.left(24) : QString()));
+                n++;
+            }
+            evt("bm_dump_done", QString("n=%1 fav=%2 ai=%3").arg(n).arg(fN).arg(aiN));
+        }
+        hr_qt_shutdown();
+        return 0;
+    }
 
     /* v0.76.0 V1 --iconsmoke：QtSvg 渲染+双色染色+非空像素 无头回归 */
     if (iconSmoke)
@@ -928,6 +1005,21 @@ int main(int argc, char **argv)
         return 0;
     }
 
+    if (davSmoke)
+    {
+        /* v1.1.0：Digest 服务器在 GET 该 URL 时要求 Digest 认证——
+         * Basic 预置头 → 401 → 按挑战重试 → 200 */
+        hr::WebDavClient dav(book, remoteArg2 == "-" ? QString() : remoteArg2,
+                             remoteArg3 == "-" ? QString() : remoteArg3);
+        const QByteArray body = dav.get(book);
+        const bool ok = body.contains("ok");
+        evt(ok ? "davsmoke_ok" : "davsmoke_fail",
+            QString("len=%1").arg(body.size()));
+        fprintf(stderr, "DAVSMOKE_%s len=%d\n", ok ? "OK" : "FAIL", (int)body.size());
+        hr_qt_shutdown();
+        return ok ? 0 : 4;
+    }
+
     if (smbSmoke)
     {
         /* SMB 流式打开冒烟：libsmb2 Range 读 + 块缓存 + fz_stream → 渲染对比 */
@@ -1022,6 +1114,174 @@ int main(int argc, char **argv)
         QThreadPool::globalInstance()->waitForDone();
         hr_qt_shutdown();
         return r.ok ? 0 : 8;
+    }
+    if (scrollSmoke)
+    {
+        /* v1.6.1：滚动模式增页空白页回归——真实窗口化计数+phase2 补齐后，逐点跳页等待渲染，
+         * 断言目标页落图且滚动条 range 覆盖全内容高（修复前：新页区 range 封顶=滚不进去） */
+        if (book.isEmpty() || !QFileInfo::exists(book))
+        {
+            fprintf(stderr, "SCROLLSMOKE rc=3 fail=book\n");
+            hr_qt_shutdown();
+            return 3;
+        }
+        win.show(); /* v1.6.1：真窗口——QScrollArea range 只在布局激活后刷新，headless 假象会掩盖修复 */
+        for (int j = 0; j < 30; ++j)
+        {
+            QCoreApplication::processEvents();
+            QThread::msleep(30);
+        }
+        if (!win.openBookAsync(book, -1))
+        {
+            fprintf(stderr, "SCROLLSMOKE rc=3 fail=open\n");
+            hr_qt_shutdown();
+            return 3;
+        }
+        const qint64 aw = QDateTime::currentMSecsSinceEpoch();
+        while (win.pageCount() <= 0 && !win.asyncFailed() &&
+               QDateTime::currentMSecsSinceEpoch() - aw < 30000)
+            QCoreApplication::processEvents();
+        const int pgs0 = win.pageCount();
+        if (pgs0 <= 0)
+        {
+            fprintf(stderr, "SCROLLSMOKE rc=3 fail=opened\n");
+            hr_qt_shutdown();
+            return 3;
+        }
+        /* 等 phase2 增页与建栈批次落定（最多 25s，静默 6s 即提前走） */
+        qint64 lastLbl = win.probeLabelCount();
+        qint64 tSil = QDateTime::currentMSecsSinceEpoch();
+        while (QDateTime::currentMSecsSinceEpoch() - aw < 25000)
+        {
+            QCoreApplication::processEvents();
+            QThread::msleep(25);
+            if (win.probeLabelCount() != lastLbl)
+            {
+                lastLbl = win.probeLabelCount();
+                tSil = QDateTime::currentMSecsSinceEpoch();
+            }
+            else if (QDateTime::currentMSecsSinceEpoch() - tSil > 6000) break;
+        }
+        const int pgs = win.pageCount();
+        QVector<int> pages = scrollPages;
+        if (pages.isEmpty())
+            pages << pgs * 30 / 100 << pgs / 2 << pgs * 70 / 100 << qMax(1, pgs * 95 / 100);
+        int okN = 0;
+        QString detail;
+        for (int pi = 0; pi < pages.size(); pi++)
+        {
+            const int pg = qBound(1, pages[pi], pgs) - 1;
+            win.jumpToPublic(pg);
+            const qint64 tj = QDateTime::currentMSecsSinceEpoch();
+            auto winOk = [&win](int c) {
+                for (int d = -2; d <= 2; d++)
+                    if (win.probePageRendered(c + d)) return true;
+                return false;
+            };
+            while (!winOk(pg) && QDateTime::currentMSecsSinceEpoch() - tj < 4000)
+            {
+                QCoreApplication::processEvents();
+                QThread::msleep(25);
+            }
+            const bool r = winOk(pg);
+            if (r) okN++;
+            detail += QString("%1:%2 ").arg(pg + 1).arg(r ? "R" : "-");
+        }
+        /* 停一帧让 resize/repaint 落定再读几何 */
+        for (int j = 0; j < 10; ++j)
+        {
+            QCoreApplication::processEvents();
+            QThread::msleep(30);
+        }
+        const int maxSb = win.probeScrollMax();
+        const int vpH = win.probeViewportH();
+        const int needH = win.probeStackNeedH();
+        const bool cover = (maxSb >= 0 && needH > 0 && maxSb + vpH >= needH - 8);
+        evt("scrollsmoke_done",
+            QString("pages=%1 labels=%2 sbmax=%3 vph=%4 needh=%5 stackh=%6 rendered=%7/%8 cover=%9")
+                .arg(pgs).arg(win.probeLabelCount()).arg(maxSb).arg(vpH).arg(needH)
+                .arg(win.probeStackH()).arg(okN).arg(pages.size()).arg(cover ? 1 : 0));
+        const bool pass = (okN == pages.size()) && cover;
+        fprintf(stderr,
+                "SCROLLSMOKE rc=%d pages=%d labels=%d sbmax=%d vph=%d needh=%d stackh=%d rendered=%d/%d cover=%d %s\n",
+                pass ? 0 : 8, pgs, win.probeLabelCount(), maxSb, vpH, needH,
+                win.probeStackH(), okN, pages.size(), cover ? 1 : 0,
+                detail.toLocal8Bit().constData());
+        fflush(stderr);
+        QThreadPool::globalInstance()->clear();
+        QThreadPool::globalInstance()->waitForDone();
+        hr_qt_shutdown();
+        return pass ? 0 : 8;
+    }
+    if (noteSmoke)
+    {
+        /* v1.6.0（§6）：笔记生产端无头回归——真窗链路保存（addNoteBookmark=编辑器/AI 保存按钮同一
+         * 函数）→落库断言（isAiNote/label=正文/锚 pgs）→删除走墓碑链→androidSync 发布→墓碑不复活。
+         * 服务器键面（isAiNote/text/aiAnswer）由 ps1 GET books/<md5>.json 断言；正文 ASCII 便于检索。 */
+        hr::Db::open();
+        const QString nb = noteBook;
+        if (!QFileInfo::exists(nb))
+        {
+            evt("notesmoke_fail", "book missing path=" + nb.left(80));
+            fprintf(stderr, "NOTESMOKE rc=3 fail=book\n");
+            hr_qt_shutdown();
+            return 3;
+        }
+        void *d0 = hr_qt_open(hr::openablePath(nb).toUtf8().constData());
+        if (d0)
+        {
+            hr::Db::upsertFileMeta(nb, QString::fromUtf8(hr_qt_meta(d0, 0)), hr_qt_count(d0),
+                                   QFileInfo(nb).size(),
+                                   QFileInfo(nb).lastModified().toMSecsSinceEpoch());
+            hr_qt_close(d0);
+        }
+        win.setSmokeViewport(900, 1200);
+        win.forcePageMode();
+        if (!win.openBook(nb, -1))
+        {
+            evt("notesmoke_fail", "open path=" + nb.left(80));
+            fprintf(stderr, "NOTESMOKE rc=3 fail=open\n");
+            hr_qt_shutdown();
+            return 3;
+        }
+        for (const hr::BookmarkRow &rr : hr::Db::listBookmarks(nb)) hr::Db::deleteBookmark(rr.id);
+        const QString t1s = "note-body-B1";
+        const QString a2s = "ai-answer-full";
+        const QString t3s = "del-test-note";
+        const long long c1 = win.addNoteBookmark(t1s, QString(), win.currentPage());
+        const long long c2 = win.addNoteBookmark("sel\n\nQ: what is this book", a2s,
+                                                 win.currentPage());
+        const long long c3 = win.addNoteBookmark(t3s, QString(), win.currentPage());
+        bool m1 = false, m2 = false;
+        long long id3 = -1;
+        for (const hr::BookmarkRow &rr : hr::Db::listBookmarks(nb))
+        {
+            if (rr.createdAt == c1)
+                m1 = (rr.isAiNote == 1 && rr.label == t1s && rr.pgs == win.pageCount());
+            if (rr.createdAt == c2)
+                m2 = (rr.isAiNote == 1 && rr.aiAnswer == a2s);
+            if (rr.createdAt == c3) id3 = rr.id;
+        }
+        if (id3 > 0) /* 书签面板删除同款链路：墓碑+删行 */
+        {
+            hr::addBmTombstoneFor(nb, QString::number(c3));
+            hr::Db::deleteBookmark(id3);
+        }
+        const hr::SyncResult r = hr::androidSync(book, syncUser, syncPass, remoteArg2,
+                                                 remoteArg3.isEmpty() ? "newer" : remoteArg3);
+        bool gone = true;
+        for (const hr::BookmarkRow &rr : hr::Db::listBookmarks(nb))
+            if (rr.createdAt == c3) gone = false;
+        const bool pass = r.ok && c1 > 0 && c2 > 0 && c3 > 0 && m1 && m2 && id3 > 0 && gone;
+        evt("notesmoke_done", QString("sync=%1 m1=%2 m2=%3 gone=%4 pages=%5")
+                                  .arg(r.ok ? 1 : 0).arg(m1 ? 1 : 0).arg(m2 ? 1 : 0)
+                                  .arg(gone ? 1 : 0).arg(win.pageCount()));
+        fprintf(stderr, "NOTESMOKE rc=%d sync=%d m1=%d m2=%d gone=%d id3=%d\n",
+                pass ? 0 : 9, r.ok ? 1 : 0, m1 ? 1 : 0, m2 ? 1 : 0, gone ? 1 : 0,
+                (int)(id3 > 0 ? 1 : 0));
+        QThreadPool::globalInstance()->waitForDone();
+        hr_qt_shutdown();
+        return pass ? 0 : 9;
     }
     if (!book.isEmpty())
     {

@@ -70,6 +70,9 @@ bool Db::open()
          " created_at INTEGER)"},
         {"CREATE TABLE IF NOT EXISTS tombstone(kind TEXT, book TEXT, key TEXT, t INTEGER,"
          " PRIMARY KEY(kind, book, key))"},
+        /* v1.4.0（R/F）：远端最近/收藏条目待定区（kind=favorite/recent，key=云端条目键） */
+        {"CREATE TABLE IF NOT EXISTS meta_sync(kind TEXT, key TEXT, name TEXT,"
+         " time INTEGER, PRIMARY KEY(kind, key))"},
     };
     for (const T &t : ddl)
         q.exec(QString::fromUtf8(t.sql));
@@ -80,6 +83,18 @@ bool Db::open()
     q.exec("ALTER TABLE file_meta ADD COLUMN series_index INTEGER");
     q.exec("ALTER TABLE file_meta ADD COLUMN tags TEXT");
     q.exec("ALTER TABLE file_meta ADD COLUMN description TEXT");
+    /* v1.1.0：书签章节锚（安卓 1.3.21 sec/sr/st 互通；pgs=捕获时全书页数） */
+    q.exec("ALTER TABLE bookmark ADD COLUMN sec INTEGER DEFAULT -1");
+    q.exec("ALTER TABLE bookmark ADD COLUMN sr REAL DEFAULT 0");
+    q.exec("ALTER TABLE bookmark ADD COLUMN st TEXT");
+    q.exec("ALTER TABLE bookmark ADD COLUMN pgs INTEGER DEFAULT 0");
+    /* v1.2.0（B2/B3）：安卓书签键面——收藏标 / AI 笔记（ALTER 吞重复列错，v1.1.0 同模式） */
+    q.exec("ALTER TABLE bookmark ADD COLUMN isF INTEGER DEFAULT 0");
+    q.exec("ALTER TABLE bookmark ADD COLUMN isAiNote INTEGER DEFAULT 0");
+    q.exec("ALTER TABLE bookmark ADD COLUMN ai_answer TEXT");
+    /* v1.4.0（R/F）：最近/收藏行携带云端条目键（远端原键发布/墓碑口径） */
+    q.exec("ALTER TABLE favorite ADD COLUMN sync_key TEXT DEFAULT ''");
+    q.exec("ALTER TABLE recent ADD COLUMN sync_key TEXT DEFAULT ''");
     evt("db_open", "file=howread.db");
     return true;
 }
@@ -109,6 +124,27 @@ bool Db::loadProgress(const QString &path, int *page, int *pageCount, int *viewp
     if (pageCount) *pageCount = q.value(1).toInt();
     if (viewportW) *viewportW = q.value(2).toInt();
     return true;
+}
+
+/* v1.2.0（G）：标记未读 = 清进度行（安卓 BookStateStore.markUnread 同语义） */
+void Db::deleteProgress(const QString &path)
+{
+    if (!s_ok) return;
+    QSqlQuery q(conn());
+    q.prepare("DELETE FROM progress WHERE path=?");
+    q.addBindValue(path);
+    q.exec();
+}
+
+/* v1.2.0（B2）：书签收藏标（同步载荷双向；安卓 ListBoxHelper isF 勾选对位） */
+void Db::setBookmarkFav(long long id, bool on)
+{
+    if (!s_ok) return;
+    QSqlQuery q(conn());
+    q.prepare("UPDATE bookmark SET isF=? WHERE id=?");
+    q.addBindValue(on ? 1 : 0);
+    q.addBindValue(id);
+    q.exec();
 }
 
 void Db::touchRecent(const QString &path)
@@ -160,16 +196,22 @@ void Db::upsertFileMeta(const QString &path, const QString &title, int pages, lo
 }
 
 long long Db::addBookmark(const QString &path, int page, const QString &label,
-                          const QString &note)
+                          const QString &note, int sec, double sr, const QString &st,
+                          int pgs)
 {
     if (!s_ok) return -1;
     QSqlQuery q(conn());
-    q.prepare("INSERT INTO bookmark(path,page,label,note,created_at) VALUES(?,?,?,?,?)");
+    q.prepare("INSERT INTO bookmark(path,page,label,note,created_at,sec,sr,st,pgs)"
+              " VALUES(?,?,?,?,?,?,?,?,?)");
     q.addBindValue(path);
     q.addBindValue(page);
     q.addBindValue(label);
     q.addBindValue(note);
     q.addBindValue(QDateTime::currentMSecsSinceEpoch());
+    q.addBindValue(sec);
+    q.addBindValue(sr);
+    q.addBindValue(st);
+    q.addBindValue(pgs);
     if (!q.exec()) return -1;
     return q.lastInsertId().toLongLong();
 }
@@ -179,8 +221,8 @@ QList<BookmarkRow> Db::listBookmarks(const QString &path)
     QList<BookmarkRow> out;
     if (!s_ok) return out;
     QSqlQuery q(conn());
-    q.prepare("SELECT id,path,page,label,note,created_at FROM bookmark WHERE path=?"
-              " ORDER BY created_at DESC, id DESC");
+    q.prepare("SELECT id,path,page,label,note,created_at,sec,sr,st,pgs,isF,isAiNote,ai_answer"
+              " FROM bookmark WHERE path=? ORDER BY created_at DESC, id DESC");
     q.addBindValue(path);
     if (!q.exec()) return out;
     while (q.next())
@@ -192,6 +234,13 @@ QList<BookmarkRow> Db::listBookmarks(const QString &path)
         r.label = q.value(3).toString();
         r.note = q.value(4).toString();
         r.createdAt = q.value(5).toLongLong();
+        r.sec = q.value(6).isNull() ? -1 : q.value(6).toInt();
+        r.sr = q.value(7).toDouble();
+        r.st = q.value(8).toString();
+        r.pgs = q.value(9).toInt();
+        r.isF = q.value(10).toInt() != 0;
+        r.isAiNote = q.value(11).toInt() != 0;
+        r.aiAnswer = q.value(12).toString();
         out.append(r);
     }
     return out;

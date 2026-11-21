@@ -448,6 +448,18 @@ void BlockCacheStore::enforceCap(long long maxMB, const QString &cacheRoot,
     }
 }
 
+/* v1.9.0（P1-6）：已缓存字节（blocks.bin 位图口径，锁内统计） */
+long long BlockCacheStore::cachedBytes() const
+{
+    long long have = 0;
+    {
+        QMutexLocker _(&const_cast<BlockCacheStore *>(this)->m_memMutex());
+        for (int i = 0; i < m_blockCount; i++)
+            if (m_flags[i]) have += m_blockSize;
+    }
+    return qMin(have, m_size);
+}
+
 /* P0 适配：窗口深度按偏好接线（前/后 % × 窗口字节 / 块长，1..128 块） */
 void BlockCacheStore::setDepths(int fwdBlocks, int backBlocks)
 {

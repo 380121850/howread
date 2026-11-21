@@ -3,6 +3,7 @@ import preferences from '@ohos.data.preferences';
 import util from '@ohos.util';
 import { loadProxy, proxyOpt } from './HttpUtil';
 import { tlog } from './TestLog';
+import { isProUnlocked, gateMessage } from './ProState';
 
 /**
  * Unified LLM access layer (Android 2026-09-26 parity): the protocol field
@@ -413,6 +414,14 @@ function isCancelledError(e: Object): boolean {
 /** Single chat completion (non-stream). Retries once without the thinking
  * switch when the endpoint rejects it with 400, then remembers the combo. */
 export async function chatCompletion(cfg: AiConfig, messages: AiMessage[], maxTokens: number, ctx?: Context): Promise<string> {
+  /* 0.9.69: Pro gate (Android AiClient.ask 'pro_required' parity) — covers
+   * every chat surface (AiChat, AI intro, translate) in one place. The AI
+   * config dialog's 测试连接 (testChat) stays ungated so the config dialog
+   * itself remains debuggable. */
+  if (!isProUnlocked()) {
+    tlog('pro_gate_block', 'src=chat_completion');
+    return Promise.reject(new Error(gateMessage()));
+  }
   lastTruncated = false;
   await loadNoThinking(ctx);
   const withThinking = !NO_THINK.has(thinkKey(cfg));
@@ -605,6 +614,11 @@ tlog('ai_req_start', 'stream model=' + cfg.model);
  * or the transport fails (Android 2026-09-24/25). */
 export async function chatCompletionStream(cfg: AiConfig, messages: AiMessage[], maxTokens: number,
   onDelta: (full: string) => void, ctx?: Context, isCancelled?: () => boolean): Promise<string> {
+  /* 0.9.69: Pro gate (Android parity, same as chatCompletion) */
+  if (!isProUnlocked()) {
+    tlog('pro_gate_block', 'src=chat_stream');
+    return Promise.reject(new Error(gateMessage()));
+  }
   lastTruncated = false;
   if (!isOpenAi(cfg.protocol)) {
     /* anthropic / google: single-block answers on their own wire */

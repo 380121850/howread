@@ -45,7 +45,12 @@ import i18n from '@ohos.i18n';
 import preferences from '@ohos.data.preferences';
 import bundleManager from '@ohos.bundle.bundleManager';
 import Want from '@ohos.app.ability.Want';
-import { BUILD_TIME } from '../model/BuildInfo';
+import { BUILD_TIME, IS_DEBUG_BUILD } from '../model/BuildInfo';
+import { initProState, isProUnlocked, purchasePro, restorePro, simulateRefund, stubPurchase,
+  getChannelKind, getPurchaseTime, getOrderIdSuffix, ProPurchaseKind } from '../model/ProState';
+import { initAds, bannerVisible, maybeShowInterstitial, bannerParams, loadOptions, displayOpts,
+  bannerListener } from '../model/AdsService';
+import { AutoAdComponent } from '@kit.AdsKit';
 import { parseScanFormats, FORMAT_EXTS } from '../model/LibrarySearch';
 import {
   RemoteSession, RemoteFileSource, WebDavFileSource, SmbFileSource, SftpFileSource, RemoteBookRec, DavListEntry, RemoteCacheSettings, RemoteUriParts,
@@ -430,6 +435,11 @@ struct Index {
   @State migrateFrom: string = '';
   @State migrateTo: string = '';
   @State dbgLogOn: boolean = false;
+  /* 0.9.69: Pro card UI state + stub purchase dialog + reader-close
+   * interstitial flag (Android AppSP.iapProUnlocked view parity) */
+  @State proUnlockedUi: boolean = false;
+  @State showProStubBuy: boolean = false;
+  private wasReaderOpen: boolean = false;
   /* 0.9.55: remote/cache manager + lock-password dialogs */
   @State showRemoteCfg: boolean = false;
   @State showCacheMgr: boolean = false;
@@ -574,6 +584,14 @@ struct Index {
       this.appVersion = '0.8.6';
       console.error('[Index] getBundleInfoForSelfSync failed');
     }
+    /* 0.9.69: Pro entitlement load (+ release-only IAP ownership re-sync,
+     * Android MainTabs2.syncOwnershipSilently parity) and ads facade init —
+     * both fire-and-forget, never block first paint. */
+    initProState(getContext(this) as common.UIAbilityContext).then((): void => {
+      this.refreshProCard();
+    }).catch((_e: Error) => {
+    });
+    initAds(getContext(this));
   }
 
   /** hr05: load persisted OPDS/WebDAV server lists. */
@@ -625,6 +643,13 @@ struct Index {
   /** Phase 3: refresh stats + library whenever the Index page becomes visible
    *  again (e.g. after returning from the Reader via router back). */
   onPageShow(): void {
+    /* 0.9.69: interstitial after the reader closes (Android
+     * AdsFragmentActivity.closeActivity parity); wasReaderOpen keeps the
+     * app's own first onPageShow ad-free. */
+    if (this.wasReaderOpen) {
+      this.wasReaderOpen = false;
+      maybeShowInterstitial(getContext(this) as common.UIAbilityContext);
+    }
     this.loadStats();
     this.loadLibrary();
     if (this.settings.appLockEnabled && !this.appUnlocked) {
@@ -1732,6 +1757,7 @@ struct Index {
   }
 
   private openBook(book: RecentBook): void {
+    this.wasReaderOpen = true; /* 0.9.69: arms the reader-close interstitial */
     this.prefetchOpen(book.path);
   tlog('book_open_tap', 'title=' + book.title);
     /* Round 7: alwaysPage1 forces page 1 in the Reader (ignores saved progress) */
@@ -1881,6 +1907,20 @@ struct Index {
         }
         .width('100%')
         .layoutWeight(1)
+        /* 0.9.69: banner ad slot above the bottom tab bar (Android MainTabs2
+         * adFrame2 parity); AutoAdComponent loads itself, dormant (no node)
+         * when the slot id is empty or Pro is unlocked. */
+        if (bannerVisible()) {
+          AutoAdComponent({
+            adParam: bannerParams(),
+            adOptions: loadOptions(),
+            displayOptions: displayOpts(),
+            interactionListener: bannerListener()
+          })
+            .width('100%')
+            .height(80)
+            .id('ads_banner')
+        }
       }
       .width('100%')
       .height('100%')
@@ -1981,6 +2021,7 @@ struct Index {
         this.buildLockPassDialog()
       }
 
+
       // ---- AI 大模型接入 dialog (Android hr08) ----
       if (this.showAiDialog) {
         this.buildAiDialog()
@@ -2077,6 +2118,14 @@ struct Index {
             this.activeOverlay = 0;
           })
         this.buildAboutOverlay()
+      }
+
+      /* 0.9.69: Pro stub purchase confirm (debug builds only) — rendered
+       * after the about overlay so it stacks ON TOP of it (the dialog is
+       * opened from the about card; earlier placement put it underneath and
+       * the confirm button was covered by the card). */
+      if (this.showProStubBuy) {
+        this.buildProStubBuyDialog()
       }
       /* Round 6: profile management overlay */
       if (this.showProfile) {
@@ -6322,6 +6371,11 @@ tlog('download_start', 'name=' + fileName);    try {
 
   /** hr19+hr17: AI 问答: ask the model about the book, show + save as AI note. */
   private startAiIntro(): void {
+    /* 0.9.69: Pro gate (Android AiTranslateDialog parity) */
+    if (!isProUnlocked()) {
+      promptAction.showToast({ message: $r('app.string.pro_toast_locked') });
+      return;
+    }
     const book = this.libMenuBook();
     if (book === undefined) {
       return;
@@ -8503,13 +8557,22 @@ tlog('download_start', 'name=' + fileName);    try {
           if (addKind === 1) {
             this.openOpdsEdit(-1);
           } else if (addKind === 2) {
-            this.openDavEdit(-1);
+            /* 0.9.69: Pro gates on the WebDAV/SMB/SFTP add entries
+             * (Android BrowseFragment2 buildRemoteNetSection parity); OPDS
+             * and local folders stay open. */
+            if (this.proNetGate()) {
+              this.openDavEdit(-1);
+            }
           } else if (addKind === 4) {
             this.openDirPick('libFolder');
           } else if (addKind === 5) {
-            this.openSmbEdit(-1);
+            if (this.proNetGate()) {
+              this.openSmbEdit(-1);
+            }
           } else if (addKind === 6) {
-            this.openSftpEdit(-1);
+            if (this.proNetGate()) {
+              this.openSftpEdit(-1);
+            }
           }
         })
       }
@@ -8824,11 +8887,17 @@ tlog('download_start', 'name=' + fileName);    try {
         .width(20).height(20).fillColor(this.thm())
         .onClick(() => {
           /* Round 8: scan this server into the remote-book shelf */
+          if (!this.proNetGate()) {
+            return;
+          }
           this.remoteScanServer(s);
         })
       Image($r('app.media.ic_pencil'))
         .width(20).height(20).fillColor(this.thm())
         .onClick(() => {
+          if (!this.proNetGate()) {
+            return;
+          }
           this.openDavEdit(idx);
         })
       Image($r('app.media.ic_close'))
@@ -9346,11 +9415,17 @@ tlog('download_start', 'name=' + fileName);    try {
       Image($r('app.media.ic_refresh'))
         .width(20).height(20).fillColor(this.thm())
         .onClick(() => {
+          if (!this.proNetGate()) {
+            return;
+          }
           this.remoteScanSmb(s);
         })
       Image($r('app.media.ic_pencil'))
         .width(20).height(20).fillColor(this.thm())
         .onClick(() => {
+          if (!this.proNetGate()) {
+            return;
+          }
           this.openSmbEdit(idx);
         })
       Image($r('app.media.ic_close'))
@@ -9379,11 +9454,17 @@ tlog('download_start', 'name=' + fileName);    try {
       Image($r('app.media.ic_refresh'))
         .width(20).height(20).fillColor(this.thm())
         .onClick(() => {
+          if (!this.proNetGate()) {
+            return;
+          }
           this.remoteScanSftp(s);
         })
       Image($r('app.media.ic_pencil'))
         .width(20).height(20).fillColor(this.thm())
         .onClick(() => {
+          if (!this.proNetGate()) {
+            return;
+          }
           this.openSftpEdit(idx);
         })
       Image($r('app.media.ic_close'))
@@ -11477,6 +11558,10 @@ tlog('download_start', 'name=' + fileName);    try {
           .width('100%')
           .padding({ left: 12, right: 12, top: 9, bottom: 9 })
           .onClick(() => {
+            /* 0.9.69: Pro gate (Android webdavSyncRow parity) */
+            if (!this.proNetGate()) {
+              return;
+            }
             loadSyncConfig(getContext(this)).then((c: SyncConfig) => {
               this.syncCfg = c;
               this.syncTestOut = '';
@@ -11495,6 +11580,10 @@ tlog('download_start', 'name=' + fileName);    try {
           .width('100%')
           .padding({ left: 12, right: 12, top: 9, bottom: 9 })
           .onClick(() => {
+            /* 0.9.69: Pro gate (Android aiConfigRow parity) */
+            if (!this.proNetGate()) {
+              return;
+            }
             loadAiConfig(getContext(this)).then((c: AiConfig) => {
               this.aiCfg = c;
               this.aiTestIn = '';
@@ -11515,6 +11604,10 @@ tlog('download_start', 'name=' + fileName);    try {
           .width('100%')
           .padding({ left: 12, right: 12, top: 9, bottom: 9 })
           .onClick(() => {
+            /* 0.9.69: Pro gate (Android remoteConfigRow parity) */
+            if (!this.proNetGate()) {
+              return;
+            }
             this.remoteCfgThreshold = '' + this.settings.remoteWholeBookThresholdMB;
             this.remoteCfgBefore = '' + this.settings.remoteWindowBeforePct;
             this.remoteCfgAfter = '' + this.settings.remoteWindowAfterPct;
@@ -12601,28 +12694,56 @@ tlog('download_start', 'name=' + fileName);    try {
             .fontSize(13).fontColor(this.txtSec())
             .textAlign(TextAlign.Start)
             .padding({ left: 8, right: 8 })
-          /* Pro card (Android about_section proCardRoot, active state;
-           * HarmonyOS Pro HAP ships unlocked, no IAP — display only) */
+          /* 0.9.69 (Android AboutSectionBinder.bindProCard parity): dynamic
+           * Pro card — locked shows the upgrade button + hint, active shows
+           * channel/time/order-suffix info with restore + manage links.
+           * Long-press on the active links row = simulate refund (debug
+           * builds only; Android simulateRefund parity). */
           Row({ space: 10 }) {
             Text($r('app.string.about_pro'))
               .fontSize(13).fontColor(this.txtSec())
               .width(120)
-            Text($r('app.string.about_pro_active'))
-              .fontSize(13).fontWeight(FontWeight.Bold).fontColor(this.thm())
+            if (this.proUnlockedUi) {
+              Text($r('app.string.about_pro_active'))
+                .fontSize(13).fontWeight(FontWeight.Bold).fontColor(this.thm())
+                .layoutWeight(1)
+            } else {
+              Button($r('app.string.pro_upgrade_btn'))
+                .fontSize(13).height(30)
+                .backgroundColor(this.thm()).fontColor(Color.White)
+                .onClick(() => {
+                  this.onProUpgradeTap();
+                })
+            }
           }
           .width('100%')
-          Text($r('app.string.about_pro_info'))
-            .fontSize(13).fontColor(this.txtSec())
+          if (this.proUnlockedUi) {
+            Text(this.proInfoText())
+              .fontSize(13).fontColor(this.txtSec())
+              .width('100%')
+            Row({ space: 20 }) {
+              Text($r('app.string.about_pro_restore'))
+                .fontSize(13).fontColor(this.thm())
+                .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+                .onClick(() => {
+                  this.onProRestoreTap();
+                })
+              Text($r('app.string.about_pro_manage'))
+                .fontSize(13).fontColor(this.thm())
+                .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+                .onClick(() => {
+                  this.onProManageTap();
+                })
+            }
             .width('100%')
-          Row({ space: 20 }) {
-            Text($r('app.string.about_pro_restore'))
-              .fontSize(13).fontColor(this.thm())
-              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
-            Text($r('app.string.about_pro_manage'))
-              .fontSize(13).fontColor(this.thm())
-              .decoration({ type: TextDecorationType.Underline, color: this.thm() })
+            .gesture(LongPressGesture().onAction(() => {
+              this.onProRefundLongPress();
+            }))
+          } else {
+            Text($r('app.string.pro_hint_locked'))
+              .fontSize(13).fontColor(this.txtSec())
+              .width('100%')
           }
-          .width('100%')
           /* Android about_section.xml rows (2026-09-24): developer / what's
            * new / privacy / license / feedback / mail / web */
           this.aboutRow($r('app.string.about_developer'), 'LeeStudio', (): void => {
@@ -12675,6 +12796,145 @@ tlog('download_start', 'name=' + fileName);    try {
     .backgroundColor(this.cardBg())
     .borderRadius(12)
     .align(Alignment.Center)
+  }
+
+  /* ===== 0.9.69: Pro card actions (Android AboutSectionBinder parity) ===== */
+
+  private refreshProCard(): void {
+    this.proUnlockedUi = isProUnlocked();
+  }
+
+  /** Shared gate for the (Pro) rows + network add/edit/scan entries. */
+  private proNetGate(): boolean {
+    if (!isProUnlocked()) {
+      promptAction.showToast({ message: $r('app.string.pro_toast_locked') });
+      return false;
+    }
+    return true;
+  }
+
+  private onProUpgradeTap(): void {
+    if (isProUnlocked()) {
+      return;
+    }
+    if (IS_DEBUG_BUILD) {
+      this.showProStubBuy = true;
+      return;
+    }
+    /* release: real IAP cashier (IAP Kit, NONCONSUMABLE howread_pro_unlock) */
+    purchasePro(getContext(this) as common.UIAbilityContext, (kind: ProPurchaseKind): void => {
+      this.onProPurchaseDone(kind);
+    });
+  }
+
+  private onProRestoreTap(): void {
+    restorePro(getContext(this) as common.UIAbilityContext, (kind: ProPurchaseKind): void => {
+      this.onProPurchaseDone(kind);
+    });
+  }
+
+  /** Toast mapping for purchase/restore outcomes (Android pro_toast_* parity). */
+  private onProPurchaseDone(kind: ProPurchaseKind): void {
+    if (kind === 'purchased') {
+      promptAction.showToast({ message: IS_DEBUG_BUILD ? $r('app.string.pro_toast_purchased') : $r('app.string.pro_toast_purchased_real') });
+    } else if (kind === 'owned' || kind === 'restored') {
+      promptAction.showToast({ message: IS_DEBUG_BUILD ? $r('app.string.pro_toast_restored') : $r('app.string.pro_toast_restored_real') });
+    } else if (kind === 'none') {
+      promptAction.showToast({ message: $r('app.string.pro_toast_no_purchases') });
+    } else if (kind === 'fail') {
+      promptAction.showToast({ message: $r('app.string.pro_iap_unavailable') });
+    }
+    /* 'cancel' stays silent (Android parity) */
+    this.refreshProCard();
+  }
+
+  private onProManageTap(): void {
+    /* HarmonyOS has no PayInfo-page API for non-consumables — an honest
+     * pointer to the system purchase-history path instead of a dead button. */
+    promptAction.showToast({ message: $r('app.string.pro_manage_hint_hmos') });
+  }
+
+  /** Android AboutSectionBinder long-press simulateRefund parity — debug
+   * builds only, so the locked gating stays verifiable on the emulator. */
+  private onProRefundLongPress(): void {
+    if (!IS_DEBUG_BUILD) {
+      return;
+    }
+    AlertDialog.show({
+      title: this.L($r('app.string.pro_refund_title')),
+      message: this.L($r('app.string.pro_refund_msg')),
+      primaryButton: {
+        value: this.L($r('app.string.common_cancel')),
+        action: (): void => {
+        }
+      },
+      secondaryButton: {
+        value: this.L($r('app.string.common_ok')),
+        action: (): void => {
+          simulateRefund(getContext(this));
+          promptAction.showToast({ message: $r('app.string.pro_toast_refunded') });
+          this.refreshProCard();
+        }
+      }
+    });
+  }
+
+  /** Pro card info line: channel / purchase time / order suffix. */
+  private proInfoText(): string {
+    const channel = getChannelKind() === 'stub'
+      ? this.L($r('app.string.pro_channel_local_key'))
+      : this.L($r('app.string.pro_channel_huawei'));
+    const t = getPurchaseTime();
+    let time = '';
+    if (t > 0) {
+      const d = new Date(t);
+      const p = (n: number): string => (n < 10 ? '0' + n : '' + n);
+      time = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    }
+    const order = getOrderIdSuffix();
+    return this.L($r('app.string.pro_info_channel')) + channel + '\n'
+      + this.L($r('app.string.pro_info_time')) + time + '\n'
+      + this.L($r('app.string.pro_info_order')) + order;
+  }
+
+  @Builder
+  buildProStubBuyDialog() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showProStubBuy = false;
+        })
+      Column({ space: 12 }) {
+        Text($r('app.string.pro_stub_purchase_title'))
+          .fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
+        Text($r('app.string.pro_stub_purchase_msg'))
+          .fontSize(13).fontColor(this.txtSec())
+        Row({ space: 12 }) {
+          Button($r('app.string.common_cancel'))
+            .fontSize(13).height(36).layoutWeight(1)
+            .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+            .onClick(() => {
+              this.showProStubBuy = false;
+            })
+          Button($r('app.string.pro_stub_buy'))
+            .fontSize(13).height(36).layoutWeight(1)
+            .backgroundColor(this.thm()).fontColor(Color.White)
+            .onClick(() => {
+              this.showProStubBuy = false;
+              stubPurchase(getContext(this));
+              this.onProPurchaseDone('purchased');
+            })
+        }
+        .width('100%')
+      }
+      .width('72%')
+      .padding(14)
+      .backgroundColor(this.cardBg())
+      .borderRadius(12)
+    }
+    .width('100%').height('100%')
   }
 
   // ---- NAPI self-test (runs once on launch, results shown in Settings tab) ----

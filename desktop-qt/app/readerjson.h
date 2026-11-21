@@ -3,6 +3,7 @@
 #ifndef HRREADERJSON_H
 #define HRREADERJSON_H
 
+#include <QJsonObject>
 #include <QString>
 
 namespace hr
@@ -27,6 +28,13 @@ struct RJson
  * 命中导入返回 true。映射：fontSizeSp→em、lineHeight12×10→lineHeight、段距/缩进/边距直映、
  * textAlign 枚举→align、alwaysTwoPages→twoPage（写 qt-prefs.ini reader/twoPage）。 */
 bool importAndroidCssIfNeeded();
+
+/* v1.3.0（A1）：Qt 排版真源(reader.json) ⇄ 安卓 app-CSS.json 双向——
+ * mirrorReaderToAndroidCss：9 个映射键从 reader.json 镜像进本地 app-CSS.json 副本
+ * （文件已存在才镜像——首装采纳前不种子）；applyAndroidCssKeys：合并结果即时映射回
+ * reader.json（与导入器同一张映射表）。 */
+bool mirrorReaderToAndroidCss();
+void applyAndroidCssKeys(const QJsonObject &css);
 
 } // namespace hr
 

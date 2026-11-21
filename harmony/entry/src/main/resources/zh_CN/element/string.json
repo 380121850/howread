@@ -3323,6 +3323,114 @@
     {
       "name": "bm_sort_old",
       "value": "按时间（最旧在前）"
+    },
+    {
+      "name": "zoom_reflow_hint",
+      "value": "该书的排版由字体大小控制，请在 阅读偏好 中调整字号"
+    },
+    {
+      "name": "zoom_pdf_todo",
+      "value": "PDF 缩放查看将在后续版本提供"
+    },
+    {
+      "name": "pro_upgrade_btn",
+      "value": "解锁Pro高级功能"
+    },
+    {
+      "name": "pro_hint_locked",
+      "value": "Pro 未解锁，解锁后享受WebDAV、AI笔记等高级功能"
+    },
+    {
+      "name": "pro_toast_locked",
+      "value": "Pro 功能，请先升级 Pro"
+    },
+    {
+      "name": "pro_toast_purchased",
+      "value": "购买成功（IAP 桩），Pro 已激活"
+    },
+    {
+      "name": "pro_toast_restored",
+      "value": "已恢复购买（IAP 桩）"
+    },
+    {
+      "name": "pro_toast_purchased_real",
+      "value": "购买成功，Pro 已激活"
+    },
+    {
+      "name": "pro_toast_restored_real",
+      "value": "已恢复购买，Pro 已激活"
+    },
+    {
+      "name": "pro_toast_no_purchases",
+      "value": "未查询到已购项目"
+    },
+    {
+      "name": "pro_iap_unavailable",
+      "value": "当前设备不支持华为 IAP"
+    },
+    {
+      "name": "pro_toast_refunded",
+      "value": "已模拟退款，Pro 回到未解锁状态"
+    },
+    {
+      "name": "pro_stub_purchase_title",
+      "value": "模拟购买（IAP 桩）"
+    },
+    {
+      "name": "pro_stub_purchase_msg",
+      "value": "调试包未接入计费，当前为打桩购买。\n\n商品：Pro 高级功能解锁（WebDAV 同步、AI 笔记、AI 翻译、在线阅读、笔记导出、阅读统计）\n价格：免费（桩）\n\n确认购买？"
+    },
+    {
+      "name": "pro_stub_buy",
+      "value": "确认购买（桩）"
+    },
+    {
+      "name": "pro_refund_title",
+      "value": "模拟退款（IAP 桩）"
+    },
+    {
+      "name": "pro_refund_msg",
+      "value": "将清除本机解锁标记，Pro 回到未解锁状态。继续？"
+    },
+    {
+      "name": "pro_channel_local_key",
+      "value": "本地 key"
+    },
+    {
+      "name": "pro_channel_huawei",
+      "value": "华为应用市场"
+    },
+    {
+      "name": "pro_info_channel",
+      "value": "解锁方式："
+    },
+    {
+      "name": "pro_info_time",
+      "value": "购买时间："
+    },
+    {
+      "name": "pro_info_order",
+      "value": "订单号后四位："
+    },
+    {
+      "name": "pro_manage_hint_hmos",
+      "value": "请在 华为账号 > 付款与购买记录 中管理已购项目"
+    },
+    {
+      "name": "reader_reward_ad",
+      "value": "🎁 观看视频免广告2小时"
+    },
+    {
+      "name": "ads_reward_earned",
+      "value": "已解锁 2 小时免广告"
+    },
+    {
+      "name": "ads_reward_unavailable",
+      "value": "广告暂不可用"
+    },
+    {
+      "name": "perm_tracking_consent",
+      "value": "广告标识符权限，用于展示相关广告"
     }
   ]
 }

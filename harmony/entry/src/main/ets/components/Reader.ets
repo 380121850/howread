@@ -44,6 +44,8 @@ import {
 } from 'libmupdf_napi.so';
 import { saveRecentBook, getPageForPath, getRecentBookForPath, RecentBook } from '../model/ReadingProgress';
 import { recordReadTime, recordPagesRead } from '../model/ReadingStats';
+import { isProUnlocked } from '../model/ProState';
+import { showRewardAd as launchRewardAd } from '../model/AdsService';
 import { getBookmarks, addBookmark, removeBookmark, replaceBookmarks, exportBookmarks, recordBookmarkTombstone, Bookmark, BmAnchor } from '../model/Bookmarks';
 import { AiConfig, loadAiConfig, chatCompletion, chatCompletionStream, aiConfigReady, AiMessage, lastTruncated} from '../model/AiClient';
 import { getNotes, addNote, removeNote, AiNote } from '../model/Notes';
@@ -2491,6 +2493,11 @@ struct Reader {
 
   /** Phase 3: accumulate a 30s reading-time chunk. */
   private tickReadTime(): void {
+    if (!isProUnlocked()) {
+      /* 0.9.69: Pro gate (Android ReadingStats.onFlip parity) — history is
+       * kept, no new data is recorded while locked. */
+      return;
+    }
     try {
       recordReadTime(getContext(this), 30000).catch((e: Error) => {
       });
@@ -2523,8 +2530,11 @@ struct Reader {
         this.remoteSession.prefetchForPageTurn(index > prevPage ? 1 : -1);
       }
       try {
-        recordPagesRead(getContext(this), 1).catch((e: Error) => {
-        });
+        /* 0.9.69: Pro gate — stats recording pauses while locked (parity) */
+        if (isProUnlocked()) {
+          recordPagesRead(getContext(this), 1).catch((e: Error) => {
+          });
+        }
       } catch (e) {
         /* non-fatal */
       }
@@ -2576,7 +2586,24 @@ struct Reader {
     }
   }
 
+  /* 0.9.68: the whole zoom channel (pinch / volume-key zoom mode / double
+   * tap / the align key) previously mutated zoom state silently — reflow
+   * books have no zoom semantics at all (layout is font-size driven) and the
+   * PDF scaled-viewport viewer is a later release, so NOTHING on screen ever
+   * changed and the keys felt dead. Gate them with an honest toast now. */
+  private zoomGate(): boolean {
+    if (this.isReflow) {
+      promptAction.showToast({ message: $r('app.string.zoom_reflow_hint') });
+      return false;
+    }
+    promptAction.showToast({ message: $r('app.string.zoom_pdf_todo') });
+    return false;
+  }
+
   private zoomIn(): void {
+    if (!this.zoomGate()) {
+      return;
+    }
     const newZoom = Math.min(this.zoomLevel + ZOOM_STEP, MAX_ZOOM);
     if (newZoom !== this.zoomLevel) {
       this.zoomLevel = newZoom;
@@ -2586,6 +2613,9 @@ struct Reader {
   }
 
   private zoomOut(): void {
+    if (!this.zoomGate()) {
+      return;
+    }
     const newZoom = Math.max(this.zoomLevel - ZOOM_STEP, MIN_ZOOM);
     if (newZoom !== this.zoomLevel) {
       this.zoomLevel = newZoom;
@@ -2595,8 +2625,13 @@ struct Reader {
   }
 
   /* 2026-09-20 port: Android DOUBLE_CLICK_ADJUST_PAGE ("\u7F29\u653E\u5230\u5408\u9002\u5927\u5C0F") -
-   * double-tap returns to the comfortable fit zoom; again zooms back in. */
+   * 0.9.68: gated like zoomIn/zoomOut (see zoomGate) — reflow books guide to
+   * the font-size preference, PDF gets the scaled-viewport notice. The zoom
+   * flip below stays as the future scaled-viewport hook. */
   private doubleTapFit(): void {
+    if (!this.zoomGate()) {
+      return;
+    }
     const target: number = this.zoomLevel > this.fitZoom + 0.01 ? this.fitZoom
       : Math.min(this.fitZoom * 2, MAX_ZOOM);
     if (Math.abs(target - this.zoomLevel) < 0.001) {
@@ -4104,11 +4139,13 @@ struct Reader {
     console.info(`[Reader] RSVP speed: ${this.rsvpWpm} wpm`);
   }
 
-  /** Toggle fullscreen/immersive mode (sprint I1).
-   * Uses UI-level approach: hides top/bottom bars for immersive reading.
-   * System-level window API requires @ohos.window which may not bundle correctly. */
+  /** Toggle fullscreen/immersive mode (sprint I1, wired in 0.9.68).
+   * UI-level approach: while isFullscreen, every chrome block (top info row,
+   * icon band, progress line, bottom seek/icon rows) is hidden — the five
+   * barsVisible conditions above also check !isFullscreen. Center tap exits. */
   private toggleFullscreen(): void {
     this.isFullscreen = !this.isFullscreen;
+    tlog('fullscreen', this.isFullscreen ? 'on' : 'off');
     console.info(`[Reader] Fullscreen (UI): ${this.isFullscreen ? 'ON' : 'OFF'}`);
   }
 
@@ -4841,9 +4878,15 @@ struct Reader {
         this.seekToPage(0);
       }
     } else if (action === 2) {
-      /* 0.9.59: center tap shows/hides the top+bottom bars (Android hideShow) */
-      this.barsVisible = !this.barsVisible;
-      console.info(`[Reader] Bars toggled: ${this.barsVisible}`);
+      /* 0.9.59: center tap shows/hides the top+bottom bars (Android hideShow);
+       * 0.9.68: while immersive (fullscreen key 3) the center tap EXITS
+       * fullscreen instead — otherwise there would be no way back. */
+      if (this.isFullscreen) {
+        this.toggleFullscreen();
+      } else {
+        this.barsVisible = !this.barsVisible;
+        console.info(`[Reader] Bars toggled: ${this.barsVisible}`);
+      }
     } else if (action === 3) {
       this.showToc = true;
     } else if (action === 4) {
@@ -5074,6 +5117,11 @@ struct Reader {
 
   /** Export bookmarks + AI notes of this book to TXT/Markdown (A). */
   private doExportNotes(markdown: boolean): void {
+    /* 0.9.69: Pro gate (Android BookmarksFragment2.showNoteExportMenu parity) */
+    if (!isProUnlocked()) {
+      promptAction.showToast({ message: $r('app.string.pro_toast_locked') });
+      return;
+    }
     const data: ExportData = {
       docTitle: this.docTitle,
       bookmarks: this.bookmarks,
@@ -5085,6 +5133,15 @@ struct Reader {
         this.showExportDialog = false;
         this.showBookmarks = false;
       }
+    });
+  }
+
+  /** 0.9.69: rewarded ad -> 2h ad-free window (Android showRewardVideo parity). */
+  private showRewardAd(): void {
+    launchRewardAd(getContext(this) as common.UIAbilityContext, (): void => {
+      promptAction.showToast({ message: $r('app.string.ads_reward_earned') });
+    }, (): void => {
+      promptAction.showToast({ message: $r('app.string.ads_reward_unavailable') });
     });
   }
 
@@ -5236,6 +5293,11 @@ struct Reader {
 
   /** Android ShareDialog.showAiIntro parity: AI book intro (Pro). */
   private startAiIntro(): void {
+    /* 0.9.69: Pro gate (Android AiTranslateDialog parity) */
+    if (!isProUnlocked()) {
+      promptAction.showToast({ message: $r('app.string.pro_toast_locked') });
+      return;
+    }
     if (this.aiIntroBusy) {
       return;
     }
@@ -7279,6 +7341,12 @@ struct Reader {
           this.showBookMenu = false;
           this.startAiIntro();
         })
+        this.bmRow($r('app.string.reader_reward_ad'), (): void => {
+          /* 0.9.69: 🎁 rewarded ad -> 2h ad-free (Android reader reward
+           * button parity); dormant (empty slot id) toasts unavailable. */
+          this.showBookMenu = false;
+          this.showRewardAd();
+        })
         this.bmRow($r('app.string.bm_file_info'), (): void => {
           this.showBookMenu = false;
           this.openFileInfo();
@@ -7856,7 +7924,7 @@ struct Reader {
         /* 0.9.59 (Android document_title + document_title_buttons parity):
          * the top chrome is two rows — status info row + right-aligned icon
          * band; both bars show/hide with a single center tap (barsVisible). */
-        if (this.barsVisible && this.showStatusBar) {
+        if (this.barsVisible && !this.isFullscreen && this.showStatusBar) {
           Row() {
             Column({ space: 1 }) {
               Text(this.docTitle.length > 16 ? this.docTitle.substring(0, 16) + '…' : (this.docTitle.length > 0 ? this.docTitle : ''))
@@ -7891,7 +7959,10 @@ struct Reader {
         }
         /* icon band — 6 keys, right-aligned (Android menuLayout:
          * 对齐文档/日夜切换/全屏/AI 对照翻译/阅读偏好/关书) */
-        if (this.barsVisible) {
+        /* 0.9.68: immersive fullscreen (key 3) hides every chrome block —
+         * the state existed since sprint I1 but had no UI consumer, so the
+         * key only flipped a flag and looked dead. */
+        if (this.barsVisible && !this.isFullscreen) {
           Row({ space: 20 }) {
             Image($r('app.media.ic_rdr_align'))
               .width(22).height(22).fillColor(Color.White)
@@ -7940,7 +8011,7 @@ struct Reader {
         }
         /* thin reading-progress line + chapter ticks (Android ProgressDraw);
          * 0.9.59: gated by 显示进度条/章节进度条, height = 进度条高度 */
-        if (this.barsVisible && this.showProgressBar) {
+        if (this.barsVisible && !this.isFullscreen && this.showProgressBar) {
           Stack({ alignContent: Alignment.Start }) {
             Progress({ value: this.totalPages > 0 ? this.currentPage + 1 : 0, total: this.totalPages > 0 ? this.totalPages : 1, type: ProgressType.Linear })
               .width('100%').height(this.progressBarH)
@@ -7976,7 +8047,7 @@ struct Reader {
         }
         /* 0.9.23 (Android 10-10 parity): the page seek row moved ABOVE the
          * icon row (document_footer.xml order). */
-        if (this.barsVisible) {
+        if (this.barsVisible && !this.isFullscreen) {
         Row({ space: 10 }) {
           Text(this.totalPages > 0 ? (this.progressScale === 1 ? `${Math.round((this.currentPage + 1) * 100 / this.totalPages)}%` : '' + (this.currentPage + 1)) : '0')
             .fontSize(12).fontColor(Color.White).width(36).textAlign(TextAlign.Center)
@@ -8021,7 +8092,7 @@ struct Reader {
         /* 0.9.59 (Android document_footer parity): right-aligned 6-key row —
          * 搜索/选择/书签开关/目录/触摸锁定/书籍菜单; the extra keys moved to
          * the book menu (TTS/缩略图/历史/滚动模式) */
-        if (this.barsVisible) {
+        if (this.barsVisible && !this.isFullscreen) {
           Row({ space: 22 }) {
             Image($r('app.media.ic_rdr_search'))
               .width(22).height(22).fillColor(Color.White)
@@ -8682,6 +8753,11 @@ struct Reader {
               Text($r('app.string.reader_export'))
                 .fontSize(13).fontColor(this.thm())
                 .onClick(() => {
+                  /* 0.9.69: Pro gate (Android showNoteExportMenu parity) */
+                  if (!isProUnlocked()) {
+                    promptAction.showToast({ message: $r('app.string.pro_toast_locked') });
+                    return;
+                  }
                   this.showExportDialog = true;
                 })
             }

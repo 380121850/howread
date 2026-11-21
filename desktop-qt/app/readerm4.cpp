@@ -33,6 +33,8 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QVBoxLayout>
+#include <QSharedPointer> /* v1.6.0（B4）：AI 结果共享态 */
+#include <QStatusBar> /* v1.6.0（B1）：statusBar 轻提示 */
 
 namespace hr
 {
@@ -385,10 +387,14 @@ void m4AiDialog(ReaderWindow *w, int modeHint)
     lay->addWidget(pageBox, 1);
     QTextBrowser *outBox = new QTextBrowser(&dlg);
     lay->addWidget(outBox, 2);
+    /* v1.6.0（B4）：执行结果共享态（模式, 原文答复）+保存笔记按钮 */
+    auto aiRes = QSharedPointer<QPair<QString, QString>>::create();
+    QPushButton *btnNoteSave = new QPushButton(hr::l10n::s("保存笔记", "Save note"), &dlg);
+    lay->addWidget(btnNoteSave, 0, Qt::AlignRight);
 
     QObject::connect(btnCfg, &QPushButton::clicked, &dlg, [w] { m4AiConfigDialog(w); });
     QObject::connect(btnAsk, &QPushButton::clicked, &dlg,
-                     [cfg, model, mode, pageBox, outBox, btnAsk, w]
+                     [cfg, model, mode, pageBox, outBox, btnAsk, w, aiRes]
     {
         AiConfig c = cfg;
         c.model = model->text().trimmed();
@@ -439,12 +445,12 @@ void m4AiDialog(ReaderWindow *w, int modeHint)
         const QString pageText = pageBox->toPlainText();
         const QString mm = m;
         QThreadPool::globalInstance()->start(QRunnable::create(
-            [c, prompt, ob, ba, mm, pageText]
+            [c, prompt, ob, ba, mm, pageText, aiRes]
         {
             QString err;
             const QString ans = aiAsk(c, prompt, &err, c.maxTokens);
             QMetaObject::invokeMethod(ob ? static_cast<QObject *>(ob.data()) : qApp,
-            [ob, ba, mm, ans, err, pageText]
+            [ob, ba, mm, ans, err, pageText, aiRes]
             {
                 if (ba) ba->setEnabled(true);
                 if (!ob) return; /* 对话框已关闭 */
@@ -480,6 +486,7 @@ void m4AiDialog(ReaderWindow *w, int modeHint)
                     ob->setHtml(html.isEmpty()
                                     ? QString(ans).toHtmlEscaped().replace('\n', "<br>")
                                     : html);
+                    *aiRes = qMakePair(mm, ans); /* v1.6.0（B4）：双语结果亦可存笔记 */
                     evt("ai_bilingual", QString("paras=%1 paired=%2").arg(ps.size()).arg(paired));
                     return;
                 }
@@ -488,8 +495,24 @@ void m4AiDialog(ReaderWindow *w, int modeHint)
                                      : ans);
                 evt("ai_page", QString("mode=%1 ok=%2 len=%3")
                                    .arg(mm).arg(ans.isEmpty() ? 0 : 1).arg(ans.size()));
+                if (!ans.isEmpty()) *aiRes = qMakePair(mm, ans); /* v1.6.0（B4） */
             }, Qt::QueuedConnection);
         }));
+    });
+    /* v1.6.0（B4）：结果存笔记（安卓 ShareDialog save_as_note 同款：text=书名/页码行，aiAnswer=结果全文） */
+    QObject::connect(btnNoteSave, &QPushButton::clicked, &dlg, [w, aiRes, &dlg]
+    {
+        if (aiRes->second.isEmpty())
+        {
+            QMessageBox::information(&dlg, hr::l10n::s("保存笔记", "Save note"),
+                                     hr::l10n::s("先执行生成结果，再保存笔记。",
+                                                 "Run a request first, then save."));
+            return;
+        }
+        const QString ctx = aiRes->first == "intro"
+                                ? QFileInfo(w->bookPath()).fileName()
+                                : QString(hr::l10n::s("第%1页", "p.%1")).arg(w->currentPage() + 1);
+        w->addNoteBookmark(ctx, aiRes->second, w->currentPage());
     });
     dlg.exec();
 }
@@ -598,9 +621,34 @@ void m4QaDialog(ReaderWindow *w)
     row->addWidget(ask, 1);
     row->addWidget(send);
     lay->addLayout(row);
+    /* v1.6.0（B3）：开框即记来源（安卓 AiAskDialog anchorPg 透传同款）+最近一次成功问答 */
+    const int anchorPg = w->currentPage();
+    const QString sel0 = w->selText().trimmed();
+    QString lastQ, lastA;
+
+    QHBoxLayout *botRow = new QHBoxLayout;
+    QPushButton *btnNoteQa = new QPushButton(hr::l10n::s("保存笔记", "Save note"), &dlg);
     QPushButton *close = new QPushButton(hr::l10n::s("关闭", "Close"), &dlg);
-    lay->addWidget(close);
+    botRow->addStretch(1);
+    botRow->addWidget(btnNoteQa);
+    botRow->addWidget(close);
+    lay->addLayout(botRow);
     QObject::connect(close, &QPushButton::clicked, &dlg, &QDialog::accept);
+    /* v1.6.0（B3）：AI 检索结果→笔记存储（安卓 AiAskDialog:109-137 同款：正文=选文+Q 行、
+     * aiAnswer=答复全文、锚=问答发起页） */
+    QObject::connect(btnNoteQa, &QPushButton::clicked, &dlg, [&]
+    {
+        if (lastA.isEmpty())
+        {
+            QMessageBox::information(&dlg, hr::l10n::s("保存笔记", "Save note"),
+                                     hr::l10n::s("先提问获得回答，再保存笔记。",
+                                                 "Ask a question first, then save."));
+            return;
+        }
+        QString text = QString::fromLatin1("Q: ") + lastQ;
+        if (!sel0.isEmpty()) text = sel0 + QString::fromUtf8("\n\n") + text;
+        w->addNoteBookmark(text, lastA, anchorPg);
+    });
 
     const QStringList paras = m4PageParas(w, w->currentPage());
     QString ctx;
@@ -628,7 +676,7 @@ void m4QaDialog(ReaderWindow *w)
         evt("qa_ask", QString("len=%1 ctx=%2").arg(q.size()).arg(ctx.size()));
         QPointer<QDialog> dp(&dlg);
         QThreadPool::globalInstance()->start(QRunnable::create(
-            [=, &hist, &send, &turns, prompt, q]
+            [=, &hist, &send, &turns, &lastQ, &lastA, prompt, q]
         {
             QString err;
             /* P2 适配（D9）：流式回答（150ms 节流刷新历史面板） */
@@ -649,7 +697,7 @@ void m4QaDialog(ReaderWindow *w)
                 },
                 &err, 2048);
             if (!dp) return; /* 对话框已关闭 */
-            QMetaObject::invokeMethod(dp, [dp, &hist, &send, &turns, q, ans, err]
+            QMetaObject::invokeMethod(dp, [dp, &hist, &send, &turns, &lastQ, &lastA, q, ans, err]
             {
                 send->setEnabled(true);
                 if (ans.isEmpty())
@@ -661,6 +709,7 @@ void m4QaDialog(ReaderWindow *w)
                     hist->append(QString("<b>A:</b> %1")
                                      .arg(ans.toHtmlEscaped().replace("\n", "<br>")));
                     turns.append(qMakePair(q, ans));
+                    lastQ = q; lastA = ans; /* v1.6.0（B3）：保存笔记取最近一次问答 */
                 }
                 evt("qa_done", QString("ok=%1 len=%2")
                                    .arg(ans.isEmpty() ? 0 : 1)
@@ -687,6 +736,53 @@ void m4QaDialog(ReaderWindow *w)
         }
     });
     dlg.exec();
+}
+
+/* ---- v1.6.0（B1）：笔记编辑器（安卓 NoteEditDialog.java:84-104 同构：元信息行+正文+保存=
+ * 新增 isAiNote 书签；正文→label（=text 键面，D2 拍板）；空文拒绝（安卓 incorrect_value Toast）） ---- */
+void noteEditDialog(ReaderWindow *w, const QString &prefill)
+{
+    if (!w->hrDoc()) return;
+    QDialog dlg(w);
+    dlg.setWindowTitle(hr::l10n::s("笔记", "Note"));
+    dlg.resize(560, 480);
+    QVBoxLayout *lay = new QVBoxLayout(&dlg);
+    const QString meta = QString("%1 · %2")
+                             .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm"))
+                             .arg(QString(hr::l10n::s("第%1/%2页", "p.%1/%2"))
+                                      .arg(w->currentPage() + 1).arg(w->pageCount()));
+    QLabel *metaLb = new QLabel(meta, &dlg); /* 安卓 noteEditMeta 同款元信息行 */
+    lay->addWidget(metaLb);
+    QPlainTextEdit *body = new QPlainTextEdit(&dlg);
+    body->setPlainText(prefill); /* 安卓 onNoteToEdit：选文预填可增改 */
+    body->setPlaceholderText(hr::l10n::s(
+        "在此写读书笔记（保存为一条笔记书签，随 WebDAV 同步到手机）",
+        "Write your reading note (saved as a note bookmark, synced to phone)"));
+    lay->addWidget(body, 1);
+    QDialogButtonBox *bb = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel,
+                                                &dlg);
+    bb->button(QDialogButtonBox::Save)->setText(hr::l10n::s("保存", "Save"));
+    bb->button(QDialogButtonBox::Cancel)->setText(hr::l10n::s("取消", "Cancel"));
+    lay->addWidget(bb);
+    /* 空文不落笔（对齐安卓 :87-89 空文 Toast 不关框）：Save 钮自校验，不挂 accepted */
+    QObject::connect(bb->button(QDialogButtonBox::Save), &QPushButton::clicked, &dlg,
+                     [body, &dlg]
+    {
+        if (body->toPlainText().trimmed().isEmpty())
+        {
+            QMessageBox::warning(&dlg, hr::l10n::s("笔记", "Note"),
+                                 hr::l10n::s("笔记内容不能为空", "Note text is empty"));
+            return;
+        }
+        dlg.accept();
+    });
+    QObject::connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    if (dlg.exec() != QDialog::Accepted) return;
+    const QString text = body->toPlainText().trimmed();
+    if (text.isEmpty()) return;
+    /* 安卓 NoteEditDialog:92：手工笔记也置 isAiNote=true（笔记类别统一口径，勿另立仅 AI 语义） */
+    w->addNoteBookmark(text, QString(), w->currentPage());
+    w->statusBar()->showMessage(hr::l10n::s("已保存笔记", "Note saved"), 4000);
 }
 
 } // namespace hr

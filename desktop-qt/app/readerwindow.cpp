@@ -1,8 +1,11 @@
 #include "readerwindow.h"
 #include "hr_bridge.h"
 #include "hrdb.h"
+#include "hranchor.h" /* v1.1.0：章节锚折算 */
 #include <functional>
 #include "hrsync.h"
+#include "hrbcache.h" /* v1.9.0（P1-6/P1-7）：CacheProgressSource */
+#include "hraccels.h" /* v1.9.0（P1-5）：accelPathFor/accelCleanup 去 static 后声明 */
 #include "hrpaths.h"
 #include "readermark.h"
 #include "readerm4.h"
@@ -19,6 +22,7 @@
 #include <QMutex>
 #include <QMutexLocker> /* P2：纹理缓存 */
 #include <QClipboard>
+#include <QContextMenuEvent> /* v1.7.0：右键弹阅读菜单 */
 #include <QMenu>
 #include <QPainter>
 #include <QDateTime>
@@ -63,6 +67,8 @@
 #include <QSlider>
 #include <QStatusBar>
 #include <QThreadPool>
+#include <QPalette> /* v1.8.0（P0-2）：占位纸底 */
+#include <algorithm> /* v1.8.0（P0-1）：待渲队列排序 */
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
@@ -128,6 +134,7 @@ ReaderWindow::ReaderWindow(QWidget *parent) : QMainWindow(parent)
     QToolButton *btnToc = mkTb(hr::l10n::s("目录", "TOC"), "glyphicons_160_playlist", false, true);
     QToolButton *btnBm = mkTb(hr::l10n::s("书签", "Bookmarks"), "glyphicons_73_bookmark", false, true);
     QToolButton *btnAddBm = mkTb(hr::l10n::s("+签", "+Mark"), "glyphicons_371_plus", false, true);
+    QToolButton *btnNote = mkTb(hr::l10n::s("笔记", "Note"), "my_glyphicons_pen", false, true); /* v1.6.0（B1）：✏️ 笔记=安卓 pencil 入口 */
     QPushButton *btnFontDown = new QPushButton("A-");
     QPushButton *btnFontUp = new QPushButton("A+");
     QToolButton *btnTheme = mkTb(hr::l10n::s("主题", "Theme"), "glyphicons_140_adjust", false, true);
@@ -155,6 +162,7 @@ ReaderWindow::ReaderWindow(QWidget *parent) : QMainWindow(parent)
     top->addWidget(btnToc);
     top->addWidget(btnBm);
     top->addWidget(btnAddBm);
+    top->addWidget(btnNote); /* v1.6.0（B1） */
     top->addWidget(btnSearch);
     top->addWidget(btnTrim); /* v0.83.0 W2 D6 */
     top->addWidget(btnTheme);
@@ -270,6 +278,11 @@ ReaderWindow::ReaderWindow(QWidget *parent) : QMainWindow(parent)
     {
         const int i = m_hlList->currentRow();
         if (i < 0 || i >= m_hlRows.size()) return;
+        { /* v1.3.0（F'）：注解删除落墓碑（ann；book=内容MD5，随侧车同步抑制复活） */
+            const QString h = hr::syncMd5(m_path);
+            Db::tombstoneAdd("ann", h.isEmpty() ? m_path : h,
+                             QString::number(m_hlRows[i].createdAt));
+        }
         Db::deleteAnnotation(m_hlRows[i].id);
         evt("hl_del", QString("left=%1").arg(m_hlRows.size() - 1));
         refreshHighlights();
@@ -325,12 +338,12 @@ ReaderWindow::ReaderWindow(QWidget *parent) : QMainWindow(parent)
     connect(bmGo, &QPushButton::clicked, this, [this]
     {
         const int i = m_bmList->currentRow();
-        if (i >= 0 && i < m_bmRows.size()) jumpTo(m_bmRows[i].page);
+        if (i >= 0 && i < m_bmRows.size()) jumpToBookmark(i);
     });
     connect(m_bmList, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *)
     {
         const int i = m_bmList->currentRow();
-        if (i >= 0 && i < m_bmRows.size()) jumpTo(m_bmRows[i].page);
+        if (i >= 0 && i < m_bmRows.size()) jumpToBookmark(i);
     });
     /* P1 适配（C1）：书签笔记——右键编辑备注（bookmark.note 列与 WIN/安卓互通） */
     m_bmList->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -341,14 +354,49 @@ ReaderWindow::ReaderWindow(QWidget *parent) : QMainWindow(parent)
         if (i < 0 || i >= m_bmRows.size()) return;
         QMenu bmMenu(this);
         QAction *goA = bmMenu.addAction(hr::l10n::s("跳转", "Go"));
-        QAction *noteA = bmMenu.addAction(
-            m_bmRows[i].note.isEmpty()
-                ? hr::l10n::s("添加备注…", "Add note…")
-                : hr::l10n::s("编辑备注…", "Edit note…"));
+        /* v1.2.0（B2/B3）：AI 笔记只读查看；普通书签加收藏标切换 */
+        QAction *aiA = nullptr, *noteA = nullptr, *favA = nullptr;
+        if (m_bmRows[i].isAiNote)
+            /* v1.6.0（B5）：手工笔记（答复空）=查看笔记正文；AI 笔记=看答复（D4 渲染口径） */
+            aiA = bmMenu.addAction(m_bmRows[i].aiAnswer.isEmpty()
+                                       ? hr::l10n::s("查看笔记", "View note")
+                                       : hr::l10n::s("查看 AI 笔记", "View AI note"));
+        else
+        {
+            noteA = bmMenu.addAction(
+                m_bmRows[i].note.isEmpty()
+                    ? hr::l10n::s("添加备注…", "Add note…")
+                    : hr::l10n::s("编辑备注…", "Edit note…"));
+            favA = bmMenu.addAction(m_bmRows[i].isF
+                                        ? hr::l10n::s("取消收藏标", "Unstar")
+                                        : hr::l10n::s("收藏标★", "Star"));
+        }
         QAction *act = bmMenu.exec(m_bmList->mapToGlobal(pos));
         if (act == goA)
-            jumpTo(m_bmRows[i].page);
-        else if (act == noteA)
+            jumpToBookmark(i);
+        else if (act == aiA && aiA)
+        {
+            /* v1.6.0（B5）：手工笔记直接展示正文（label），不再"（无正文）" */
+            const QString noteBody = m_bmRows[i].aiAnswer.isEmpty()
+                                         ? m_bmRows[i].label
+                                         : m_bmRows[i].aiAnswer.left(8000);
+            QMessageBox::information(this,
+                                     m_bmRows[i].aiAnswer.isEmpty()
+                                         ? hr::l10n::s("笔记", "Note")
+                                         : hr::l10n::s("AI 笔记", "AI note"),
+                                     noteBody.isEmpty() ? hr::l10n::s("（无正文）", "(empty)")
+                                                        : noteBody);
+            evt("bm_ai_view", QString("id=%1").arg(m_bmRows[i].id));
+        }
+        else if (act == favA && favA)
+        {
+            const bool on = !m_bmRows[i].isF;
+            Db::setBookmarkFav(m_bmRows[i].id, on);
+            m_bmRows[i].isF = on ? 1 : 0;
+            evt("bm_fav", QString("id=%1 on=%2").arg(m_bmRows[i].id).arg(on ? 1 : 0));
+            refreshBookmarkList();
+        }
+        else if (act == noteA && noteA)
         {
             bool okD = false;
             const QString t = QInputDialog::getMultiLineText(
@@ -415,6 +463,7 @@ ReaderWindow::ReaderWindow(QWidget *parent) : QMainWindow(parent)
     connect(btnToc, &QPushButton::clicked, this, [this] { showPanel(0); });
     connect(btnBm, &QPushButton::clicked, this, [this] { showPanel(1); });
     connect(btnAddBm, &QPushButton::clicked, this, &ReaderWindow::onAddBookmark);
+    connect(btnNote, &QToolButton::clicked, this, [this] { hr::noteEditDialog(this); }); /* v1.6.0（B1） */
     connect(btnFontDown, &QPushButton::clicked, this, &ReaderWindow::onFontSmaller);
     connect(btnFontUp, &QPushButton::clicked, this, &ReaderWindow::onFontBigger);
     connect(btnTheme, &QPushButton::clicked, this, &ReaderWindow::onThemeNext);
@@ -498,9 +547,24 @@ ReaderWindow::ReaderWindow(QWidget *parent) : QMainWindow(parent)
                 evt("autoscroll_end", QString());
                 return;
             }
-            sb->setValue(sb->value() + 56);
+            /* v1.8.0（P0-7）：自动滚动与渲染解耦——在途/待渲未清空时本 tick 原地等
+             * （最多让 300ms 防弱机死等）；步长由固定 56px 改视口高 1/3（与页高
+             * 成比例，大页不挪半行、小页不跳屏） */
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
+            if ((!m_flight.isEmpty() || !m_pendQueue.isEmpty()) &&
+                now - m_lastAutoAdvance < 300)
+                return;
+            m_lastAutoAdvance = now;
+            sb->setValue(sb->value() +
+                         qBound(48, m_scroll->viewport()->height() / 3, 400));
         }
-        else nav(1);
+        else
+        {
+            /* v1.8.0（P0-7）：自动翻页 render-then-wait——上一页异步渲染在途则本
+             * tick 跳过（防定时器把未完成翻页按间隔堆叠）；固定间隔语义保留 */
+            if (m_pageFlight) return;
+            nav(1);
+        }
     });
     connect(btnRsvp, &QPushButton::clicked, this, [this] { hr::m4RsvpDialog(this); });
 
@@ -754,6 +818,15 @@ ReaderWindow::ReaderWindow(QWidget *parent) : QMainWindow(parent)
     m_selOverlay = new hr::SelOverlay(m_scroll->viewport());
     m_selOverlay->hide();
 
+    /* v1.8.0（P0-6）：翻页异步渲染"渲染中…"角标（viewport 右上角，鼠标穿透） */
+    m_pageBusy = new QLabel(m_scroll->viewport());
+    m_pageBusy->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_pageBusy->setStyleSheet(QString::fromLatin1(
+        "background:rgba(25,25,25,170);color:#ffffff;padding:4px 10px;"));
+    m_pageBusy->setText(hr::l10n::s("渲染中…", "Rendering…"));
+    m_pageBusy->adjustSize();
+    m_pageBusy->hide();
+
     /* v0.103.0 P0-1：后台打开遮罩（打开/排版期间挡输入并给反馈；几何随 resizeEvent） */
     m_openOv = new QWidget(this);
     m_openOv->setStyleSheet(QString::fromLatin1("background:rgba(25,25,25,150);"));
@@ -797,6 +870,9 @@ void ReaderWindow::applyThemeToJob(int *mode, int *tint) const
     else { *mode = 1; *tint = (int)(t.bg & 0xFFFFFF); }
 }
 
+/* v1.9.0（P1-2）：QImage 外部缓冲 cleanup——桥返回的 malloc 缓冲免 .copy() 直构 */
+static void hr_imgFree(void *p) { free(p); }
+
 bool ReaderWindow::renderRaw(int page, int width, QImage *out)
 {
     if (!m_doc) return false;
@@ -806,9 +882,8 @@ bool ReaderWindow::renderRaw(int page, int width, QImage *out)
     unsigned char *rgb = nullptr;
     if (hr_qt_render(m_doc, page, width, mode, tint, &w, &h, &rgb) != 0 || !rgb)
         return false;
-    QImage img(rgb, w, h, w * 3, QImage::Format_RGB888);
-    *out = img.copy(); /* 拷贝后立即归还 C 缓冲 */
-    free(rgb);
+    /* v1.9.0（P1-2）：外部缓冲直构（cleanup 释放），免整页 .copy() */
+    *out = QImage(rgb, w, h, w * 3, QImage::Format_RGB888, hr_imgFree, rgb);
     compositeHighlights(page, out); /* U-ann：持久高亮合成（翻页模式） */
     applyTexture(out); /* P2（B6） */
     return true;
@@ -833,13 +908,19 @@ void ReaderWindow::jumpTo(int page)
         m_scroll->verticalScrollBar()->setValue(page * (m_estH));
         fillVisible();
     }
-    else renderNow(page);
+    /* v1.8.0（P0-6）：翻页渲染异步化——旧页留存+角标，后台完成一次换页；
+     * 冒烟无头路径保持同步（位图立即可取）。同步 renderNow 仅余：开书首渲/
+     * 主题·裁边·双页切换/预取命中快路径 */
+    else if (m_smokeW > 0)
+        renderNow(page);
+    else
+        renderPageAsync(page);
 }
 
 /* ---------- 打开书 ---------- */
 
 /* P2 适配（B3）：EPUB 排版加速器路径（cache/accels/<md5-12>-<size>-<mtime>.accel；仅本地 epub） */
-static QString accelPathFor(const QString &path)
+QString accelPathFor(const QString &path) /* v1.9.0（P1-5）：去 static 供 warmer 共用（hraccels.h） */
 {
     /* v0.104.0（P2-8）：accels 扩全本地格式（引擎 fz_save_accelerator 支持 pdf/epub，
      * 其余格式保存失败自动跳过；打开时无 accel 文件自然回退普通打开） */
@@ -927,7 +1008,7 @@ static QVector<int> loadCountCache(const QString &path, int vw, int vh, int em, 
     return per;
 }
 
-static void accelCleanup(const QString &path, const QString &keep)
+void accelCleanup(const QString &path, const QString &keep) /* v1.9.0（P1-5）：去 static（hraccels.h） */
 {
     const QString pre = QString::fromLatin1(QCryptographicHash::hash(path.toUtf8(),
                                                                     QCryptographicHash::Md5)
@@ -968,7 +1049,8 @@ static QPixmap texPixmapFor(const QString &id, int w, int h)
 bool ReaderWindow::openBook(const QString &path, int jumpPage)
 {
     /* 单飞行渲染在途时等它落地（避免关书 UAF；单飞行保证最多等一页） */
-    while (m_busy) QApplication::processEvents();
+    while (!m_flight.isEmpty() || m_auxJobs.load() > 0)
+        QApplication::processEvents(); /* v1.8.0：等滚动飞行+翻页/预取辅助任务落地再动 doc */
     if (m_doc) { hr_qt_close(m_doc); m_doc = nullptr; }
     m_path = path;
     m_bookName = QFileInfo(path).fileName();
@@ -1091,7 +1173,8 @@ bool ReaderWindow::openBookAsync(const QString &path, int jumpPage)
         return false;
     }
     /* 单飞行渲染在途时等它落地（最多一页，与同步路径同守卫） */
-    while (m_busy) QApplication::processEvents();
+    while (!m_flight.isEmpty() || m_auxJobs.load() > 0)
+        QApplication::processEvents(); /* v1.8.0：等滚动飞行+翻页/预取辅助任务落地再动 doc */
     /* v0.104.0：等在途后台重排落地（旧 doc 由本流程关，互锁防 UAF） */
     if (m_relayoutBusy.load())
     {
@@ -1128,7 +1211,11 @@ bool ReaderWindow::openBookAsync(const QString &path, int jumpPage)
     m_fixedLayout = QStringList{"pdf", "djvu", "cbz", "xps"}
                         .contains(QFileInfo(path).suffix().toLower());
     m_zoom = 1.0;
-    applyUserCss(); /* v0.59.0：排版偏好 user CSS（ctx 级，layout 前设好即可） */
+    /* v1.9.1（修复）：css 下沉 worker——set_css 是 g_glock ctx 级操作，warmer
+     * 预热排版占 g_glock 时 UI 线程调用=整窗冻结；worker 在 layout 前设置，
+     * 语义不变。此处只在 UI 线程定格成员取值。 */
+    const QByteArray cssUtf8 = userCss().toUtf8();
+    const int useDocCss = m_useDocCss ? 1 : 0;
     const bool openFirst =
         QSettings(hr::dataDir() + "/qt-prefs.ini", QSettings::IniFormat)
             .value("reader/openFirstPage", false)
@@ -1154,7 +1241,8 @@ bool ReaderWindow::openBookAsync(const QString &path, int jumpPage)
     const int viewW = m_viewW, viewH = m_viewH;
     const int genV = gen;
     QThreadPool::globalInstance()->start(QRunnable::create(
-        [gw, path, jumpPage, genV, em, viewW, viewH, layW, oldDoc, openFirst]
+        [gw, path, jumpPage, genV, em, viewW, viewH, layW, oldDoc, openFirst,
+         cssUtf8, useDocCss]
     {
         const qint64 t0 = QDateTime::currentMSecsSinceEpoch();
         /* 转换层（txt/md 转码、zip 解包、azw3·大 mobi 转 EPUB、doc/docx/odt/rtf 转 HTML；命中即回） */
@@ -1194,6 +1282,7 @@ bool ReaderWindow::openBookAsync(const QString &path, int jumpPage)
         const bool bigEpub =
             QFileInfo(path).suffix().toLower() == QString::fromLatin1("epub") &&
             QFileInfo(path).size() >= 100LL * 1024 * 1024;
+        hr_qt_set_css(cssUtf8.constData(), useDocCss); /* v1.9.1：css 移入 worker */
         if (bigEpub) hr_qt_defer_images(1);
         hr_qt_layout(doc, (float)layW, (float)viewH, em);
         const qint64 t2 = QDateTime::currentMSecsSinceEpoch();
@@ -1393,8 +1482,10 @@ void ReaderWindow::finishOpen(void *doc, int pages, int chapters, int restored,
     m_doc = doc;
     m_pages = qMax(0, pages);
     m_page = qBound(0, restored, qMax(0, m_pages - 1));
-    m_busy = false;
-    m_pendingPage = -1;
+    /* v1.8.0：渲染状态复位（多飞行/待渲/翻页异步/首帧门控） */
+    m_flight.clear(); m_flightT0.clear(); m_flightSeq.clear(); m_pendQueue.clear();
+    m_pageFlight = false; m_gatePending = false;
+    m_cacheProg = nullptr;
     m_img = QImage();
     m_img2 = QImage();
     m_estH = m_viewH > 0 ? m_viewH : 1200; /* v1.0.0：锚排版页高，防占位细条海 */
@@ -1404,21 +1495,33 @@ void ReaderWindow::finishOpen(void *doc, int pages, int chapters, int restored,
     m_lastStatPage = m_page;
     m_statTimer.start();
     m_openBusy.store(false);
-    hideOpenOverlay();
     if (m_scrollMode)
     {
         m_scroll->verticalScrollBar()->setValue(m_page * (m_estH));
         const qint64 tff = QDateTime::currentMSecsSinceEpoch();
+        /* v1.8.0（P0-3）：首帧门控——遮罩等首个滚动页渲染成功（或 300ms 超时降级）
+         * 再摘，消除"遮罩已摘、正文还是占位页码"的开书瞬间空白 */
+        m_gatePending = true;
         fillVisible();
         evt(QString::fromLatin1("first_fill"),
             QString::fromLatin1("ms=%1 pages=%2")
                 .arg(QDateTime::currentMSecsSinceEpoch() - tff)
                 .arg(m_pages));
+        QTimer::singleShot(300, this, [this]
+        {
+            if (m_gatePending)
+            {
+                m_gatePending = false;
+                hideOpenOverlay();
+                evt("first_gate_timeout", QString::fromLatin1("ms=300"));
+            }
+        });
     }
     else
     {
         const qint64 tff = QDateTime::currentMSecsSinceEpoch();
-        renderNow(m_page);
+        renderNow(m_page); /* 同步首渲：返回即有首帧 */
+        hideOpenOverlay();
         evt(QString::fromLatin1("first_fill"),
             QString::fromLatin1("ms=%1 pages=%2 pagemode=1")
                 .arg(QDateTime::currentMSecsSinceEpoch() - tff)
@@ -1545,9 +1648,8 @@ void ReaderWindow::applyPhase2Pages(int total, int chapters, QVector<int> all)
             for (int i = m_labels.size(); i < m_pages; i++)
             {
                 QLabel *lb = new QLabel;
-                lb->setAlignment(Qt::AlignHCenter | Qt::AlignTop);
                 lb->setFixedSize(w, m_estH);
-                lb->setText(QString::number(i + 1));
+                initPlaceholder(lb, i); /* v1.8.0（P0-2） */
                 m_stackLay->insertWidget(qMax(0, m_stackLay->count() - 1), lb);
                 m_labels.append(lb);
                 m_labelW.append(-1);
@@ -1556,15 +1658,29 @@ void ReaderWindow::applyPhase2Pages(int total, int chapters, QVector<int> all)
                 QString::fromLatin1("to=%1 ms=%2")
                     .arg(m_pages)
                     .arg(QDateTime::currentMSecsSinceEpoch() - tb0));
+            syncStackHeight(); /* v1.6.1 */
         }
     }
     m_slider->setRange(0, qMax(0, m_pages - 1));
-    /* 书库页数从窗口期写入的部分值补正为全量 */
-    if (!m_path.startsWith(QString::fromLatin1("remote://")) && m_doc)
+    /* 书库页数从窗口期写入的部分值补正为全量；v1.9.0（P1-6）：远程书同样补登
+     * （size 从 file_meta 保真回填，countCache 键依赖 size 不得清零） */
+    if (m_doc && !m_path.startsWith(QString::fromLatin1("remote://")))
     {
         Db::upsertFileMeta(m_path, QString::fromUtf8(hr_qt_meta(m_doc, 0)), m_pages,
                            QFileInfo(m_path).size(),
                            QFileInfo(m_path).lastModified().toMSecsSinceEpoch());
+    }
+    else if (m_doc && m_path.startsWith(QString::fromLatin1("remote://")))
+    {
+        long long sz = 0;
+        for (const Db::MetaRow &m : Db::listLibrary())
+            if (m.path == m_path)
+            {
+                sz = m.size;
+                break;
+            }
+        Db::upsertFileMeta(m_path, m_bookName, m_pages, sz,
+                           QDateTime::currentMSecsSinceEpoch());
     }
     updateTitle();
 }
@@ -1580,9 +1696,8 @@ void ReaderWindow::scheduleStackGrow()
     while (m_labels.size() < target)
     {
         QLabel *lb = new QLabel;
-        lb->setAlignment(Qt::AlignHCenter | Qt::AlignTop);
         lb->setFixedSize(w, m_estH);
-        lb->setText(QString::number(m_labels.size() + 1));
+        initPlaceholder(lb, m_labels.size()); /* v1.8.0（P0-2） */
         m_stackLay->insertWidget(qMax(0, m_stackLay->count() - 1), lb);
         m_labels.append(lb);
         m_labelW.append(-1);
@@ -1591,6 +1706,7 @@ void ReaderWindow::scheduleStackGrow()
         QString::fromLatin1("to=%1 ms=%2 batch=1")
             .arg(m_labels.size())
             .arg(QDateTime::currentMSecsSinceEpoch() - tb0));
+    syncStackHeight(); /* v1.6.1：前沿随批次同步增长，用户可连续滚入 */
     if (m_labels.size() < m_pages)
         QTimer::singleShot(40, this, &ReaderWindow::scheduleStackGrow);
 }
@@ -1598,7 +1714,8 @@ void ReaderWindow::scheduleStackGrow()
 bool ReaderWindow::adoptDoc(void *doc, const QString &displayName, QObject *keepAlive,
                             int jumpPage, const QString &progressKey)
 {
-    while (m_busy) QApplication::processEvents();
+    while (!m_flight.isEmpty() || m_auxJobs.load() > 0)
+        QApplication::processEvents(); /* v1.8.0：等滚动飞行+翻页/预取辅助任务落地再动 doc */
     while (m_phase2Busy.load()) /* v0.107.0（P1-5）：等窗口计数 phase2 落地再动 doc */
         QApplication::processEvents();
     if (m_relayoutBusy.load()) /* v0.104.0：等在途后台重排落地 */
@@ -1616,6 +1733,225 @@ bool ReaderWindow::adoptDoc(void *doc, const QString &displayName, QObject *keep
     if (keepAlive) keepAlive->setParent(this); /* 会话随窗销毁 */
     if (!afterOpen(jumpPage)) return false;
     evt("remote_open", "name=" + displayName.left(80));
+    return true;
+}
+
+/* v1.9.0（P1-6）：远程书后台装配——引擎句柄已在库侧开好（头尾预取即开，"保持即开"
+ * 语义不变），排版/窗口计数移到 worker：UI 不冻结，遮罩实时显示块缓存下载进度
+ * （原同步 afterOpen 在 UI 线程整书读流=整窗假死且无进度可见）。 */
+bool ReaderWindow::adoptDocAsync(void *doc, const QString &displayName, QObject *keepAlive,
+                                 int jumpPage, const QString &progressKey)
+{
+    if (m_openBusy.load())
+    {
+        evt("open_busy", displayName.left(60));
+        return false;
+    }
+    while (!m_flight.isEmpty() || m_auxJobs.load() > 0)
+        QApplication::processEvents();
+    if (m_relayoutBusy.load())
+    {
+        m_relayoutGen.fetch_add(1); /* 作废挂起的重排完成回调 */
+        const qint64 tw = QDateTime::currentMSecsSinceEpoch();
+        while (m_relayoutBusy.load() && QDateTime::currentMSecsSinceEpoch() - tw < 10000)
+            QApplication::processEvents();
+    }
+    m_openBusy.store(true);
+    m_asyncFailed.store(false);
+    const int gen = m_openGen.fetch_add(1) + 1;
+    {
+        const qint64 tw2 = QDateTime::currentMSecsSinceEpoch();
+        while (m_phase2Busy.load() &&
+               QDateTime::currentMSecsSinceEpoch() - tw2 < 15000)
+            QApplication::processEvents();
+        m_phase2Busy.store(false);
+    }
+    if (m_smokeW > 0)
+    {
+        m_viewW = m_smokeW;
+        m_viewH = m_smokeH;
+    }
+    else
+    {
+        m_viewW = m_scroll->viewport()->width();
+        m_viewH = m_scroll->viewport()->height();
+        if (m_viewW < 300) { m_viewW = width() - 40; m_viewH = height() - 160; }
+    }
+    m_fixedLayout = QStringList{"pdf", "djvu", "cbz", "xps"}
+                        .contains(QFileInfo(displayName).suffix().toLower());
+    m_zoom = 1.0;
+    /* v1.9.1（修复）：css 下沉 worker（同 openBookAsync——UI 线程不再碰 g_glock） */
+    const QByteArray cssUtf8 = userCss().toUtf8();
+    const int useDocCss = m_useDocCss ? 1 : 0;
+    const bool openFirst =
+        QSettings(hr::dataDir() + "/qt-prefs.ini", QSettings::IniFormat)
+            .value("reader/openFirstPage", false)
+            .toBool();
+    const int layW = maxCharsWidth();
+    void *oldDoc = m_doc;
+    m_doc = nullptr;
+    m_pages = 0;
+    m_page = 0;
+    m_img = QImage();
+    m_img2 = QImage();
+    m_pfCache.clear();
+    m_flight.clear(); m_flightT0.clear(); m_flightSeq.clear(); m_pendQueue.clear();
+    m_pageFlight = false; m_gatePending = false;
+    m_cacheProg = dynamic_cast<hr::CacheProgressSource *>(keepAlive); /* v1.9.0（P1-6） */
+    m_path = progressKey.isEmpty() ? QString::fromLatin1("remote://") + displayName
+                                   : progressKey;
+    m_bookName = displayName;
+    if (keepAlive) keepAlive->setParent(this); /* 会话随窗销毁（BcsHolder） */
+    updateTitle();
+    showOpenOverlay();
+    /* v1.9.0（P1-6）：遮罩显示块缓存进度（500ms 轮询；finishOpen 摘遮罩后自停） */
+    {
+        QTimer *ppt = new QTimer(this);
+        connect(ppt, &QTimer::timeout, this, [this, ppt]
+        {
+            if (!m_openOv || !m_openOv->isVisible() || !m_cacheProg)
+            {
+                ppt->stop();
+                ppt->deleteLater();
+                return;
+            }
+            const long long tot = m_cacheProg->cacheTotalBytes();
+            if (tot > 0)
+            {
+                const int pct = (int)qMin<long long>(
+                    100, m_cacheProg->cacheCachedBytes() * 100 / tot);
+                m_openOvLb->setText(hr::l10n::s("正在打开… 已缓存 %1%",
+                                                "Opening… cached %1%")
+                                        .arg(pct));
+            }
+        });
+        ppt->start(500);
+    }
+    evt("open_begin", "remote=" + m_path.left(120));
+    QPointer<ReaderWindow> gw(this);
+    const int em = m_em;
+    const int viewW = m_viewW, viewH = m_viewH;
+    const int genV = gen;
+    QThreadPool::globalInstance()->start(QRunnable::create(
+        [gw, doc, oldDoc, genV, em, viewW, viewH, layW, jumpPage, openFirst,
+         pth = m_path, cssUtf8, useDocCss]
+    {
+        const qint64 t0 = QDateTime::currentMSecsSinceEpoch();
+        if (oldDoc) hr_qt_close(oldDoc); /* 渲染已排水，旧书此刻无人引用 */
+        hr_qt_set_css(cssUtf8.constData(), useDocCss); /* v1.9.1：css 移入 worker */
+        hr_qt_layout(doc, (float)layW, (float)viewH, em);
+        const qint64 t2 = QDateTime::currentMSecsSinceEpoch();
+        int nc = 0;
+        int cntPartialCh = 0;
+        bool cntPartial = false;
+        int uptoPg = -1;
+        if (jumpPage >= 0)
+            uptoPg = jumpPage;
+        else if (!openFirst)
+        {
+            int sp0 = 0, spc0 = 0, svw0 = 0;
+            if (Db::loadProgress(pth, &sp0, &spc0, &svw0) && sp0 > 0)
+                uptoPg = sp0;
+            else
+                uptoPg = 0;
+        }
+        auto countPages = [&](bool *partial, int *cdone, QVector<int> *per) -> int
+        {
+            int pg = 0;
+            nc = hr_qt_count_chapters(doc);
+            *partial = false;
+            *cdone = 0;
+            if (nc > 1)
+            {
+                const int limit =
+                    uptoPg >= 0 ? uptoPg + qMax(3, qMin(10, uptoPg / 4)) : 0x7fffffff;
+                for (int ci = 0; ci < nc && gw; ci += 16)
+                {
+                    for (int k = ci; k < qMin(ci + 16, nc); k++)
+                    {
+                        const int cp = hr_qt_count_pages_of(doc, k);
+                        pg += cp;
+                        per->append(cp);
+                        if (pg >= limit)
+                        {
+                            *partial = true;
+                            *cdone = k + 1;
+                            return pg;
+                        }
+                    }
+                }
+                if (pg <= 0) pg = hr_qt_count(doc);
+            }
+            else
+                pg = hr_qt_count(doc);
+            return pg;
+        };
+        QVector<int> chapPages;
+        const int ncPre = hr_qt_count_chapters(doc);
+        QVector<int> cachedCh = loadCountCache(pth, viewW, viewH, em, ncPre);
+        const qint64 tcw0 = QDateTime::currentMSecsSinceEpoch();
+        int pages;
+        if (!cachedCh.isEmpty())
+        {
+            pages = 0;
+            for (int v : cachedCh) pages += v;
+            cntPartial = false;
+            cntPartialCh = 0;
+        }
+        else
+            pages = countPages(&cntPartial, &cntPartialCh, &chapPages);
+        if (nc <= 0) nc = ncPre;
+        evt(QString::fromLatin1("count_done"),
+            QString::fromLatin1("ms=%1 chapters=%2 partial=%3 winCh=%4 cached=%5 remote=1")
+                .arg(QDateTime::currentMSecsSinceEpoch() - tcw0)
+                .arg(nc)
+                .arg(cntPartial ? 1 : 0)
+                .arg(cntPartialCh)
+                .arg(cachedCh.isEmpty() ? 0 : 1));
+        /* v1.9.0（P1-6）：远程开书即登记页数（库侧 upsert 只有 size；worker 补齐） */
+        if (pages > 0)
+        {
+            long long sz = 0;
+            for (const Db::MetaRow &m : Db::listLibrary())
+                if (m.path == pth)
+                {
+                    sz = m.size;
+                    break;
+                }
+            Db::upsertFileMeta(pth, gw ? gw->m_bookName : pth.mid(9), pages, sz,
+                               QDateTime::currentMSecsSinceEpoch());
+        }
+        int restored = 0;
+        if (jumpPage >= 0)
+            restored = jumpPage;
+        else
+        {
+            int sp = 0, spc = 0, svw = 0;
+            if (Db::loadProgress(pth, &sp, &spc, &svw) && spc > 0 && sp >= 0)
+            {
+                if (pages > 0 && sp < pages)
+                    restored = sp;
+                else if (pages > 0)
+                    restored = qBound(0, (int)((double)sp / spc * pages), pages - 1);
+            }
+            if (openFirst) restored = 0;
+        }
+        if (!gw)
+        {
+            hr_qt_close(doc);
+            return;
+        }
+        QMetaObject::invokeMethod(
+            gw.data(),
+            [gw, genV, doc, pages, nc, restored, t0, t2, cntPartial, cntPartialCh,
+             chapPages]
+            {
+                gw->finishOpen(doc, pages, nc, restored, 0, t2 - t0, 0,
+                               QString(), genV, false, 0, cntPartialCh,
+                               cntPartial, chapPages);
+            },
+            Qt::QueuedConnection);
+    }));
     return true;
 }
 
@@ -1762,8 +2098,10 @@ bool ReaderWindow::afterOpen(int jumpPage)
             .toBool())
         m_page = 0;
 
-    m_busy = false;
-    m_pendingPage = -1;
+    /* v1.8.0：渲染状态复位（多飞行/待渲/翻页异步/首帧门控） */
+    m_flight.clear(); m_flightT0.clear(); m_flightSeq.clear(); m_pendQueue.clear();
+    m_pageFlight = false; m_gatePending = false;
+    m_cacheProg = nullptr;
     m_img = QImage();
     m_img2 = QImage();
     m_pfCache.clear(); /* v0.103.0：邻页预取随书/排版换代 */
@@ -1857,13 +2195,15 @@ void ReaderWindow::buildStack()
      * 下次 requestPage 的 QPointer 构造即撞 UAF（GUI 起书秒退根因，v0.58 潜伏） */
     m_labels.clear();
     m_labelW.clear();
+    m_lru.clear();          /* v1.8.0（P0-5）：随栈重建清 LRU/字节账 */
+    m_labelBytes.clear();
+    m_lastTop = -1;
     const int w = renderWidthPx();
     for (int i = 0; i < m_pages; i++)
     {
         QLabel *lb = new QLabel;
-        lb->setAlignment(Qt::AlignHCenter | Qt::AlignTop);
         lb->setFixedSize(w, m_estH);
-        lb->setText(QString::number(i + 1));
+        initPlaceholder(lb, i); /* v1.8.0（P0-2）：占位纸底+页码+载入提示 */
         cl->addWidget(lb);
         m_labels.append(lb);
         m_labelW.append(-1);
@@ -1874,6 +2214,7 @@ void ReaderWindow::buildStack()
     m_stack = content;
     m_stackLay = cl;
     m_scroll->setWidget(m_stack);
+    syncStackHeight(); /* v1.6.1：初始即按 layout 高装配 */
     evt(QString::fromLatin1("ui_stack"),
         QString::fromLatin1("entries=%1 ms=%2")
             .arg(m_pages)
@@ -1925,12 +2266,64 @@ static QImage trimWhiteImg(const QImage &in)
     return in.copy(left, top, right - left + 1, bottom - top + 1);
 }
 
+/* v1.8.0（P0-2）：占位不空白——未渲染页=主题纸底色+弱化页码+载入提示（原只写页码
+ * 无底色，视觉上就是"空白页"）。主题色随栈重建烘焙（主题切换会 buildStack）。 */
+void ReaderWindow::initPlaceholder(QLabel *lb, int page)
+{
+    const Theme &t = kThemes[m_theme];
+    lb->setText(hr::l10n::s("第 %1 页 · 载入中…", "p. %1 · loading…").arg(page + 1));
+    lb->setAlignment(Qt::AlignHCenter | Qt::AlignVCenter);
+    lb->setAutoFillBackground(true);
+    QPalette pal = lb->palette();
+    pal.setColor(QPalette::Window, (QRgb)t.bg);
+    const QColor bg((QRgb)t.bg), fg((QRgb)t.fg);
+    pal.setColor(QPalette::WindowText,
+                 QColor((2 * bg.red() + fg.red()) / 3,
+                        (2 * bg.green() + fg.green()) / 3,
+                        (2 * bg.blue() + fg.blue()) / 3)); /* fg 1/3 混入=弱化 */
+    lb->setPalette(pal);
+}
+
+/* v1.8.0（P0-5）：位图字节预算 LRU 淘汰（替代 ±8 页硬淘汰）——视口±1 永不淘汰，
+ * 其余按 m_lru（最旧在前）清到位图总字节 ≤ 预算（默认 64MB，qt-prefs.ini
+ * reader/bitmapBudgetMB）。高分辨率不爆内存、低分辨率不过度回收；几何不变。 */
+void ReaderWindow::evictByBudget(int first, int last)
+{
+    if (m_bitmapBudgetMB <= 0) return;
+    const qint64 budget = (qint64)m_bitmapBudgetMB * 1024 * 1024;
+    qint64 total = 0;
+    for (auto it = m_labelBytes.constBegin(); it != m_labelBytes.constEnd(); ++it)
+        total += it.value();
+    if (total <= budget) return;
+    const int lo = first - 1, hi = last + 1;
+    QList<int> victims;
+    for (int p : m_lru)
+        if (!(p >= lo && p <= hi) && p >= 0 && p < m_labelW.size() &&
+            p < m_labels.size() && m_labelW[p] >= 0 && m_labelBytes.contains(p))
+            victims.append(p);
+    for (int p : victims)
+    {
+        if (total <= budget) break;
+        if (!m_labels[p]) continue;
+        m_labels[p]->clear(); /* fixedSize 不变保几何（原 P2-9 口径） */
+        initPlaceholder(m_labels[p], p);
+        m_labelW[p] = -1;
+        total -= m_labelBytes.value(p);
+        m_labelBytes.remove(p);
+        m_lru.removeAll(p);
+    }
+}
+
 void ReaderWindow::fillVisible()
 {
     m_lastRenderReq.store(QDateTime::currentMSecsSinceEpoch()); /* v0.107.1 让路信号 */
     if (m_openBusy.load() || !m_scrollMode || m_pages == 0) return;
     const int top = m_scroll->verticalScrollBar()->value();
     const int bottom = top + m_scroll->viewport()->height();
+    /* v1.8.0（P0-4）：滚动方向记忆（+1 下 / -1 上）——预取按方向加宽前方 */
+    if (m_lastTop >= 0)
+        m_scrollDir = top > m_lastTop ? 1 : (top < m_lastTop ? -1 : m_scrollDir);
+    m_lastTop = top;
     /* v0.111.1：可见页定位改按真实标签几何累计——渲染完成会把标签改为真实高，
      * estH 均匀假设在短页/长页混排时漂移（短页越多漂越远）：向错误的页派渲染
      * 并清除区间外的标签，真实可见页反而无人渲染=空白。按标签逐个累计高即精确。 */
@@ -1952,22 +2345,16 @@ void ReaderWindow::fillVisible()
     }
     for (int p = first; p <= last; p++)
         requestPage(p);
-    if (last + 1 < m_pages) requestPage(last + 1); /* v0.103.0 P0-4：下一页预取 */
-    /* v0.103.0 P2-9：视口外位图淘汰（QLabel fixedSize 不变保几何；-1 允许滚回重渲；
-     * 对齐安卓"内存页缓存有界"思路，消长滚动内存增长） */
-    if (m_pages > 32)
+    /* v1.8.0（P0-4）：预取加宽+方向加权——窗口外前后各 2 页，滚动方向侧再 +2 */
     {
-        const int lo = first - 8, hi = last + 8;
-        for (int p = 0; p < m_labels.size() && p < m_labelW.size(); p++)
-        {
-            if (p >= lo && p <= hi) continue;
-            if (m_labelW[p] >= 0 && m_labels[p])
-            {
-                m_labels[p]->clear();
-                m_labelW[p] = -1;
-            }
-        }
+        const int ahead = 2 + (m_scrollDir > 0 ? 2 : 0);
+        const int behind = 2 + (m_scrollDir < 0 ? 2 : 0);
+        const int plo = qMax(0, first - behind), phi = qMin(m_pages - 1, last + ahead);
+        for (int p = plo; p <= phi; p++)
+            if (p < first || p > last)
+                requestPage(p);
     }
+    evictByBudget(first, last); /* v1.8.0（P0-5）：字节预算 LRU（替代 ±8 硬淘汰） */
     if (m_page != first)
     {
         m_page = first;
@@ -1977,7 +2364,11 @@ void ReaderWindow::fillVisible()
 
 void ReaderWindow::onScrollValue(int) { fillVisible(); }
 
-/* ---------- 异步渲染（单飞行 + 最新请求优先） ---------- */
+/* ---------- 异步渲染（v1.8.0 多飞行 + 视口中心距待渲队列） ---------- */
+
+/* v1.8.0（P0-1）：多飞行上限（2~3 档取 3；MuPDF 单文档引擎锁内仍串行，
+ * 多飞行=下一页提前排队 + 在途回调拷贝与渲染重叠） */
+static const int kMaxFlight = 3;
 
 /* v0.110.2：滚动渲染专用线程池——全局池被扫描/后台计数/封面生成占满时
  * （云盘慢扫一次可达数十秒），渲染 runnable 排不上队=整场空白页（日志实证：
@@ -2002,9 +2393,8 @@ void ReaderWindow::ensureStackTo(int page)
     while (m_labels.size() < target)
     {
         QLabel *lb = new QLabel;
-        lb->setAlignment(Qt::AlignHCenter | Qt::AlignTop);
         lb->setFixedSize(w, m_estH);
-        lb->setText(QString::number(m_labels.size() + 1));
+        initPlaceholder(lb, m_labels.size()); /* v1.8.0（P0-2） */
         m_stackLay->insertWidget(qMax(0, m_stackLay->count() - 1), lb);
         m_labels.append(lb);
         m_labelW.append(-1);
@@ -2012,6 +2402,7 @@ void ReaderWindow::ensureStackTo(int page)
     evt("stack_selfheal",
         QString("to=%1 ms=%2").arg(m_labels.size())
             .arg(QDateTime::currentMSecsSinceEpoch() - tb0));
+    syncStackHeight(); /* v1.6.1 */
 }
 
 void ReaderWindow::requestPage(int page)
@@ -2025,75 +2416,181 @@ void ReaderWindow::requestPage(int page)
     }
     const int targetW = renderWidthPx();
     if (m_labelW[page] == targetW) return; /* 已是目标宽 */
-    if (m_busy)
+    if (m_flight.contains(page)) return; /* v1.8.0（P0-1）：同页在途去重 */
+    if (m_flight.size() >= kMaxFlight)
     {
-        /* v0.110.1：渲染看门狗——单飞行卡死（引擎锁被网络停顿长期持有）时放行
-         * 重试，否则一次卡住=整场空白页且无自愈；卡死的那次完成回调无害 */
-        const qint64 wt = QDateTime::currentMSecsSinceEpoch() - m_renderT0.load();
-        if (wt < 8000) { m_pendingPage = page; return; }
-        evt("render_stuck", QString("page=%1 wait=%2").arg(page + 1).arg(wt));
+        reapStuckFlights(); /* v0.110.1 看门狗语义：卡死在途作废放行（seq 防旧回调） */
+        if (m_flight.size() >= kMaxFlight)
+        {
+            /* v1.8.0（P0-1）：池满入待渲队列（去重；完成回调按视口中心距派发） */
+            if (!m_pendQueue.contains(page))
+                m_pendQueue.append(page);
+            if (m_pendQueue.size() > 96)
+                m_pendQueue.removeFirst(); /* 防快速滚动失速堆积 */
+            return;
+        }
     }
-    m_busy = true;
-    m_renderT0.store(QDateTime::currentMSecsSinceEpoch());
+    dispatchPage(page);
+}
+
+/* v1.8.0（P0-1）：派发单页渲染——多飞行=多页提前排队（MuPDF 单文档非线程安全，
+ * 引擎内仍串行；在途回调的 RGB 拷贝/落图与下一页引擎渲染重叠），保留看门狗
+ * （reapStuckFlights）与 seq 代际（旧回调整体丢弃，不再有"单 pending 折叠"）。
+ * v1.9.0（P1-3 变体）：固定版式自适应渐进——该书上次全宽渲染 >400ms 时，未渲染页
+ * 先出半宽快图（光栅 ~4x 快）放大铺位，全宽图随后由队列补渲替换；快书直接全宽。
+ * v1.9.0（P1-2）：桥返回缓冲 QImage 外部直构（cleanup 释放），免整页 .copy()。 */
+void ReaderWindow::dispatchPage(int page)
+{
+    if (m_openBusy.load() || !m_doc || page < 0 || page >= m_pages) return;
+    if (page >= m_labels.size())
+    {
+        ensureStackTo(page);
+        if (page >= m_labels.size()) return;
+    }
+    const int targetW = renderWidthPx();
+    if (m_labelW[page] == targetW || m_flight.contains(page)) return;
+    const bool quick = (m_fixedLayout && m_labelW[page] == -1 && m_fixedSlowMs > 400);
+    const int rendW = quick ? qMax(200, targetW / 2) : targetW;
+    const qint64 t0 = QDateTime::currentMSecsSinceEpoch();
+    m_flight.insert(page);
+    m_flightT0.insert(page, t0);
+    const int seq = ++m_dispSeq;
+    m_flightSeq.insert(page, seq);
     m_labelW[page] = -2; /* 在途标记 */
-    evt("render_req", QString("page=%1").arg(page + 1)); /* v0.110.3：滚动渲染派发打点 */
+    evt("render_req", QString("page=%1 flight=%2 q=%3")
+                          .arg(page + 1)
+                          .arg(m_flight.size())
+                          .arg(m_pendQueue.size()));
     int mode = 0, tint = 0;
     applyThemeToJob(&mode, &tint); /* GUI 线程先取定参数，避免与主题切换竞态 */
     void *doc = m_doc;
     QPointer<QLabel> lb(m_labels[page]);
     renderPool()->start(QRunnable::create(
-        [this, doc, page, targetW, mode, tint, lb]
+        [this, doc, page, rendW, mode, tint, lb, seq, t0, quick, targetW]
     {
         int w = 0, h = 0;
         unsigned char *rgb = nullptr;
         QImage img;
-        if (hr_qt_render(doc, page, targetW, mode, tint, &w, &h, &rgb) == 0 && rgb)
-        {
-            QImage tmp(rgb, w, h, w * 3, QImage::Format_RGB888);
-            img = tmp.copy();
-            free(rgb);
-        }
+        if (hr_qt_render(doc, page, rendW, mode, tint, &w, &h, &rgb) == 0 && rgb)
+            img = QImage(rgb, w, h, w * 3, QImage::Format_RGB888, hr_imgFree, rgb);
         QMetaObject::invokeMethod(
             this,
-            [this, page, img, targetW, lb]
+            [this, page, img, targetW, lb, seq, t0, quick, rendW]
             {
-                m_busy = false;
+                /* v1.8.0：seq 防串——看门狗作废/重派后的旧回调整体丢弃 */
+                if (m_flightSeq.value(page, -1) != seq) return;
+                m_flight.remove(page);
+                m_flightT0.remove(page);
+                m_flightSeq.remove(page);
                 if (!img.isNull() && lb)
                 {
                     QImage im2 = img;
                     compositeHighlights(page, &im2); /* U-ann：持久高亮合成（滚动模式） */
-        applyTexture(&im2); /* P2（B6） */
+                    applyTexture(&im2); /* P2（B6） */
                     maybeSaveRemoteCover(page, im2); /* 缺陷#4：远程封面（滚动模式首渲） */
-                    if (m_trimWhite) im2 = trimWhiteImg(im2); /* v0.83.0 W2（开关滚动恒关） */
-                    lb->setPixmap(QPixmap::fromImage(im2));
-                    lb->setFixedSize(im2.size());
-                    m_labelW[page] = targetW;
-                    /* v1.0.0：矮页（封面/标题行，高仅几十 px）不参与校准——
-                     * 此前 estH 被第 0 页带塌，整本占位标签成细条海（用户附图实证） */
-                    if (page == 0 && m_viewH > 0 && img.height() >= m_viewH / 2)
-                        m_estH = img.height();
-                    evt("render_ok", QString("page=%1 ms=%2").arg(page + 1)
-                            .arg(QDateTime::currentMSecsSinceEpoch() - m_renderT0.load()));
+                    if (quick)
+                    {
+                        /* v1.9.0（P1-3 变体）：半宽快图放大铺位（几何即全宽比例尺寸）；
+                         * m_labelW=rendW≠targetW → 全宽图随后由队列补渲替换 */
+                        const int dispH = qMax(1, im2.height() * targetW / qMax(1, rendW));
+                        QImage up = im2.scaled(targetW, dispH, Qt::IgnoreAspectRatio,
+                                               Qt::SmoothTransformation);
+                        lb->setPixmap(QPixmap::fromImage(up));
+                        lb->setFixedSize(targetW, dispH);
+                        m_labelW[page] = rendW;
+                        m_labelBytes.insert(page, (qint64)up.sizeInBytes());
+                        m_lru.removeAll(page);
+                        m_lru.append(page);
+                        syncStackHeight();
+                        evt("render_quick", QString("page=%1 w=%2").arg(page + 1).arg(rendW));
+                        requestPage(page); /* 全宽补渲入队（池满则待渲队列） */
+                    }
+                    else
+                    {
+                        if (m_trimWhite) im2 = trimWhiteImg(im2); /* v0.83.0 W2（开关滚动恒关） */
+                        lb->setPixmap(QPixmap::fromImage(im2));
+                        lb->setFixedSize(im2.size());
+                        m_labelW[page] = targetW;
+                        /* v1.8.0（P0-5）：字节账 + LRU 触点 */
+                        m_labelBytes.insert(page, (qint64)im2.sizeInBytes());
+                        m_lru.removeAll(page);
+                        m_lru.append(page);
+                        /* v1.9.0（P1-3 变体）：固定版式全宽耗时采样（>400ms 之书启用快图） */
+                        if (m_fixedLayout)
+                        {
+                            const qint64 ms = QDateTime::currentMSecsSinceEpoch() - t0;
+                            if (ms > 400) m_fixedSlowMs = (int)ms;
+                        }
+                        syncStackHeight(); /* v1.6.1：真实页高替换 estH 后同步 */
+                        /* v1.0.0：矮页（封面/标题行，高仅几十 px）不参与校准——
+                         * 此前 estH 被第 0 页带塌，整本占位标签成细条海（用户附图实证） */
+                        if (page == 0 && m_viewH > 0 && img.height() >= m_viewH / 2)
+                            m_estH = img.height();
+                        evt("render_ok", QString("page=%1 ms=%2").arg(page + 1)
+                                .arg(QDateTime::currentMSecsSinceEpoch() - t0));
+                        /* v1.8.0（P0-3）：首帧门控——开书遮罩等首个成功渲染再摘 */
+                        if (m_gatePending)
+                        {
+                            m_gatePending = false;
+                            hideOpenOverlay();
+                            evt("first_gate", QString("page=%1").arg(page + 1));
+                        }
+                    }
                 }
                 else if (lb && m_labelW[page] == -2)
                 {
                     m_labelW[page] = -1; /* 失败可重试 */
                     evt("render_fail", QString("page=%1").arg(page + 1));
                 }
-                if (m_pendingPage >= 0)
-                {
-                    int p = m_pendingPage;
-                    m_pendingPage = -1;
-                    requestPage(p);
-                }
-                /* v0.111.1：渲染落地后补派可见窗口——快速滚动期间每 tick 的窗口
-                 * 请求被单飞行折叠成 1 个 pending，用户停下后若恰逢最后一次渲染
-                 * 完成，窗口其余页无人再请求=停留占位空白。成功才补派（收敛链：
-                 * 补请求→渲染→再补直到窗口齐）；渲染失败不补派防打转空转 */
+                pumpPending(); /* v1.8.0（P0-1）：待渲队列按视口中心距补派 */
+                /* v0.111.1：渲染落地后补派可见窗口——收敛链：补请求→渲染→再补
+                 * 直到窗口齐；渲染失败不补派防打转空转 */
                 if (!img.isNull()) fillVisible();
             },
             Qt::QueuedConnection);
     }));
+}
+
+/* v1.8.0（P0-1）：待渲队列按"视口中心页距"排序派发——原单 pending 折叠在滚动中
+ * 互相覆盖（只记住最后一页），多飞行+队列让窗口填充并行化、停手即收敛 */
+void ReaderWindow::pumpPending()
+{
+    if (m_pendQueue.isEmpty() || m_flight.size() >= kMaxFlight) return;
+    const int top = m_scroll->verticalScrollBar()->value();
+    const int mid = top + m_scroll->viewport()->height() / 2;
+    int center = m_page;
+    int acc = 0;
+    for (int i = 0; i < m_labels.size(); i++)
+    {
+        const int h = m_labels[i] ? m_labels[i]->height() : m_estH;
+        if (acc + h > mid) { center = i; break; }
+        acc += h;
+    }
+    std::sort(m_pendQueue.begin(), m_pendQueue.end(),
+              [center](int a, int b) { return qAbs(a - center) < qAbs(b - center); });
+    while (!m_pendQueue.isEmpty() && m_flight.size() < kMaxFlight)
+        dispatchPage(m_pendQueue.takeFirst());
+}
+
+/* v1.8.0（P0-1）：渲染看门狗（原单飞行 8s 语义扩展到多飞行）——引擎锁被网络停顿
+ * 长期持有时作废卡死在途放行重试；作废回调因 seq 失配自动丢弃 */
+void ReaderWindow::reapStuckFlights()
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    QList<int> stuck;
+    for (auto it = m_flightT0.constBegin(); it != m_flightT0.constEnd(); ++it)
+        if (now - it.value() > 8000)
+            stuck.append(it.key());
+    for (int p : stuck)
+    {
+        evt("render_stuck",
+            QString("page=%1 wait=%2").arg(p + 1).arg(now - m_flightT0.value(p)));
+        m_flight.remove(p);
+        m_flightT0.remove(p);
+        m_flightSeq.remove(p);
+        if (p >= 0 && p < m_labelW.size() && m_labelW[p] == -2)
+            m_labelW[p] = -1;
+    }
 }
 
 /* ---------- 翻页模式 ---------- */
@@ -2180,10 +2677,13 @@ void ReaderWindow::kickPagePrefetch(int page)
     applyThemeToJob(&mode, &tint); /* GUI 线程先取定参数（与 requestPage 同口径） */
     void *doc = m_doc;
     const int gen = m_openGen.load();
-    for (int d = -1; d <= 1; d += 2)
+    /* v1.8.0（P0-4）：预取 ±1→±3（远跳后前后都有缓冲；双页按页对语义等价放宽） */
+    for (int d = -3; d <= 3; d++)
     {
+        if (d == 0) continue;
         const int p = page + d;
         if (p < 0 || p >= m_pages || m_pfCache.contains(p)) continue;
+        m_auxJobs.fetch_add(1); /* v1.8.0：辅助任务计数（换书/关书等清零防 UAF） */
         QPointer<ReaderWindow> gw(this);
         renderPool()->start(QRunnable::create(
             [gw, doc, p, w, mode, tint, gen]
@@ -2193,10 +2693,10 @@ void ReaderWindow::kickPagePrefetch(int page)
             QImage img;
             if (hr_qt_render(doc, p, w, mode, tint, &iw, &ih, &rgb) == 0 && rgb)
             {
-                QImage tmp(rgb, iw, ih, iw * 3, QImage::Format_RGB888);
-                img = tmp.copy();
-                free(rgb);
+                /* v1.9.0（P1-2）：外部缓冲直构 */
+                img = QImage(rgb, iw, ih, iw * 3, QImage::Format_RGB888, hr_imgFree, rgb);
             }
+            if (gw) gw->m_auxJobs.fetch_sub(1); /* v1.8.0：任务收尾（窗亡放任防 UAF） */
             if (gw && !img.isNull())
                 QMetaObject::invokeMethod(
                     gw.data(),
@@ -2209,12 +2709,136 @@ void ReaderWindow::kickPagePrefetch(int page)
 void ReaderWindow::storePrefetch(int gen, int page, int w, const QImage &img)
 {
     if (gen != m_openGen.load() || img.isNull()) return;
-    if (m_pfCache.size() > 4) m_pfCache.clear();
+    if (m_pfCache.size() > 8) m_pfCache.clear(); /* v1.8.0（P0-4）：±3 预取需 8 档 */
     m_pfCache.insert(page, qMakePair(w, img));
+}
+
+/* v1.8.0（P0-6）：翻页模式异步渲染——旧页位图留存+右上角"渲染中…"角标，后台完成
+ * 后一次换页（seq 防串页 + 8s 看门狗降级）。原 renderNow 在 UI 线程同步等引擎锁
+ * （大页 PDF/重排首访页/远程缺块读网=整窗冻结数秒，自动翻页按间隔重演冻结）；
+ * 预取命中仍走同步快路径（毫秒级）。 */
+void ReaderWindow::renderPageAsync(int page)
+{
+    if (m_openBusy.load() || !m_doc || m_pages <= 0) return;
+    page = qBound(0, page, m_pages - 1);
+    const int w = renderWidthPx();
+    const bool pfHit = m_pfCache.contains(page) && m_pfCache.value(page).first == w;
+    const bool pf2 = m_twoPage && page + 1 < m_pages &&
+                     m_pfCache.contains(page + 1) &&
+                     m_pfCache.value(page + 1).first == w;
+    if (pfHit && (!m_twoPage || pf2))
+    {
+        renderNow(page); /* 预取命中快路径（毫秒级，无冻结感） */
+        return;
+    }
+    onPageChanged(); /* 进度/标题/滑条即时反馈（旧页位图仍显示=旧页留存） */
+    m_pageFlight = true;
+    m_pageReqT0 = QDateTime::currentMSecsSinceEpoch();
+    const int seq = ++m_pageSeq;
+    if (m_pageBusy)
+    {
+        m_pageBusy->adjustSize();
+        m_pageBusy->move(m_scroll->viewport()->width() - m_pageBusy->width() - 16, 12);
+        m_pageBusy->raise();
+        m_pageBusy->show();
+    }
+    evt("page_async_req", QString("page=%1 seq=%2").arg(page + 1).arg(seq));
+    int mode = 0, tint = 0;
+    applyThemeToJob(&mode, &tint);
+    void *doc = m_doc;
+    const bool two = m_twoPage;
+    const int npg = m_pages;
+    m_auxJobs.fetch_add(1);
+    QPointer<ReaderWindow> gw(this);
+    renderPool()->start(QRunnable::create([gw, doc, page, w, mode, tint, seq, two, npg]
+    {
+        QImage img, img2;
+        /* m_pageSeq 跨线程读竞争无害（int 读；最坏多渲一页，回调仍被 seq 丢弃） */
+        if (gw && seq == gw->m_pageSeq)
+        {
+            auto render1 = [&](int p, QImage *out)
+            {
+                int rw = 0, rh = 0;
+                unsigned char *rgb = nullptr;
+                if (hr_qt_render(doc, p, w, mode, tint, &rw, &rh, &rgb) == 0 && rgb)
+                {
+                    /* v1.9.0（P1-2）：外部缓冲直构 */
+                    *out = QImage(rgb, rw, rh, rw * 3, QImage::Format_RGB888,
+                                  hr_imgFree, rgb);
+                }
+            };
+            render1(page, &img);
+            if (two && page + 1 < npg && gw && seq == gw->m_pageSeq)
+                render1(page + 1, &img2);
+        }
+        if (gw) gw->m_auxJobs.fetch_sub(1); /* 换书/关书等待清零；窗亡放任防 UAF */
+        if (!gw) return;
+        QMetaObject::invokeMethod(
+            gw.data(),
+            [gw, page, seq, img, img2]
+            { gw->onPageJobDone(page, seq, img, img2); },
+            Qt::QueuedConnection);
+    }));
+    /* 8s 看门狗降级（复用滚动看门狗语义）：超时保留旧页+状态栏提示 */
+    QTimer::singleShot(8000, this, [this, seq]
+    {
+        if (!m_pageFlight || seq != m_pageSeq) return;
+        m_pageFlight = false;
+        if (m_pageBusy) m_pageBusy->hide();
+        evt("page_async_stuck", QString("seq=%1").arg(seq));
+        statusBar()->showMessage(
+            hr::l10n::s("页面渲染超时，已保留当前页", "Page render timeout"), 4000);
+    });
+}
+
+/* v1.8.0（P0-6）：翻页异步完成回调——seq/开书态/模式校验后一次换页；
+ * 新翻页已推进 seq → 本回调整体丢弃（防串页） */
+void ReaderWindow::onPageJobDone(int page, int seq, const QImage &img,
+                                 const QImage &img2)
+{
+    if (seq != m_pageSeq || m_openBusy.load() || !m_doc) return;
+    m_pageFlight = false;
+    if (m_pageBusy) m_pageBusy->hide();
+    if (m_scrollMode) return; /* 翻页期间切到滚动模式：交 fillVisible 接管 */
+    if (img.isNull())
+    {
+        evt("render_fail", QString("pagemode page=%1").arg(page + 1));
+        return; /* 保留旧页位图 */
+    }
+    m_img = img;
+    m_img2 = (m_twoPage && page + 1 < m_pages) ? img2 : QImage();
+    compositeHighlights(page, &m_img); /* U-ann：与 renderRaw 同口径 */
+    applyTexture(&m_img);
+    if (!m_img2.isNull())
+    {
+        compositeHighlights(page + 1, &m_img2);
+        applyTexture(&m_img2);
+    }
+    if (page == 0 && m_viewH > 0 && m_img.height() >= m_viewH / 2) /* v1.0.0：矮页不校准 */
+        m_estH = m_img.height();
+    if (m_trimWhite) /* v0.83.0 W2 D6：裁白边（翻页模式） */
+    {
+        m_img = trimWhiteImg(m_img);
+        if (!m_img2.isNull()) m_img2 = trimWhiteImg(m_img2);
+    }
+    showPageView();
+    maybeSaveRemoteCover(page, m_img);
+    evt("page_async_ok",
+        QString("page=%1 seq=%2 ms=%3")
+            .arg(page + 1)
+            .arg(seq)
+            .arg(QDateTime::currentMSecsSinceEpoch() - m_pageReqT0));
+    onPageChanged();
+    kickPagePrefetch(page); /* 邻页后台预取 */
 }
 
 void ReaderWindow::onPageChanged()
 {
+    /* v1.9.0（P1-7②）：阅读位置→字节窗口主动驱动（原仅 readAt 被动更新窗口）——
+     * 远程书按页号平滑推算字节位置，后台补齐线程优先取当前阅读区 */
+    if (m_cacheProg && m_pages > 0)
+        m_cacheProg->cacheSetWindow((long long)m_page *
+                                    m_cacheProg->cacheTotalBytes() / m_pages);
     m_lbPos->setText(QString("%1 / %2").arg(m_page + 1).arg(m_pages));
     if (!m_sliderMoving) m_slider->setValue(m_page);
     updateTitle();
@@ -2244,8 +2868,10 @@ void ReaderWindow::finishRelayoutWindowed(int gen, void *doc, const QVector<int>
     m_img2 = QImage();
     m_pfCache.clear(); /* 排版参数变了，预取位图全部失效 */
     m_estH = m_viewH > 0 ? m_viewH : 1200; /* v1.0.0：锚排版页高，防占位细条海 */
-    m_busy = false;
-    m_pendingPage = -1;
+    /* v1.8.0：渲染状态复位（多飞行/待渲/翻页异步/首帧门控） */
+    m_flight.clear(); m_flightT0.clear(); m_flightSeq.clear(); m_pendQueue.clear();
+    m_pageFlight = false; m_gatePending = false;
+    m_cacheProg = nullptr;
     buildStack();
     m_slider->setRange(0, qMax(0, m_pages - 1));
     m_slider->setValue(m_page);
@@ -2257,6 +2883,9 @@ void ReaderWindow::finishRelayoutWindowed(int gen, void *doc, const QVector<int>
     else renderNow(m_page);
     updateTitle();
     onPageChanged();
+    /* v1.1.0：排版变更后目录页码与书签折算页随新排版刷新（安卓 0.9.66 同语义） */
+    refreshTocTree();
+    refreshBookmarkList();
     evt("layout", QString("pages=%1 em=%2 theme=%3 scroll=%4 win=1 ch=%5")
                       .arg(m_pages).arg(m_em).arg(kThemes[m_theme].id)
                       .arg((int)m_scrollMode).arg(all.size()));
@@ -2280,6 +2909,7 @@ void ReaderWindow::updateModeUi()
 {
     if (m_slider)
         m_slider->setVisible(!m_scrollMode);
+    if (m_pageBusy) m_pageBusy->hide(); /* v1.8.0（P0-6）：切模式收翻页角标 */
 }
 
 void ReaderWindow::relayoutAfterChange(bool metrics)
@@ -2298,12 +2928,14 @@ void ReaderWindow::relayoutAfterChange(bool metrics)
     {
         m_pages = hr_qt_count(m_doc);
         m_page = qBound(0, m_page, qMax(0, m_pages - 1));
-        m_img = QImage();
-        m_img2 = QImage();
+        /* v1.9.0（P1-4）：旧位图保留——缩放瞬时按新旧宽比矩阵缩放即时反馈 */
         m_pfCache.clear();
         m_estH = m_viewH > 0 ? m_viewH : 1200; /* v1.0.0：锚排版页高，防占位细条海 */
-        m_busy = false;
-        m_pendingPage = -1;
+        /* v1.8.0：渲染状态复位（多飞行/待渲/翻页异步/首帧门控） */
+        m_flight.clear(); m_flightT0.clear(); m_flightSeq.clear(); m_pendQueue.clear();
+        m_pageFlight = false; m_gatePending = false;
+        m_cacheProg = nullptr;
+    m_cacheProg = nullptr;
         buildStack();
         m_slider->setRange(0, qMax(0, m_pages - 1));
         m_slider->setValue(m_page);
@@ -2312,7 +2944,28 @@ void ReaderWindow::relayoutAfterChange(bool metrics)
             m_scroll->verticalScrollBar()->setValue(m_page * (m_estH));
             fillVisible();
         }
-        else renderNow(m_page);
+        /* v1.9.0（P1-4）：缩放渐进——旧位图按新旧宽比缩放即时显示，全宽重渲走
+         * 翻页异步链（旧页留存+角标）；冒烟保持同步 */
+        else if (m_smokeW > 0)
+        {
+            renderNow(m_page);
+        }
+        else
+        {
+            const int nw = renderWidthPx();
+            if (!m_img.isNull() && nw > 0 && m_img.width() > 0 && nw != m_img.width())
+            {
+                const double zf = (double)nw / m_img.width();
+                m_img = m_img.scaled(nw, qMax(1, (int)(m_img.height() * zf)),
+                                     Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+                if (!m_img2.isNull())
+                    m_img2 = m_img2.scaled(nw, qMax(1, (int)(m_img2.height() * zf)),
+                                           Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+            }
+            showPageView();
+            onPageChanged();
+            renderPageAsync(m_page);
+        }
         updateTitle();
         evt("layout", QString("pages=%1 em=%2 theme=%3 scroll=%4 fixed=1")
                           .arg(m_pages).arg(m_em).arg(kThemes[m_theme].id).arg((int)m_scrollMode));
@@ -2433,8 +3086,10 @@ void ReaderWindow::finishRelayout(int gen, void *doc, int pages, int chapters)
     m_img2 = QImage();
     m_pfCache.clear(); /* 排版参数变了，预取位图全部失效 */
     m_estH = m_viewH > 0 ? m_viewH : 1200; /* v1.0.0：锚排版页高，防占位细条海 */
-    m_busy = false;
-    m_pendingPage = -1;
+    /* v1.8.0：渲染状态复位（多飞行/待渲/翻页异步/首帧门控） */
+    m_flight.clear(); m_flightT0.clear(); m_flightSeq.clear(); m_pendQueue.clear();
+    m_pageFlight = false; m_gatePending = false;
+    m_cacheProg = nullptr;
     buildStack();
     m_slider->setRange(0, qMax(0, m_pages - 1));
     m_slider->setValue(m_page);
@@ -2445,10 +3100,11 @@ void ReaderWindow::finishRelayout(int gen, void *doc, int pages, int chapters)
     }
     else renderNow(m_page);
     updateTitle();
-    /* U3b：开书刷新侧板（目录/书签），搜索结果清空 */
+    /* U3b：开书刷新侧板（目录/书签），搜索结果清空；
+     * v1.1.0：目录页表（章节锚数据源）无条件载入——书签捕获/折算不依赖侧板可见 */
+    refreshTocTree();
     if (m_side)
     {
-        refreshTocTree();
         refreshBookmarkList();
         if (m_schList) m_schList->clear();
         if (m_schLb)
@@ -2504,6 +3160,209 @@ void ReaderWindow::keyPressEvent(QKeyEvent *e)
     QMainWindow::keyPressEvent(e);
 }
 
+/* v1.7.0：阅读菜单（原拖选释放即弹的划词菜单抽出）——右键调用；
+ * 有选区作用于选区，无选区文字类项置灰。 */
+void ReaderWindow::showSelMenu(const QPoint &gp)
+{
+    if (!m_doc || m_pages <= 0) return;
+    /* U3b 划词菜单增强：网搜/选区存图/高亮5色/翻译目标语三选 */
+    QMenu menu(this);
+    QAction *cp = menu.addAction(hr::l10n::s("复制", "Copy"));
+    QAction *web = menu.addAction(hr::l10n::s("网搜…", "Web search…"));
+    QMenu *hlMenu = menu.addMenu(hr::l10n::s("高亮(PDF)", "Highlight (PDF)"));
+    struct HlColor { const char *zh, *en; unsigned argb; };
+    const HlColor hls[5] = {
+        {"黄", "Yellow", 0xFFFF00}, {"绿", "Green", 0x66BB00},
+        {"蓝", "Blue", 0x2196F3},   {"红", "Red", 0xE53935},
+        {"紫", "Purple", 0x8E24AA}};
+    for (const HlColor &hc : hls)
+        hlMenu->addAction(hr::l10n::s(hc.zh, hc.en))
+            ->setData(uint(hc.argb));
+    QAction *img =
+        menu.addAction(hr::l10n::s("选区存图", "Snapshot selection"));
+    QMenu *trMenu = menu.addMenu(hr::l10n::s("翻译", "Translate"));
+    /* U6：目标语记忆（reader/translateTgt 0/1/2，勾选态同步） */
+    QSettings pst(hr::dataDir() + "/qt-prefs.ini", QSettings::IniFormat);
+    const int lastTgt = pst.value("reader/translateTgt", 0).toInt();
+    QAction *trAuto = trMenu->addAction(hr::l10n::s("自动判断", "Auto"));
+    trAuto->setCheckable(true);
+    trAuto->setChecked(lastTgt == 0);
+    QAction *trZh = trMenu->addAction(hr::l10n::s("译成中文", "To Chinese"));
+    trZh->setCheckable(true);
+    trZh->setChecked(lastTgt == 1);
+    QAction *trEn = trMenu->addAction(hr::l10n::s("译成英文", "To English"));
+    trEn->setCheckable(true);
+    trEn->setChecked(lastTgt == 2);
+    QAction *sr = menu.addAction(hr::l10n::s("搜索同词", "Search word"));
+    QAction *spk = menu.addAction(hr::l10n::s("朗读", "Speak")); /* P1（C3） */
+    QAction *bmAdd = menu.addAction(hr::l10n::s("加书签", "Bookmark")); /* P1（C2） */
+    QAction *noteAct = menu.addAction(hr::l10n::s("笔记…", "Note…")); /* v1.6.0（B2）=安卓 onNoteToEdit */
+    QAction *dcAct = menu.addAction(hr::l10n::s("词典", "Dictionary"));
+    menu.addSeparator();
+    QAction *cancelAct = menu.addAction(hr::l10n::s("取消", "Cancel"));
+        /* v1.7.0：无选词时弹菜单但文字类项置灰（右键必出菜单体验） */
+    const bool hasText = !m_selText.trimmed().isEmpty();
+    if (!hasText)
+    {
+        for (QAction *a : menu.actions())
+        {
+            if (QMenu *sm = a->menu())
+            {
+                for (QAction *s2 : sm->actions())
+                    s2->setEnabled(false);
+                continue;
+            }
+            if (!a->isSeparator())
+                a->setEnabled(a == cancelAct);
+        }
+    }
+    QAction *act = menu.exec(gp);
+
+    auto doHighlight = [this](int argb)
+    {
+        const QRectF ir =
+            m_scrollMode ? scrollPageRect(m_selPage) : pageImageRect();
+        float box[4] = {0, 0, 0, 0};
+        hr_qt_page_box(m_doc, m_page, box);
+        const double scale = ir.width() / qMax(1.0f, box[2] - box[0]);
+        QVector<float> quads;
+        for (const QRectF &r : m_selOverlay->rects)
+        {
+            quads << (float)((r.left() - ir.left()) / scale + box[0])
+                  << (float)((r.top() - ir.top()) / scale + box[1])
+                  << (float)((r.right() - ir.left()) / scale + box[0])
+                  << (float)((r.bottom() - ir.top()) / scale + box[1]);
+        }
+        const int pg = m_selPage; /* P1（D2） */
+        const float *qptr = quads.constData();
+        const int qn = quads.size() / 4;
+        /* U-ann：持久化 annotation 表（与 Compose/安卓同 schema 互通）；
+         * PDF 写回改为书签板「写回PDF」全量导出（原单条覆盖 .annot.pdf 弃用） */
+        QString quadsRaw;
+        for (const QRectF &r : m_selOverlay->rects)
+        {
+            quadsRaw +=
+                QString::number((r.left() - ir.left()) / scale + box[0], 'f', 2) +
+                "," +
+                QString::number((r.top() - ir.top()) / scale + box[1], 'f', 2) +
+                "," +
+                QString::number((r.right() - ir.left()) / scale + box[0], 'f', 2) +
+                "," +
+                QString::number((r.bottom() - ir.top()) / scale + box[1], 'f', 2) +
+                ";";
+        }
+        Db::addAnnotation(m_path, pg, 0xFF000000 | argb, quadsRaw,
+                          m_selText.trimmed().left(120), m_pages);
+        evt("sel_highlight",
+            QString("page=%1 quads=%2 argb=%3 db=1")
+                .arg(m_page + 1).arg(qn)
+                .arg(argb, 6, 16, QChar('0')));
+        refreshHighlights();
+        refreshHighlightList();
+    };
+    if (act == cp)
+    {
+        QApplication::clipboard()->setText(m_selText);
+        evt("sel_copy", QString("len=%1 page=%2")
+                            .arg(m_selText.size()).arg(m_page + 1));
+    }
+    else if (act == web)
+    {
+        /* U3b：默认浏览器网搜（P1 适配 C4：引擎可选 google/bing/baidu/duckduckgo） */
+        static const char *engines[][2] = {
+            {"google", "https://www.google.com/search"},
+            {"bing", "https://www.bing.com/search"},
+            {"baidu", "https://www.baidu.com/s"},
+            {"duckduckgo", "https://duckduckgo.com/"},
+        };
+        const QString eng = pst.value("reader/webSearchEngine", "bing").toString();
+        QUrl u(QString::fromLatin1(engines[1][1]));
+        for (auto &e : engines)
+            if (eng == QLatin1String(e[0]))
+                u = QUrl(QString::fromLatin1(e[1]));
+        QUrlQuery qu;
+        qu.addQueryItem("q", m_selText.trimmed());
+        u.setQuery(qu);
+        QDesktopServices::openUrl(u);
+        evt("sel_web", QString("len=%1").arg(m_selText.size()));
+    }
+    else if (act && hlMenu->actions().contains(act))
+    {
+        /* U3b：高亮 5 色（原固定黄） */
+        doHighlight((int)act->data().toUInt());
+    }
+    else if (act == img)
+    {
+        /* U3b：选区存图（P1 D2：滚动模式取锚定页位图） */
+        QImage selImg = m_img;
+        const QLabel *sl =
+            (m_scrollMode && m_selPage >= 0 && m_selPage < m_labels.size())
+                ? m_labels[m_selPage]
+                : nullptr;
+        if (sl && sl->pixmap() && !sl->pixmap()->isNull())
+            selImg = sl->pixmap()->toImage();
+        const QRectF ir =
+            m_scrollMode ? scrollPageRect(m_selPage) : pageImageRect();
+        QRectF acc;
+        for (const QRectF &r : m_selOverlay->rects)
+        {
+            const QRectF inImg = r.translated(-ir.topLeft());
+            acc = acc.isNull() ? inImg : acc.united(inImg);
+        }
+        if (!acc.isNull() && !selImg.isNull())
+        {
+            const QImage cut =
+                selImg.copy(acc.toRect().intersected(selImg.rect()));
+            QApplication::clipboard()->setImage(cut);
+            evt("sel_image", QString("page=%1 w=%2 h=%3")
+                                 .arg(m_page + 1)
+                                 .arg(cut.width()).arg(cut.height()));
+        }
+    }
+    else if (act == trAuto || act == trZh || act == trEn)
+    {
+        const int tg = act == trZh ? 1 : (act == trEn ? 2 : 0);
+        pst.setValue("reader/translateTgt", tg); /* U6：记住目标语 */
+        translateSelection(m_selText, tg);
+    }
+    else if (act == sr)
+    {
+        emit searchWord(m_selText.trimmed());
+    }
+    else if (act == spk)
+    {
+        /* P1 适配（C3）：选区朗读 */
+        if (Tts::available() && Tts::speakAsync(m_selText))
+            evt("sel_speak", QString("len=%1").arg(m_selText.size()));
+        else
+            statusBar()->showMessage(
+                hr::l10n::s("SAPI 不可用", "SAPI unavailable"), 4000);
+    }
+    else if (act == bmAdd)
+    {
+        /* P1 适配（C2）：划词加书签（note=摘录≤200，对齐 WIN sel_bm） */
+        int asec = -1; double asr = 0; QString ast;
+        captureAnchor(m_selPage, &asec, &asr, &ast);
+        long long id = Db::addBookmark(
+            m_path, m_selPage,
+            QString(hr::l10n::s("第%1页", "p.%1")).arg(m_selPage + 1),
+            m_selText.trimmed().left(200),
+            asec, asr, ast, m_pages);
+        refreshBookmarkList();
+        evt("sel_bm", QString("id=%1 page=%2 sec=%3")
+                          .arg(id).arg(m_selPage + 1).arg(asec));
+    }
+    else if (act == noteAct)
+    {
+        /* v1.6.0（B2）：选文进笔记编辑器预填（安卓 DragingDialogs:2012-2022 语义） */
+        hr::noteEditDialog(this, m_selText.trimmed());
+    }
+    else if (act == dcAct)
+    {
+        dictLookup(m_selText);
+    }
+}
+
 bool ReaderWindow::eventFilter(QObject *obj, QEvent *ev)
 {
     if (obj == m_scroll->viewport() && m_doc && m_pages > 0) /* P1（D2）：滚动模式开放划词 */
@@ -2552,179 +3411,20 @@ bool ReaderWindow::eventFilter(QObject *obj, QEvent *ev)
             if (m_dragging)
             {
                 m_dragging = false;
-                if (!m_selText.isEmpty())
+                /* v1.7.0：拖选只负责选中（划出段落文字），不再自动弹菜单——菜单改右键带出；
+                 * 选区高亮保留供右键菜单使用，拖到无文字处则清空选区 */
+                if (m_selText.trimmed().isEmpty())
                 {
-                    /* U3b 划词菜单增强：网搜/选区存图/高亮5色/翻译目标语三选 */
-                    QMenu menu(this);
-                    QAction *cp = menu.addAction(hr::l10n::s("复制", "Copy"));
-                    QAction *web = menu.addAction(hr::l10n::s("网搜…", "Web search…"));
-                    QMenu *hlMenu = menu.addMenu(hr::l10n::s("高亮(PDF)", "Highlight (PDF)"));
-                    struct HlColor { const char *zh, *en; unsigned argb; };
-                    const HlColor hls[5] = {
-                        {"黄", "Yellow", 0xFFFF00}, {"绿", "Green", 0x66BB00},
-                        {"蓝", "Blue", 0x2196F3},   {"红", "Red", 0xE53935},
-                        {"紫", "Purple", 0x8E24AA}};
-                    for (const HlColor &hc : hls)
-                        hlMenu->addAction(hr::l10n::s(hc.zh, hc.en))
-                            ->setData(uint(hc.argb));
-                    QAction *img =
-                        menu.addAction(hr::l10n::s("选区存图", "Snapshot selection"));
-                    QMenu *trMenu = menu.addMenu(hr::l10n::s("翻译", "Translate"));
-                    /* U6：目标语记忆（reader/translateTgt 0/1/2，勾选态同步） */
-                    QSettings pst(hr::dataDir() + "/qt-prefs.ini", QSettings::IniFormat);
-                    const int lastTgt = pst.value("reader/translateTgt", 0).toInt();
-                    QAction *trAuto = trMenu->addAction(hr::l10n::s("自动判断", "Auto"));
-                    trAuto->setCheckable(true);
-                    trAuto->setChecked(lastTgt == 0);
-                    QAction *trZh = trMenu->addAction(hr::l10n::s("译成中文", "To Chinese"));
-                    trZh->setCheckable(true);
-                    trZh->setChecked(lastTgt == 1);
-                    QAction *trEn = trMenu->addAction(hr::l10n::s("译成英文", "To English"));
-                    trEn->setCheckable(true);
-                    trEn->setChecked(lastTgt == 2);
-                    QAction *sr = menu.addAction(hr::l10n::s("搜索同词", "Search word"));
-                    QAction *spk = menu.addAction(hr::l10n::s("朗读", "Speak")); /* P1（C3） */
-                    QAction *bmAdd = menu.addAction(hr::l10n::s("加书签", "Bookmark")); /* P1（C2） */
-                    QAction *dcAct = menu.addAction(hr::l10n::s("词典", "Dictionary"));
-                    menu.addSeparator();
-                    menu.addAction(hr::l10n::s("取消", "Cancel"));
-                    QAction *act = menu.exec(me->globalPos());
-                    auto doHighlight = [this](int argb)
-                    {
-                        const QRectF ir =
-                            m_scrollMode ? scrollPageRect(m_selPage) : pageImageRect();
-                        float box[4] = {0, 0, 0, 0};
-                        hr_qt_page_box(m_doc, m_page, box);
-                        const double scale = ir.width() / qMax(1.0f, box[2] - box[0]);
-                        QVector<float> quads;
-                        for (const QRectF &r : m_selOverlay->rects)
-                        {
-                            quads << (float)((r.left() - ir.left()) / scale + box[0])
-                                  << (float)((r.top() - ir.top()) / scale + box[1])
-                                  << (float)((r.right() - ir.left()) / scale + box[0])
-                                  << (float)((r.bottom() - ir.top()) / scale + box[1]);
-                        }
-                        const int pg = m_selPage; /* P1（D2） */
-                        const float *qptr = quads.constData();
-                        const int qn = quads.size() / 4;
-                        /* U-ann：持久化 annotation 表（与 Compose/安卓同 schema 互通）；
-                         * PDF 写回改为书签板「写回PDF」全量导出（原单条覆盖 .annot.pdf 弃用） */
-                        QString quadsRaw;
-                        for (const QRectF &r : m_selOverlay->rects)
-                        {
-                            quadsRaw +=
-                                QString::number((r.left() - ir.left()) / scale + box[0], 'f', 2) +
-                                "," +
-                                QString::number((r.top() - ir.top()) / scale + box[1], 'f', 2) +
-                                "," +
-                                QString::number((r.right() - ir.left()) / scale + box[0], 'f', 2) +
-                                "," +
-                                QString::number((r.bottom() - ir.top()) / scale + box[1], 'f', 2) +
-                                ";";
-                        }
-                        Db::addAnnotation(m_path, pg, 0xFF000000 | argb, quadsRaw,
-                                          m_selText.trimmed().left(120), m_pages);
-                        evt("sel_highlight",
-                            QString("page=%1 quads=%2 argb=%3 db=1")
-                                .arg(m_page + 1).arg(qn)
-                                .arg(argb, 6, 16, QChar('0')));
-                        refreshHighlights();
-                        refreshHighlightList();
-                    };
-                    if (act == cp)
-                    {
-                        QApplication::clipboard()->setText(m_selText);
-                        evt("sel_copy", QString("len=%1 page=%2")
-                                            .arg(m_selText.size()).arg(m_page + 1));
-                    }
-                    else if (act == web)
-                    {
-                        /* U3b：默认浏览器网搜（P1 适配 C4：引擎可选 google/bing/baidu/duckduckgo） */
-                        static const char *engines[][2] = {
-                            {"google", "https://www.google.com/search"},
-                            {"bing", "https://www.bing.com/search"},
-                            {"baidu", "https://www.baidu.com/s"},
-                            {"duckduckgo", "https://duckduckgo.com/"},
-                        };
-                        const QString eng = pst.value("reader/webSearchEngine", "bing").toString();
-                        QUrl u(QString::fromLatin1(engines[1][1]));
-                        for (auto &e : engines)
-                            if (eng == QLatin1String(e[0]))
-                                u = QUrl(QString::fromLatin1(e[1]));
-                        QUrlQuery qu;
-                        qu.addQueryItem("q", m_selText.trimmed());
-                        u.setQuery(qu);
-                        QDesktopServices::openUrl(u);
-                        evt("sel_web", QString("len=%1").arg(m_selText.size()));
-                    }
-                    else if (act && hlMenu->actions().contains(act))
-                    {
-                        /* U3b：高亮 5 色（原固定黄） */
-                        doHighlight((int)act->data().toUInt());
-                    }
-                    else if (act == img)
-                    {
-                        /* U3b：选区存图（P1 D2：滚动模式取锚定页位图） */
-                        QImage selImg = m_img;
-                        const QLabel *sl =
-                            (m_scrollMode && m_selPage >= 0 && m_selPage < m_labels.size())
-                                ? m_labels[m_selPage]
-                                : nullptr;
-                        if (sl && sl->pixmap() && !sl->pixmap()->isNull())
-                            selImg = sl->pixmap()->toImage();
-                        const QRectF ir =
-                            m_scrollMode ? scrollPageRect(m_selPage) : pageImageRect();
-                        QRectF acc;
-                        for (const QRectF &r : m_selOverlay->rects)
-                        {
-                            const QRectF inImg = r.translated(-ir.topLeft());
-                            acc = acc.isNull() ? inImg : acc.united(inImg);
-                        }
-                        if (!acc.isNull() && !selImg.isNull())
-                        {
-                            const QImage cut =
-                                selImg.copy(acc.toRect().intersected(selImg.rect()));
-                            QApplication::clipboard()->setImage(cut);
-                            evt("sel_image", QString("page=%1 w=%2 h=%3")
-                                                 .arg(m_page + 1)
-                                                 .arg(cut.width()).arg(cut.height()));
-                        }
-                    }
-                    else if (act == trAuto || act == trZh || act == trEn)
-                    {
-                        const int tg = act == trZh ? 1 : (act == trEn ? 2 : 0);
-                        pst.setValue("reader/translateTgt", tg); /* U6：记住目标语 */
-                        translateSelection(m_selText, tg);
-                    }
-                    else if (act == sr)
-                    {
-                        emit searchWord(m_selText.trimmed());
-                    }
-                    else if (act == spk)
-                    {
-                        /* P1 适配（C3）：选区朗读 */
-                        if (Tts::available() && Tts::speakAsync(m_selText))
-                            evt("sel_speak", QString("len=%1").arg(m_selText.size()));
-                        else
-                            statusBar()->showMessage(
-                                hr::l10n::s("SAPI 不可用", "SAPI unavailable"), 4000);
-                    }
-                    else if (act == bmAdd)
-                    {
-                        /* P1 适配（C2）：划词加书签（note=摘录≤200，对齐 WIN sel_bm） */
-                        long long id = Db::addBookmark(
-                            m_path, m_selPage,
-                            QString(hr::l10n::s("第%1页", "p.%1")).arg(m_selPage + 1),
-                            m_selText.trimmed().left(200));
-                        refreshBookmarkList();
-                        evt("sel_bm", QString("id=%1 page=%2").arg(id).arg(m_selPage + 1));
-                    }
-                    else if (act == dcAct)
-                    {
-                        dictLookup(m_selText);
-                    }
+                    m_selText.clear();
+                    m_selOverlay->rects.clear();
+                    m_selOverlay->hide();
                 }
-                m_selOverlay->hide();
+                else
+                {
+                    m_selOverlay->setGeometry(m_scroll->viewport()->rect());
+                    m_selOverlay->update();
+                    m_selOverlay->show();
+                }
                 return true;
             }
             const int w = m_scroll->viewport()->width();
@@ -2734,6 +3434,35 @@ bool ReaderWindow::eventFilter(QObject *obj, QEvent *ev)
                 if (x < w * 0.3) nav(-1);
                 else if (x > w * 0.7) nav(1);
             }
+            return true;
+        }
+        else if (ev->type() == QEvent::ContextMenu)
+        {
+            /* v1.7.0：正文右键=阅读菜单（复用划词菜单）。已有选区直接作用其上；
+             * 无选区先按点自动选词（安卓长按同款），仍无文字也弹菜单（文字项置灰） */
+            QContextMenuEvent *ce = static_cast<QContextMenuEvent *>(ev);
+            m_dragging = false;
+            const QPoint p = ce->pos();
+            const int pg = m_scrollMode ? scrollPageAt(p) : m_page;
+            if (m_selText.trimmed().isEmpty())
+            {
+                const QRectF ir = m_scrollMode ? scrollPageRect(pg) : pageImageRect();
+                const hr::SelResult r = hr::ReaderMark::select(
+                    this, pg, ir, QPointF(p.x() - 2, p.y() - 2),
+                    QPointF(p.x() + 2, p.y() + 2));
+                m_selPage = pg;
+                m_selText = r.text;
+                m_selOverlay->rects = r.rectsPx;
+                if (!r.text.trimmed().isEmpty())
+                {
+                    m_selOverlay->setGeometry(m_scroll->viewport()->rect());
+                    m_selOverlay->update();
+                    m_selOverlay->show();
+                }
+                evt("sel_rmb", QString("page=%1 len=%2")
+                                .arg(pg + 1).arg(r.text.size()));
+            }
+            showSelMenu(ce->globalPos());
             return true;
         }
         else if (ev->type() == QEvent::MouseButtonPress || ev->type() == QEvent::MouseMove)
@@ -2831,9 +3560,13 @@ QString ReaderWindow::outlineCachePath() const
     if (m_path.startsWith(QString::fromLatin1("remote://"))) return QString();
     const QFileInfo fi(m_path);
     if (!fi.isFile()) return QString();
+    /* v1.1.0：键带排版盐——字号/窗口变更后目录页码按新排版重算
+     *（章节锚与目录显示都以当前排版为准；旧键缓存由 LRU 自然淘汰） */
     const QByteArray k = QCryptographicHash::hash(
         (m_path + "#" + QString::number(fi.size()) + "#" +
-         QString::number(fi.lastModified().toMSecsSinceEpoch()))
+         QString::number(fi.lastModified().toMSecsSinceEpoch()) + "#" +
+         QString::number(m_em) + "#v" + QString::number(m_viewW) +
+         "h" + QString::number(m_viewH))
             .toUtf8(),
         QCryptographicHash::Md5).toHex();
     return dataDir() + QString::fromLatin1("/cache/outline/") + k.left(12) +
@@ -2916,6 +3649,9 @@ void ReaderWindow::refreshTocTree()
             }
         }
     }
+    /* v1.1.0：目录页表入成员（章节锚捕获/折算、书签落点显示共用） */
+    m_tocPage = page;
+    m_tocTitle = title;
     QVector<QTreeWidgetItem *> stack(1, nullptr);
     for (int i = 0; i < lvl.size(); i++)
     {
@@ -2943,14 +3679,26 @@ void ReaderWindow::refreshBookmarkList()
     m_bmList->clear();
     for (const BookmarkRow &r : m_bmRows)
     {
+        /* v1.2.0（B2/B3）：收藏标★ / AI 笔记🤖 前缀（安卓键面消费展示） */
+        QString prefix;
+        if (r.isF) prefix += QString::fromUtf8("\xe2\x98\x85 ");   /* ★ */
+        if (r.isAiNote) /* v1.6.0（B5）：答复非空=AI 笔记🤖；手工笔记=📝（正文=label） */
+            prefix += (r.aiAnswer.isEmpty() ? QString::fromUtf8("\xf0\x9f\x93\x9d ")
+                                            : QString::fromUtf8("\xf0\x9f\xa4\x96 "));
         QListWidgetItem *it = new QListWidgetItem(
+            prefix +
             QString(hr::l10n::s("%1    第%2页", "%1    p.%2"))
                 .arg(r.label)
-                .arg(r.page + 1) +
-            (r.note.isEmpty()
-                 ? QString()
-                 : QString(hr::l10n::s("　·%1", "  ·%1")).arg(r.note.left(24))));
-        it->setToolTip(r.note); /* P1（C1）：书签笔记 */
+                .arg(resolveBookmarkPage(r) + 1) +
+            (r.isAiNote
+                 ? (r.aiAnswer.isEmpty() /* v1.6.0（B5）：手工笔记答复列空着不显示占位 */
+                        ? QString()
+                        : QString(hr::l10n::s("　·%1", "  ·%1")).arg(r.aiAnswer.left(24)))
+                 : (r.note.isEmpty()
+                        ? QString()
+                        : QString(hr::l10n::s("　·%1", "  ·%1")).arg(r.note.left(24)))));
+        it->setToolTip(r.isAiNote ? (r.aiAnswer.isEmpty() ? r.label : r.aiAnswer)
+                                  : r.note); /* P1（C1）/v1.6.0（B5）：手工笔记 tooltip=正文 */
         m_bmList->addItem(it);
     }
     evt("bm_side", QString("rows=%1").arg(m_bmRows.size()));
@@ -3160,13 +3908,78 @@ void ReaderWindow::sideSearch(const QString &pre)
 
 void ReaderWindow::onToc() { showPanel(0); }
 
+/* ---------- v1.1.0：章节锚（安卓 1.3.21 互通） ---------- */
+
+void ReaderWindow::captureAnchor(int page, int *sec, double *sr, QString *st)
+{
+    *sec = -1;
+    *sr = 0;
+    *st = QString();
+    if (!hr::anchorCapture(m_tocPage, page, m_pages, sec, sr)) return;
+    if (*sec >= 0 && *sec < m_tocTitle.size()) *st = m_tocTitle[*sec];
+    else { *sec = -1; *sr = 0; *st = QString(); }
+}
+
+int ReaderWindow::resolveBookmarkPage(const BookmarkRow &r) const
+{
+    /* 安卓 1.3.21 跳转优先级：同排版纪元绝对页精确 → 章节锚折算 → 比例回落 */
+    const bool stOk = r.st.isEmpty() ||
+                      (r.sec >= 0 && r.sec < m_tocTitle.size() &&
+                       m_tocTitle[r.sec] == r.st);
+    if (r.sec >= 0 && r.sec < m_tocPage.size() && stOk)
+    {
+        const int pg = hr::anchorResolve(m_tocPage, m_pages, r.sec, r.sr);
+        if (pg >= 0) return pg;
+    }
+    if (r.pgs > 0 && r.pgs != m_pages)
+        return qBound(0, (int)qRound((r.page + 1.0) / r.pgs * m_pages) - 1, m_pages - 1);
+    return r.page;
+}
+
+void ReaderWindow::jumpToBookmark(int idx)
+{
+    if (idx < 0 || idx >= m_bmRows.size()) return;
+    const BookmarkRow r = m_bmRows[idx];
+    const int pg = resolveBookmarkPage(r);
+    evt("bm_jump", QString("id=%1 from=%2 to=%3 sec=%4 sr=%5 pgs=%6")
+                       .arg(r.id).arg(r.page + 1).arg(pg + 1).arg(r.sec)
+                       .arg(r.sr, 0, 'f', 4).arg(r.pgs));
+    jumpTo(pg);
+}
+
 void ReaderWindow::onAddBookmark()
 {
     if (!m_doc) return;
+    int sec = -1; double sr = 0; QString st;
+    captureAnchor(m_page, &sec, &sr, &st);
     long long id = Db::addBookmark(
         m_path, m_page,
-        QString(hr::l10n::s("第%1页", "p.%1")).arg(m_page + 1), QString());
-    evt("bm_add", QString("id=%1 page=%2").arg(id).arg(m_page + 1));
+        QString(hr::l10n::s("第%1页", "p.%1")).arg(m_page + 1), QString(),
+        sec, sr, st, m_pages);
+    evt("bm_add", QString("id=%1 page=%2 sec=%3 sr=%4 st=%5")
+                       .arg(id).arg(m_page + 1).arg(sec)
+                       .arg(sr, 0, 'f', 4).arg(st.left(24)));
+}
+
+/* v1.6.0（B1-B3）：保存笔记——安卓 NoteEditDialog 同构：isAiNote=true 书签、正文→label（=text
+ * 键面，D2：笔记正文绝不写 note 列）；落笔即带锚（captureAnchor+pgs，D3）。返回创建毫秒（union 键）。 */
+long long ReaderWindow::addNoteBookmark(const QString &label, const QString &aiAnswer, int page)
+{
+    if (m_path.isEmpty() || m_pages <= 0) return -1;
+    int sec = -1; double sr = 0; QString st;
+    captureAnchor(page, &sec, &sr, &st);
+    /* union 键=创建毫秒（§7.3 同毫秒后到让位）：连续保存单调化，冒烟/批存零撞 */
+    static long long s_lastMs = 0;
+    long long now = QDateTime::currentMSecsSinceEpoch();
+    if (now <= s_lastMs) now = s_lastMs + 1;
+    s_lastMs = now;
+    Db::addBookmarkRaw(m_path, page, label, QString(), now, sec, sr, st, m_pages,
+                       0, 1, aiAnswer);
+    refreshBookmarkList();
+    evt("note_add", QString("page=%1 sec=%2 sr=%3 pgs=%4 ai=%5 len=%6")
+                        .arg(page + 1).arg(sec).arg(sr, 0, 'f', 4).arg(m_pages)
+                        .arg(aiAnswer.isEmpty() ? 0 : 1).arg(label.size()));
+    return now;
 }
 
 void ReaderWindow::onBookmarks() { showPanel(1); }
@@ -3502,7 +4315,30 @@ void ReaderWindow::armTtsAdvance(int sec)
 
 void ReaderWindow::disarmTtsAdvance()
 {
+    const bool wasArmed = m_ttsTimer.isActive();
     m_ttsTimer.stop();
+    /* v1.3.0（I）：朗读会话结束落"快速书签"（安卓 TTSService fastTTSBookmakr 同语义；
+     * 同页去重；tts/autoBookmark 默认开，偏好 tts/autoBookmark=0 关闭） */
+    if (wasArmed && m_doc &&
+        QSettings(dataDir() + "/qt-prefs.ini", QSettings::IniFormat)
+            .value("tts/autoBookmark", 1).toInt() != 0)
+    {
+        bool have = false;
+        for (const BookmarkRow &r : m_bmRows)
+            if (r.page == m_page) { have = true; break; }
+        if (!have)
+        {
+            int sec = -1;
+            double sr = 0;
+            QString st;
+            captureAnchor(m_page, &sec, &sr, &st);
+            const long long id = Db::addBookmark(
+                m_path, m_page, hr::l10n::s("快速书签", "Quick bookmark"), QString(),
+                sec, sr, st, m_pages);
+            evt("bm_tts_add", QString("id=%1 page=%2 sec=%3").arg(id).arg(m_page + 1).arg(sec));
+            refreshBookmarkList();
+        }
+    }
 }
 
 /* ---------- 偏好 ---------- */
@@ -3554,6 +4390,8 @@ void ReaderWindow::loadPrefs()
     m_autoMs = qBound(100, m_autoMs, 5000);
     m_autoFlipSec = qBound(1, st.value("reader/autoFlipSec", 5).toInt(), 600); /* v0.83.0 W2 */
     m_trimWhite = st.value("reader/trimWhite", false).toBool();
+    /* v1.8.0（P0-5）：滚动位图字节预算（MB，默认 64；16~512） */
+    m_bitmapBudgetMB = qBound(16, st.value("reader/bitmapBudgetMB", 64).toInt(), 512);
     m_ttsAdvanceSec = st.value("tts/advanceSec", 0).toInt();
     m_ttsAdvanceSec = qBound(0, m_ttsAdvanceSec, 600);
     /* reader.json 配置互通（Compose 桌面版同文件；存在则覆盖 ini 值） */
@@ -3598,6 +4436,7 @@ void ReaderWindow::savePrefs()
     st.setValue("reader/autoScrollMs", m_autoMs);
     st.setValue("reader/autoFlipSec", m_autoFlipSec); /* v0.83.0 W2 */
     st.setValue("reader/trimWhite", m_trimWhite);
+    st.setValue("reader/bitmapBudgetMB", m_bitmapBudgetMB); /* v1.8.0（P0-5） */
     st.setValue("tts/advanceSec", m_ttsAdvanceSec);
     /* reader.json 同步写（Compose 桌面版同文件互通） */
     hr::RJson rj;
@@ -3712,12 +4551,13 @@ void ReaderWindow::closeEvent(QCloseEvent *e)
 }
 
 /* v0.106.0（P0-4）：归还引擎文档——retireReader/closeEvent/析构共用。
- * 渲染(m_busy)/开书(m_openBusy)/后台重排(m_relayoutBusy)任一在飞时跳过，
+ * 渲染(m_flight/m_auxJobs)/开书(m_openBusy)/后台重排(m_relayoutBusy)任一在飞时跳过，
  * 交给既有代际关闭兜底，避免 UAF；朗读先停。 */
 void ReaderWindow::releaseEngineDoc()
 {
     hr::m4StopSpeak(this);
-    if (m_openBusy.load() || m_relayoutBusy.load() || m_phase2Busy.load() || m_busy)
+    if (m_openBusy.load() || m_relayoutBusy.load() || m_phase2Busy.load() ||
+        !m_flight.isEmpty() || m_auxJobs.load() > 0) /* v1.8.0：多飞行/辅助任务 */
         return;
     void *d = m_doc;
     m_doc = nullptr;
@@ -3752,6 +4592,40 @@ void ReaderWindow::requestClose()
         return;
     }
     close();
+}
+
+/* v1.6.1：--scrollsmoke 探针（无头定位滚动栈空白页根因：QScrollArea widgetResizable=false
+ * 下容器 widget 尺寸不随 layout 增高，增页后滚动条 range 停在开书期高度） */
+/* v1.6.1：滚动模式空白页根修——QScrollArea widgetResizable=false 下容器 widget 尺寸不随
+ * layout 增高：窗口化开书后 phase2 每 16 章扩页数百条、render_ok 又把标签换成真实图高，
+ * 滚动条 range 始终停在开书时刻的旧高度——新页区根本滚不进去，翻页只见占位空白
+ * （v1.6.0 会话日志实锤：epub 343→771/361→1086 增页后 24s 翻页零 render_req；
+ * 探针实锤：sbmax=48278 仅覆盖 needh=381069 的 12.7%）。栈内容任何变化后同步一次。 */
+void ReaderWindow::syncStackHeight()
+{
+    if (!m_scrollMode || !m_stack || !m_stackLay) return;
+    const QSize want = m_stackLay->sizeHint();
+    if (want.width() > 0 && want.height() > 0 && want != m_stack->size())
+        m_stack->resize(want); /* QScrollArea 据 widget 尺寸算滚动范围 */
+}
+int ReaderWindow::probeScrollMax() const
+{
+    return (m_scroll && m_scroll->verticalScrollBar())
+               ? m_scroll->verticalScrollBar()->maximum()
+               : -1;
+}
+int ReaderWindow::probeViewportH() const
+{
+    return (m_scroll && m_scroll->viewport()) ? m_scroll->viewport()->height() : -1;
+}
+int ReaderWindow::probeStackNeedH() const
+{
+    if (!m_stack || !m_stack->layout()) return -1;
+    return m_stack->layout()->sizeHint().height();
+}
+bool ReaderWindow::probePageRendered(int pg) const
+{
+    return pg >= 0 && pg < m_labelW.size() && m_labelW[pg] == renderWidthPx();
 }
 
 } // namespace hr

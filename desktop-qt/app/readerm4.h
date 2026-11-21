@@ -23,6 +23,8 @@ QStringList m4PageParas(ReaderWindow *w, int page);
 
 void m4QaDialog(hr::ReaderWindow *w); /* P1（C7）AI 问答（当前页上下文+4 轮历史） */
 
+void noteEditDialog(ReaderWindow *w, const QString &prefill = QString()); /* v1.6.0（B1）：笔记编辑器（安卓 NoteEditDialog 同构） */
+
 } // namespace hr
 
 

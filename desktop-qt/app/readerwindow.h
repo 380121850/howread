@@ -4,6 +4,8 @@
 
 #include <atomic>
 #include <QHash>
+#include <QList>
+#include <QSet>
 #include <QImage>
 #include <QMainWindow>
 #include <QPair>
@@ -25,6 +27,7 @@ class QWheelEvent;
 class QResizeEvent;
 class QScrollArea;
 namespace hr { class SelOverlay; }
+namespace hr { class CacheProgressSource; } /* v1.9.0（P1-6） */
 class QDockWidget;
 class QTreeWidget;
 class QListWidget;
@@ -59,6 +62,9 @@ public:
     /* M3 远程流式打开：接管已打开的引擎句柄；keepAlive（如块缓存会话）随窗销毁 */
     bool adoptDoc(void *doc, const QString &displayName, QObject *keepAlive,
                   int jumpPage = -1, const QString &progressKey = QString());
+    /* v1.9.0（P1-6）：远程书后台装配（UI 不冻结+遮罩块缓存进度）；占用中返回 false */
+    bool adoptDocAsync(void *doc, const QString &displayName, QObject *keepAlive,
+                       int jumpPage = -1, const QString &progressKey = QString());
 
     /* --smoke 无头支撑：定视口、强制翻页模式（同步渲染）、取当前页位图/页码 */
     void setSmokeViewport(int w, int h) { m_smokeW = w; m_smokeH = h; }
@@ -82,12 +88,28 @@ public:
     void beginTeardown(bool wait = true); /* v0.107.0（P1-5 补齐）：销毁前收 phase2；v0.107.2：wait=false=只作废 gen 即返回 */
     QString outlineCachePath() const; /* v0.107.0（P2-6）：outline 每书缓存键 */
     void outlineCacheTrim();          /* v0.107.0（P2-6）：outline 缓存 LRU 留 50 */
+    /* v1.1.0（安卓 1.3.21 章节锚）：书签跨设备/改字号落位折算 */
+    void captureAnchor(int page, int *sec, double *sr, QString *st);
+    int resolveBookmarkPage(const BookmarkRow &r) const;
+    void jumpToBookmark(int idx);
+    /* v1.6.0（笔记批）：笔记生产端受控入口与访问器（readerm4 对话框族用） */
+    QString bookPath() const { return m_path; }
+    QString selText() const { return m_selText; }
+    long long addNoteBookmark(const QString &label, const QString &aiAnswer, int page);
     int m_searchGenLoad() const { return m_searchGen; } /* P2（C6）：搜索换代读取 */
     void toggleImmersive();        /* U3a：沉浸（全屏+隐双栏，Esc 退出） */
     void armTtsAdvance(int sec);   /* 批次三：朗读定时自动翻页 */
     void disarmTtsAdvance();
     QRectF pageImageRect() const;
     int renderW() const { return renderWidthPx(); }
+    /* v1.6.1：--scrollsmoke 探针——滚动栈几何/页渲染状态（定位 phase2 增页后空白页） */
+    void syncStackHeight(); /* v1.6.1：容器 widget 尺寸跟随 layout 高（空白页根修核心） */
+    int probeScrollMax() const;
+    int probeStackH() const { return m_stack ? m_stack->height() : -1; }
+    int probeViewportH() const;
+    int probeStackNeedH() const;
+    int probeLabelCount() const { return m_labels.size(); }
+    bool probePageRendered(int pg) const;
     signals:
     void searchWord(const QString &w);
     void backRequested(); /* v0.75.0：内嵌模式请求返回书库 */
@@ -136,9 +158,35 @@ private:
     int m_viewW = 900, m_viewH = 1200;
     int m_smokeW = 0, m_smokeH = 0;
     int m_estH = 1200; /* 占位页高估计 */
-    bool m_busy = false;      /* 单飞行渲染 */
-    int m_pendingPage = -1;   /* 渲染期间的最新请求 */
     int m_sliderMoving = 0;
+    /* v1.8.0（P0-1）：多飞行渲染——K=3 页在途 + 按视口中心距排序的待渲队列
+     * （原单飞行 m_busy/单 pending 移除；seq 代际防旧回调串页，8s 看门狗保留） */
+    QSet<int> m_flight;            /* 在途页集合（≤kMaxFlight） */
+    QHash<int, qint64> m_flightT0; /* 在途起始时刻（看门狗） */
+    QHash<int, int> m_flightSeq;   /* 在途派发序号（回调防串） */
+    QVector<int> m_pendQueue;      /* 待渲队列（去重，按视口中心距派发） */
+    int m_dispSeq = 0;             /* 派发单调序号 */
+    int m_scrollDir = 0;           /* P0-4：滚动方向（+1 下 / -1 上） */
+    int m_lastTop = -1;            /* P0-4：上次视口 top（方向判定） */
+    /* v1.8.0（P0-5）：位图字节预算 LRU（默认 64MB；qt-prefs.ini reader/bitmapBudgetMB） */
+    int m_bitmapBudgetMB = 64;
+    QHash<int, qint64> m_labelBytes; /* 页→位图字节 */
+    QList<int> m_lru;                /* 已渲染页 LRU（front=最旧） */
+    /* v1.8.0（P0-6）：翻页模式异步渲染（旧页留存 + "渲染中"角标 + seq 防串页） */
+    QLabel *m_pageBusy = nullptr;
+    bool m_pageFlight = false; /* 翻页异步在途（自动翻页 render-then-wait 节流） */
+    int m_pageSeq = 0;
+    qint64 m_pageReqT0 = 0;
+    std::atomic<int> m_auxJobs{0}; /* 辅助渲染任务计数（翻页异步/邻页预取）——
+                                      开书/换书等清零再关旧 doc，防后台渲染踩已关句柄 */
+    /* v1.9.0（P1-6/P1-7）：远程块缓存会话（BcsHolder 实现 CacheProgressSource） */
+    hr::CacheProgressSource *m_cacheProg = nullptr;
+    /* v1.9.0（P1-3 变体）：固定版式全宽渲染耗时采样（>400ms 之书启用半宽快图） */
+    int m_fixedSlowMs = 0;
+    /* v1.8.0（P0-3）：首帧门控（开书遮罩等首个 render_ok/300ms 超时再摘） */
+    bool m_gatePending = false;
+    /* v1.8.0（P0-7）：自动滚动节流（渲染未跟上时原地等） */
+    qint64 m_lastAutoAdvance = 0;
 
     int renderWidthPx() const;
     int maxCharsWidth() const; /* P1：版心宽（maxChars>0 时钳制；否则=视口宽） */
@@ -165,6 +213,14 @@ private:
     void scheduleStackGrow(); /* v0.107.1：滚动条目分批补建 */
     void kickPagePrefetch(int page);
     void storePrefetch(int gen, int page, int w, const QImage &img);
+    /* v1.8.0（P0 批）：渲染管线改造——多飞行/待渲队列/字节预算淘汰/翻页异步化 */
+    void dispatchPage(int page);
+    void pumpPending();
+    void reapStuckFlights();
+    void evictByBudget(int first, int last);
+    void initPlaceholder(QLabel *lb, int page);
+    void renderPageAsync(int page);
+    void onPageJobDone(int page, int seq, const QImage &img, const QImage &img2);
     void finishRelayout(int gen, void *doc, int pages, int chapters); /* v0.104.0：后台重排装配 */
 
     /* U3a 顶栏/底栏/沉浸 */
@@ -182,6 +238,8 @@ private:
     QLineEdit *m_schEdit = nullptr;
     QLabel *m_schLb = nullptr;
     QList<BookmarkRow> m_bmRows;
+    QVector<int> m_tocPage;   /* v1.1.0：目录页表（章节锚捕获/折算，随 fillToc 刷新） */
+    QVector<QString> m_tocTitle;
     /* U-ann 书签板高亮分区 */
     QListWidget *m_hlList = nullptr;
     QList<Db::AnnotationRow> m_hlRows;
@@ -202,6 +260,7 @@ private:
     void onPageChanged();
     void updateTitle();
     void jumpTo(int page);
+    void showSelMenu(const QPoint &gp); /* v1.7.0：右键阅读菜单（原拖选释放菜单抽出复用） */
     /* U3b 侧板 */
     void showPanel(int tab);
     void refreshTocTree();
@@ -252,7 +311,6 @@ private:
     /* v0.107.0（P1-5）：窗口计数 phase2 后台补页（busy 互锁同上） */
     std::atomic<bool> m_phase2Busy{false};
     std::atomic<qint64> m_lastRenderReq{0}; /* v0.107.1：最近渲染请求时刻（phase2 让路用） */
-    std::atomic<qint64> m_renderT0{0}; /* v0.110.1：在途渲染起始时刻（看门狗用） */
     /* v0.110.0：m_vSlider/m_mid 已移除——滚动模式用原生连续滚动条 */
     QVector<int> m_chapPages; /* v0.107.1：窗口截断时的已数章页数表（phase2 续算/落盘） */
     /* M4 划词状态（PAGE 模式，事件在 m_scroll viewport eventFilter 处理） */

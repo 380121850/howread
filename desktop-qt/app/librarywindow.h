@@ -175,6 +175,7 @@ private:
     QVector<QPair<QTreeWidgetItem *, QPair<QString, QString>>> m_iconTodo;
     QVector<QListWidgetItem *> m_wallTodo;
     QVector<Db::MetaRow> m_wallRows;
+    QString m_lastTableFp; /* v1.10.0（P0-1）：loadTable 指纹——一致则整表跳过 */
     QSet<QString> m_wallFavs;
     QHash<QString, QPair<int, int>> m_wallProg;
     int m_wallCw = 0, m_wallCh = 0;
@@ -233,6 +234,9 @@ private:
     ReaderWindow *m_reader = nullptr; /* 当前内嵌阅读器（至多一个） */
     QWidget *m_tabBar = nullptr;      /* 底部标签条包壳（阅读时整体隐藏） */
     int m_prevIdx = 0;                /* 进入阅读前的栈页（返回时恢复） */
+    /* v1.9.0（P1-5）：BookWarmer 同款空闲预热器（阅读活跃即停） */
+    bool m_warmBusy = false;
+    int m_warmDone = 0;
     QStringList m_sideIconFiles;      /* v0.76.0 V1：侧栏图标文件（随亮暗重染） */
     QString m_tagFilter; /* v0.84.0 W3 D4：当前标签过滤（空=无；Compose tagFilter 同语义） */
     QVector<QListWidgetItem *> m_tagItems; /* v0.84.0 W3：侧栏标签区动态行 */
@@ -244,6 +248,7 @@ private:
     void applySideIcons();
     void refreshSideTags(); /* v0.84.0 W3 D4：侧栏标签区聚合/重建 */
     void embedReader(ReaderWindow *rw);
+    void warmNextBook(); /* v1.9.0（P1-5）：空闲预热器（阅读活跃即停） */
     void retireReader(bool refresh);
 };
 

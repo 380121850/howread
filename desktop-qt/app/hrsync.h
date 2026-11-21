@@ -5,6 +5,7 @@
 #ifndef HRSYNC_H
 #define HRSYNC_H
 
+#include <QHash>
 #include <QString>
 
 namespace hr
@@ -23,6 +24,10 @@ QString syncMd5(const QString &path);
 
 /* 删除书签时写墓碑（bm; book=内容 MD5） */
 void addBmTombstoneFor(const QString &bookPath, const QString &bmKey);
+
+/* v1.2.0（G）：READING 覆盖（dataDir/book-states.json，{文件名:1}；安卓 BookStateStore 形态） */
+QHash<QString, int> bookStateOverrides(); /* 书架过滤用（文件名 → 1） */
+void setBookStateReading(const QString &bookPath, bool reading); /* 标记在读/取消 */
 
 SyncResult androidSync(const QString &baseUrl, const QString &user, const QString &pass,
                        const QString &remoteDir, const QString &policy /*newer|local|server*/);

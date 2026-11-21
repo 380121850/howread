@@ -47,6 +47,8 @@ public:
 
     static void enforceCap(long long maxMB, const QString &cacheRoot,
                            const QString &keepDir = QString()); /* keepDir=在读书保护 */
+    /* v1.9.0（P1-6）：已缓存字节（blocks.bin 位图口径，锁内统计；UI 进度显示） */
+    long long cachedBytes() const;
 
 private:
     QByteArray fetchBlock(int idx);          /* 锁外调用 */
@@ -89,6 +91,17 @@ private:
     bool ensureBlock(int idx); /* 前台：缺则取并落盘 */
     QByteArray blockData(int idx); /* 持锁取块数据：内存→磁盘 */
     QMutex &m_memMutex();
+};
+
+/* v1.9.0（P1-6/P1-7）：块缓存会话 UI 侧抽象——ReaderWindow 经 dynamic_cast 探测，
+ * 不知会话具体类型；BcsHolder（librarywindow）实现转发 */
+class CacheProgressSource
+{
+public:
+    virtual ~CacheProgressSource() = default;
+    virtual long long cacheCachedBytes() const = 0;
+    virtual long long cacheTotalBytes() const = 0;
+    virtual void cacheSetWindow(long long pos) = 0;
 };
 
 } // namespace hr

@@ -3331,6 +3331,114 @@
     {
       "name": "bm_sort_old",
       "value": "By time, oldest first"
+    },
+    {
+      "name": "zoom_reflow_hint",
+      "value": "Layout for this book is controlled by font size - adjust it in Reading preferences"
+    },
+    {
+      "name": "zoom_pdf_todo",
+      "value": "PDF zoom viewer is coming in a later release"
+    },
+    {
+      "name": "pro_upgrade_btn",
+      "value": "Unlock Pro features"
+    },
+    {
+      "name": "pro_hint_locked",
+      "value": "Pro is locked — unlock to enjoy WebDAV sync, AI notes and other pro features"
+    },
+    {
+      "name": "pro_toast_locked",
+      "value": "Pro feature — please upgrade first"
+    },
+    {
+      "name": "pro_toast_purchased",
+      "value": "Purchase successful (IAP stub) — Pro activated"
+    },
+    {
+      "name": "pro_toast_restored",
+      "value": "Purchases restored (IAP stub)"
+    },
+    {
+      "name": "pro_toast_purchased_real",
+      "value": "Purchase successful — Pro activated"
+    },
+    {
+      "name": "pro_toast_restored_real",
+      "value": "Purchases restored — Pro activated"
+    },
+    {
+      "name": "pro_toast_no_purchases",
+      "value": "No purchases found"
+    },
+    {
+      "name": "pro_iap_unavailable",
+      "value": "Huawei IAP is unavailable on this device"
+    },
+    {
+      "name": "pro_toast_refunded",
+      "value": "Refund simulated — Pro locked again"
+    },
+    {
+      "name": "pro_stub_purchase_title",
+      "value": "Simulated purchase (IAP stub)"
+    },
+    {
+      "name": "pro_stub_purchase_msg",
+      "value": "Billing is NOT integrated in debug builds — this is a STUB purchase.\n\nProduct: Pro feature unlock (WebDAV sync, AI notes, AI translate, online reading, notes export, reading stats)\nPrice: free (stub)\n\nConfirm purchase?"
+    },
+    {
+      "name": "pro_stub_buy",
+      "value": "Buy (stub)"
+    },
+    {
+      "name": "pro_refund_title",
+      "value": "Simulate refund (IAP stub)"
+    },
+    {
+      "name": "pro_refund_msg",
+      "value": "This locks Pro again on this device (debug only). Continue?"
+    },
+    {
+      "name": "pro_channel_local_key",
+      "value": "Local key"
+    },
+    {
+      "name": "pro_channel_huawei",
+      "value": "Huawei AppGallery"
+    },
+    {
+      "name": "pro_info_channel",
+      "value": "Unlocked via: "
+    },
+    {
+      "name": "pro_info_time",
+      "value": "Purchased: "
+    },
+    {
+      "name": "pro_info_order",
+      "value": "Order (last 4): "
+    },
+    {
+      "name": "pro_manage_hint_hmos",
+      "value": "Manage purchases in HUAWEI ID > Payments and purchases"
+    },
+    {
+      "name": "reader_reward_ad",
+      "value": "🎁 Watch video: 2h ad-free"
+    },
+    {
+      "name": "ads_reward_earned",
+      "value": "Ad-free for 2 hours"
+    },
+    {
+      "name": "ads_reward_unavailable",
+      "value": "Ad not available right now"
+    },
+    {
+      "name": "perm_tracking_consent",
+      "value": "Advertising identifier, used to show relevant ads"
     }
   ]
 }

@@ -4,7 +4,7 @@ set(CMAKE_AUTORCC ON) # v0.76.0 V1：icons.qrc 图标资源
 add_executable(HowReadQt WIN32
     app.rc
     main.cpp hrpaths.cpp hrdb.cpp hrdb_m2.cpp hrdb_m3.cpp
-    readerwindow.cpp librarywindow.cpp hrbcache.cpp hrwebdav.cpp hrsync.cpp
+    readerwindow.cpp librarywindow.cpp hrbcache.cpp hrwebdav.cpp hrsync.cpp hranchor.cpp hrmerge.cpp
     readermark.cpp readerm4.cpp hrtts.cpp hrai.cpp
     hrcvt.cpp hrl10n.cpp hrssh.cpp hropds.cpp hrdict.cpp hrfetch.cpp hrsmb.cpp
     hrcred.cpp hrstats.cpp readerjson.cpp hricons.cpp hrtheme.cpp icons.qrc res.qrc)

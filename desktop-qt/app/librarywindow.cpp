@@ -13,6 +13,7 @@
 #include "hrfetch.h"
 #include "hrai.h"
 #include "readerm4.h"
+#include "hraccels.h" /* v1.9.0（P1-5）：warmer 复用加速器路径/清理 */
 #include "readerwindow.h" /* v0.75.0 内嵌阅读 */
 #include "hricons.h" /* v0.76.0 V1 图标 */
 #include "hrtheme.h" /* v0.79.0 V4 主题色槽位（UiTheme，避免与阅读器 Theme 撞名） */
@@ -181,6 +182,9 @@ static const char *const kQuotes[][2] = {
 static QPixmap coverTile(const QString &path, const QString &title, int w, int h);
 static QPixmap w8RoundedCover(QPixmap pm, bool fav); /* v0.89.0 W8：封面卡合成 */
 static QPixmap coverTileBase(const QString &path, const QString &title, int w, int h); /* W8 前置 */
+static QPixmap composedCardPixmap(const QString &key, int w, int h,
+                                  const std::function<QPixmap()> &make); /* v1.10.0（P0-3） */
+static int remoteCachePct(const QString &path); /* v1.10.0：成品卡键用（定义在文件尾） */
 static QString currentProfileName(); /* U8：配置名（定义在文末 U8 区） */
 
 /* U8 书架视图（对齐 Compose ShelfView：固定列数封面行 + 木质板条视觉） */
@@ -201,6 +205,10 @@ public:
     };
     void rebuild()
     {
+        /* v1.10.0（P1-6）：books+pct 与上次一致直接复用（指纹短路后重建仅在数据变化时发生） */
+        if (!m_btns.isEmpty() && m_lastBooks == books && m_lastPct == pct) return;
+        m_lastBooks = books;
+        m_lastPct = pct;
         for (QToolButton *b : m_btns) b->deleteLater();
         m_btns.clear();
         for (const auto &bk : books)
@@ -288,6 +296,8 @@ private:
         update();
     }
     QVector<QToolButton *> m_btns;
+    QVector<QPair<QString, QString>> m_lastBooks; /* v1.10.0（P1-6） */
+    QHash<QString, int> m_lastPct;
 };
 
 
@@ -338,6 +348,15 @@ LibraryWindow::LibraryWindow(QWidget *parent) : QMainWindow(parent)
 {
     setWindowTitle("HowRead Qt — " + hr::l10n::s("书架", "Bookshelf")); /* v1.0.0 更名 */
     resize(980, 720);
+    /* v1.9.0（P1-5）：BookWarmer 同款空闲预热器——书库闲置 30s 起对最近 ≤5 本本地
+     * epub/pdf 依次 open+layout+save_accel（accel 命中后重开免整书重排+逐章计数）；
+     * 阅读活跃即停（m_reader 存在即跳过）；超大书跳过；一次一本最低优先级 */
+    {
+        QTimer *wt = new QTimer(this);
+        wt->setInterval(30000);
+        connect(wt, &QTimer::timeout, this, [this] { warmNextBook(); });
+        wt->start();
+    }
     for (const char *e : kExts) m_exts.append(QString::fromLatin1(e));
     /* U4：启用格式从偏好载入（lib/exts；缺省=全开） */
     {
@@ -840,6 +859,28 @@ LibraryWindow::LibraryWindow(QWidget *parent) : QMainWindow(parent)
     m_iconFillTimer = new QTimer(this);
     m_iconFillTimer->setInterval(25);
     connect(m_iconFillTimer, &QTimer::timeout, this, &LibraryWindow::pumpDeferredFill);
+    /* v1.10.1 探针：HR_SHELF_CYCLE=N 驱动 N 轮书架全量重建（无环境变量零差异）。
+     * 首轮延后 6s（等首建+预热稳态），每 2s 翻转 lib/showFileName → 指纹变化 → 全量重建 */
+    {
+        const int cyc = qEnvironmentVariableIntValue("HR_SHELF_CYCLE");
+        if (cyc > 0)
+        {
+            QTimer *ct = new QTimer(this);
+            ct->setInterval(2000);
+            int *left = new int(cyc);
+            connect(ct, &QTimer::timeout, this, [this, ct, left]
+            {
+                if (*left <= 0) { ct->stop(); delete left; return; }
+                QSettings cp(hr::dataDir() + "/qt-prefs.ini", QSettings::IniFormat);
+                const bool cur = cp.value("lib/showFileName", false).toBool();
+                cp.setValue("lib/showFileName", !cur);
+                evt("shelf_cycle", QString("left=%1 sf=%2").arg(*left).arg(cur ? 1 : 0));
+                (*left)--;
+                loadTable();
+            });
+            QTimer::singleShot(6000, ct, [ct] { ct->start(); });
+        }
+    }
     m_scanDebounce = new QTimer(this);
     m_scanDebounce->setSingleShot(true);
     m_scanDebounce->setInterval(600);
@@ -948,24 +989,59 @@ static QString coverPathFor(const QString &src)
  * UI 线程重复"磁盘读 PNG + 平滑缩放"（132 本书一次可触发 150+ 次）——关书
  * 回库与启动卡顿主源。键=png|mtime|宽x高（mtime 入键：重扫重生成封面自动
  * 失效）；QImage 缓存线程安全，出缓存再转 QPixmap；代价按像素 kB，24MB LRU。 */
+/* v1.10.0：封面两级缓存提为文件域（fill 与 peek 共享同一实例） */
+static QMutex s_covMu;
+static QCache<QString, QImage> s_covRaw;   /* 缩放原图（键 png|pmtime|宽x高） */
+static QCache<QString, QPixmap> s_covCard; /* 成品卡面（圆角+星标/云徽） */
+static int s_dbgAttaches = 0; /* v1.10.1 诊断探针（临时）：本次构建首个挂卡回探 */
+
 static QImage coverPngScaledImage(const QString &png, int w, int h)
 {
     if (png.isEmpty() || w <= 0 || h <= 0 || !QFileInfo(png).isFile()) return QImage();
     const qint64 mt = QFileInfo(png).lastModified().toMSecsSinceEpoch();
     const QString key = QString::fromLatin1("%1|%2|%3x%4").arg(png).arg(mt).arg(w).arg(h);
-    static QMutex s_mu;
-    static QCache<QString, QImage> s_cache;
-    QMutexLocker lk(&s_mu);
-    if (s_cache.maxCost() == 0) s_cache.setMaxCost(24 * 1024); /* kB ≈ 24MB */
-    if (QImage *hit = s_cache.object(key)) return *hit;
+    QMutexLocker lk(&s_covMu);
+    /* v1.10.1 根修：QCache 默认 maxCost=100 而非 0——原 maxCost()==0 守卫永不
+     * 生效，缓存实际容量仅 100kB、逐条插入自逐出（自 v0.107.2 起形同虚设） */
+    s_covRaw.setMaxCost(24 * 1024); /* kB ≈ 24MB */
+    if (QImage *hit = s_covRaw.object(key)) return *hit;
     lk.unlock();
     QImage img(png);
     if (img.isNull()) return QImage();
     img = img.scaled(w, h, Qt::KeepAspectRatioByExpanding,
                      Qt::SmoothTransformation).copy(0, 0, w, h);
     lk.relock();
-    s_cache.insert(key, new QImage(img), qMax(1, img.width() * img.height() * 4 / 1024));
+    s_covRaw.insert(key, new QImage(img), qMax(1, img.width() * img.height() * 4 / 1024));
     return img;
+}
+/* v1.10.0（P0-2）：命中探测（不解码）——键与 fill 一致 */
+static bool coverPngScaledPeek(const QString &png, int w, int h)
+{
+    if (png.isEmpty() || w <= 0 || h <= 0 || !QFileInfo(png).isFile()) return false;
+    const qint64 mt = QFileInfo(png).lastModified().toMSecsSinceEpoch();
+    const QString key = QString::fromLatin1("%1|%2|%3x%4").arg(png).arg(mt).arg(w).arg(h);
+    QMutexLocker lk(&s_covMu);
+    return s_covRaw.object(key) != nullptr;
+}
+static QPixmap composedCardPeek(const QString &key)
+{
+    QMutexLocker lk(&s_covMu);
+    if (QPixmap *hit = s_covCard.object(key)) return *hit;
+    return QPixmap();
+}
+static QPixmap composedCardPixmap(const QString &key, int w, int h,
+                                  const std::function<QPixmap()> &make)
+{
+    QMutexLocker lk(&s_covMu);
+    /* v1.10.1 根修：同上（成品卡面缓存实际只留 1 条 → 命中快路径永不生效） */
+    s_covCard.setMaxCost(24 * 1024); /* kB ≈ 24MB */
+    if (QPixmap *hit = s_covCard.object(key)) return *hit;
+    lk.unlock();
+    const QPixmap pm = make(); /* 仅 UI 线程调用（QPixmap 合成） */
+    if (pm.isNull()) return pm;
+    lk.relock();
+    s_covCard.insert(key, new QPixmap(pm), qMax(1, pm.width() * pm.height() * 4 / 1024));
+    return pm;
 }
 static QPixmap coverPngScaled(const QString &png, int w, int h)
 {
@@ -973,6 +1049,25 @@ static QPixmap coverPngScaled(const QString &png, int w, int h)
     return img.isNull() ? QPixmap() : QPixmap::fromImage(img);
 }
 
+
+/* v1.10.0（P1-4）：免 stat 封面键——size/mtime 调用方传入（行集自带，与扫描写库同源）。
+ * 文件在扫描后被外部改动时键暂指旧 PNG，重扫后自然对齐（同安卓陈旧封面窗口）。 */
+static QString coverPathForMeta(const QString &src, qint64 size, qint64 mtimeMs)
+{
+    if (src.startsWith(QString::fromLatin1("remote://")))
+    {
+        return hr::dataDir() + "/cache/covers/r-" +
+               QString::fromLatin1(QCryptographicHash::hash(src.toUtf8(),
+                                                            QCryptographicHash::Md5)
+                                       .toHex().left(12)) + ".png";
+    }
+    const QFileInfo fi(src);
+    const QString seed = fi.absoluteFilePath() + "#" + QString::number(size) + "#" +
+                         QString::number(mtimeMs);
+    const QString key = QString::fromLatin1(
+        QCryptographicHash::hash(seed.toUtf8(), QCryptographicHash::Md5).toHex().left(12));
+    return hr::dataDir() + "/cache/covers/" + key + ".png";
+}
 
 /* ---------- v0.82.0 W1：文件名系列解析（对齐 Compose core/library/SeriesParser.kt，
  * 保守策略宁可漏判不误判；引擎无标准系列元数据字段，与 Compose 同口径） ---------- */
@@ -1158,6 +1253,7 @@ void LibraryWindow::loadTable()
     QHash<QString, QPair<int, int>> prog;
     for (const Db::ProgressRow &pr : Db::allProgress())
         prog.insert(pr.path, qMakePair(pr.page, pr.pageCount));
+    const QHash<QString, int> states = hr::bookStateOverrides(); /* v1.2.0（G）：READING 覆盖 */
     const QString query = m_search ? m_search->text().trimmed() : QString();
     const QString status = m_statusC ? m_statusC->currentData().toString()
                                      : QString::fromLatin1("all");
@@ -1194,7 +1290,12 @@ void LibraryWindow::loadTable()
         }
         if (status != "all")
         {
-            if (!hasProg)
+            /* v1.2.0（G）：READING 覆盖优先（app-BookStates 下行；安卓 effective 同语义） */
+            if (states.contains(QFileInfo(r.path).fileName()))
+            {
+                if (status != "reading") continue;
+            }
+            else if (!hasProg)
             {
                 if (status != "unread") continue;
             }
@@ -1291,6 +1392,44 @@ void LibraryWindow::loadTable()
                             viewKey == QLatin1String("glang") ||
                             viewKey == QLatin1String("gformat"));
     m_tree->setIconSize(tableView ? QSize(0, 0) : QSize(40, 56));
+    /* v1.10.0（P0-1）：指纹短路——视图/排序/过滤/显示偏好/行集/进度/收藏与上次构建
+     * 一致则整表跳过：关书回库/切页等高频 loadTable 不再 clear+重建（安卓适配器语义） */
+    QString fpNow;
+    {
+        const bool wallVis = (viewKey == QLatin1String("cover") || viewKey == QLatin1String("grid"));
+        const bool shelfVis = (viewKey == QLatin1String("shelf"));
+        fpNow = QString("%1|sk=%2|fo=%3|tag=%4|cs=%5|wv=%6|sv=%7|q=%8|st=%9|sf=%10|um=%11|sn=%12|hf=%13")
+                    .arg(viewKey, sk)
+                    .arg(m_onlyFav ? 1 : 0)
+                    .arg(m_tagFilter)
+                    .arg(m_cover ? m_cover->iconSize().width() : 0)
+                    .arg(wallVis ? 1 : 0)
+                    .arg(shelfVis ? 1 : 0)
+                    .arg(query, status)
+                    .arg(showFn ? 1 : 0)
+                    .arg(useMeta ? 1 : 0)
+                    .arg(serNum ? 1 : 0)
+                    .arg(hideFin ? 1 : 0);
+        for (const Db::MetaRow &r : rows)
+        {
+            const auto pit = prog.constFind(r.path);
+            const int pg = pit == prog.constEnd() ? 0 : pit->first;
+            const int pc = pit == prog.constEnd() ? 0 : pit->second;
+            fpNow += QString("|%1#%2#%3#%4#%5#%6#%7#%8")
+                         .arg(r.path, QString::number(r.mtime), QString::number(r.size),
+                              r.title, r.author, r.series, QString::number(r.seriesIdx),
+                              QString::number(pg * 100000 + pc));
+        }
+        QStringList favs = Db::listFavorites();
+        std::sort(favs.begin(), favs.end());
+        fpNow += "|FAV:" + favs.join(QChar(','));
+        if (fpNow == m_lastTableFp)
+        {
+            evt("lib_table", QString("skip=fingerprint ms=%1 rows=%2")
+                    .arg(QDateTime::currentMSecsSinceEpoch() - t0).arg(rows.size()));
+            return;
+        }
+    }
     auto mkRowItem = [this, &prog, showFn, useMeta, tableView, serNum](QTreeWidgetItem *parent,
                                                                const Db::MetaRow &r)
         -> QTreeWidgetItem *
@@ -1379,20 +1518,65 @@ void LibraryWindow::loadTable()
         const QSize cis = m_cover->iconSize();
         m_wallCw = qMax(80, cis.width());
         m_wallCh = qMax(110, cis.height());
+        m_wallFavs = wallFavs;
+        m_wallProg = prog;
+        /* v1.10.0（P0-2/P1-5）：命中卡（成品/原图缓存）按行序一次挂完（行序=视口序）；
+         * 未命中的走节拍泵，位图先交线程池预热解码——UI 节拍不再承担解码 */
+        int wallSync = 0;
+        QStringList missPngs;
+        s_dbgAttaches = 0; /* v1.10.1 诊断探针 */
+        QString dbgPk, dbgCk;
+        qint64 dbgPmt = -1;
         for (const Db::MetaRow &r : rows)
         {
-            const QString png = coverPathFor(r.path);
+            const QString png = coverPathForMeta(r.path, r.size, r.mtime);
             const bool remote = r.path.startsWith(QString::fromLatin1("remote://"));
             const bool hasCover = remote || QFileInfo(png).isFile();
             QListWidgetItem *it = new QListWidgetItem(m_cover);
             it->setData(Qt::UserRole, r.path);
+            it->setData(Qt::UserRole + 1, png); /* v1.10.0（P1-4）：png 键行自带 */
             it->setData(Qt::UserRole + 3, hasCover ? 1 : 0); /* W8：封面就绪标记 */
             m_wallRows.append(r);
-            m_wallTodo.append(it); /* v0.109.0：卡片分批挂载 */
+            bool hot = false;
+            if (hasCover)
+            {
+                const bool fav = wallFavs.contains(r.path);
+                const qint64 pmt = QFileInfo(png).lastModified().toMSecsSinceEpoch();
+                QString ck = png + QString("|%1|%2x%3|f%4").arg(pmt).arg(m_wallCw).arg(m_wallCh).arg(fav ? 1 : 0);
+                if (remote)
+                    ck += QString("|p%1").arg(remoteCachePct(r.path));
+                hot = !composedCardPeek(ck).isNull() || coverPngScaledPeek(png, m_wallCw, m_wallCh);
+                if (dbgPmt < 0) { dbgPk = png; dbgPmt = pmt; dbgCk = ck; } /* 诊断探针 */
+            }
+            if (hot)
+            {
+                wallAttachCard(r, it);
+                wallSync++;
+            }
+            else
+            {
+                m_wallTodo.append(it); /* v0.109.0：卡片分批挂载 */
+                missPngs.append(png);
+            }
         }
-        m_wallFavs = wallFavs;
-        m_wallProg = prog;
-        m_iconFillTimer->start(); /* v0.109.0：卡片分批挂，关书回库/冷启动不整段卡 */
+        if (!m_wallTodo.isEmpty())
+        {
+            m_iconFillTimer->start(); /* v0.109.0：卡片分批挂，关书回库/冷启动不整段卡 */
+            QPointer<LibraryWindow> gw(this);
+            const QStringList pns = missPngs;
+            const int cw = m_wallCw, chh = m_wallCh;
+            QThreadPool::globalInstance()->start(QRunnable::create([gw, pns, cw, chh]
+            {
+                for (const QString &p : pns)
+                    coverPngScaledImage(p, cw, chh); /* 预热：解码+缩放入缓存（线程安全） */
+            }));
+        }
+        evt("wall_fill", QString("sync=%1 defer=%2").arg(wallSync).arg(m_wallTodo.size()));
+        if (dbgPmt >= 0) /* v1.10.1 诊断探针：peek 侧键快照（与 wall_attach0 对照） */
+            evt("wall_peek0", QString("png=%1 pmt=%2 ck=%3 tot=%4")
+                    .arg(dbgPk.mid(dbgPk.size() - 24))
+                    .arg(dbgPmt).arg(dbgCk.right(72))
+                    .arg(s_covCard.totalCost()));
         startCoverGen(); /* v0.108.1：墙内缺封面在此补（视图回调 count>0 前置在首次切换时不成立） */
     }
     /* U8：书架视图镜像（同排序行集；仅书架可见时构建） */
@@ -1428,6 +1612,7 @@ void LibraryWindow::loadTable()
         m_shelf->rebuild();
         evt("shelf_render", QString("n=%1").arg(m_shelf->books.size()));
     }
+    m_lastTableFp = fpNow; /* v1.10.0（P0-1）：指纹在此刻生效 */
     evt("lib_table", QString("rows=%1 ms=%2").arg(n).arg(
         QDateTime::currentMSecsSinceEpoch() - t0)); /* v0.107.2：关书回库/启动耗时定位 */
 }
@@ -1437,17 +1622,35 @@ void LibraryWindow::wallAttachCard(const Db::MetaRow &r, QListWidgetItem *it)
 {
     if (!it || !m_cover) return;
     const QString title = r.title.isEmpty() ? QFileInfo(r.path).fileName() : r.title;
-    const QString png = coverPathFor(r.path);
+    /* v1.10.0（P1-4）：png 键由 loadTable 行自带（UserRole+1），免重算 */
+    QString png = it->data(Qt::UserRole + 1).toString();
+    if (png.isEmpty()) png = coverPathFor(r.path);
     const bool remote = r.path.startsWith(QString::fromLatin1("remote://"));
     /* v0.89.0 W8 LIB-2/4/5：封面墙卡片化——圆角封面+收藏星标+书名+作者·进度 */
-    QPixmap pm;
+    /* v1.10.0（P0-3）：成品卡面（圆角+星标+云徽）缓存直取，重建不再逐卡重画 */
+    const bool fav = m_wallFavs.contains(r.path);
+    const qint64 pmt = QFileInfo(png).lastModified().toMSecsSinceEpoch();
+    QString ck = png + QString("|%1|%2x%3|f%4").arg(pmt).arg(m_wallCw).arg(m_wallCh).arg(fav ? 1 : 0);
     if (remote)
-        pm = coverTile(r.path, title, m_wallCw, m_wallCh);
-    else if (QFileInfo(png).isFile())
-        pm = coverPngScaled(png, m_wallCw, m_wallCh);
-    else
-        pm = coverTileBase(r.path, title, m_wallCw, m_wallCh);
-    pm = w8RoundedCover(pm, m_wallFavs.contains(r.path));
+        ck += QString("|p%1").arg(remoteCachePct(r.path));
+    const QPixmap pm = composedCardPixmap(ck, m_wallCw, m_wallCh,
+        [this, &r, &png, &title, remote, fav]() -> QPixmap
+        {
+            QPixmap p;
+            if (remote)
+                p = coverTile(r.path, title, m_wallCw, m_wallCh);
+            else if (QFileInfo(png).isFile())
+                p = coverPngScaled(png, m_wallCw, m_wallCh);
+            else
+                p = coverTileBase(r.path, title, m_wallCw, m_wallCh);
+            return w8RoundedCover(p, fav);
+        });
+    /* v1.10.1 诊断探针（临时）：首挂卡回探缓存是否真插入 */
+    if (s_dbgAttaches++ == 0)
+        evt("wall_attach0", QString("ck=%1 back=%2 pm=%3x%4")
+                .arg(ck.right(72))
+                .arg(composedCardPeek(ck).isNull() ? 0 : 1)
+                .arg(pm.width()).arg(pm.height()));
     it->setIcon(QIcon(pm));
     QWidget *card = new QWidget;
     card->setStyleSheet(QString::fromLatin1("background:transparent;"));
@@ -1652,7 +1855,7 @@ void LibraryWindow::onToggleFav()
     QTreeWidgetItem *it = m_tree->currentItem();
     if (!it) return;
     const QString p = it->data(0, Qt::UserRole).toString();
-    Db::setFavorite(p, !Db::isFavorite(p));
+    Db::setFavoriteSync(p, !Db::isFavorite(p));
     loadTable();
 }
 
@@ -1690,6 +1893,12 @@ void LibraryWindow::onTreeMenu(const QPoint &pos)
     QAction *delAct = isRm ? nullptr
                            : menu.addAction(hr::l10n::s("删除文件…", "Delete files…"));
     if (delAct) delAct->setData(QString("red"));
+    /* v1.2.0（G）：三态标记（安卓 BookStateStore 同语义：已读=进度写满、
+     * 未读=清进度、在读=READING 覆盖；前两者随 books 通道回流安卓） */
+    QMenu *markMenu = menu.addMenu(hr::l10n::s("标记状态", "Mark status"));
+    QAction *mkRead = markMenu->addAction(hr::l10n::s("标记已读", "Mark finished"));
+    QAction *mkReading = markMenu->addAction(hr::l10n::s("标记在读", "Mark reading"));
+    QAction *mkUnread = markMenu->addAction(hr::l10n::s("标记未读", "Mark unread"));
     menu.addSeparator();
     menu.addAction(hr::l10n::s("取消", "Cancel"));
     QAction *act = menu.exec(m_tree->viewport()->mapToGlobal(pos));
@@ -1697,8 +1906,37 @@ void LibraryWindow::onTreeMenu(const QPoint &pos)
     if (act == favAct)
     {
         const bool turnOn = multi ? true : !fav;
-        for (const QString &x : paths) Db::setFavorite(x, turnOn);
+        for (const QString &x : paths) Db::setFavoriteSync(x, turnOn);
         evt("lib_fav", QString("on=%1 n=%2").arg(turnOn ? 1 : 0).arg(paths.size()));
+        loadTable();
+    }
+    else if (act == mkRead || act == mkReading || act == mkUnread)
+    {
+        for (const QString &x : paths)
+        {
+            if (act == mkReading)
+            {
+                hr::setBookStateReading(x, true);
+            }
+            else if (act == mkRead)
+            {
+                int pg = 0, pc = 0, vw = 0;
+                if (!Db::loadProgress(x, &pg, &pc, &vw) || pc <= 0) { pc = 1; vw = 0; }
+                Db::saveProgress(x, pc - 1, pc, vw); /* p=1.0（安卓 markRead 同语义） */
+                hr::setBookStateReading(x, false);
+            }
+            else
+            {
+                Db::deleteProgress(x); /* 安卓 markUnread 同语义 */
+                hr::setBookStateReading(x, false);
+            }
+        }
+        evt("lib_mark_state",
+            QString("act=%1 n=%2")
+                .arg(act == mkRead ? QString("read")
+                     : act == mkReading ? QString("reading")
+                                        : QString("unread"))
+                .arg(paths.size()));
         loadTable();
     }
     else if (act == rmLibAct)
@@ -2031,12 +2269,43 @@ void LibraryWindow::onCoverMenu(const QPoint &pos)
     QMenu menu(this);
     QAction *favAct = menu.addAction(fav ? hr::l10n::s("取消收藏", "Unfavorite")
                                          : hr::l10n::s("加入收藏", "Favorite"));
+    /* v1.2.0（G）：三态标记（同 onTreeMenu） */
+    QMenu *markMenu = menu.addMenu(hr::l10n::s("标记状态", "Mark status"));
+    QAction *mkRead = markMenu->addAction(hr::l10n::s("标记已读", "Mark finished"));
+    QAction *mkReading = markMenu->addAction(hr::l10n::s("标记在读", "Mark reading"));
+    QAction *mkUnread = markMenu->addAction(hr::l10n::s("标记未读", "Mark unread"));
     QAction *act = menu.exec(m_cover->viewport()->mapToGlobal(pos));
     if (act == favAct)
     {
-        Db::setFavorite(p, !fav);
+        Db::setFavoriteSync(p, !fav);
         evt("lib_fav", QString("on=%1 path=%2")
                            .arg(!fav ? 1 : 0).arg(QFileInfo(p).fileName().left(80)));
+        loadTable();
+    }
+    else if (act == mkRead || act == mkReading || act == mkUnread)
+    {
+        if (act == mkReading)
+        {
+            hr::setBookStateReading(p, true);
+        }
+        else if (act == mkRead)
+        {
+            int pg = 0, pc = 0, vw = 0;
+            if (!Db::loadProgress(p, &pg, &pc, &vw) || pc <= 0) { pc = 1; vw = 0; }
+            Db::saveProgress(p, pc - 1, pc, vw);
+            hr::setBookStateReading(p, false);
+        }
+        else
+        {
+            Db::deleteProgress(p);
+            hr::setBookStateReading(p, false);
+        }
+        evt("lib_mark_state",
+            QString("act=%1 path=%2")
+                .arg(act == mkRead ? QString("read")
+                     : act == mkReading ? QString("reading")
+                                        : QString("unread"))
+                .arg(QFileInfo(p).fileName().left(80)));
         loadTable();
     }
 }
@@ -2128,7 +2397,75 @@ void LibraryWindow::openRemoteInReader(void *doc, const QString &name, QObject *
 {
     ReaderWindow *rw = new ReaderWindow(m_stack);
     embedReader(rw);
-    rw->adoptDoc(doc, name, keepAlive, -1, key);
+    /* v1.9.0（P1-6）：远程装配移 worker（遮罩进度）；新窗必闲，兜底同步路径 */
+    if (!rw->adoptDocAsync(doc, name, keepAlive, -1, key))
+        rw->adoptDoc(doc, name, keepAlive, -1, key);
+}
+
+/* v1.9.0（P1-5）：空闲预热——最近本地 epub/pdf 且无 accel 文件且 ≤150MB；
+ * worker open+layout+save_accel（P1-1 每 doc 锁下与阅读渲染并行不互卡） */
+void LibraryWindow::warmNextBook()
+{
+    if (m_warmBusy || m_warmDone >= 5) return;
+    if (m_reader || m_scanning || m_remoteScanBusy) return; /* 阅读活跃/扫描中即停 */
+    QString pick;
+    for (const QString &p : Db::listRecent(14))
+    {
+        if (p.startsWith(QString::fromLatin1("remote://"))) continue;
+        const QFileInfo fi(p);
+        if (!fi.isFile()) continue;
+        const QString ext = fi.suffix().toLower();
+        if (ext != QString::fromLatin1("epub") && ext != QString::fromLatin1("pdf"))
+            continue;
+        if (fi.size() > 150LL * 1024 * 1024) continue;
+        const QString acc = hr::accelPathFor(p);
+        if (acc.isEmpty() || QFileInfo::exists(acc)) continue; /* 已有 accel 跳过 */
+        pick = p;
+        break;
+    }
+    if (pick.isEmpty()) return;
+    m_warmBusy = true;
+    m_warmDone++;
+    QPointer<LibraryWindow> gw(this);
+    QThreadPool::globalInstance()->start(QRunnable::create([gw, pick]
+    {
+        const QString acc = hr::accelPathFor(pick);
+        void *doc = hr_qt_open(hr::openablePath(pick).toUtf8().constData());
+        if (doc)
+        {
+            const int lrc = hr_qt_layout(doc, 900.0f, 1200.0f, 20.0f); /* 常用默认排版参数 */
+            /* v1.9.1（修复）：mupdf epub 布局惰性——fz_layout_document 只记尺寸
+             * （源码 epub_layout：短路比较 + invalidate_accelerator），真正排版在
+             * 首次逐章计数/取页。必须逐章计数填实加速器，否则 save_accel 落空壳档。 */
+            int ncw = 0;
+            if (lrc == 0)
+            {
+                ncw = hr_qt_count_chapters(doc);
+                for (int ci = 0; ci < ncw; ++ci)
+                    hr_qt_count_pages_of(doc, ci);
+            }
+            const int src = lrc == 0 ? hr_qt_save_accel(doc, acc.toUtf8().constData()) : -1;
+            evt("warmer_job", QString("lrc=%1 nc=%2 src=%3 err=%4")
+                    .arg(lrc).arg(ncw).arg(src)
+                    .arg(QString::fromUtf8(hr_qt_last_error()).left(120)));
+            if (src == 0)
+                hr::accelCleanup(pick, acc);
+            hr_qt_close(doc);
+        }
+        else
+            evt("warmer_openfail", QString::fromUtf8(hr_qt_last_error()).left(120));
+        if (!gw) return;
+        QMetaObject::invokeMethod(
+            gw.data(),
+            [gw]
+            {
+                if (!gw) return;
+                gw->m_warmBusy = false;
+                evt("warmer_done", QString("n=%1").arg(gw->m_warmDone));
+            },
+            Qt::QueuedConnection);
+    }));
+    evt("warmer_start", pick.left(80));
 }
 
 bool LibraryWindow::readerIsCurrent() const
@@ -2592,7 +2929,7 @@ static int cacheReadCb(void *ud, long long pos, unsigned char *buf, int len)
 }
 
 /* 块缓存会话随阅读窗销毁（adoptDoc 里 setParent）；协议会话/熔断策略同生命周期 */
-class BcsHolder : public QObject
+class BcsHolder : public QObject, public hr::CacheProgressSource /* v1.9.0（P1-6） */
 {
 public:
     hr::BlockCacheStore *s = nullptr;
@@ -2601,6 +2938,10 @@ public:
     std::shared_ptr<hr::SmbClient> smb;
     std::shared_ptr<hr::FetchPolicy> fp;
     ~BcsHolder() override { delete s; }
+    /* v1.9.0（P1-6/P1-7）：进度/位置窗口转发（ReaderWindow dynamic_cast 探测） */
+    long long cacheCachedBytes() const override { return s ? s->cachedBytes() : 0; }
+    long long cacheTotalBytes() const override { return s ? s->totalSize() : 0; }
+    void cacheSetWindow(long long pos) override { if (s) s->setWindow(pos); }
 };
 
 void LibraryWindow::onRemote()
@@ -4144,6 +4485,9 @@ bool LibraryWindow::remoteServerForm(Db::RemoteSrc *io)
                              {"sftp", "SFTP", 22},
                              {"opds", "OPDS", 80}};
     QLineEdit *name[4], *host[4], *port[4], *path[4], *user[4], *pass[4];
+    /* v1.1.0（安卓 1.3.17 对齐）：浏览目录按钮贴到路径（起始目录）字段旁 */
+    QVector<QPair<int, QPushButton *>> brList;
+    std::function<void(int)> browseInto; /* 主体在下方对话框段赋值；先连后赋（点击时必已就绪） */
     for (int i = 0; i < 4; i++)
     {
         QWidget *pg = new QWidget;
@@ -4165,7 +4509,23 @@ bool LibraryWindow::remoteServerForm(Db::RemoteSrc *io)
         f->addRow(hr::l10n::s("名称", "Name"), name[i]);
         f->addRow(hr::l10n::s("主机", "Host"), host[i]);
         f->addRow(hr::l10n::s("端口", "Port"), port[i]);
-        f->addRow(hr::l10n::s("路径", "Path"), path[i]);
+        /* v1.1.0：路径行内嵌"浏览目录"按钮（OPDS 为目录型信息流，仍走保存后导航） */
+        if (protos[i].key == "opds")
+        {
+            f->addRow(hr::l10n::s("路径", "Path"), path[i]);
+        }
+        else
+        {
+            QWidget *prow = new QWidget(pg);
+            QHBoxLayout *prl = new QHBoxLayout(prow);
+            prl->setContentsMargins(0, 0, 0, 0);
+            prl->addWidget(path[i], 1);
+            QPushButton *pbr =
+                new QPushButton(hr::l10n::s("浏览目录…", "Browse…"), prow);
+            prl->addWidget(pbr);
+            f->addRow(hr::l10n::s("路径", "Path"), prow);
+            brList.append(qMakePair(i, pbr));
+        }
         f->addRow(hr::l10n::s("用户名", "User"), user[i]);
         f->addRow(hr::l10n::s("密码", "Password"), pass[i]);
         if (protos[i].key == "smb")
@@ -4270,13 +4630,10 @@ bool LibraryWindow::remoteServerForm(Db::RemoteSrc *io)
         }
     });
 
-    /* P1 适配（E2）：浏览远程目录选定路径（对齐 WIN RemoteDirPicker；webdav/sftp） */
-    QPushButton *browseB =
-        new QPushButton(hr::l10n::s("浏览目录选路径…", "Browse folders…"), &dlg);
-    lay->addWidget(browseB);
-    connect(browseB, &QPushButton::clicked, &dlg, [&]()
+    /* P1 适配（E2）：浏览远程目录选定路径（对齐 WIN RemoteDirPicker；webdav/sftp）
+     * v1.1.0：浏览主体抽成 browseInto(tab)，由路径行内按钮触发（安卓 1.3.17 同位） */
+    browseInto = [&](int bi)
     {
-        const int bi = tabs->currentIndex();
         if (protos[bi].key == "opds")
         {
             QMessageBox::information(&dlg, hr::l10n::s("浏览", "Browse"),
@@ -4379,7 +4736,13 @@ bool LibraryWindow::remoteServerForm(Db::RemoteSrc *io)
         });
         connect(pb, &QDialogButtonBox::rejected, &pd, &QDialog::reject);
         pd.exec();
-    });
+    };
+    for (const auto &br : brList)
+    {
+        const int ti = br.first;
+        connect(br.second, &QPushButton::clicked, &dlg,
+                [ti, &browseInto]() { browseInto(ti); });
+    }
 
     if (dlg.exec() != QDialog::Accepted) return false;
     const int i = tabs->currentIndex();
@@ -5139,8 +5502,14 @@ void LibraryWindow::openRemoteItem(const Db::RemoteSrc &s, const QString &name, 
         }
     }
 
-    /* P0 适配（D4）：net/* 假接线——重试参数真读偏好（原恒默认 3/100） */
-    const long long memLimit = 32LL * 1024 * 1024;
+    /* P0 适配（D4）：net/* 假接线——重试参数真读偏好（原恒默认 3/100）。
+     * v1.9.0（P1-7④）：内存帽自适应——32MB 下限、随书大小升至 128MB 上限
+     * （1MB 块的重排书窗口过浅根因之一）；net/memLimitMB>0 显式覆盖 */
+    const long long mlPref =
+        stNet.value(QString::fromLatin1("net/memLimitMB"), 0).toLongLong();
+    const long long memLimit =
+        mlPref > 0 ? mlPref * 1024 * 1024
+                   : qBound(32LL * 1024 * 1024, size / 4, 128LL * 1024 * 1024);
     /* v0.111.0：后台补齐线程数（webdav/opds 每线程独立连接真并发；sftp/smb 客户端
      * 内部单锁串行——多线程退化为不重复排队，无收益也无害）；偏好 net/fillThreads */
     const int fillThreads =
@@ -5258,10 +5627,11 @@ void LibraryWindow::openRemoteItem(const Db::RemoteSrc &s, const QString &name, 
         holder->s = new hr::BlockCacheStore(key, size, blockSize, fetch, memLimit, fillThreads);
     }
     /* P0 适配（D4）：前后窗口深度按偏好 %（窗口字节/块长）；P0 适配（D5）：上限接线（在读书保护） */
+    /* v1.9.0（P1-7①）：窗口深度默认改为前 40%/后 10%（原 20/30 与阅读方向倒挂） */
     holder->s->setDepths(
-        (int)(memLimit * qBound(0, stNet.value("net/windowFwdPct", 20).toInt(), 100) / 100 /
+        (int)(memLimit * qBound(0, stNet.value("net/windowFwdPct", 40).toInt(), 100) / 100 /
               blockSize),
-        (int)(memLimit * qBound(0, stNet.value("net/windowBackPct", 30).toInt(), 100) / 100 /
+        (int)(memLimit * qBound(0, stNet.value("net/windowBackPct", 10).toInt(), 100) / 100 /
               blockSize));
     hr::BlockCacheStore::enforceCap(stNet.value("cache/capMB", 500).toLongLong(),
                                     hr::dataDir() + "/cache", holder->s->dirPath());
@@ -5286,12 +5656,13 @@ void LibraryWindow::openRemoteItem(const Db::RemoteSrc &s, const QString &name, 
     }
     /* 缺陷#4：登记书库（键与 ReaderWindow 进度键一致；P0 起含文件名） */
     const QString rkey = QString::fromLatin1("remote://%1/%2").arg(s.id).arg(fullRel);
-    Db::upsertFileMeta(rkey, name, hr_qt_count(doc), size,
-                       QDateTime::currentMSecsSinceEpoch());
+    /* v1.9.0（P1-6）：页数不在 UI 线程整书数（远程重排 hr_qt_count=整书读流，
+     * 开门前两次全读=假死主源）；页数由阅读窗 worker 计数后补登 */
+    Db::upsertFileMeta(rkey, name, 0, size, QDateTime::currentMSecsSinceEpoch());
     /* 旧父目录键行清理（仅 file_meta，无墓碑——同一本书的历史键格式） */
     if (fullRel != target)
         Db::deleteMeta(QString::fromLatin1("remote://%1/%2").arg(s.id).arg(target));
-    evt("meta_remote", QString("key=%1 pages=%2").arg(rkey.left(70)).arg(hr_qt_count(doc)));
+    evt("meta_remote", QString("key=%1").arg(rkey.left(70)));
     emit openRemoteRequested(doc, name, holder, rkey);
     evt("remote_open", QString("proto=%1 name=%2 size=%3").arg(proto, name.left(50)).arg(size));
 
@@ -6865,7 +7236,7 @@ void LibraryWindow::buildFavPage()
         const QString p = it->data(Qt::UserRole).toString();
         if (act == un && !p.isEmpty())
         {
-            Db::setFavorite(p, false);
+            Db::setFavoriteSync(p, false);
             evt("fav_page_unfav", "path=" + p.left(60));
             refreshFavPage();
             refreshHome();

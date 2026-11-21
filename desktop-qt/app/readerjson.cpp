@@ -133,4 +133,86 @@ bool importAndroidCssIfNeeded()
     return any;
 }
 
+/* v1.3.0（A1）：合并结果的映射键 → reader.json（即时生效；与 importAndroidCssIfNeeded
+ * 同一张映射表，不含 app-State.json 的 alwaysTwoPages——那仍走导入器） */
+void applyAndroidCssKeys(const QJsonObject &css)
+{
+    if (css.isEmpty()) return;
+    RJson rj;
+    rj.load(); /* 既有值兜底 */
+    bool any = false;
+    if (css.contains(QString::fromLatin1("fontSizeSp")))
+    {
+        rj.em = (float)clampi(css.value(QString::fromLatin1("fontSizeSp")).toInt(20), 8, 32);
+        any = true;
+    }
+    if (css.contains(QString::fromLatin1("lineHeight12")))
+    {
+        rj.lineHeight = clampi(css.value(QString::fromLatin1("lineHeight12")).toInt(18) * 10, 100, 250);
+        any = true;
+    }
+    static const char *maps[][2] = {
+        {"marginTop", "marginTop"}, {"marginRight", "marginRight"},
+        {"marginBottom", "marginBottom"}, {"marginLeft", "marginLeft"},
+        {"textIndent", "textIndent"}, {"paragraphHeight", "paraSpacing"} };
+    for (int i = 0; i < 6; i++)
+    {
+        if (css.contains(QLatin1String(maps[i][0])))
+        {
+            const int v = css.value(QLatin1String(maps[i][0])).toInt();
+            if (i == 4) rj.textIndent = clampi(v, 0, 50);
+            else if (i == 5) rj.paraSpacing = clampi(v, 0, 10);
+            else *(i == 0 ? &rj.marginTop : i == 1 ? &rj.marginRight
+                        : i == 2 ? &rj.marginBottom : &rj.marginLeft) = clampi(v, 0, 60);
+            any = true;
+        }
+    }
+    if (css.contains(QString::fromLatin1("textAlign")))
+    {
+        static const char *a2s[] = { "justify", "left", "right", "center" };
+        const int k = css.value(QString::fromLatin1("textAlign")).toInt(0);
+        rj.align = QString::fromLatin1(a2s[k >= 0 && k <= 3 ? k : 0]);
+        any = true;
+    }
+    if (any) rj.save();
+}
+
+/* v1.3.0（A1）：reader.json 真源 → 本地 app-CSS.json 副本（9 个映射键反向镜像）。
+ * 文件不存在则不镜像（首装采纳前不种子，防止桌面默认值覆盖安卓个性化）；
+ * 内容没变不重写（免 mtime 抖动）。 */
+bool mirrorReaderToAndroidCss()
+{
+    const QString cssP = dataDir() + QString::fromLatin1("/app-CSS.json");
+    if (!QFileInfo::exists(cssP)) return false;
+    QJsonObject orig;
+    {
+        QFile f(cssP);
+        if (!f.open(QIODevice::ReadOnly)) return false;
+        orig = QJsonDocument::fromJson(f.readAll()).object();
+    }
+    RJson rj;
+    rj.load();
+    QJsonObject css = orig;
+    const int al = rj.align == QLatin1String("left")    ? 1
+                   : rj.align == QLatin1String("right") ? 2
+                   : rj.align == QLatin1String("center") ? 3
+                                                         : 0; /* justify=0 */
+    css.insert(QString::fromLatin1("fontSizeSp"), qRound(rj.em));
+    css.insert(QString::fromLatin1("lineHeight12"), rj.lineHeight / 10);
+    css.insert(QString::fromLatin1("marginTop"), rj.marginTop);
+    css.insert(QString::fromLatin1("marginRight"), rj.marginRight);
+    css.insert(QString::fromLatin1("marginBottom"), rj.marginBottom);
+    css.insert(QString::fromLatin1("marginLeft"), rj.marginLeft);
+    css.insert(QString::fromLatin1("textIndent"), rj.textIndent);
+    css.insert(QString::fromLatin1("paragraphHeight"), rj.paraSpacing);
+    css.insert(QString::fromLatin1("textAlign"), al);
+    if (QJsonDocument(orig).toJson(QJsonDocument::Compact) ==
+        QJsonDocument(css).toJson(QJsonDocument::Compact))
+        return false;
+    QFile f(cssP);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+    f.write(QJsonDocument(css).toJson(QJsonDocument::Compact));
+    return true;
+}
+
 } // namespace hr

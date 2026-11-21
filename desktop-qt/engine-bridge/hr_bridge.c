@@ -1,4 +1,19 @@
-/* HowRead Qt 分支 M0：引擎 C 桥接实现（渲染管线逐行复刻 DocumentHandle.render）。 */
+/* HowRead Qt 分支 M0：引擎 C 桥接实现（渲染管线逐行复刻 DocumentHandle.render）。
+ * v1.9.0（P1-1）：引擎锁分级——MuPDF 官方多线程配方：
+ *   ① 基上下文带 fz_locks_context（v1.9.1：每个 FZ_LOCK_* 锁号独立 SRWLOCK
+ *      数组——1.23.7 存在 GLYPHCACHE→FREETYPE 嵌套持锁，单锁映射=自锁死）
+ *      store/glyph cache/字体缓存），每线程 fz_clone_context（t_ctx 线程局部；
+ *      style/store 共享，user_css 跨线程可见，见 mupdf source/fitz/context.c）；
+ *   ② 每文档独立 dlock（同 doc 串行=MuPDF 单文档非线程安全；不同 doc 并发=预热/
+ *      扫描/封面生成不再与阅读渲染互卡）；
+ *   ③ g_glock（全局）守 ctx 级操作（init/shutdown/set_css/defer_images）与
+ *      layout/count 族——layout 会解析 user_css，与 css 交换（同为 g_glock）串行，
+ *      结构性消除跨线程 css 释放竞态；渲染（热路径）不取 g_glock=并行收益主体。
+ *      （P1-1 方案中的 phase2 令牌桶让路因此省略：计数占 g_glock 只挡 layout 族，
+ *      不再阻塞渲染。）
+ * v1.9.0（P1-2）：渲染输出零逐像素路径——恒等变换（白底乘色/无主题）整行 memcpy；
+ *   夜间反相/染色乘色 3×256 查表（替代逐像素乘除）；调用方以 QImage 外部缓冲
+ *   +cleanup 直构（去 .copy() 全页拷贝）。 */
 #include "hr_bridge.h"
 #include "mupdf/fitz.h"
 #include "mupdf/pdf.h"
@@ -11,14 +26,43 @@
 #ifdef _WIN32
 #define _WIN32_WINNT 0x0601
 #include <windows.h>
-static SRWLOCK g_lock = SRWLOCK_INIT;
-static void hr_lock(void) { AcquireSRWLockExclusive(&g_lock); }
-static void hr_unlock(void) { ReleaseSRWLockExclusive(&g_lock); }
+/* v1.9.1（修复）：MuPDF 官方配方=每个 FZ_LOCK_* 锁号一把独立互斥量——1.23.7
+ * 存在 GLYPHCACHE→FREETYPE 嵌套持锁（draw-glyph.c fz_render_glyph 的 ft 分支
+ * 在持 GLYPHCACHE 时调 fz_render_ft_glyph，font.c 注明 "The glyph cache lock
+ * is always taken"），单把锁映射=同线程二次独占获取 SRWLOCK→永久自锁死。 */
+static SRWLOCK g_fzlocks[FZ_LOCK_MAX];
+/* g_glock：ctx 级操作 + layout/count 族（css 交换与 layout 解析串行） */
+static SRWLOCK g_glock = SRWLOCK_INIT;
+static void hr_glock(void) { AcquireSRWLockExclusive(&g_glock); }
+static void hr_gunlock(void) { ReleaseSRWLockExclusive(&g_glock); }
+static void hr_mupdf_lock(void *user, int lock)
+{
+	if (lock < 0 || lock >= FZ_LOCK_MAX) lock = 0;
+	AcquireSRWLockExclusive(&((SRWLOCK *)user)[lock]);
+}
+static void hr_mupdf_unlock(void *user, int lock)
+{
+	if (lock < 0 || lock >= FZ_LOCK_MAX) lock = 0;
+	ReleaseSRWLockExclusive(&((SRWLOCK *)user)[lock]);
+}
+static fz_locks_context g_lockcfg;
 #else
 #include <pthread.h>
-static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
-static void hr_lock(void) { pthread_mutex_lock(&g_lock); }
-static void hr_unlock(void) { pthread_mutex_unlock(&g_lock); }
+static pthread_mutex_t g_ctxlock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_glock = PTHREAD_MUTEX_INITIALIZER;
+static void hr_glock(void) { pthread_mutex_lock(&g_glock); }
+static void hr_gunlock(void) { pthread_mutex_unlock(&g_glock); }
+static void hr_mupdf_lock(void *user, int lock)
+{
+	(void)lock;
+	pthread_mutex_lock((pthread_mutex_t *)user);
+}
+static void hr_mupdf_unlock(void *user, int lock)
+{
+	(void)lock;
+	pthread_mutex_unlock((pthread_mutex_t *)user);
+}
+static fz_locks_context g_lockcfg;
 #endif
 
 /* 来自 hr_sysfont.c（同 target）：与桌面现版同一套系统字体钩子 */
@@ -27,10 +71,24 @@ extern fz_font *hr_sysfont_cjk(fz_context *ctx, const char *name, int ordering, 
 extern fz_font *hr_sysfont_fallback(fz_context *ctx, int script, int language, int serif, int bold, int italic);
 
 static fz_context *g_ctx = NULL;
-static char g_err[512] = {0};
+/* v1.9.0（P1-1）：错误串线程局部（不同 doc 并发后全局缓冲会互踩） */
+static __thread char g_err[512] = {0};
 
 static void hr_set_err(const char *m) { snprintf(g_err, sizeof g_err, "%s", m ? m : ""); }
 const char *hr_qt_last_error(void) { return g_err; }
+
+/* 每线程克隆上下文（共享 store/style/字体；错误栈线程独立）。线程退出不回收
+ * （QThreadPool 线程数有界，上下文体积小；与 hr_qt_meta 的 __thread 缓冲同口径）。 */
+static fz_context *t_ctx_get(void)
+{
+	static __thread fz_context *tc = NULL;
+	if (!tc)
+	{
+		if (!g_ctx) return NULL;
+		tc = fz_clone_context(g_ctx);
+	}
+	return tc;
+}
 
 /* ---- v0.59.0：统一句柄（mupdf 文档 / DJVU 会话二选一，DocumentHandle.isDjvu 同构） ---- */
 struct hr_doc
@@ -39,7 +97,11 @@ struct hr_doc
 	fz_document *fz;
 	void *dctx; /* ddjvu_context_t* */
 	void *ddoc; /* ddjvu_document_t* */
+	SRWLOCK dlock; /* v1.9.0（P1-1）：每文档锁（同 doc 串行） */
 };
+
+static void dlock(void *docv) { AcquireSRWLockExclusive(&((struct hr_doc *)docv)->dlock); }
+static void dunlock(void *docv) { ReleaseSRWLockExclusive(&((struct hr_doc *)docv)->dlock); }
 
 /* DJVU 后端（hr_qt_djvu.c，同 target 内部符号，不走 .def 导出） */
 void *hr_djv_create(void);
@@ -64,7 +126,11 @@ static int hr_ext_is(const char *path, const char *ext)
 int hr_qt_init(void)
 {
 	if (g_ctx) return 0;
-	fz_context *ctx = fz_new_context(NULL, NULL, FZ_STORE_UNLIMITED);
+	for (int i = 0; i < FZ_LOCK_MAX; i++) InitializeSRWLock(&g_fzlocks[i]);
+	g_lockcfg.user = g_fzlocks;
+	g_lockcfg.lock = hr_mupdf_lock;
+	g_lockcfg.unlock = hr_mupdf_unlock;
+	fz_context *ctx = fz_new_context(NULL, &g_lockcfg, FZ_STORE_UNLIMITED);
 	if (!ctx) { hr_set_err("fz_new_context failed"); return -1; }
 	fz_try(ctx)
 	{
@@ -84,34 +150,39 @@ int hr_qt_init(void)
 
 void hr_qt_shutdown(void)
 {
-	hr_lock(); /* v0.99.0 W20：与在途 worker 互斥后再销毁上下文 */
+	hr_glock(); /* ctx 级操作；在途 worker 持 doc 锁不受影响（应用退出路径） */
 	if (g_ctx) { fz_drop_context(g_ctx); g_ctx = NULL; }
-	hr_unlock();
+	hr_gunlock();
 }
 
 void hr_qt_set_css(const char *css, int use_document_css)
 {
 	if (!g_ctx) return;
-	hr_lock(); /* v0.99.0 W20：此前无锁——与扫描/封面线程的引擎调用并发即踩 g_ctx */
+	/* v1.9.0（P1-1）：与 layout/count 同锁（g_glock）——css 串在共享 style 上交换，
+	 * 与正在解析 css 的 layout 串行，防旧串被释放时在途解析踩悬挂 */
+	hr_glock();
 	fz_set_user_css(g_ctx, css ? css : "");
 	fz_set_use_document_css(g_ctx, use_document_css != 0);
-	hr_unlock();
+	hr_gunlock();
 }
 
 /* v0.103.0（P1-2）：排版期延迟图解（ctx 级开关；对齐安卓 deferHtml Round 12） */
 void hr_qt_defer_images(int defer)
 {
 	if (!g_ctx) return;
-	hr_lock();
+	hr_glock();
 	fz_set_defer_html_images(g_ctx, defer != 0);
-	hr_unlock();
+	hr_gunlock();
 }
 
 void *hr_qt_open(const char *path)
 {
 	if (!g_ctx || !path) { hr_set_err("not init"); return NULL; }
+	fz_context *tc = t_ctx_get();
+	if (!tc) { hr_set_err("not init"); return NULL; }
 	struct hr_doc *hd = (struct hr_doc *)calloc(1, sizeof *hd);
 	if (!hd) { hr_set_err("oom"); return NULL; }
+	InitializeSRWLock(&hd->dlock);
 	/* DJVU：引擎内 libdjvu 渲染（DocumentHandle.isDjvu 同口径，含 .djv），不经 mupdf */
 	if (hr_ext_is(path, "djvu") || hr_ext_is(path, "djv"))
 	{
@@ -128,15 +199,13 @@ void *hr_qt_open(const char *path)
 		return hd;
 	}
 	fz_document *doc = NULL;
-	hr_lock();
-	fz_try(g_ctx)
-		doc = fz_open_document(g_ctx, path);
-	fz_catch(g_ctx)
+	fz_try(tc)
+		doc = fz_open_document(tc, path);
+	fz_catch(tc)
 	{
-		hr_set_err(fz_caught_message(g_ctx));
+		hr_set_err(fz_caught_message(tc));
 		doc = NULL;
 	}
-	hr_unlock();
 	if (!doc) { free(hd); return NULL; }
 	hd->fz = doc;
 	return hd;
@@ -145,15 +214,19 @@ void *hr_qt_open(const char *path)
 int hr_qt_count(void *docv)
 {
 	struct hr_doc *hd = (struct hr_doc *)docv;
-	if (!g_ctx || !hd) return 0;
+	if (!hd) return 0;
 	if (hd->isDjvu) return hr_djv_count(hd->ddoc);
+	fz_context *tc = t_ctx_get();
+	if (!tc) return 0;
 	int n = 0;
-	hr_lock();
-	fz_try(g_ctx)
-		n = fz_count_pages(g_ctx, hd->fz);
-	fz_catch(g_ctx)
+	hr_glock(); /* layout 族（css 串行） */
+	dlock(docv);
+	fz_try(tc)
+		n = fz_count_pages(tc, hd->fz);
+	fz_catch(tc)
 		n = 0;
-	hr_unlock();
+	dunlock(docv);
+	hr_gunlock();
 	return n;
 }
 
@@ -161,29 +234,37 @@ int hr_qt_count(void *docv)
 int hr_qt_count_chapters(void *docv)
 {
 	struct hr_doc *hd = (struct hr_doc *)docv;
-	if (!g_ctx || !hd) return 0;
+	if (!hd) return 0;
 	if (hd->isDjvu) return 1;
+	fz_context *tc = t_ctx_get();
+	if (!tc) return 0;
 	int n = 0;
-	hr_lock();
-	fz_try(g_ctx)
-		n = fz_count_chapters(g_ctx, hd->fz);
-	fz_catch(g_ctx)
+	hr_glock();
+	dlock(docv);
+	fz_try(tc)
+		n = fz_count_chapters(tc, hd->fz);
+	fz_catch(tc)
 		n = 0;
-	hr_unlock();
+	dunlock(docv);
+	hr_gunlock();
 	return n > 0 ? n : 1;
 }
 
 int hr_qt_count_pages_of(void *docv, int chapter)
 {
 	struct hr_doc *hd = (struct hr_doc *)docv;
-	if (!g_ctx || !hd || hd->isDjvu) return 0;
+	if (!hd || hd->isDjvu) return 0;
+	fz_context *tc = t_ctx_get();
+	if (!tc) return 0;
 	int n = 0;
-	hr_lock();
-	fz_try(g_ctx)
-		n = fz_count_chapter_pages(g_ctx, hd->fz, chapter);
-	fz_catch(g_ctx)
+	hr_glock(); /* layout 族：分章计数触发 epub 章内布局，读 css */
+	dlock(docv);
+	fz_try(tc)
+		n = fz_count_chapter_pages(tc, hd->fz, chapter);
+	fz_catch(tc)
 		n = 0;
-	hr_unlock();
+	dunlock(docv);
+	hr_gunlock();
 	return n;
 }
 
@@ -191,26 +272,28 @@ int hr_qt_count_pages_of(void *docv, int chapter)
 int hr_qt_save_accel(void *docv, const char *accelPath)
 {
 	struct hr_doc *hd = (struct hr_doc *)docv;
-	if (!g_ctx || !hd || hd->isDjvu || !accelPath) return -1;
+	if (!hd || hd->isDjvu || !accelPath) return -1;
+	fz_context *tc = t_ctx_get();
+	if (!tc) return -1;
 	int rc = -2;
 	/* v0.110.1：锁内只写本地临时文件——加速器常落在 SMB/NFS 数据目录，
-	 * 网络写一旦停顿会长期持有全局引擎锁，渲染/后台计数全部阻塞（滚动
+	 * 网络写一旦停顿会长期持有锁，渲染/后台计数全部阻塞（滚动
 	 * 模式整场空白页根因）；先落 %TEMP% 再在锁外移动到目标路径。 */
 	char tm[520], tmp[1100];
 	DWORD tn = GetTempPathA(sizeof(tm), tm);
 	if (tn == 0 || tn >= sizeof(tm)) { lstrcpynA(tm, ".", 2); }
 	snprintf(tmp, sizeof(tmp), "%shr_accel_%u.tmp", tm, (unsigned)GetCurrentProcessId());
-	hr_lock();
-	fz_try(g_ctx)
+	dlock(docv);
+	fz_try(tc)
 	{
-		fz_save_accelerator(g_ctx, hd->fz, tmp);
+		fz_save_accelerator(tc, hd->fz, tmp);
 		rc = 0;
 	}
-	fz_catch(g_ctx)
+	fz_catch(tc)
 	{
 		rc = -3;
 	}
-	hr_unlock();
+	dunlock(docv);
 	if (rc == 0)
 	{
 		DeleteFileA(accelPath);
@@ -229,18 +312,19 @@ int hr_qt_save_accel(void *docv, const char *accelPath)
 void *hr_qt_open_accel(const char *path, const char *accelPath)
 {
 	if (!g_ctx || !path || !accelPath) { hr_set_err("not init"); return NULL; }
+	fz_context *tc = t_ctx_get();
+	if (!tc) { hr_set_err("not init"); return NULL; }
 	struct hr_doc *hd = (struct hr_doc *)calloc(1, sizeof *hd);
 	if (!hd) { hr_set_err("oom"); return NULL; }
+	InitializeSRWLock(&hd->dlock);
 	fz_document *doc = NULL;
-	hr_lock();
-	fz_try(g_ctx)
-		doc = fz_open_accelerated_document(g_ctx, path, accelPath);
-	fz_catch(g_ctx)
+	fz_try(tc)
+		doc = fz_open_accelerated_document(tc, path, accelPath);
+	fz_catch(tc)
 	{
-		hr_set_err(fz_caught_message(g_ctx));
+		hr_set_err(fz_caught_message(tc));
 		doc = NULL;
 	}
-	hr_unlock();
 	if (!doc) { free(hd); return NULL; }
 	hd->fz = doc;
 	return hd;
@@ -249,27 +333,50 @@ void *hr_qt_open_accel(const char *path, const char *accelPath)
 int hr_qt_layout(void *docv, float w, float h, float em)
 {
 	struct hr_doc *hd = (struct hr_doc *)docv;
-	if (!g_ctx || !hd) return -1;
+	if (!hd) return -1;
 	if (hd->isDjvu) return 0; /* djvu 无重排 */
-	hr_lock();
-	fz_try(g_ctx)
-		fz_layout_document(g_ctx, hd->fz, w, h, em);
-	fz_catch(g_ctx)
+	fz_context *tc = t_ctx_get();
+	if (!tc) return -1;
+	hr_glock(); /* layout 族（css 串行，见 hr_qt_set_css 注） */
+	dlock(docv);
+	fz_try(tc)
+		fz_layout_document(tc, hd->fz, w, h, em);
+	fz_catch(tc)
 	{
-		hr_set_err(fz_caught_message(g_ctx));
-		hr_unlock();
+		hr_set_err(fz_caught_message(tc));
+		dunlock(docv);
+		hr_gunlock();
 		return -2;
 	}
-	hr_unlock();
+	dunlock(docv);
+	hr_gunlock();
 	return 0;
 }
 
+/* v1.9.0（P1-2）：输出变换查表（0..255 → 变换后值；恒等变换不建表走 memcpy） */
+static void hr_build_lut(int mode, int tint, unsigned char *lr, unsigned char *lg, unsigned char *lb)
+{
+	for (int v = 0; v < 256; v++)
+	{
+		int r = v, g = v, b = v;
+		if (mode == 2) { r = 255 - r; g = 255 - g; b = 255 - b; }
+		else if (tint != 0)
+		{
+			int tr = (tint >> 16) & 255, tg = (tint >> 8) & 255, tb2 = tint & 255;
+			r = r * tr / 255; g = g * tg / 255; b = b * tb2 / 255;
+		}
+		lr[v] = (unsigned char)r; lg[v] = (unsigned char)g; lb[v] = (unsigned char)b;
+	}
+}
+
 /* 渲染管线与 DocumentHandle.render 逐行同构：fit-width + 40M 像素上限 + RGB 无 alpha
- * + 白底清屏 + draw device + NIGHT 反相 / tint 乘色（列序 = 源码同款）。 */
+ * + 白底清屏 + draw device + NIGHT 反相 / tint 乘色（列序 = 源码同款）。
+ * v1.9.0（P1-2）：恒等变换整行 memcpy（白底乘色=乘 255 恒等；无主题 mode=0 同），
+ * 夜间/染色 3×256 查表——逐像素乘除全消。 */
 int hr_qt_render(void *docv, int page, int width, int mode, int tint,
                  int *outW, int *outH, unsigned char **outRGB)
 {
-	if (!g_ctx || !docv || !outW || !outH || !outRGB) return -1;
+	if (!docv || !outW || !outH || !outRGB) return -1;
 	struct hr_doc *hd = (struct hr_doc *)docv;
 	if (hd->isDjvu)
 	{
@@ -282,32 +389,39 @@ int hr_qt_render(void *docv, int page, int width, int mode, int tint,
 		}
 		unsigned char *buf = (unsigned char *)malloc((size_t)w * h * 3);
 		if (!buf) { free(px); return -3; }
+		const int identity = (mode != 2) && (tint == 0 || tint == 0xFFFFFF);
+		unsigned char lr[256], lg[256], lb[256];
+		if (!identity) hr_build_lut(mode, tint, lr, lg, lb);
 		for (long long i = 0; i < (long long)w * h; i++)
 		{
-			int r = (int)((px[i] >> 16) & 255), g = (int)((px[i] >> 8) & 255), b = (int)(px[i] & 255);
-			if (mode == 2) { r = 255 - r; g = 255 - g; b = 255 - b; }
-			else if (tint != 0)
+			unsigned int c = px[i];
+			int r = (int)((c >> 16) & 255), g = (int)((c >> 8) & 255), b = (int)(c & 255);
+			if (identity)
 			{
-				int tr = (tint >> 16) & 255, tg = (tint >> 8) & 255, tb2 = tint & 255;
-				r = r * tr / 255; g = g * tg / 255; b = b * tb2 / 255;
+				buf[i * 3] = (unsigned char)r; buf[i * 3 + 1] = (unsigned char)g; buf[i * 3 + 2] = (unsigned char)b;
 			}
-			buf[i * 3] = (unsigned char)r; buf[i * 3 + 1] = (unsigned char)g; buf[i * 3 + 2] = (unsigned char)b;
+			else
+			{
+				buf[i * 3] = lr[r]; buf[i * 3 + 1] = lg[g]; buf[i * 3 + 2] = lb[b];
+			}
 		}
 		free(px);
 		*outW = w; *outH = h; *outRGB = buf;
 		return 0;
 	}
+	fz_context *tc = t_ctx_get();
+	if (!tc) return -1;
 	fz_page *p = NULL;
 	fz_pixmap *pm = NULL;
 	fz_device *dev = NULL;
 	unsigned char *buf = NULL;
 	int rc = 0;
-	hr_lock();
+	dlock(docv);
 	fz_var(p); fz_var(pm); fz_var(dev); fz_var(buf);
-	fz_try(g_ctx)
+	fz_try(tc)
 	{
-		p = fz_load_page(g_ctx, hd->fz, page);
-		fz_rect b = fz_bound_page(g_ctx, p);
+		p = fz_load_page(tc, hd->fz, page);
+		fz_rect b = fz_bound_page(tc, p);
 		float pw = b.x1 - b.x0, ph = b.y1 - b.y0;
 		if (pw < 1.0f) pw = 1.0f;
 		float scale = width / pw;
@@ -316,47 +430,53 @@ int hr_qt_render(void *docv, int page, int width, int mode, int tint,
 		fz_matrix ctm = fz_scale(scale, scale);
 		fz_rect tb = fz_transform_rect(b, ctm);
 		fz_irect ir = fz_round_rect(tb);
-		pm = fz_new_pixmap_with_bbox(g_ctx, fz_device_rgb(g_ctx), ir, NULL, 0);
-		fz_clear_pixmap_with_value(g_ctx, pm, 0xff);
-		dev = fz_new_draw_device(g_ctx, ctm, pm);
-		fz_run_page(g_ctx, p, dev, fz_identity, NULL);
+		pm = fz_new_pixmap_with_bbox(tc, fz_device_rgb(tc), ir, NULL, 0);
+		fz_clear_pixmap_with_value(tc, pm, 0xff);
+		dev = fz_new_draw_device(tc, ctm, pm);
+		fz_run_page(tc, p, dev, fz_identity, NULL);
 		int w = pm->w, h = pm->h, n = pm->n;
 		buf = (unsigned char *)malloc((size_t)w * h * 3);
 		if (!buf) { rc = -3; }
 		else
 		{
+			/* v1.9.0（P1-2）：恒等=整行 memcpy（pm->stride 兼容）；变换=查表 */
+			const int identity = (mode != 2) && (tint == 0 || tint == 0xFFFFFF);
+			unsigned char lr[256], lg[256], lb[256];
+			if (!identity) hr_build_lut(mode, tint, lr, lg, lb);
 			for (int y = 0; y < h; y++)
 			{
 				const unsigned char *s = pm->samples + (size_t)y * pm->stride;
 				unsigned char *d = buf + (size_t)y * w * 3;
-				for (int x = 0; x < w; x++)
+				if (identity)
 				{
-					int r = s[x * n], g = s[x * n + 1], bl = s[x * n + 2];
-					if (mode == 2) { r = 255 - r; g = 255 - g; bl = 255 - bl; }
-					else if (tint != 0)
+					memcpy(d, s, (size_t)w * 3);
+				}
+				else
+				{
+					for (int x = 0; x < w; x++)
 					{
-						int tr = (tint >> 16) & 255, tg = (tint >> 8) & 255, tb2 = tint & 255;
-						r = r * tr / 255; g = g * tg / 255; bl = bl * tb2 / 255;
+						d[x * 3] = lr[s[x * n]];
+						d[x * 3 + 1] = lg[s[x * n + 1]];
+						d[x * 3 + 2] = lb[s[x * n + 2]];
 					}
-					d[x * 3] = (unsigned char)r; d[x * 3 + 1] = (unsigned char)g; d[x * 3 + 2] = (unsigned char)bl;
 				}
 			}
 			*outW = w; *outH = h; *outRGB = buf; buf = NULL;
 		}
 	}
-	fz_always(g_ctx)
+	fz_always(tc)
 	{
-		if (dev) fz_close_device(g_ctx, dev);
-		if (dev) fz_drop_device(g_ctx, dev);
-		if (pm) fz_drop_pixmap(g_ctx, pm);
-		if (p) fz_drop_page(g_ctx, p);
+		if (dev) fz_close_device(tc, dev);
+		if (dev) fz_drop_device(tc, dev);
+		if (pm) fz_drop_pixmap(tc, pm);
+		if (p) fz_drop_page(tc, p);
 	}
-	fz_catch(g_ctx)
+	fz_catch(tc)
 	{
-		hr_set_err(fz_caught_message(g_ctx));
+		hr_set_err(fz_caught_message(tc));
 		rc = -2;
 	}
-	hr_unlock();
+	dunlock(docv);
 	if (buf) free(buf);
 	return rc;
 }
@@ -372,11 +492,12 @@ void hr_qt_close(void *docv)
 		free(hd);
 		return;
 	}
-	if (g_ctx)
+	fz_context *tc = t_ctx_get();
+	if (tc)
 	{
-		hr_lock();
-		fz_drop_document(g_ctx, hd->fz);
-		hr_unlock();
+		dlock(docv);
+		fz_drop_document(tc, hd->fz);
+		dunlock(docv);
 	}
 	free(hd);
 }
@@ -420,33 +541,35 @@ static int hr_outline_walk(fz_context *ctx, fz_document *doc, fz_outline *o, int
 int hr_qt_outline(void *docv, hr_outline_cb cb, void *ud)
 {
 	struct hr_doc *hd = (struct hr_doc *)docv;
-	if (!g_ctx || !hd || !cb) return 0;
+	if (!hd || !cb) return 0;
 	if (hd->isDjvu) return 0; /* djvu 无目录（DocumentHandle 同 stub） */
+	fz_context *tc = t_ctx_get();
+	if (!tc) return 0;
 	fz_outline *ol = NULL;
 	int n = 0;
-	hr_lock();
+	dlock(docv);
 	fz_var(ol);
-	fz_try(g_ctx)
+	fz_try(tc)
 	{
-		ol = fz_load_outline(g_ctx, hd->fz);
-		if (ol) n = hr_outline_walk(g_ctx, hd->fz, ol, 0, cb, ud);
+		ol = fz_load_outline(tc, hd->fz);
+		if (ol) n = hr_outline_walk(tc, hd->fz, ol, 0, cb, ud);
 	}
-	fz_always(g_ctx)
+	fz_always(tc)
 	{
-		if (ol) fz_drop_outline(g_ctx, ol);
+		if (ol) fz_drop_outline(tc, ol);
 	}
-	fz_catch(g_ctx)
+	fz_catch(tc)
 	{
-		hr_set_err(fz_caught_message(g_ctx));
+		hr_set_err(fz_caught_message(tc));
 	}
-	hr_unlock();
+	dunlock(docv);
 	return n;
 }
 
 int hr_qt_page_size(void *docv, int page, float *w, float *h)
 {
 	struct hr_doc *hd = (struct hr_doc *)docv;
-	if (!g_ctx || !hd || !w || !h) return -1;
+	if (!hd || !w || !h) return -1;
 	if (hd->isDjvu)
 	{
 		int pw = 0, ph = 0;
@@ -454,27 +577,29 @@ int hr_qt_page_size(void *docv, int page, float *w, float *h)
 		*w = (float)pw; *h = (float)ph; /* djvu 页面像素≈pt（fit-width 同语义） */
 		return 0;
 	}
+	fz_context *tc = t_ctx_get();
+	if (!tc) return -1;
 	fz_page *p = NULL;
 	int rc = 0;
-	hr_lock();
+	dlock(docv);
 	fz_var(p);
-	fz_try(g_ctx)
+	fz_try(tc)
 	{
-		p = fz_load_page(g_ctx, hd->fz, page);
-		fz_rect b = fz_bound_page(g_ctx, p);
+		p = fz_load_page(tc, hd->fz, page);
+		fz_rect b = fz_bound_page(tc, p);
 		*w = b.x1 - b.x0;
 		*h = b.y1 - b.y0;
 	}
-	fz_always(g_ctx)
+	fz_always(tc)
 	{
-		if (p) fz_drop_page(g_ctx, p);
+		if (p) fz_drop_page(tc, p);
 	}
-	fz_catch(g_ctx)
+	fz_catch(tc)
 	{
-		hr_set_err(fz_caught_message(g_ctx));
+		hr_set_err(fz_caught_message(tc));
 		rc = -2;
 	}
-	hr_unlock();
+	dunlock(docv);
 	return rc;
 }
 
@@ -483,18 +608,20 @@ const char *hr_qt_meta(void *docv, int key)
 	static __thread char buf[512]; /* v0.107.0（P2-12）：线程局部，多线程桥调用不互踩 */
 	buf[0] = 0;
 	struct hr_doc *hd = (struct hr_doc *)docv;
-	if (!g_ctx || !hd || hd->isDjvu) return buf; /* djvu 无元数据 */
+	if (!hd || hd->isDjvu) return buf; /* djvu 无元数据 */
 	const char *k = (key == 0) ? "info:Title" : (key == 1) ? "info:Author" : NULL;
 	if (!k) return buf;
-	hr_lock();
-	fz_try(g_ctx)
+	fz_context *tc = t_ctx_get();
+	if (!tc) return buf;
+	dlock(docv);
+	fz_try(tc)
 	{
 		char tmp[512] = {0};
-		int n = fz_lookup_metadata(g_ctx, hd->fz, k, tmp, (int)sizeof tmp);
+		int n = fz_lookup_metadata(tc, hd->fz, k, tmp, (int)sizeof tmp);
 		if (n > 0) snprintf(buf, sizeof buf, "%s", tmp);
 	}
-	fz_catch(g_ctx) { buf[0] = 0; }
-	hr_unlock();
+	fz_catch(tc) { buf[0] = 0; }
+	dunlock(docv);
 	return buf;
 }
 
@@ -561,8 +688,11 @@ static void hr_stream_drop(fz_context *ctx, void *state)
 void *hr_qt_open_stream(const char *magic, long long size, hr_stream_read cb, void *ud)
 {
 	if (!g_ctx || !magic || !cb || size <= 0) { hr_set_err("open_stream: bad args"); return NULL; }
+	fz_context *tc = t_ctx_get();
+	if (!tc) { hr_set_err("open_stream: not init"); return NULL; }
 	struct hr_doc *hd = (struct hr_doc *)calloc(1, sizeof *hd);
 	if (!hd) { hr_set_err("open_stream: oom"); return NULL; }
+	InitializeSRWLock(&hd->dlock);
 	struct hr_stream_state *s = (struct hr_stream_state *)malloc(sizeof *s);
 	if (!s) { free(hd); hr_set_err("open_stream: oom"); return NULL; }
 	s->cb = cb; s->ud = ud; s->size = size; s->pos = 0;
@@ -571,24 +701,22 @@ void *hr_qt_open_stream(const char *magic, long long size, hr_stream_read cb, vo
 	if (!s->bp) { free(s); free(hd); hr_set_err("open_stream: oom2"); return NULL; }
 	fz_stream *stm = NULL;
 	fz_document *doc = NULL;
-	hr_lock();
 	fz_var(stm);
-	fz_try(g_ctx)
+	fz_try(tc)
 	{
-		stm = fz_new_stream(g_ctx, s, hr_stream_next, hr_stream_drop);
+		stm = fz_new_stream(tc, s, hr_stream_next, hr_stream_drop);
 		stm->seek = hr_stream_seek;
-		doc = fz_open_document_with_stream(g_ctx, magic, stm);
+		doc = fz_open_document_with_stream(tc, magic, stm);
 	}
-	fz_always(g_ctx)
+	fz_always(tc)
 	{
-		if (stm) fz_drop_stream(g_ctx, stm);
+		if (stm) fz_drop_stream(tc, stm);
 	}
-	fz_catch(g_ctx)
+	fz_catch(tc)
 	{
-		hr_set_err(fz_caught_message(g_ctx));
+		hr_set_err(fz_caught_message(tc));
 		doc = NULL;
 	}
-	hr_unlock();
 	if (!doc) { free(hd); return NULL; }
 	hd->fz = doc;
 	return hd;
@@ -637,7 +765,7 @@ static int hr_stext_fill(fz_context *ctx, fz_document *docv, int page, fz_stext_
 int hr_qt_selection(void *docv, int page, float ax, float ay, float bx, float by,
                     char **outText, float **outRects, int *outRectN)
 {
-	if (!g_ctx || !docv || !outText || !outRects || !outRectN) return -1;
+	if (!docv || !outText || !outRects || !outRectN) return -1;
 	*outText = NULL; *outRects = NULL; *outRectN = 0;
 	struct hr_doc *hd = (struct hr_doc *)docv;
 	if (hd->isDjvu)
@@ -645,18 +773,20 @@ int hr_qt_selection(void *docv, int page, float ax, float ay, float bx, float by
 		*outText = (char *)calloc(1, 1); /* djvu 无文字层（DocumentHandle 同 stub） */
 		return 0;
 	}
+	fz_context *tc = t_ctx_get();
+	if (!tc) return -1;
 	fz_page *p = NULL;
 	fz_stext_page *st = NULL;
 	char *text = NULL;
 	float *rects = NULL;
 	int rn = 0, rc = 0;
-	hr_lock();
+	dlock(docv);
 	fz_var(p); fz_var(st); fz_var(text); fz_var(rects);
-	fz_try(g_ctx)
+	fz_try(tc)
 	{
-		hr_stext_fill(g_ctx, hd->fz, page, &st, &p);
+		hr_stext_fill(tc, hd->fz, page, &st, &p);
 		fz_point a = { ax, ay }, b = { bx, by };
-		char *sel = fz_copy_selection(g_ctx, st, a, b, 1);
+		char *sel = fz_copy_selection(tc, st, a, b, 1);
 		text = sel ? sel : (char *)calloc(1, 1);
 		int cap = 16;
 		rects = (float *)malloc(sizeof(float) * 4 * cap);
@@ -679,91 +809,97 @@ int hr_qt_selection(void *docv, int page, float ax, float ay, float bx, float by
 		*outRects = rects; rects = NULL;
 		*outRectN = rn;
 	}
-	fz_always(g_ctx)
+	fz_always(tc)
 	{
-		if (st) fz_drop_stext_page(g_ctx, st);
-		if (p) fz_drop_page(g_ctx, p);
+		if (st) fz_drop_stext_page(tc, st);
+		if (p) fz_drop_page(tc, p);
 		if (text) free(text);
 		if (rects) free(rects);
 	}
-	fz_catch(g_ctx)
+	fz_catch(tc)
 	{
-		hr_set_err(fz_caught_message(g_ctx));
+		hr_set_err(fz_caught_message(tc));
 		rc = -2;
 	}
-	hr_unlock();
+	dunlock(docv);
 	return rc;
 }
 
 int hr_qt_page_box(void *docv, int page, float box[4])
 {
-	if (!g_ctx || !docv || !box) return -1;
+	if (!docv || !box) return -1;
 	struct hr_doc *hd = (struct hr_doc *)docv;
 	if (hd->isDjvu) { box[0] = box[1] = box[2] = box[3] = 0; return -1; }
+	fz_context *tc = t_ctx_get();
+	if (!tc) return -1;
 	fz_page *p = NULL;
 	int rc = 0;
-	hr_lock();
+	dlock(docv);
 	fz_var(p);
-	fz_try(g_ctx)
+	fz_try(tc)
 	{
-		p = fz_load_page(g_ctx, hd->fz, page);
-		fz_rect b = fz_bound_page(g_ctx, p);
+		p = fz_load_page(tc, hd->fz, page);
+		fz_rect b = fz_bound_page(tc, p);
 		box[0] = b.x0; box[1] = b.y0; box[2] = b.x1; box[3] = b.y1;
 	}
-	fz_always(g_ctx)
+	fz_always(tc)
 	{
-		if (p) fz_drop_page(g_ctx, p);
+		if (p) fz_drop_page(tc, p);
 	}
-	fz_catch(g_ctx)
+	fz_catch(tc)
 	{
-		hr_set_err(fz_caught_message(g_ctx));
+		hr_set_err(fz_caught_message(tc));
 		rc = -2;
 	}
-	hr_unlock();
+	dunlock(docv);
 	return rc;
 }
 
 int hr_qt_search_page(void *docv, int page, const char *needle)
 {
 	struct hr_doc *hd = (struct hr_doc *)docv;
-	if (!g_ctx || !hd || !needle || !needle[0] || hd->isDjvu) return 0;
+	if (!hd || !needle || !needle[0] || hd->isDjvu) return 0;
+	fz_context *tc = t_ctx_get();
+	if (!tc) return 0;
 	fz_page *p = NULL;
 	fz_stext_page *st = NULL;
 	int hits = 0;
-	hr_lock();
+	dlock(docv);
 	fz_var(p); fz_var(st);
-	fz_try(g_ctx)
+	fz_try(tc)
 	{
-		hr_stext_fill(g_ctx, hd->fz, page, &st, &p);
+		hr_stext_fill(tc, hd->fz, page, &st, &p);
 		fz_quad quads[64];
-		int n = fz_search_stext_page(g_ctx, st, needle, NULL, quads, nelem(quads));
+		int n = fz_search_stext_page(tc, st, needle, NULL, quads, nelem(quads));
 		hits = n > 0 ? n : 0;
 	}
-	fz_always(g_ctx)
+	fz_always(tc)
 	{
-		if (st) fz_drop_stext_page(g_ctx, st);
-		if (p) fz_drop_page(g_ctx, p);
+		if (st) fz_drop_stext_page(tc, st);
+		if (p) fz_drop_page(tc, p);
 	}
-	fz_catch(g_ctx)
+	fz_catch(tc)
 	{
 		hits = 0;
 	}
-	hr_unlock();
+	dunlock(docv);
 	return hits;
 }
 
 int hr_qt_page_paragraphs(void *docv, int page, hr_paras_cb cb, void *ud)
 {
 	struct hr_doc *hd = (struct hr_doc *)docv;
-	if (!g_ctx || !hd || !cb || hd->isDjvu) return 0; /* djvu 无段落 */
+	if (!hd || !cb || hd->isDjvu) return 0; /* djvu 无段落 */
+	fz_context *tc = t_ctx_get();
+	if (!tc) return 0;
 	fz_page *p = NULL;
 	fz_stext_page *st = NULL;
 	int count = 0;
-	hr_lock();
+	dlock(docv);
 	fz_var(p); fz_var(st);
-	fz_try(g_ctx)
+	fz_try(tc)
 	{
-		hr_stext_fill(g_ctx, hd->fz, page, &st, &p);
+		hr_stext_fill(tc, hd->fz, page, &st, &p);
 		for (fz_stext_block *blk = st->first_block; blk; blk = blk->next)
 		{
 			if (blk->type != FZ_STEXT_BLOCK_TEXT) continue;
@@ -807,16 +943,16 @@ int hr_qt_page_paragraphs(void *docv, int page, hr_paras_cb cb, void *ud)
 			if (!stop) break;
 		}
 	}
-	fz_always(g_ctx)
+	fz_always(tc)
 	{
-		if (st) fz_drop_stext_page(g_ctx, st);
-		if (p) fz_drop_page(g_ctx, p);
+		if (st) fz_drop_stext_page(tc, st);
+		if (p) fz_drop_page(tc, p);
 	}
-	fz_catch(g_ctx)
+	fz_catch(tc)
 	{
-		hr_set_err(fz_caught_message(g_ctx));
+		hr_set_err(fz_caught_message(tc));
 	}
-	hr_unlock();
+	dunlock(docv);
 	return count;
 }
 
@@ -825,22 +961,24 @@ int hr_qt_pdf_export_highlights(void *docv, const char *destPath,
                                 const float *const *quadsArr, const int *quadNs, int nItems)
 {
 	struct hr_doc *hd = (struct hr_doc *)docv;
-	if (!g_ctx || !hd || !destPath || !pages || !argbs || !quadsArr || !quadNs) return 0;
+	if (!hd || !destPath || !pages || !argbs || !quadsArr || !quadNs) return 0;
 	if (hd->isDjvu) return 0; /* djvu 非 PDF */
+	fz_context *tc = t_ctx_get();
+	if (!tc) return 0;
 	int ok = 0;
-	hr_lock();
-	fz_try(g_ctx)
+	dlock(docv);
+	fz_try(tc)
 	{
-		pdf_document *pdf = pdf_specifics(g_ctx, hd->fz);
+		pdf_document *pdf = pdf_specifics(tc, hd->fz);
 		if (pdf)
 		{
 			for (int i = 0; i < nItems; i++)
 			{
-				fz_page *pg = fz_load_page(g_ctx, hd->fz, pages[i]);
-				pdf_page *pp = pdf_page_from_fz_page(g_ctx, pg);
+				fz_page *pg = fz_load_page(tc, hd->fz, pages[i]);
+				pdf_page *pp = pdf_page_from_fz_page(tc, pg);
 				if (pp)
 				{
-					pdf_annot *ann = pdf_create_annot(g_ctx, pp, PDF_ANNOT_HIGHLIGHT);
+					pdf_annot *ann = pdf_create_annot(tc, pp, PDF_ANNOT_HIGHLIGHT);
 					const float *q = quadsArr[i];
 					fz_quad *fqs =
 						(fz_quad *)malloc(sizeof(fz_quad) * (size_t)(quadNs[i] > 0 ? quadNs[i] : 1));
@@ -851,59 +989,61 @@ int hr_qt_pdf_export_highlights(void *docv, const char *destPath,
 						fqs[k].ll = fz_make_point(q[k * 4 + 0], q[k * 4 + 1]);
 						fqs[k].lr = fz_make_point(q[k * 4 + 2], q[k * 4 + 1]);
 					}
-					pdf_set_annot_quad_points(g_ctx, ann, quadNs[i], fqs);
+					pdf_set_annot_quad_points(tc, ann, quadNs[i], fqs);
 					free(fqs);
 					float rgb[3] = { ((argbs[i] >> 16) & 255) / 255.0f,
 									 ((argbs[i] >> 8) & 255) / 255.0f,
 									 (argbs[i] & 255) / 255.0f };
-					pdf_set_annot_color(g_ctx, ann, 3, rgb);
-					pdf_set_annot_opacity(g_ctx, ann, 0.5f);
-					pdf_update_annot(g_ctx, ann);
+					pdf_set_annot_color(tc, ann, 3, rgb);
+					pdf_set_annot_opacity(tc, ann, 0.5f);
+					pdf_update_annot(tc, ann);
 				}
-				if (pg) fz_drop_page(g_ctx, pg);
+				if (pg) fz_drop_page(tc, pg);
 			}
-			pdf_save_document(g_ctx, pdf, destPath, NULL);
+			pdf_save_document(tc, pdf, destPath, NULL);
 			ok = 1;
 		}
 	}
-	fz_catch(g_ctx)
+	fz_catch(tc)
 	{
-		hr_set_err(fz_caught_message(g_ctx));
+		hr_set_err(fz_caught_message(tc));
 		ok = 0;
 	}
-	hr_unlock();
+	dunlock(docv);
 	return ok;
 }
 
 int hr_qt_pdf_annotation_count(void *docv, int page)
 {
 	struct hr_doc *hd = (struct hr_doc *)docv;
-	if (!g_ctx || !hd) return -1;
+	if (!hd) return -1;
 	if (hd->isDjvu) return -1;
+	fz_context *tc = t_ctx_get();
+	if (!tc) return -1;
 	int n = -1;
-	hr_lock();
-	fz_try(g_ctx)
+	dlock(docv);
+	fz_try(tc)
 	{
-		pdf_document *pdf = pdf_specifics(g_ctx, hd->fz);
+		pdf_document *pdf = pdf_specifics(tc, hd->fz);
 		if (!pdf)
 		{
 			n = -1;
 		}
 		else
 		{
-			fz_page *pg = fz_load_page(g_ctx, hd->fz, page);
-			pdf_page *pp = pdf_page_from_fz_page(g_ctx, pg);
+			fz_page *pg = fz_load_page(tc, hd->fz, page);
+			pdf_page *pp = pdf_page_from_fz_page(tc, pg);
 			n = 0;
 			if (pp)
-				for (pdf_annot *a = pdf_first_annot(g_ctx, pp); a; a = pdf_next_annot(g_ctx, a))
+				for (pdf_annot *a = pdf_first_annot(tc, pp); a; a = pdf_next_annot(tc, a))
 					n++;
-			if (pg) fz_drop_page(g_ctx, pg);
+			if (pg) fz_drop_page(tc, pg);
 		}
 	}
-	fz_catch(g_ctx)
+	fz_catch(tc)
 	{
 		n = -1;
 	}
-	hr_unlock();
+	dunlock(docv);
 	return n;
 }

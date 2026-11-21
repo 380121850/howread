@@ -1,4 +1,5 @@
 #include "hropds.h"
+#include "hrwebdav.h" /* v1.1.0：Digest 实现移至 hrwebdav 共享 */
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -33,49 +34,6 @@ static QString stripHtml(const QString &s)
 }
 
 /* RFC2617 Digest（MD5）最小实现（HttpDigest.kt 移植）；algorithm 非 MD5 返回空。 */
-static QString digestAuthorize(const QString &method, const QString &uri, const QString &user,
-                               const QString &pass, const QString &challenge)
-{
-    QHash<QString, QString> ch;
-    QString body = challenge.trimmed();
-    if (body.startsWith("Digest", Qt::CaseInsensitive)) body = body.mid(6);
-    const QStringList parts = body.split(',');
-    for (const QString &part : parts)
-    {
-        const int i = part.indexOf('=');
-        if (i <= 0) continue;
-        const QString k = part.left(i).trimmed().toLower();
-        QString v = part.mid(i + 1).trimmed();
-        if (v.size() >= 2 && v.startsWith('"') && v.endsWith('"')) v = v.mid(1, v.size() - 2);
-        ch.insert(k, v);
-    }
-    const QString realm = ch.value("realm"), nonce = ch.value("nonce");
-    if (realm.isEmpty() || nonce.isEmpty()) return QString();
-    if (!ch.value("algorithm", "MD5").toUpper().contains("MD5")) return QString();
-    QString qop;
-    const QStringList qs = ch.value("qop").split(',');
-    for (const QString &x : qs)
-        if (x.trimmed() == "auth") qop = "auth";
-    const auto md5 = [](const QString &s) {
-        return QString::fromLatin1(
-            QCryptographicHash::hash(s.toUtf8(), QCryptographicHash::Md5).toHex());
-    };
-    const QString ha1 = md5(user + ":" + realm + ":" + pass);
-    const QString ha2 = md5(method + ":" + uri);
-    const QString cnonce = md5(nonce + QString::number(QDateTime::currentMSecsSinceEpoch())).left(16);
-    const QString nc = "00000001";
-    const QString resp = qop.isEmpty()
-                             ? md5(ha1 + ":" + nonce + ":" + ha2)
-                             : md5(ha1 + ":" + nonce + ":" + nc + ":" + cnonce + ":" + qop + ":" + ha2);
-    QString out = QString("Digest username=\"%1\", realm=\"%2\", nonce=\"%3\", uri=\"%4\", "
-                          "response=\"%5\"")
-                      .arg(user, realm, nonce, uri, resp);
-    if (ch.contains("opaque")) out += QString(", opaque=\"%1\"").arg(ch.value("opaque"));
-    if (!qop.isEmpty())
-        out += QString(", qop=auth, nc=%1, cnonce=\"%2\", algorithm=MD5").arg(nc, cnonce);
-    return out;
-}
-
 /* 同步单请求：返回 body（2xx）；非 2xx/网络错误返回空并带码/认证头 */
 static QByteArray opdsSyncReq(QNetworkAccessManager *nam, const QNetworkRequest &req, int *codeOut,
                               QString *chOut, QString *err)
@@ -134,7 +92,7 @@ QByteArray OpdsClient::get(const QString &url, QString *err)
         const QUrl u(url);
         const QString uri = u.path(QUrl::FullyEncoded) +
                             (u.hasQuery() ? "?" + u.query(QUrl::FullyEncoded) : QString());
-        const QString auth = digestAuthorize("GET", uri, m_user, m_pass, ch);
+        const QString auth = davDigestAuth("GET", uri, m_user, m_pass, ch);
         if (!auth.isEmpty())
         {
             body = opdsSyncReq(m_nam, req1(auth), &code, &ch, &e1);
