@@ -763,7 +763,7 @@ static int hr_stext_fill(fz_context *ctx, fz_document *docv, int page, fz_stext_
 }
 
 int hr_qt_selection(void *docv, int page, float ax, float ay, float bx, float by,
-                    char **outText, float **outRects, int *outRectN)
+                    int snap, char **outText, float **outRects, int *outRectN)
 {
 	if (!docv || !outText || !outRects || !outRectN) return -1;
 	*outText = NULL; *outRects = NULL; *outRectN = 0;
@@ -786,23 +786,45 @@ int hr_qt_selection(void *docv, int page, float ax, float ay, float bx, float by
 	{
 		hr_stext_fill(tc, hd->fz, page, &st, &p);
 		fz_point a = { ax, ay }, b = { bx, by };
+		/* v1.12.0：词吸附（双击/右键选词）——a/b 吸附到所在词的边界 */
+		if (snap)
+			fz_snap_selection(tc, st, &a, &b, FZ_SELECT_WORDS);
 		char *sel = fz_copy_selection(tc, st, a, b, 1);
 		text = sel ? sel : (char *)calloc(1, 1);
-		int cap = 16;
-		rects = (float *)malloc(sizeof(float) * 4 * cap);
-		for (fz_stext_block *blk = st->first_block; blk; blk = blk->next)
+		/* v1.12.0：精确高亮 quad（fz_highlight_selection，仅选区内文字）——
+		 * 原实现返回全页每一行的 bbox，拖选高亮糊满整页、PDF 高亮导出范围也错 */
 		{
-			if (blk->type != FZ_STEXT_BLOCK_TEXT) continue;
-			for (fz_stext_line *ln = blk->u.t.first_line; ln; ln = ln->next)
+			int qcap = 512;
+			fz_quad *qs = (fz_quad *)malloc(sizeof(fz_quad) * qcap);
+			if (qs)
 			{
-				if (rn == cap)
+				int qn = fz_highlight_selection(tc, st, a, b, qs, qcap);
+				if (qn == qcap) /* 整页全选极端场景：扩容重试一次 */
 				{
-					cap *= 2;
-					rects = (float *)realloc(rects, sizeof(float) * 4 * cap);
+					qcap = 2048;
+					fz_quad *qs2 = (fz_quad *)realloc(qs, sizeof(fz_quad) * qcap);
+					if (qs2)
+					{
+						qs = qs2;
+						qn = fz_highlight_selection(tc, st, a, b, qs, qcap);
+					}
 				}
-				rects[rn * 4 + 0] = ln->bbox.x0; rects[rn * 4 + 1] = ln->bbox.y0;
-				rects[rn * 4 + 2] = ln->bbox.x1; rects[rn * 4 + 3] = ln->bbox.y1;
-				rn++;
+				if (qn > 0)
+				{
+					rects = (float *)malloc(sizeof(float) * 4 * qn);
+					if (rects) /* v1.12.1：OOM 判空——失败降级为无 quad（文本仍返回） */
+					{
+						for (int i = 0; i < qn; i++)
+						{
+							rects[i * 4 + 0] = qs[i].ul.x;
+							rects[i * 4 + 1] = qs[i].ul.y;
+							rects[i * 4 + 2] = qs[i].lr.x;
+							rects[i * 4 + 3] = qs[i].lr.y;
+						}
+						rn = qn;
+					}
+				}
+				free(qs);
 			}
 		}
 		*outText = text; text = NULL;

@@ -20,7 +20,7 @@ bool ReaderMark::pageToPix(const QRectF &imgRect, const float box[4], float scal
 }
 
 SelResult ReaderMark::select(ReaderWindow *w, int page, const QRectF &imgRect,
-                             const QPointF &a, const QPointF &b)
+                             const QPointF &a, const QPointF &b, int snap)
 {
     SelResult out;
     void *doc = w->hrDoc();
@@ -36,7 +36,7 @@ SelResult ReaderMark::select(ReaderWindow *w, int page, const QRectF &imgRect,
     char *text = nullptr;
     float *rects = nullptr;
     int rn = 0;
-    if (hr_qt_selection(doc, page, ax, ay, bx2, by2, &text, &rects, &rn) == 0)
+    if (hr_qt_selection(doc, page, ax, ay, bx2, by2, snap, &text, &rects, &rn) == 0)
     {
         out.text = QString::fromUtf8(text);
         for (int i = 0; i < rn; i++)

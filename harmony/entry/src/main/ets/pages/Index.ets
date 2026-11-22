@@ -14,6 +14,7 @@ import {
 import {
   saveRecentBook, getRecentBooks, getRecentBooksStarred, toggleStar,
   exportRecentBooks, replaceRecentBooks, setBookStatus, setBooksStatus,
+  getRecentHidden, hideRecentBook, clearRecentBooks,
   RecentBook
 } from '../model/ReadingProgress';
 import { exportBookmarks, replaceBookmarks, getBookmarks, removeBookmark, addBookmark, Bookmark } from '../model/Bookmarks';
@@ -74,6 +75,8 @@ const SORT_LABELS: Resource[] = [$r('app.string.libsort_folder'), $r('app.string
 /* 0.9.50: 书架视图弹单 (SearchFragment2.popupMenu names/icons order; Android
  * 标签 reuses the 关键词 tags icon) */
 const VIEW_IDS: number[] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+/* 0.9.70: recent page popup shows the 4 layout modes only (Android RecentFragment2) */
+const RECENT_VIEW_IDS: number[] = [0, 1, 2, 3];
 const VIEW_MENU_LABELS: Resource[] = [$r('app.string.vm_list'), $r('app.string.vm_compact'), $r('app.string.vm_grid'), $r('app.string.vm_cover'), $r('app.string.vm_shelf'), $r('app.string.vm_author'), $r('app.string.vm_genre'), $r('app.string.vm_series'), $r('app.string.vm_keywords'), $r('app.string.vm_language'), $r('app.string.vm_tags'), $r('app.string.vm_publisher'), $r('app.string.vm_pubdate')];
 const VIEW_MENU_ICONS: Resource[] = [$r('app.media.ic_view_list'), $r('app.media.ic_view_compact'), $r('app.media.ic_view_grid'), $r('app.media.ic_view_cover'), $r('app.media.ic_view_shelf'), $r('app.media.ic_view_author'), $r('app.media.ic_view_genre'), $r('app.media.ic_view_series'), $r('app.media.ic_view_keywords'), $r('app.media.ic_view_language'), $r('app.media.ic_view_keywords'), $r('app.media.ic_view_publisher'), $r('app.media.ic_view_pubdate')];
 const THEME_PRESETS: string[] = ['#3949AB', '#1565C0', '#00897B', '#2E7D32', '#6D4C41', '#455A64', '#AD1457', '#37474F'];
@@ -233,6 +236,14 @@ struct Index {
    * link-row list (Android PrefFragment2 parity) */
   @State groupExp: Record<string, boolean> = { 'lib': true, 'gen': true, 'ui': true, 'backup': false, 'fmt': false, 'libset': false, 'libdisp': false, 'cov': false, 'read': false, 'theme': false, 'tabs': false, 'remote': false, 'cachemgr': false, 'dbglog': false };
   @State subPage: number = 0;           /* full-screen sub-page: 0=none 1=最近阅读 2=书签笔记 */
+  /* 0.9.70: Android RecentFragment2 parity - view mode (0=列表 1=简表 2=网格
+   * 3=封面, session-only like the shelf libViewMode) + the hidden-path set
+   * behind 清空/✕ (progress-safe removal; a book re-enters the list when it
+   * is opened again) */
+  @State recentMode: number = 0;
+  @State recentHidden: string[] = [];
+  @State showRecentViewMenu: boolean = false;
+  @State showRecentClear: boolean = false;
   @State showDirPick: boolean = false;  /* local directory picker dialog */
   @State dirPickTarget: string = '';    /* root | fonts | downloads | libFolder | libFolderEdit */
   private dirPickEditOld: string = '';  /* libFolderEdit: the path being replaced */
@@ -1266,6 +1277,8 @@ struct Index {
       const ctx = getContext(this);
       this.recentBooks = await getRecentBooks(ctx);
       this.starredBooks = await getRecentBooksStarred(ctx);
+      /* 0.9.70: hidden-path set behind 清空/✕ */
+      this.recentHidden = await getRecentHidden(ctx);
       /* Sprint N: load tag list */
       this.allTags = await getTagList(ctx);
       console.info(`[Index] Library loaded: ${this.recentBooks.length} recent, ${this.starredBooks.length} starred`);
@@ -1939,6 +1952,7 @@ struct Index {
         .width(52).height(52)
         .backgroundColor(this.thm())
         .borderRadius(26)
+        .id('fab_open_last')
         .shadow({ radius: 8, color: '#44000000', offsetX: 0, offsetY: 2 })
         .margin({ right: 16, bottom: this.settings.tabPositionTop ? 24 : 62 })
         .translate({ x: this.fabDx, y: this.fabDy })
@@ -1980,6 +1994,19 @@ struct Index {
       }
       if (this.showViewMenu) {
         this.buildViewMenuDialog()
+      }
+      /* 0.9.70: recent page view popup + 清空 confirm (Android RecentFragment2) */
+      if (this.showRecentViewMenu) {
+        this.buildRecentViewMenu()
+      }
+      if (this.showRecentClear) {
+        Column() {}
+          .width('100%').height('100%')
+          .backgroundColor('#66000000')
+          .onClick(() => {
+            this.showRecentClear = false;
+          })
+        this.buildRecentClearConfirm()
       }
 
       // ---- 0.9.51: 多文档搜索 (Android MultyDocSearchDialog) ----
@@ -4452,7 +4479,7 @@ tlog('download_start', 'name=' + fileName);    try {
             if (moreAction === 9) {
               this.subPage = 2;
             } else if (moreAction === 10) {
-              this.subPage = 1;
+              this.openRecentPage();
             } else {
               this.switchTab(moreAction);
             }
@@ -5417,7 +5444,7 @@ tlog('download_start', 'name=' + fileName);    try {
                   .width('100%').padding({ left: 8, top: 10, bottom: 4 })
                   .textAlign(TextAlign.Start)
                 ForEach(group[1], (book: RecentBook) => {
-                  this.LibRow(book, false)
+                  this.LibRow(book, false, false)
                   Divider().color(this.inputBg())
                 }, (item: RecentBook) => `${item.path}_${item.page}_${item.status}_${item.star}`)
               }
@@ -5432,7 +5459,7 @@ tlog('download_start', 'name=' + fileName);    try {
         Scroll() {
           Column({ space: 0 }) {
             ForEach(this.getLibraryBooks(), (book: RecentBook) => {
-              this.LibRow(book, this.libViewMode === 1)
+              this.LibRow(book, this.libViewMode === 1, false)
               Divider().color(this.inputBg())
             }, (item: RecentBook) => `${item.path}_${item.page}_${item.status}_${item.star}`)
           }
@@ -5450,7 +5477,7 @@ tlog('download_start', 'name=' + fileName);    try {
               Grid() {
                 ForEach(this.getLibraryBooks(), (book: RecentBook) => {
                   GridItem() {
-                    this.LibGridCell(book)
+                    this.LibGridCell(book, this.libViewMode === 2)
                   }
                 }, (item: RecentBook) => `${item.path}_${item.page}_${item.status}_${item.star}`)
               }
@@ -5725,9 +5752,11 @@ tlog('download_start', 'name=' + fileName);    try {
     this.exitSel();
   }
 
-  /** Library list / compact row with selection + progress + star. */
+  /** Library list / compact row with selection + progress + star.
+   *  0.9.70: withRemove renders the recent-page trailing group ✕ ☆ ⋮
+   *  (Android RecentFragment2 row; ✕ hides the book from the recent list). */
   @Builder
-  LibRow(book: RecentBook, compact: boolean) {
+  LibRow(book: RecentBook, compact: boolean, withRemove: boolean) {
     Row() {
       if (this.selMode) {
         Text(this.selSet.indexOf(book.path) >= 0 ? '\u2611' : '\u2610')
@@ -5772,20 +5801,45 @@ tlog('download_start', 'name=' + fileName);    try {
       .margin({ left: 8 })
 
       if (!this.selMode) {
-        Column() {
-          Image($r('app.media.ic_more_vert')).width(20).height(20).fillColor(this.txtHint())
-        }
-        .width(32).height(36).justifyContent(FlexAlign.Center)
-        .margin({ right: 4 })
-        .onClick(() => {
-          this.libMenuPath = book.path;
-          console.info(`[Index] Book menu: ${book.title}`);
-        })
-        Text(book.star ? '\u2605' : '\u2606')
-          .fontSize(22).fontColor(book.star ? '#f5a623' : this.txtFaint())
+        if (withRemove) {
+          /* 0.9.70: recent page trailing ✕ ☆ ⋮ (Android RecentFragment2) */
+          Text('\u2716')
+            .fontSize(16).fontColor(this.txtFaint())
+            .width(30).height(36).textAlign(TextAlign.Center)
+            .id('recent_row_del')
+            .onClick(() => {
+              this.onRecentRemove(book);
+            })
+          Text(book.star ? '\u2605' : '\u2606')
+            .fontSize(22).fontColor(book.star ? '#f5a623' : this.txtFaint())
+            .onClick(() => {
+              this.onToggleStar(book);
+            })
+          Column() {
+            Image($r('app.media.ic_more_vert')).width(20).height(20).fillColor(this.txtHint())
+          }
+          .width(32).height(36).justifyContent(FlexAlign.Center)
+          .margin({ left: 2 })
           .onClick(() => {
-            this.onToggleStar(book);
+            this.libMenuPath = book.path;
+            console.info(`[Index] Book menu: ${book.title}`);
           })
+        } else {
+          Column() {
+            Image($r('app.media.ic_more_vert')).width(20).height(20).fillColor(this.txtHint())
+          }
+          .width(32).height(36).justifyContent(FlexAlign.Center)
+          .margin({ right: 4 })
+          .onClick(() => {
+            this.libMenuPath = book.path;
+            console.info(`[Index] Book menu: ${book.title}`);
+          })
+          Text(book.star ? '\u2605' : '\u2606')
+            .fontSize(22).fontColor(book.star ? '#f5a623' : this.txtFaint())
+            .onClick(() => {
+              this.onToggleStar(book);
+            })
+        }
       }
     }
     .width('100%')
@@ -5805,9 +5859,11 @@ tlog('download_start', 'name=' + fileName);    try {
     }))
   }
 
-  /** Library grid / cover / bookshelf cell (Android hr04: cover + progress/star/more overlay). */
+  /** Library grid / cover / bookshelf cell (Android hr04: cover + progress/star/more
+   *  overlay). 0.9.70: showTitle is the caller's grid-vs-cover decision (grid
+   *  shows the caption under the cell, cover does not). */
   @Builder
-  LibGridCell(book: RecentBook) {
+  LibGridCell(book: RecentBook, showTitle: boolean) {
     Column({ space: 4 }) {
       Stack({ alignContent: Alignment.Bottom }) {
         /* shelf plank under the book (Android ShelfBoardsDecoration: walnut
@@ -5896,7 +5952,7 @@ tlog('download_start', 'name=' + fileName);    try {
           this.toggleSelect(book.path);
         }
       }))
-      if (this.libViewMode === 2) {
+      if (showTitle) {
         Text(book.title.length > 10 ? book.title.substring(0, 10) + '\u2026' : book.title)
           .fontSize(11).fontColor(this.txtPri()).maxLines(1)
       }
@@ -7872,7 +7928,8 @@ tlog('download_start', 'name=' + fileName);    try {
     .backgroundColor(this.drawerBg())
   }
 
-  /** One drawer nav row. target: 0/1=shelf tab, 2=my-library tab, 3=bookmarks sub-page. */
+  /** One drawer nav row. target: 0=recent sub-page, 1=shelf tab,
+   *  2=my-library tab, 3=bookmarks sub-page. */
   @Builder
   drawerNavItem(icon: Resource, label: string, target: number) {
     Row({ space: 18 }) {
@@ -7881,9 +7938,13 @@ tlog('download_start', 'name=' + fileName);    try {
     }
     .width('100%').height(52)
     .padding({ left: 16 })
+    .id('drawer_nav_' + target)
     .onClick(() => {
       this.showDrawer = false;
-      if (target === 0 || target === 1) {
+      if (target === 0) {
+        /* 0.9.70: 最近阅读 opens the recent sub-page (Android RecentFragment2) */
+        this.openRecentPage();
+      } else if (target === 1) {
         this.switchTab(1);
       } else if (target === 2) {
         this.switchTab(2);
@@ -7925,6 +7986,93 @@ tlog('download_start', 'name=' + fileName);    try {
     })
   }
 
+  /* ---- 0.9.70: recent sub-page (Android RecentFragment2 parity) ---- */
+
+  /** Recent page entry (drawer 最近阅读 / home 更多): open + refresh hidden set. */
+  openRecentPage(): void {
+    this.subPage = 1;
+    const ctx = getContext(this);
+    getRecentHidden(ctx).then((h: string[]) => {
+      this.recentHidden = h;
+    });
+    tlog('recent_page', 'mode=' + this.recentMode + ' hidden=' + this.recentHidden.length);
+    console.info('[Index] Recent page opened');
+  }
+
+  /** Visible recent rows = store order minus hidden minus (hide-read ? finished). */
+  private recentViewList(): RecentBook[] {
+    const out: RecentBook[] = [];
+    for (let i = 0; i < this.recentBooks.length; i++) {
+      const b = this.recentBooks[i];
+      if (this.recentHidden.indexOf(b.path) >= 0) {
+        continue;
+      }
+      if (this.settings.hideReadBooks && b.status === 2) {
+        continue;
+      }
+      out.push(b);
+    }
+    return out;
+  }
+
+  /** Android populateDataInUI label: "最近 (N)"; hide-read: "最近 (total/hidden)". */
+  private recentCountLabel(): string {
+    let total = 0;
+    let readHidden = 0;
+    for (let i = 0; i < this.recentBooks.length; i++) {
+      const b = this.recentBooks[i];
+      if (this.recentHidden.indexOf(b.path) >= 0) {
+        continue;
+      }
+      total++;
+      if (this.settings.hideReadBooks && b.status === 2) {
+        readHidden++;
+      }
+    }
+    const title = this.L($r('app.string.sec_recent'));
+    if (this.settings.hideReadBooks) {
+      return title + ' (' + total + '/' + readHidden + ')';
+    }
+    return title + ' (' + total + ')';
+  }
+
+  /** Recent row ✕: drop from the visible list; progress preserved, the book
+   * re-enters the list when opened again (ReadingProgress unhide-on-save). */
+  private onRecentRemove(book: RecentBook): void {
+    const ctx = getContext(this);
+    hideRecentBook(ctx, book.path).then(() => {
+      const h: string[] = this.recentHidden.slice();
+      h.push(book.path);
+      this.recentHidden = h;
+      tlog('recent_remove', book.title);
+      console.info('[Index] Recent removed: ' + book.title);
+    });
+  }
+
+  /** 清空确认 OK: hide every book currently in the store (progress kept). */
+  private onRecentClearAll(): void {
+    this.showRecentClear = false;
+    const ctx = getContext(this);
+    clearRecentBooks(ctx).then((n: number) => {
+      const all: string[] = [];
+      for (let i = 0; i < this.recentBooks.length; i++) {
+        all.push(this.recentBooks[i].path);
+      }
+      this.recentHidden = all;
+      tlog('recent_clear', 'count=' + n);
+      console.info('[Index] Recent cleared: ' + n + ' books hidden');
+    });
+  }
+
+  /** Recent view mode (Android AppState.recentMode; session-only like the
+   * shelf libViewMode). */
+  private applyRecentMode(id: number): void {
+    this.recentMode = id;
+    this.showRecentViewMenu = false;
+    tlog('recent_mode', 'id=' + id);
+    console.info('[Index] Recent mode: ' + id);
+  }
+
   /** Full-screen sub-page: 1=最近阅读 2=书签笔记 (Android Recent/BookmarksFragment;
    *  2026-09-18: home 更多 switches the whole page instead of a popup). */
   @Builder
@@ -7934,6 +8082,7 @@ tlog('download_start', 'name=' + fileName);    try {
         Text('\u2039')
           .fontSize(26).fontColor(this.txtPri())
           .width(40).height(40).textAlign(TextAlign.Center)
+          .id('subpage_back')
           .onClick(() => {
             this.subPage = 0;
           })
@@ -7955,24 +8104,87 @@ tlog('download_start', 'name=' + fileName);    try {
     .backgroundColor(this.inputBg())
   }
 
-  /** 最近阅读 sub-page body: all books, most recent first. */
+  /** 最近阅读 sub-page body (0.9.70 Android RecentFragment2 parity):
+   * panel header "最近 (N)" + 清空 + view popup, then list/compact/grid/cover
+   * by recentMode. Order = store order (newest first). */
   @Builder
   buildRecentList() {
-    Scroll() {
-      Column({ space: 0 }) {
-        if (this.recentBooks.length === 0) {
-          Text($r('app.string.lib_empty_import'))
-            .fontSize(13).fontColor(this.txtFaint()).margin({ top: 60 })
+    Column() {
+      Row({ space: 4 }) {
+        Text(this.recentCountLabel())
+          .fontSize(14).fontWeight(FontWeight.Medium).fontColor(this.txtPri())
+          .layoutWeight(1)
+          .maxLines(1)
+          .id('recent_count')
+        Text($r('app.string.recent_clear_all'))
+          .fontSize(14).fontColor(this.thm())
+          .padding({ left: 10, right: 4, top: 8, bottom: 8 })
+          .id('recent_clear_btn')
+          .onClick(() => {
+            this.showRecentClear = true;
+          })
+        Column() {
+          Image(VIEW_MENU_ICONS[this.recentMode])
+            .width(20).height(20).fillColor(this.txtMid())
         }
-        ForEach(this.recentBooks, (book: RecentBook) => {
-          this.LibRow(book, false)
-          Divider().color(this.inputBg())
-        }, (item: RecentBook) => `${item.path}_${item.page}_${item.status}_${item.star}`)
+        .width(34).height(34).justifyContent(FlexAlign.Center)
+        .id('recent_view_btn')
+        .onClick(() => {
+          this.showRecentViewMenu = true;
+        })
       }
-      .width('100%').padding({ left: 8, right: 8, top: 4 })
+      .width('100%')
+      .height(42)
+      .padding({ left: 12, right: 6 })
+      .backgroundColor(this.cardBg())
+
+      if (this.recentViewList().length === 0) {
+        Text($r('app.string.lib_empty_import'))
+          .fontSize(13).fontColor(this.txtFaint()).margin({ top: 60 })
+      } else if (this.recentMode <= 1) {
+        /* list / compact */
+        Scroll() {
+          Column({ space: 0 }) {
+            ForEach(this.recentViewList(), (book: RecentBook) => {
+              this.LibRow(book, this.recentMode === 1, true)
+              Divider().color(this.inputBg())
+            }, (item: RecentBook) => `${item.path}_${item.page}_${item.status}_${item.star}_${this.recentMode}`)
+          }
+          .width('100%').padding({ left: 8, right: 8, top: 4 })
+        }
+        .width('100%')
+        .layoutWeight(1)
+      } else {
+        /* grid / cover — wood background, shelf grid parity */
+        Scroll() {
+          Stack({ alignContent: Alignment.TopStart }) {
+            Image($r('app.media.bg_wood'))
+              .width('100%').height('100%')
+              .objectFit(ImageFit.Cover)
+            Column() {
+              Grid() {
+                ForEach(this.recentViewList(), (book: RecentBook) => {
+                  GridItem() {
+                    this.LibGridCell(book, this.recentMode === 2)
+                  }
+                }, (item: RecentBook) => `${item.path}_${item.page}_${item.status}_${item.star}_${this.recentMode}`)
+              }
+              .columnsTemplate(this.coverColsTemplate())
+              .columnsGap(8).rowsGap(14)
+              .width('94%')
+              .padding({ top: 4 })
+            }
+            .width('100%')
+            .padding({ top: 4, bottom: 16 })
+          }
+          .width('100%')
+        }
+        .width('100%')
+        .layoutWeight(1)
+      }
     }
     .width('100%')
-    .layoutWeight(1)
+    .height('100%')
   }
 
   /** 书签笔记 body: search + entries (full-screen sub-page content). */
@@ -10804,9 +11016,20 @@ tlog('download_start', 'name=' + fileName);    try {
     })
   }
 
-  /** Dashboard card source with the 显示/书籍数 prefs applied (Android widget). */
+  /** Dashboard card source with the 显示/书籍数 prefs applied (Android widget).
+   *  0.9.70: the recent source also drops 清空/✕-hidden books (Android
+   *  dashboard reads the same MRU list the RecentFragment clears). */
   private widgetCardBooks(): RecentBook[] {
-    const src: RecentBook[] = this.settings.cardSource === 0 ? this.recentBooks : this.starredBooks;
+    let src: RecentBook[] = this.settings.cardSource === 0 ? this.recentBooks : this.starredBooks;
+    if (this.settings.cardSource === 0) {
+      const f: RecentBook[] = [];
+      for (let i = 0; i < src.length; i++) {
+        if (this.recentHidden.indexOf(src[i].path) < 0) {
+          f.push(src[i]);
+        }
+      }
+      src = f;
+    }
     return src.slice(0, Math.max(1, Math.min(6, this.settings.cardCount)));
   }
 
@@ -12582,6 +12805,97 @@ tlog('download_start', 'name=' + fileName);    try {
 
 
   /* ---- exit confirmation (Android isShowCloseAppDialog) ---- */
+
+  /* 0.9.70: recent 清空 confirm (Android AlertDialogs.showDialog parity). */
+  @Builder
+  buildRecentClearConfirm() {
+    Column({ space: 12 }) {
+      Text($r('app.string.recent_clear_confirm'))
+        .fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.txtPri())
+      Row({ space: 12 }) {
+        Button($r('app.string.common_cancel'))
+          .fontSize(13).height(36).layoutWeight(1)
+          .backgroundColor(this.chipBg()).fontColor(this.txtPri())
+          .id('recent_clear_cancel')
+          .onClick(() => {
+            this.showRecentClear = false;
+          })
+        Button($r('app.string.recent_clear_all'))
+          .fontSize(13).height(36).layoutWeight(1)
+          .backgroundColor('#e57373').fontColor(Color.White)
+          .id('recent_clear_ok')
+          .onClick(() => {
+            this.onRecentClearAll();
+          })
+      }
+      .width('100%')
+    }
+    .width('72%')
+    .padding(14)
+    .backgroundColor(this.cardBg())
+    .borderRadius(12)
+  }
+
+  /* 0.9.70: recent view popup (Android RecentFragment2.popupMenu parity):
+   * 隐藏读完的书 checkbox + 列表/简表/网格/封面. */
+  @Builder
+  buildRecentViewMenu() {
+    Stack({ alignContent: Alignment.TopEnd }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.showRecentViewMenu = false;
+        })
+      Column({ space: 2 }) {
+        Row({ space: 10 }) {
+          Text(this.settings.hideReadBooks ? '\u2611' : '\u2610')
+            .fontSize(16).fontColor(this.thm())
+          Text($r('app.string.set_hide_read'))
+            .fontSize(14).fontColor(this.txtPri())
+            .layoutWeight(1)
+        }
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+        .borderRadius(6)
+        .id('recent_hide_read')
+        .onClick(() => {
+          this.settings.hideReadBooks = !this.settings.hideReadBooks;
+          this.saveNow();
+          tlog('recent_hide_read', this.settings.hideReadBooks ? 'on' : 'off');
+          console.info('[Index] Recent hide-read: ' + this.settings.hideReadBooks);
+        })
+        ForEach(RECENT_VIEW_IDS, (id: number) => {
+          Row({ space: 10 }) {
+            Image(VIEW_MENU_ICONS[id])
+              .width(18).height(18)
+              .fillColor(this.recentMode === id ? this.thm() : this.txtMid())
+            Text(VIEW_MENU_LABELS[id])
+              .fontSize(14).fontColor(this.recentMode === id ? this.thm() : this.txtPri())
+              .layoutWeight(1)
+            if (this.recentMode === id) {
+              Image($r('app.media.ic_check'))
+                .width(16).height(16).fillColor(this.thm())
+            }
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+          .borderRadius(6)
+          .id('recent_mode_' + id)
+          .onClick(() => {
+            this.applyRecentMode(id);
+          })
+        }, (id: number) => `rviewm_${id}`)
+      }
+      .width(220)
+      .padding(8)
+      .backgroundColor(this.cardBg())
+      .borderRadius(8)
+      .shadow({ radius: 6, color: '#33000000', offsetX: 0, offsetY: 2 })
+      .margin({ top: 110, right: 12 })
+    }
+    .width('100%').height('100%')
+  }
 
   @Builder
   buildExitConfirm() {

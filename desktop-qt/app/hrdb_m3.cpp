@@ -349,6 +349,31 @@ void Db::setFavoriteSync(const QString &path, bool on)
     }
 }
 
+/* v1.14.0：最近列表移除（U9 最近页 ✕/清空）——行删 + 墓碑 + meta_sync 待定清理；
+ * 键口径同 setFavoriteSync（sync_key 或 internal-storage:Books/<文件名>）；
+ * 书文件/书架/阅读进度/收藏全部保留，重新打开书 touchRecent 会回到列表 */
+void Db::removeRecentSync(const QString &path)
+{
+    if (!s_ok) return;
+    QString key;
+    {
+        QSqlQuery q(conn());
+        q.prepare("SELECT sync_key FROM recent WHERE path=?");
+        q.addBindValue(path);
+        if (q.exec() && q.next()) key = q.value(0).toString();
+    }
+    const QString booksKey =
+        QString::fromLatin1("internal-storage:Books/") + QFileInfo(path).fileName();
+    if (key.isEmpty()) key = booksKey;
+    const QString noBook = QString::fromLatin1(""); /* 显式空串：QString() 绑 NULL 永不匹配 */
+    QSqlQuery q(conn());
+    q.prepare("DELETE FROM recent WHERE path=?");
+    q.addBindValue(path);
+    q.exec();
+    tombstoneAdd("recent", noBook, key);
+    metaSyncDelete("recent", key);
+}
+
 QVector<Db::MetaEntry> Db::metaSyncList(const char *kind)
 {
     QVector<MetaEntry> out;

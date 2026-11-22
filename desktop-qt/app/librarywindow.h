@@ -3,6 +3,7 @@
 #define HRLIBRARYWINDOW_H
 
 #include <QMainWindow>
+#include <QMenu> /* v1.15.0：fillBookMenu 形参 */
 #include <QPoint>
 #include <QString>
 
@@ -15,6 +16,7 @@
 #include <QPair>
 #include <QStackedWidget> /* v0.107.2：内联读 currentIndex 需完整类型 */
 #include <QTimer> /* v0.107.2：内联 singleShot 需完整类型（原仅前置声明） */
+#include <QScrollArea> /* v1.11.0：首页行容器成员需完整类型 */
 
 class QTreeWidget;
 class QTreeWidgetItem;
@@ -93,6 +95,15 @@ public:
     void debugOpenFirstScanDir(); /* W20 取证：圆钮路径重放 */ /* W20 取证：清 meta 强制引擎重扫 */ /* v0.99.0 W20 复现探针 */ /* v0.96.0 W17#5 双重释放回归探针 */
     QPixmap grabPrefsContent() const;       /* v0.85.0 W4：偏好滚动内容整页自绘 */
     void setViewForProbe(const QString &v); /* v0.87.0 截图对比探针：切书库视图 */
+    /* v1.15.0 书架批：多选模式/书籍右键菜单 无头探针与总开关 */
+    void setMultiSel(bool on);
+    QString multiProbeState();
+    int shellProbePage() const; /* v1.15.2：启动默认页探针 */
+    QStringList bookMenuForProbe(const QString &path);
+    void menuDispatchProbe(); /* v1.15.6：右键菜单派发回归探针 */
+    void aboutProbeShot(); /* v1.15.8：软件说明页无头截图探针 */
+    void resizeProbe(const QString &book); /* v1.15.10：阅读位保持回归探针（嵌入链） */
+    QString shelfProbeBook();
     void toggleDarkForProbe() { toggleDark(); } /* v0.87.0 二轮：夜间切换（真实路径） */ /* 探针：壳/栈/阅读器几何自检 */
 
 signals:
@@ -116,8 +127,14 @@ private:
     void loadTable(); /* file_meta -> 树/封面墙镜像 */
     void scanAll(const QStringList &onlyDirs = QStringList()); /* 所有 scan_dirs 增量扫描；v0.91.0 W12 可只扫指定目录 */
     void onToggleFav();
-    void onTreeMenu(const QPoint &pos);  /* U0：书目右键菜单（收藏接线） */
-    void onCoverMenu(const QPoint &pos); /* U0：封面墙右键收藏 */
+    void onTreeMenu(const QPoint &pos);  /* U0：书目右键菜单（v1.15.0 薄壳→showBookMenu） */
+    void onCoverMenu(const QPoint &pos); /* U0：封面墙右键（v1.15.0 薄壳） */
+    void showBookMenu(const QStringList &paths, const QPoint &gpos); /* v1.15.0：右键菜单对齐安卓（三视图共用） */
+    void fillBookMenu(QMenu &menu, const QStringList &paths);
+    void dispatchBookMenu(int id, const QStringList &paths);
+    void applyMarkState(const QStringList &paths, const QString &act); /* 标记三态（菜单/批量条共用） */
+    void updateBatchCount(); /* 多选批量条计数 */
+    QStringList batchSelPaths() const;
     void startCoverGen(); /* 封面异步生成（缺图标项，≤300） */
     /* U2 书库页 */
     void onManageDirs(); /* 目录管理对话框（添加/移除扫描目录） */
@@ -150,9 +167,12 @@ private:
     void refreshHome();
     void buildBookmarksPage();
     void refreshBookmarksPage();
+    void openBookmarksForBook(const QString &path); /* v1.13.0：首页书卡点击→U7 并展开该书 */
     void buildFavPage();
     void refreshFavPage();
-    void onClearStatsDialog(); /* 统计齿轮：清空两击确认（缺陷#3） */
+    void buildRecentPage();   /* U9：最近阅读页（从新到旧/清空/四视图） */
+    void refreshRecentPage();
+    void onClearStatsDialog(); /* 统计弹窗"清空统计…"两击确认（缺陷#3；原首页齿轮 v1.15.2 撤） */
     QString homeLastBook() const;
     /* U8 全局收尾 */
     void applyBlueLight();       /* 蓝光滤镜暖色叠加（ui/blueLight 0/1/2） */
@@ -167,6 +187,10 @@ private:
     QTreeWidget *m_tree = nullptr;
     QLabel *m_lbStat = nullptr;
     QListWidget *m_cover = nullptr;   /* 封面墙（批次三） */
+    /* v1.15.0：多选模式批量操作条 */
+    QWidget *m_batchBar = nullptr;
+    QLabel *m_batchCnt = nullptr;
+    bool m_multiSel = false;
     QTimer *m_coverRebuildTimer = nullptr; /* v0.102.0 fix15：封面宽度滑杆防抖重建 */
     QComboBox *m_sortC = nullptr;     /* 排序（标题/最近/页数/大小） */
     QPushButton *m_btnCover = nullptr;
@@ -217,6 +241,12 @@ private:
     QWidget *m_bmPage = nullptr, *m_favPage = nullptr;
     QTreeWidget *m_bmTree = nullptr;
     QListWidget *m_favList = nullptr;
+    /* U9 最近阅读页（v1.14.0，安卓 RecentFragment2 同构） */
+    QWidget *m_recentPage = nullptr;
+    QListWidget *m_recentList = nullptr;
+    QLabel *m_recentCount = nullptr;
+    int m_recentView = 0;      /* 0 列表 1 简表 2 网格 3 封面 */
+    bool m_recentHideRead = false;
     QHBoxLayout *m_hRecent = nullptr, *m_hBm = nullptr, *m_hFav = nullptr,
                 *m_hFiles = nullptr, *m_hSrv = nullptr;
     QLabel *m_hSubRecent = nullptr, *m_hSubBm = nullptr, *m_hSubFav = nullptr,
@@ -224,6 +254,12 @@ private:
     QLabel *m_hStBooks = nullptr, *m_hStRead = nullptr, *m_hStToday = nullptr,
            *m_hStSpeed = nullptr, *m_hStTotal = nullptr;
     QToolButton *m_homeFab = nullptr; /* v0.77.0 V2：56px 圆形图标 FAB */
+    /* v1.11.0：首页自适应（行容器化+动态上限；v1.11.0b 定版上下单列） */
+    QWidget *m_homeCols = nullptr;      /* 六区块挂载容器（重排目标） */
+    QVector<QWidget *> m_homeSecs;      /* 区块顺序：0最近 1书签 2珍藏 3统计 4文件 5服务器 */
+    QScrollArea *m_homeBmSa = nullptr, *m_homeFavSa = nullptr, *m_homeSrvSa = nullptr;
+    QTimer *m_homeResizeDeb = nullptr;  /* 窗口尺寸变化 250ms 防抖 */
+    bool m_homeTwoCol = false;
     QToolButton *m_sideAboutBtn = nullptr; /* v0.95.0 W16：侧栏最底横排——软件说明/夜间模式 */
     QToolButton *m_sideNightBtn = nullptr;
     /* U8 */
@@ -250,6 +286,11 @@ private:
     void embedReader(ReaderWindow *rw);
     void warmNextBook(); /* v1.9.0（P1-5）：空闲预热器（阅读活跃即停） */
     void retireReader(bool refresh);
+    void relayoutHome(bool force = false); /* v1.11.0：单列/双列重排 */
+    void dumpHomeState(const QString &tag); /* v1.11.0a 诊断探针（临时） */
+
+protected:
+    void resizeEvent(QResizeEvent *e) override; /* v1.11.0：尺寸变化 → 防抖刷新首页自适应 */
 };
 
 } // namespace hr

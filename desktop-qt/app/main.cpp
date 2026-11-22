@@ -64,6 +64,7 @@ static LONG WINAPI hr_crash_filter(EXCEPTION_POINTERS *ep)
 #include "hrwebdav.h"
 #include "librarywindow.h"
 #include "readerwindow.h"
+#include "readermark.h"
 
 #include <QApplication>
 #include <QCryptographicHash>
@@ -160,6 +161,11 @@ int main(int argc, char **argv)
     bool noteSmoke = false; /* v1.6.0：--notesmoke 笔记生产端无头回归 */
     bool scrollSmoke = false; /* v1.6.1：--scrollsmoke 滚动模式 phase2 增页空白页无头回归 */
     QVector<int> scrollPages;
+    bool selUiSmoke = false; /* v1.12.0：--seluismoke 划词 UI 路径无头回归 */
+    bool shelfSmoke = false; /* v1.15.0：--shelfsmoke 书架多选+右键菜单无头回归 */
+    bool menuDispatchSmoke = false; /* v1.15.6：--menudispatchsmoke 右键菜单派发回归 */
+    bool aboutSmoke = false; /* v1.15.8：--aboutsmoke 软件说明页无头截图 */
+    bool resizeSmoke = false; /* v1.15.10：--resizesmoke 最大化/还原阅读位保持 */
     QString dumpMode;
     QString noteBook;
     QString sshDir;
@@ -224,6 +230,12 @@ int main(int argc, char **argv)
             scrollSmoke = true;
             book = QString::fromLocal8Bit(argv[++i]);
             while (i + 1 < argc) scrollPages << QString::fromLocal8Bit(argv[++i]).toInt();
+        }
+        else if (a == "--seluismoke" && i + 1 < argc)
+        {
+            /* v1.12.0：划词选择 UI 路径回归——精确 quad / 词吸附 / 跨页拖选 */
+            selUiSmoke = true;
+            book = QString::fromLocal8Bit(argv[++i]);
         }
         else if (a == "--davsmoke" && i + 3 < argc)
         {
@@ -310,6 +322,19 @@ int main(int argc, char **argv)
         }
         else if (a == "--prefsmoke")
             prefSmoke = true;
+        else if (a == "--shelfsmoke")
+            shelfSmoke = true; /* v1.15.0：书架多选+右键菜单无头回归 */
+        else if (a == "--menudispatchsmoke")
+            menuDispatchSmoke = true; /* v1.15.6：右键菜单派发回归 */
+        else if (a == "--aboutsmoke")
+            aboutSmoke = true; /* v1.15.8：软件说明页无头截图 */
+        else if (a == "--resizesmoke" && i + 2 < argc)
+        {
+            resizeSmoke = true; /* v1.15.10：阅读位保持回归 */
+            book = QString::fromLocal8Bit(argv[i + 1]);
+            outPng = QString::fromLocal8Bit(argv[i + 2]);
+            i += 2;
+        }
         else if (a == "--shotsmoke")
             shotsSmoke = true;
         else if (a == "--browse2") /* v0.96.0 W17#5：browse 页 double-free 回归探针 */
@@ -506,7 +531,7 @@ int main(int argc, char **argv)
             int r = 0;
             const float y0 = box[1] + (box[3] - box[1]) * 0.30f;
             const float y1 = box[1] + (box[3] - box[1]) * 0.70f;
-            rc = hr_qt_selection(doc, p, box[0] + 1, y0, box[2] - 1, y1, &text, &rects, &r);
+            rc = hr_qt_selection(doc, p, box[0] + 1, y0, box[2] - 1, y1, 0, &text, &rects, &r);
             const QString s = QString::fromUtf8(text ? text : "");
             free(text);
             free(rects);
@@ -530,7 +555,7 @@ int main(int argc, char **argv)
             int r2n = 0;
             const float ya = box2[1] + (box2[3] - box2[1]) * 0.30f;
             const float yb = box2[1] + (box2[3] - box2[1]) * 0.70f;
-            if (hr_qt_selection(doc, 0, box2[0] + 1, ya, box2[2] - 1, yb, &t2, &r2, &r2n) == 0 &&
+            if (hr_qt_selection(doc, 0, box2[0] + 1, ya, box2[2] - 1, yb, 0, &t2, &r2, &r2n) == 0 &&
                 r2n > 0)
             {
                 for (int k = 0; k < r2n; k++)
@@ -725,14 +750,27 @@ int main(int argc, char **argv)
     {
         /* U0 修复#14：冒烟此前直写真实 stats.json——先快照后还原，零污染 */
         const QString statsPath = hr::dataDir() + "/stats.json";
-        const QByteArray statsBak =
-            QFile::exists(statsPath) ? QFile(statsPath).readAll() : QByteArray();
+        QByteArray statsBak;
+        {
+            QFile f(statsPath);
+            /* v1.13.1 修正：QFile 未 open 时 readAll 恒空——旧写法致快照恒空、
+             * 还原分支误删 stats.json（零污染承诺实际从未生效） */
+            if (f.open(QIODevice::ReadOnly)) statsBak = f.readAll();
+        }
         hr::Stats::addReading("book_epub.epub", 3, 2);
         hr::Stats::addReading("book_pdf.pdf", 1, 1);
         const auto rr = hr::Stats::rows(7);
         int tm = 0, tp = 0;
         for (const auto &d : rr) { tm += d.minutes; tp += d.pages; }
         const int tb = hr::Stats::totalBooks();
+        /* v1.13.1：三窗口在还原前取值（还原后 stats.json 已回原状） */
+        const int wMin = hr::Stats::minutesBack(7);
+        const int mMin = hr::Stats::minutesBack(30);
+        const int yMin = hr::Stats::minutesBack(365);
+        int d7 = 0; /* v1.14.1：逐日桶和=窗口和（口径交叉核对） */
+        for (const auto &b : hr::Stats::bucketsDaily(7)) d7 += b.second;
+        int d30 = 0;
+        for (const auto &b : hr::Stats::bucketsDaily(30)) d30 += b.second;
         if (statsBak.isEmpty()) QFile::remove(statsPath);
         else
         {
@@ -740,9 +778,11 @@ int main(int argc, char **argv)
             wf.open(QIODevice::WriteOnly | QIODevice::Truncate);
             wf.write(statsBak);
         }
-        evt("statssmoke_done", QString("days=%1 min=%2 pages=%3 books=%4")
-                                   .arg(rr.size()).arg(tm).arg(tp).arg(tb));
-        fprintf(stderr, "STATSSMOKE days=%d min=%d pages=%d books=%d\n", rr.size(), tm, tp, tb);
+        evt("statssmoke_done", QString("days=%1 min=%2 pages=%3 books=%4 w=%5 m=%6 y=%7 d7=%8 d30=%9")
+                                   .arg(rr.size()).arg(tm).arg(tp).arg(tb)
+                                   .arg(wMin).arg(mMin).arg(yMin).arg(d7).arg(d30));
+        fprintf(stderr, "STATSSMOKE days=%d min=%d pages=%d books=%d w=%d m=%d y=%d d7=%d d30=%d\n",
+                rr.size(), tm, tp, tb, wMin, mMin, yMin, d7, d30);
         hr_qt_shutdown();
         return (tm >= 3 && tp >= 4 && tb >= 2) ? 0 : 14;
     }
@@ -1213,6 +1253,142 @@ int main(int argc, char **argv)
         hr_qt_shutdown();
         return pass ? 0 : 8;
     }
+    if (selUiSmoke)
+    {
+        /* v1.12.0：划词选择 UI 路径无头回归——三断言：
+         * 1) 中带拖选：文本非空、quad 数合理且覆盖面积 < 62% 页面（旧实现=全页行框必糊满）；
+         * 2) 词吸附（snap=1, a=b）：选中一个"词"（≤40 字符）且有 quad；
+         * 3) 跨页拖选（走 updateSelection 真路径）：两页都有 quad。 */
+        hr::Db::open();
+        if (book.isEmpty() || !QFileInfo::exists(book))
+        {
+            fprintf(stderr, "SELSMOKE rc=3 fail=book\n");
+            hr_qt_shutdown();
+            return 3;
+        }
+        win.setSmokeViewport(900, 1200);
+        win.forceScrollMode();
+        win.show();
+        for (int j = 0; j < 30; ++j)
+        {
+            QCoreApplication::processEvents();
+            QThread::msleep(30);
+        }
+        if (!win.openBookAsync(book, -1))
+        {
+            fprintf(stderr, "SELSMOKE rc=3 fail=open\n");
+            hr_qt_shutdown();
+            return 3;
+        }
+        const qint64 aw = QDateTime::currentMSecsSinceEpoch();
+        while (win.pageCount() <= 0 && !win.asyncFailed() &&
+               QDateTime::currentMSecsSinceEpoch() - aw < 30000)
+            QCoreApplication::processEvents();
+        const int pgs = win.pageCount();
+        if (pgs <= 0)
+        {
+            fprintf(stderr, "SELSMOKE rc=3 fail=opened\n");
+            hr_qt_shutdown();
+            return 3;
+        }
+        const qint64 tw = QDateTime::currentMSecsSinceEpoch();
+        while ((win.probeLabelCount() < qMin(2, pgs) || !win.probePageRendered(0)) &&
+               QDateTime::currentMSecsSinceEpoch() - tw < 30000)
+        {
+            QCoreApplication::processEvents();
+            QThread::msleep(25);
+        }
+        /* 找第一个有正文的页（0..3）：页 0 可能是纯图封面 */
+        int textPg = -1;
+        hr::SelResult d1;
+        for (int cpg = 0; cpg < qMin(4, pgs) && textPg < 0; cpg++)
+        {
+            /* 大书建栈期渲染队列忙：逐页等渲染落定再选 */
+            const qint64 tp = QDateTime::currentMSecsSinceEpoch();
+            while (!win.probePageRendered(cpg) &&
+                   QDateTime::currentMSecsSinceEpoch() - tp < 12000)
+            {
+                QCoreApplication::processEvents();
+                QThread::msleep(25);
+            }
+            const QRectF r = win.probeSelPageRect(cpg);
+            if (r.width() <= 0 || !win.probePageRendered(cpg)) continue;
+            d1 = hr::ReaderMark::select(&win, cpg, r,
+                                        QPointF(r.left() + r.width() * 0.15,
+                                                r.top() + r.height() * 0.30),
+                                        QPointF(r.left() + r.width() * 0.85,
+                                                r.top() + r.height() * 0.62), 0);
+            if (!d1.text.trimmed().isEmpty() && !d1.rectsPx.isEmpty())
+                textPg = cpg;
+        }
+        bool dragOk = false;
+        if (textPg >= 0)
+        {
+            const QRectF r = win.probeSelPageRect(textPg);
+            double area = 0;
+            for (const QRectF &q : d1.rectsPx) area += q.width() * q.height();
+            dragOk = d1.rectsPx.size() <= 60 &&
+                     area < r.width() * r.height() * 0.62;
+            evt("selsmoke_drag", QString("page=%1 len=%2 quads=%3")
+                    .arg(textPg + 1).arg(d1.text.size()).arg(d1.rectsPx.size()));
+        }
+        bool wordOk = false;
+        if (textPg >= 0)
+        {
+            const QRectF r = win.probeSelPageRect(textPg);
+            const hr::SelResult w1 = hr::ReaderMark::select(&win, textPg, r,
+                                                            r.center(), r.center(), 1);
+            wordOk = !w1.text.trimmed().isEmpty() &&
+                     w1.text.trimmed().size() <= 40 && !w1.rectsPx.isEmpty();
+            evt("selsmoke_word", QString("page=%1 word=%2 quads=%3")
+                    .arg(textPg + 1).arg(w1.text.trimmed().left(24))
+                    .arg(w1.rectsPx.size()));
+        }
+        bool crossOk = false;
+        for (int p2 = textPg + 1;
+             textPg >= 0 && p2 < qMin(textPg + 6, pgs) && !crossOk; p2++)
+        {
+            if (win.probeLabelCount() <= p2) break;
+            const QRectF r0 = win.probeSelPageRect(textPg);
+            const QRectF r1 = win.probeSelPageRect(p2);
+            if (r0.width() <= 0 || r1.width() <= 0) continue;
+            /* 先全带单页试选（0~90%）——跳过纯图/空白页，避免误判跨页断言 */
+            const hr::SelResult s1 =
+                hr::ReaderMark::select(&win, p2, r1, r1.topLeft(),
+                                       QPointF(r1.center().x(),
+                                               r1.top() + r1.height() * 0.90), 0);
+            evt("sel_dbg", QString("page=%1 len=%2 quads=%3")
+                    .arg(p2 + 1).arg(s1.text.trimmed().size())
+                    .arg(s1.rectsPx.size()));
+            if (s1.text.trimmed().isEmpty() || s1.rectsPx.isEmpty()) continue;
+            /* 锚点取已证实文字 quad 的垂直中心（锚定页必含文字） */
+            QPointF anchor = QPointF(r0.width() * 0.5, r0.height() * 0.70);
+            if (!d1.rectsPx.isEmpty())
+            {
+                /* 中间 quad（深入文本块；末 quad 贴块边界会与页底角点
+                 * 吸附到同一最近字符索引，引擎按索引区间返回空选区） */
+                const QRectF q = d1.rectsPx[d1.rectsPx.size() / 2];
+                anchor = QPointF(q.center().x(), q.center().y()) - r0.topLeft();
+            }
+            crossOk = win.probeSelectRange(textPg, anchor, p2,
+                                           QPointF(r1.width() * 0.5,
+                                                   r1.height() * 0.85)) &&
+                      win.probeSelQuads().contains(textPg) &&
+                      win.probeSelQuads().contains(p2);
+            evt("selsmoke_cross", QString("pages=%1-%2 len=%3 ok=%4")
+                    .arg(textPg + 1).arg(p2 + 1)
+                    .arg(win.probeSelText().size()).arg(crossOk ? 1 : 0));
+        }
+        const bool pass = dragOk && wordOk && crossOk;
+        fprintf(stderr, "SELSMOKE rc=%d page=%d drag=%d word=%d cross=%d\n",
+                pass ? 0 : 9, textPg + 1, dragOk ? 1 : 0, wordOk ? 1 : 0,
+                crossOk ? 1 : 0);
+        fflush(stderr);
+        QThreadPool::globalInstance()->clear();
+        QThreadPool::globalInstance()->waitForDone();
+        hr_qt_shutdown();
+        return pass ? 0 : 9;
+    }
     if (noteSmoke)
     {
         /* v1.6.0（§6）：笔记生产端无头回归——真窗链路保存（addNoteBookmark=编辑器/AI 保存按钮同一
@@ -1272,10 +1448,15 @@ int main(int argc, char **argv)
         bool gone = true;
         for (const hr::BookmarkRow &rr : hr::Db::listBookmarks(nb))
             if (rr.createdAt == c3) gone = false;
-        const bool pass = r.ok && c1 > 0 && c2 > 0 && c3 > 0 && m1 && m2 && id3 > 0 && gone;
-        evt("notesmoke_done", QString("sync=%1 m1=%2 m2=%3 gone=%4 pages=%5")
+        /* v1.12.2：正文组装口径断言（aiAnswer 优先、label 兜底）——
+         * 侧板/U7/首页三消费面弹窗共用 hr::noteBodyText */
+        hr::BookmarkRow nbA; nbA.label = t1s; nbA.aiAnswer = QString();
+        hr::BookmarkRow nbB; nbB.label = t1s; nbB.aiAnswer = a2s;
+        const bool m3 = hr::noteBodyText(nbA) == t1s && hr::noteBodyText(nbB) == a2s;
+        const bool pass = r.ok && c1 > 0 && c2 > 0 && c3 > 0 && m1 && m2 && m3 && id3 > 0 && gone;
+        evt("notesmoke_done", QString("sync=%1 m1=%2 m2=%3 gone=%4 pages=%5 m3=%6")
                                   .arg(r.ok ? 1 : 0).arg(m1 ? 1 : 0).arg(m2 ? 1 : 0)
-                                  .arg(gone ? 1 : 0).arg(win.pageCount()));
+                                  .arg(gone ? 1 : 0).arg(win.pageCount()).arg(m3 ? 1 : 0));
         fprintf(stderr, "NOTESMOKE rc=%d sync=%d m1=%d m2=%d gone=%d id3=%d\n",
                 pass ? 0 : 9, r.ok ? 1 : 0, m1 ? 1 : 0, m2 ? 1 : 0, gone ? 1 : 0,
                 (int)(id3 > 0 ? 1 : 0));
@@ -1534,27 +1715,134 @@ int main(int argc, char **argv)
             hr_qt_shutdown();
             return 0;
         }
-        /* v0.87.0 --shotsmoke：七页整窗自绘（首页/书库/我的文件/偏好/网上书库/书签笔记/珍藏） */
+        /* v0.87.0 --shotsmoke：八页整窗自绘（首页/书库/我的文件/偏好/网上书库/书签笔记/珍藏/最近阅读，v1.14.0 扩） */
         if (shotsSmoke)
         {
             LibraryWindow lib;
             lib.resize(1280, 820);
             lib.show();
             app.processEvents();
-            static const char *kPg[7] = {"home", "library", "browse", "prefs", "remote", "bookmarks", "favorites"};
-            for (int i = 0; i < 7; ++i)
+            static const char *kPg[8] = {"home", "library", "browse", "prefs", "remote", "bookmarks", "favorites", "recent"};
+            for (int i = 0; i < 8; ++i)
             {
                 lib.gotoTab(i);
                 for (int j = 0; j < 25; ++j) { app.processEvents(); QThread::msleep(30); }
                 lib.grab().save(hr::dataDir() + QString("/shots_qt_%1.png").arg(QLatin1String(kPg[i])));
             }
             evt("shotsmoke", "done");
-            fprintf(stderr, "SHOTSMOKE ok=7\n");
+            fprintf(stderr, "SHOTSMOKE ok=8\n");
             QThreadPool::globalInstance()->waitForDone();
             hr_qt_shutdown();
             return 0;
         }
         /* v0.96.0 --browse2：“我的文件”页重建 double-free 回归探针 */
+        /* v1.15.0 --shelfsmoke：书架多选模式 + 书籍右键菜单无头回归 */
+        if (shelfSmoke)
+        {
+            LibraryWindow lib;
+            lib.resize(1280, 820);
+            lib.show();
+            app.processEvents();
+            int pg0 = -1, pgLate = -1; /* v1.15.4：观察窗 4s——启动后 ~800ms 有一次异步跳页 */
+            for (int j = 0; j < 100; ++j)
+            {
+                app.processEvents();
+                QThread::msleep(40);
+                if (j == 5) pg0 = lib.shellProbePage();
+            }
+            pgLate = lib.shellProbePage();
+            lib.grab().save(hr::dataDir() + "/shots_qt_startup.png");
+            evt("shelfsmoke_start", QString("pg0=%1 pgLate=%2").arg(pg0).arg(pgLate));
+            fprintf(stderr, "STARTUP pg0=%d pgLate=%d\n", pg0, pgLate);
+            lib.gotoTab(1);
+            for (int j = 0; j < 15; ++j) { app.processEvents(); QThread::msleep(30); }
+            lib.setMultiSel(true);
+            for (int j = 0; j < 8; ++j) { app.processEvents(); QThread::msleep(20); }
+            const QString mp = lib.multiProbeState();
+            lib.setMultiSel(false);
+            const QString pb = lib.shelfProbeBook();
+            const QStringList items =
+                pb.isEmpty() ? QStringList() : lib.bookMenuForProbe(pb);
+            QList<int> ids;
+            for (const QString &it : items)
+            {
+                ids << it.section('|', 0, 0).toInt();
+                fprintf(stderr, "MENUSMOKE %s\n", it.toUtf8().constData());
+            }
+            /* 安卓 ShareDialog 条目序（桌面映射）：9 重排(仅PDF) 7 打开方式 8 发送文件
+             * 3 删除 2 移出书库 4 已读 6 未读 5 在读 10 AI 11 文件信息 | 1 收藏 12 标签 */
+            QList<int> exp;
+            if (ids.contains(9)) exp << 9;
+            exp << 7 << 8 << 3 << 2 << 4 << 6 << 5 << 10 << 11 << 1 << 12;
+            const bool orderOk = (ids == exp);
+            evt("shelfsmoke_done",
+                QString("multi=%1 book=%2 items=%3 order=%4")
+                    .arg(mp)
+                    .arg(pb.mid(pb.lastIndexOf('/') + 1).left(50))
+                    .arg(items.size())
+                    .arg(orderOk ? 1 : 0));
+            fprintf(stderr, "SHELFSMOKE multi=%s items=%d order=%d\n",
+                    mp.toUtf8().constData(), items.size(), (int)orderOk);
+            QThreadPool::globalInstance()->waitForDone();
+            hr_qt_shutdown();
+            return (pg0 == 0 && pgLate == 0 &&
+                    mp.contains("tree=1 cover=1 bar=1 shelf=1") &&
+                    items.size() >= 9 && orderOk)
+                       ? 0
+                       : 6;
+        }
+        /* v1.15.6 --menudispatchsmoke：右键菜单动作真实派发回归（弹窗自关，
+         * 派发 1/4/5/6/2/11/12 后进程存活即过；堆损坏会令进程异常退出=rc 失败） */
+        if (menuDispatchSmoke)
+        {
+            LibraryWindow lib;
+            lib.resize(1280, 820);
+            lib.show();
+            app.processEvents();
+            for (int j = 0; j < 25; ++j) { app.processEvents(); QThread::msleep(40); }
+            lib.menuDispatchProbe();
+            for (int j = 0; j < 50; ++j) { app.processEvents(); QThread::msleep(40); }
+            fprintf(stderr, "MENUPROBE final alive\n");
+            evt("menudispatch_done", "alive=1");
+            QThreadPool::globalInstance()->waitForDone();
+            hr_qt_shutdown();
+            return 0;
+        }
+        /* v1.15.8 --aboutsmoke：软件说明页无头截图（版本条验证） */
+        if (aboutSmoke)
+        {
+            LibraryWindow lib;
+            lib.resize(1280, 820);
+            lib.show();
+            app.processEvents();
+            for (int j = 0; j < 20; ++j) { app.processEvents(); QThread::msleep(40); }
+            lib.aboutProbeShot();
+            app.processEvents();
+            fprintf(stderr, "ABOUTSMOKE done\n");
+            QThreadPool::globalInstance()->waitForDone();
+            hr_qt_shutdown();
+            return 0;
+        }
+        /* v1.15.10 --resizesmoke：开书→跳 40 页→放大视口触发 resize→重排落地，
+         * 门禁=阅读位不回书首（回归 1.15.9 及以前“最大化跳回首頁”缺陷） */
+        if (resizeSmoke)
+        {
+            /* v1.15.10 --resizesmoke：壳窗嵌入链（真实用户路径）——开书→跳页→放大→
+             * 重排；门禁在 runner 按 evt resz_before/resz_after 判定 */
+            LibraryWindow lib;
+            lib.resize(1280, 820);
+            /* v1.15.11：探针不 show()——开书后的 OLE/composition 窗口消息路径
+             * （user32→dataexchange 跨进程等待）会永久阻塞主线程（dump 实锤）；
+             * 重排/渲染落地均为 Qt 队列事件，无窗消息照样收齐，验证语义不变 */
+            app.processEvents();
+            for (int j = 0; j < 20; ++j) { app.processEvents(); QThread::msleep(40); }
+            lib.resizeProbe(book);
+            for (int j = 0; j < 10; ++j) { app.processEvents(); QThread::msleep(40); }
+            evt("resz_done", "ok");
+            QThreadPool::globalInstance()->waitForDone();
+            hr_qt_shutdown();
+            return 0;
+        }
         if (browse2Smoke)
         {
             LibraryWindow lib;

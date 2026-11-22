@@ -27,9 +27,10 @@ public:
     /* 像素→页坐标换算工具 */
     static bool pageToPix(const QRectF &imgRect, const float box[4], float scale,
                           float dx, float dy, float *px, float *py);
-    /* 执行划词：返回选中文字与像素矩形（imgRect=位图在视口中的矩形） */
+    /* 执行划词：返回选中文字与像素矩形（imgRect=位图在视口中的矩形）；
+     * v1.12.0：rectsPx=仅选区内精确 quad；snap=1 词吸附（双击/右键选词） */
     static SelResult select(ReaderWindow *w, int page, const QRectF &imgRect,
-                            const QPointF &a, const QPointF &b);
+                            const QPointF &a, const QPointF &b, int snap = 0);
     /* 全本搜索：返回 (页, 命中数) 列表（跳过 0） */
     static QVector<QPair<int, int>> searchAll(ReaderWindow *w, const QString &needle);
 };

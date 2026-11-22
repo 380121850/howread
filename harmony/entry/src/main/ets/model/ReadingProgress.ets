@@ -58,6 +58,96 @@ const KEY_RECENT = 'recent_books';
 const MAX_SHELF = 1000;
 export const RECENT_VIEW_LIMIT = 20;
 
+/* 0.9.70: 清空/✕ semantics (Android RecentFragment2 clearAllRecent +
+ * onDeleteRecentClick). Android keeps progress in BookStateStore and only
+ * empties the AppData MRU list, but the harmony recent store doubles as the
+ * progress store - so removals are recorded as a hidden-path set and the
+ * store itself is never touched (progress/tags/star/sync all survive; a
+ * book re-enters the list when it is opened again, Android MRU parity). */
+const KEY_HIDDEN = 'recent_hidden';
+
+async function getHiddenList(ctx: Context): Promise<string[]> {
+  try {
+    const prefs = await getPrefs(ctx);
+    const json: string = await prefs.get(KEY_HIDDEN, '[]') as string;
+    const arr: string[] = JSON.parse(json) as string[];
+    const out: string[] = [];
+    for (let i = 0; i < arr.length; i++) {
+      const p: string = arr[i];
+      if (typeof p === 'string' && p.length > 0) {
+        out.push(p);
+      }
+    }
+    return out;
+  } catch (e) {
+    return [];
+  }
+}
+
+/** Paths hidden from the visible recent list (清空/✕), store untouched. */
+export async function getRecentHidden(ctx: Context): Promise<string[]> {
+  return await getHiddenList(ctx);
+}
+
+/** Drop one book from the visible recent list (progress preserved). */
+export async function hideRecentBook(ctx: Context, path: string): Promise<void> {
+  try {
+    const prefs = await getPrefs(ctx);
+    const h = await getHiddenList(ctx);
+    if (h.indexOf(path) >= 0) {
+      return;
+    }
+    h.push(path);
+    await prefs.put(KEY_HIDDEN, JSON.stringify(h));
+    await prefs.flush();
+    console.info(`[Progress] Hidden from recent: ${path}`);
+  } catch (e) {
+    console.error('[Progress] hideRecentBook failed');
+  }
+}
+
+/** A book re-opens -> it re-enters the visible recent list (Android MRU). */
+export async function unhideRecentBook(ctx: Context, path: string): Promise<void> {
+  try {
+    const prefs = await getPrefs(ctx);
+    const h = await getHiddenList(ctx);
+    if (h.indexOf(path) < 0) {
+      return;
+    }
+    const out: string[] = [];
+    for (let i = 0; i < h.length; i++) {
+      if (h[i] !== path) {
+        out.push(h[i]);
+      }
+    }
+    await prefs.put(KEY_HIDDEN, JSON.stringify(out));
+    await prefs.flush();
+  } catch (e) {
+    console.error('[Progress] unhideRecentBook failed');
+  }
+}
+
+/** 清空: hide every book currently in the store (progress preserved); dead
+ * hidden paths (books already gone) are pruned. Returns the list size. */
+export async function clearRecentBooks(ctx: Context): Promise<number> {
+  try {
+    const prefs = await getPrefs(ctx);
+    const list = await getRecentBooks(ctx);
+    const paths: string[] = [];
+    for (let i = 0; i < list.length; i++) {
+      paths.push(list[i].path);
+    }
+    await prefs.put(KEY_HIDDEN, JSON.stringify(paths));
+    await prefs.flush();
+    console.info(`[Progress] Recent list cleared (${paths.length} books hidden, progress kept)`);
+    return paths.length;
+  } catch (e) {
+    console.error('[Progress] clearRecentBooks failed');
+    return 0;
+  }
+}
+
+
 let prefInstance: preferences.Preferences | undefined = undefined;
 let prefInstanceStore: string = '';
 
@@ -172,6 +262,18 @@ export async function saveRecentBook(ctx: Context, book: RecentBook): Promise<vo
     }
     await prefs.put(KEY_RECENT, JSON.stringify(trimmed));
     await prefs.flush();
+    /* 0.9.70: an opened book always re-enters the visible recent list */
+    const hidden = await getHiddenList(ctx);
+    if (hidden.indexOf(book.path) >= 0) {
+      const out: string[] = [];
+      for (let i = 0; i < hidden.length; i++) {
+        if (hidden[i] !== book.path) {
+          out.push(hidden[i]);
+        }
+      }
+      await prefs.put(KEY_HIDDEN, JSON.stringify(out));
+      await prefs.flush();
+    }
     console.info(`[Progress] Saved recent: ${book.title} page=${book.page}/${book.totalPages} status=${status}`);
   } catch (e) {
     console.error('[Progress] saveRecentBook failed');

@@ -43,9 +43,10 @@ void *hr_qt_open_stream(const char *magic, long long size, hr_stream_read cb, vo
 /* ---- M4 划词 / 搜索 / 段落 / PDF 注解 ---- */
 
 /* 划词：页坐标两点 → 选中文字（UTF-8，调用方 free）+ 高亮矩形（页坐标，返回条数）。
- * rects 每条 {x0,y0,x1,y1}；rectsBuf 由调用方 malloc float[4*n]（n=rects 出参）。返回 0=ok。 */
+ * rects 每条 {x0,y0,x1,y1}（v1.12.0 起仅选区内精确 quad，原实现误返全页各行 bbox）；
+ * snap=1 词吸附（双击/右键选词）；rectsBuf 由调用方 malloc float[4*n]。返回 0=ok。 */
 int hr_qt_selection(void *doc, int page, float ax, float ay, float bx, float by,
-                    char **outText, float **outRects, int *outRectN);
+                    int snap, char **outText, float **outRects, int *outRectN);
 
 /* 页盒子（x0,y0,x1,y1）；0=ok */
 int hr_qt_page_box(void *doc, int page, float box[4]);

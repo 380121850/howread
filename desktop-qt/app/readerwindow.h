@@ -5,6 +5,7 @@
 #include <atomic>
 #include <QHash>
 #include <QList>
+#include <QMap>
 #include <QSet>
 #include <QImage>
 #include <QMainWindow>
@@ -49,6 +50,13 @@ struct Theme
     bool dark;
 };
 extern const Theme kThemes[5];
+
+/* v1.12.2：笔记正文组装（D2：正文=label、AI 答复=aiAnswer）——侧板/U7/首页
+ * 三消费面弹窗共用口径（AI 答复优先、手工笔记回落正文；8000 字截断同右键） */
+inline QString noteBodyText(const BookmarkRow &r)
+{
+    return r.aiAnswer.isEmpty() ? r.label : r.aiAnswer.left(8000);
+}
 
 class ReaderWindow : public QMainWindow
 {
@@ -105,11 +113,18 @@ public:
     /* v1.6.1：--scrollsmoke 探针——滚动栈几何/页渲染状态（定位 phase2 增页后空白页） */
     void syncStackHeight(); /* v1.6.1：容器 widget 尺寸跟随 layout 高（空白页根修核心） */
     int probeScrollMax() const;
+    int probePage() const { return m_page; } /* v1.15.10：重排落地位保持探针 */
     int probeStackH() const { return m_stack ? m_stack->height() : -1; }
     int probeViewportH() const;
     int probeStackNeedH() const;
     int probeLabelCount() const { return m_labels.size(); }
     bool probePageRendered(int pg) const;
+    /* v1.12.0：--selsmoke 探针——划词选择（页矩形/跨页选区真路径/quad 表） */
+    QRectF probeSelPageRect(int pg) const { return selPageRect(pg); }
+    bool probeSelectRange(int p0, const QPointF &a, int p1, const QPointF &b);
+    const QMap<int, QVector<QRectF>> &probeSelQuads() const { return m_selQuads; }
+    const QString &probeSelText() const { return m_selText; }
+    void forceScrollMode() { m_scrollMode = true; } /* v1.12.0：selsmoke 确定性 */
     signals:
     void searchWord(const QString &w);
     void backRequested(); /* v0.75.0：内嵌模式请求返回书库 */
@@ -192,6 +207,14 @@ private:
     int maxCharsWidth() const; /* P1：版心宽（maxChars>0 时钳制；否则=视口宽） */
     QRectF scrollPageRect(int page) const; /* P1（D2）：滚动模式页矩形（视口坐标） */
     int scrollPageAt(const QPoint &vp) const; /* P1（D2）：视口坐标→命中页号 */
+    /* v1.12.0：划词选择——页内局部像素坐标为权威（跨页拖选/滚动跟随/精确 quad） */
+    QRectF selPageRect(int page) const;
+    int selClampPageAt(const QPointF &vp) const;
+    QPointF selToLocal(int page, const QPointF &vp) const;
+    void updateSelection();
+    void refreshSelOverlay();
+    void clearSelection();
+    void selAutoScrollTick();
     void applyThemeToJob(int *mode, int *tint) const;
     bool renderRaw(int page, int width, QImage *out);
     void renderNow(int page);   /* 翻页模式：同步渲染当前页 */
@@ -215,6 +238,7 @@ private:
     void storePrefetch(int gen, int page, int w, const QImage &img);
     /* v1.8.0（P0 批）：渲染管线改造——多飞行/待渲队列/字节预算淘汰/翻页异步化 */
     void dispatchPage(int page);
+    void anchorScrollOnResize(int page, QLabel *lb, int oldH, int newH); /* v1.11.1（P0-1） */
     void pumpPending();
     void reapStuckFlights();
     void evictByBudget(int first, int last);
@@ -260,7 +284,9 @@ private:
     void onPageChanged();
     void updateTitle();
     void jumpTo(int page);
+    void restorePosDeferred(int pg = -1); /* v1.15.11：重排落地位恢复（显式页快照+延迟 jumpTo） */
     void showSelMenu(const QPoint &gp); /* v1.7.0：右键阅读菜单（原拖选释放菜单抽出复用） */
+    void showNoteBody(int i); /* v1.12.2：笔记行点击只读弹正文（单击/双击/右键共用） */
     /* U3b 侧板 */
     void showPanel(int tab);
     void refreshTocTree();
@@ -318,6 +344,16 @@ private:
     bool m_dragging = false;
     QString m_selText;
     hr::SelOverlay *m_selOverlay = nullptr;
+    /* v1.12.0：划词会话状态——P0=锚定页/点，P1=当前页/点（点=页内局部像素） */
+    int m_selP0 = -1;
+    QPointF m_selPt0;
+    int m_selP1 = -1;
+    QPointF m_selPt1;
+    int m_selSnap = 0; /* 0=字符级拖选 1=词吸附（双击/右键） */
+    bool m_selDblAck = false; /* v1.12.1：双击选词后待消费的 release（抑制单击翻页） */
+    QMap<int, QVector<QRectF>> m_selQuads; /* 每页选区 quad（页内局部像素） */
+    QTimer m_selAuto;   /* 拖选边缘自动滚动 */
+    QPoint m_selLastVp; /* 拖选中最近光标（视口坐标） */
     /* U-ann 持久高亮：按页缓存（页坐标 quads + ARGB），渲染时合成进位图（两模式统一） */
     QHash<int, QVector<QPair<QVector<QRectF>, unsigned>>> m_hlCache;
     QString m_hlCachePath;

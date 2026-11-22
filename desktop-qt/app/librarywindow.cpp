@@ -21,6 +21,7 @@
 #include <numeric> /* P2：统计聚合求和 */
 #include <QPainterPath>
 #include <QRandomGenerator>
+#include <QProcess> /* v1.15.0：发送文件=资源管理器定位 */
 #include "hrcred.h"
 #include "hrstats.h"
 
@@ -76,6 +77,7 @@
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSlider>
 #include <QSpinBox>
 #include <QGridLayout>
@@ -195,6 +197,24 @@ public:
     QVector<QPair<QString, QString>> books; /* path, title */
     QHash<QString, int> pct; /* v0.81.0 V6：阅读百分比徽标（path -> 0~100，0=无） */
     std::function<void(const QString &)> onOpen;
+    /* v1.15.0：多选模式（卡片勾选）+ 右键菜单回调（与列表/封面共用书籍菜单） */
+    bool selMode = false;
+    QSet<QString> selPaths;
+    std::function<void()> onSelChanged;
+    std::function<void(const QString &, const QPoint &)> onMenu;
+    QVector<QString> m_paths;
+    void setAllSelected(bool on)
+    {
+        selPaths.clear();
+        if (on) for (const auto &bk : books) selPaths.insert(bk.first);
+        syncChecks();
+        if (onSelChanged) onSelChanged();
+    }
+    void syncChecks()
+    {
+        for (int i = 0; i < m_btns.size() && i < m_paths.size(); i++)
+            m_btns[i]->setChecked(selMode && selPaths.contains(m_paths.at(i)));
+    }
     enum
     {
         kCardW = 132,
@@ -211,6 +231,7 @@ public:
         m_lastPct = pct;
         for (QToolButton *b : m_btns) b->deleteLater();
         m_btns.clear();
+        m_paths.clear();
         for (const auto &bk : books)
         {
             QToolButton *tb = new QToolButton(this);
@@ -240,17 +261,36 @@ public:
             tb->setText(tb->fontMetrics().elidedText(bk.second, Qt::ElideRight, kCardW - 8));
             tb->setToolTip(bk.second);
             tb->setCursor(Qt::PointingHandCursor);
+            tb->setCheckable(selMode); /* v1.15.0：多选模式=卡片勾选 */
+            tb->setContextMenuPolicy(Qt::CustomContextMenu); /* v1.15.0：书架卡右键 */
             tb->setStyleSheet(QString::fromLatin1(
                 "QToolButton{border:none; background:transparent; font-size:%1px;}"
-                "QToolButton:hover{background:rgba(0,0,0,18); border-radius:6px;}").arg(hr::Ui::fsPx(11)));
+                "QToolButton:hover{background:rgba(0,0,0,18); border-radius:6px;}"
+                "QToolButton:checked{background:rgba(0,0,0,40);"
+                " border:2px solid palette(highlight); border-radius:6px;}").arg(hr::Ui::fsPx(11)));
             tb->show();
             const QString p = bk.first;
-            connect(tb, &QToolButton::clicked, this, [this, p]
+            connect(tb, &QToolButton::clicked, this, [this, p, tb]
             {
+                if (selMode) /* v1.15.0：多选模式=点卡勾选，不开书 */
+                {
+                    if (selPaths.contains(p)) selPaths.remove(p);
+                    else selPaths.insert(p);
+                    tb->setChecked(selPaths.contains(p));
+                    if (onSelChanged) onSelChanged();
+                    return;
+                }
                 if (onOpen) onOpen(p);
             });
+            connect(tb, &QWidget::customContextMenuRequested, this,
+                    [this, p, tb](const QPoint &pos)
+            {
+                if (onMenu) onMenu(p, tb->mapToGlobal(pos));
+            });
+            m_paths.append(p);
             m_btns.append(tb);
         }
+        syncChecks();
         relayout();
     }
 
@@ -370,15 +410,8 @@ LibraryWindow::LibraryWindow(QWidget *parent) : QMainWindow(parent)
     }
 
     QPushButton *btnAdd = new QPushButton(hr::l10n::s("+ 添加书籍", "+ Add book")); /* W22：状态行右侧入口 */
-    /* v0.99.2 W22：工具行撤并入状态行——这些按钮不再入布局，挂窗口父级（菜单触发 click） */
-    QPushButton *btnScan = new QPushButton(hr::l10n::s("重新扫描", "Rescan"), this);
-    QPushButton *btnFav = new QPushButton(hr::l10n::s("只看收藏", "Favorites"), this);
-    btnFav->setCheckable(true);
-    QPushButton *btnAssoc = new QPushButton(hr::l10n::s("文件关联", "File assoc."), this);
-    QPushButton *btnOpen = new QPushButton(hr::l10n::s("打开…", "Open…"), this);
-    QPushButton *btnSync = new QPushButton(hr::l10n::s("WebDAV 同步…", "WebDAV sync…"), this);
-    QPushButton *btnRemote = new QPushButton(hr::l10n::s("远程书…", "Remote…"), this);
-    QPushButton *btnStats = new QPushButton(hr::l10n::s("统计", "Stats"), this);
+    /* v1.15.0：⋯ 更多菜单撤——重新扫描/同步/文件关联/统计/远程书/只看收藏/打开 各入口
+     * 在 偏好页·书库来源对话框·首页·珍藏页 均可达（或与双击同义），按钮本体随之删除 */
     m_btnCover = new QPushButton(hr::l10n::s("封面", "Covers"));
     m_btnCover->setCheckable(true);
     m_sortC = new QComboBox;
@@ -424,7 +457,8 @@ LibraryWindow::LibraryWindow(QWidget *parent) : QMainWindow(parent)
                                 .arg(hr::Ui::fsPx(12)));
     QHBoxLayout *row1 = new QHBoxLayout;
     row1->addWidget(m_search, 1);
-    row1->addWidget(m_lbStat);
+    /* v1.15.5：排序/添加/视图/多选四钮移入本行（创建处 addWidget，落搜索框右端）；
+     * 本数统计 m_lbStat 移到状态 chips 行右端 */
 
     m_statusC->setVisible(false); /* W8：状态由 chips 接管（combo 保留为状态载体） */
     QHBoxLayout *row2 = new QHBoxLayout;
@@ -468,50 +502,202 @@ LibraryWindow::LibraryWindow(QWidget *parent) : QMainWindow(parent)
     connect(ftsChip, &QPushButton::clicked, this, &LibraryWindow::onFullTextSearch);
     row2->addWidget(ftsChip);
     row2->addStretch(1);
-    row2->addWidget(new QLabel(hr::l10n::s("排序:", "Sort:")));
-    row2->addWidget(m_sortC);
-    row2->addWidget(new QLabel(hr::l10n::s("视图:", "View:")));
-    row2->addWidget(m_viewC);
-    /* W22：右侧其余入口——+ 添加书籍 / 多选开关 / ⋯ 更多（历史工具收拢，功能不丢） */
-    row2->addWidget(btnAdd);
+    row2->addWidget(m_lbStat); /* v1.15.5：本数统计移到状态行右端 */
+    /* v1.15.5：四钮（排序/添加/视图/多选）上移到搜索框同一行右端（用户定版，同安卓
+     * secondTopPanel：搜索框在左、按钮在右）。
+    /* v1.15.0：工具栏对齐安卓书架（附图1）——搜索框右起 排序/添加/视图 三钮，Qt 另有
+     * 多选一钮；排序/视图由 combo 改为带菜单按钮（combo 转隐藏状态载体，同 m_statusC
+     * chips 模式）；⋯ 更多菜单撤（重新扫描=书库来源对话框刷新、WebDAV 同步/文件关联/
+     * 统计=偏好页、远程书=首页网上书库、只看收藏=珍藏页、打开…=双击同义） */
+    m_sortC->setVisible(false);
+    m_viewC->setVisible(false);
+    const QString tbQss = QString::fromLatin1(
+        "QPushButton#libTbBtn,QToolButton#libTbBtn{background:palette(highlight);"
+        " color:palette(highlighted-text); border:none; border-radius:4px;"
+        " padding:5px 12px; font-size:%1px;}"
+        "QToolButton#libTbBtn::menu-indicator{image:none; width:0;}"
+        "QPushButton#libTbBtn:checked{font-weight:bold;"
+        " border:2px solid palette(highlighted-text); padding:4px 11px;}").arg(hr::Ui::fsPx(12));
+    auto mkTbBtn = [&row1, &tbQss](const QString &txt)
+    {
+        QToolButton *b = new QToolButton;
+        b->setText(txt);
+        b->setObjectName(QString::fromLatin1("libTbBtn"));
+        b->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        b->setCursor(Qt::PointingHandCursor);
+        b->setStyleSheet(tbQss);
+        row1->addWidget(b);
+        return b;
+    };
+    const QString dArr = QString::fromUtf8(" \xE2\x96\xBE"); /* ▾ */
+    QToolButton *sortBtn = mkTbBtn(hr::l10n::s("排序", "Sort") + dArr);
+    {
+        QMenu *sm = new QMenu(sortBtn);
+        for (int i = 0; i < m_sortC->count(); i++)
+        {
+            QAction *sa = sm->addAction(m_sortC->itemText(i));
+            sa->setData(m_sortC->itemData(i));
+            sa->setCheckable(true);
+            connect(sa, &QAction::triggered, this, [this, sa]
+            {
+                const int idx = m_sortC->findData(sa->data());
+                if (idx >= 0)
+                {
+                    evt("lib_sort", m_sortC->itemData(idx).toString());
+                    m_sortC->setCurrentIndex(idx);
+                }
+            });
+        }
+        connect(sm, &QMenu::aboutToShow, sm, [sm, this]
+        {
+            for (QAction *sa : sm->actions())
+                sa->setChecked(m_sortC->findData(sa->data()) == m_sortC->currentIndex());
+        });
+        sortBtn->setMenu(sm);
+        sortBtn->setPopupMode(QToolButton::InstantPopup);
+    }
+    /* 添加（安卓 chooseFolderDialog 同语义）=书库来源对话框 */
+    btnAdd->setText(hr::l10n::s("+ 添加", "+ Add"));
+    btnAdd->setObjectName(QString::fromLatin1("libTbBtn"));
+    btnAdd->setStyleSheet(tbQss);
+    btnAdd->setCursor(Qt::PointingHandCursor);
+    row1->addWidget(btnAdd);
+    QToolButton *viewBtn = mkTbBtn(hr::l10n::s("视图", "View") + dArr);
+    {
+        QMenu *vm = new QMenu(viewBtn);
+        for (int i = 0; i < m_viewC->count(); i++)
+        {
+            QAction *va = vm->addAction(m_viewC->itemText(i));
+            va->setData(m_viewC->itemData(i));
+            va->setCheckable(true);
+            connect(va, &QAction::triggered, this, [this, va]
+            {
+                const int idx = m_viewC->findData(va->data());
+                if (idx >= 0)
+                {
+                    evt("lib_view_pick", m_viewC->itemData(idx).toString());
+                    m_viewC->setCurrentIndex(idx);
+                }
+            });
+        }
+        connect(vm, &QMenu::aboutToShow, vm, [vm, this]
+        {
+            for (QAction *va : vm->actions())
+                va->setChecked(m_viewC->findData(va->data()) == m_viewC->currentIndex());
+        });
+        viewBtn->setMenu(vm);
+        viewBtn->setPopupMode(QToolButton::InstantPopup);
+    }
+    /* 多选（Qt 独有按钮）：开=三视图进入多选 + 批量操作条（v1.15.0 修复此前无效果） */
     QPushButton *multiBtn = new QPushButton(hr::l10n::s("多选", "Multi"));
+    multiBtn->setObjectName(QString::fromLatin1("libTbBtn"));
     multiBtn->setCheckable(true);
     multiBtn->setCursor(Qt::PointingHandCursor);
-    connect(multiBtn, &QPushButton::toggled, this, [this](bool on)
-    {
-        evt("lib_multi", on ? "on" : "off");
-        m_tree->setSelectionMode(on ? QAbstractItemView::ExtendedSelection
-                                    : QAbstractItemView::SingleSelection);
-        m_cover->setSelectionMode(on ? QAbstractItemView::ExtendedSelection
-                                     : QAbstractItemView::SingleSelection);
-    });
-    row2->addWidget(multiBtn);
-    QMenu *libMoreMenu = new QMenu(this);
-    libMoreMenu->addAction(btnScan->text(), btnScan, [btnScan] { btnScan->click(); });
-    libMoreMenu->addAction(btnFav->text(), btnFav, [btnFav] { btnFav->click(); });
-    libMoreMenu->addAction(btnOpen->text(), btnOpen, [btnOpen] { btnOpen->click(); });
-    libMoreMenu->addAction(btnSync->text(), btnSync, [btnSync] { btnSync->click(); });
-    libMoreMenu->addAction(btnRemote->text(), btnRemote, [btnRemote] { btnRemote->click(); });
-    libMoreMenu->addAction(btnAssoc->text(), btnAssoc, [btnAssoc] { btnAssoc->click(); });
-    libMoreMenu->addAction(btnStats->text(), btnStats, [btnStats] { btnStats->click(); });
-    /* v1.0.0：工具行按钮撤出布局后仅作菜单载体——显式隐藏（此前悬浮窗口左上角
-     * 互相叠盖，最上层"统计"泄漏到阅读视图，用户点名去除；click() 对隐藏钮有效） */
-    btnScan->setVisible(false);
-    btnFav->setVisible(false);
-    btnAssoc->setVisible(false);
-    btnOpen->setVisible(false);
-    btnSync->setVisible(false);
-    btnRemote->setVisible(false);
-    btnStats->setVisible(false);
-    QToolButton *libMoreBtn = new QToolButton(this);
-    libMoreBtn->setText(QString::fromUtf8("\xE2\x8B\xAF")); /* ⋯ */
-    libMoreBtn->setPopupMode(QToolButton::InstantPopup);
-    libMoreBtn->setCursor(Qt::PointingHandCursor);
-    libMoreBtn->setToolTip(hr::l10n::s("更多工具", "More tools"));
-    libMoreBtn->setMenu(libMoreMenu);
-    row2->addWidget(libMoreBtn);
+    multiBtn->setStyleSheet(tbQss);
+    connect(multiBtn, &QPushButton::toggled, this, [this](bool on) { setMultiSel(on); });
+    row1->addWidget(multiBtn);
 
-    /* v0.99.2 W22：工具行已撤——btnAdd 入状态行右侧，其余收进“⋯ 更多”菜单（用户点名单行顶栏） */
+    /* v1.15.0：多选批量操作条（多选开时显示）——全选/清除/收藏/移出书库/删除/标记/取消 */
+    m_batchBar = new QWidget;
+    QHBoxLayout *bbl = new QHBoxLayout(m_batchBar);
+    bbl->setContentsMargins(2, 2, 2, 2);
+    bbl->setSpacing(6);
+    m_batchCnt = new QLabel(m_batchBar);
+    bbl->addWidget(m_batchCnt);
+    auto bbBtn = [&](const QString &txt)
+    {
+        QPushButton *b = new QPushButton(txt, m_batchBar);
+        b->setCursor(Qt::PointingHandCursor);
+        bbl->addWidget(b);
+        return b;
+    };
+    QPushButton *bAll = bbBtn(hr::l10n::s("全选", "All"));
+    connect(bAll, &QPushButton::clicked, this, [this]
+    {
+        const QString vk = m_viewC->currentData().toString();
+        if (vk == QLatin1String("shelf"))
+            m_shelf->setAllSelected(true);
+        else if (vk == QLatin1String("cover") || vk == QLatin1String("grid"))
+            m_cover->selectAll();
+        else
+            m_tree->selectAll();
+        evt("lib_batch", "all");
+    });
+    QPushButton *bNone = bbBtn(hr::l10n::s("清除", "Clear"));
+    connect(bNone, &QPushButton::clicked, this, [this]
+    {
+        const QString vk = m_viewC->currentData().toString();
+        if (vk == QLatin1String("shelf"))
+            m_shelf->setAllSelected(false);
+        else if (vk == QLatin1String("cover") || vk == QLatin1String("grid"))
+            m_cover->clearSelection();
+        else
+            m_tree->clearSelection();
+        evt("lib_batch", "clear");
+    });
+    QPushButton *bFav = bbBtn(hr::l10n::s("收藏", "Fav"));
+    connect(bFav, &QPushButton::clicked, this, [this]
+    {
+        const QStringList ps = batchSelPaths();
+        if (ps.isEmpty()) return;
+        for (const QString &x : ps) Db::setFavoriteSync(x, true);
+        evt("lib_batch", QString("fav n=%1").arg(ps.size()));
+        loadTable();
+    });
+    QPushButton *bRm = bbBtn(hr::l10n::s("移出书库", "Remove"));
+    connect(bRm, &QPushButton::clicked, this, [this]
+    {
+        const QStringList ps = batchSelPaths();
+        if (ps.isEmpty()) return;
+        if (QMessageBox::question(
+                this, "HowRead Qt",
+                QString(hr::l10n::s("把 %1 本移出书库（保留文件）？", "Remove %1 from library (keep files)?"))
+                    .arg(ps.size())) != QMessageBox::Yes)
+            return;
+        for (const QString &x : ps) Db::removeBookFull(x);
+        evt("lib_batch", QString("remove n=%1").arg(ps.size()));
+        loadTable();
+    });
+    QPushButton *bDel = bbBtn(hr::l10n::s("删除…", "Delete…"));
+    connect(bDel, &QPushButton::clicked, this, [this]
+    {
+        const QStringList ps = batchSelPaths();
+        if (ps.isEmpty()) return;
+        onDeleteFiles(ps);
+    });
+    QToolButton *bMark = new QToolButton(m_batchBar);
+    bMark->setText(hr::l10n::s("标记", "Mark") + dArr);
+    bMark->setCursor(Qt::PointingHandCursor);
+    bMark->setPopupMode(QToolButton::InstantPopup);
+    QMenu *bmm = new QMenu(bMark);
+    QAction *bmRead = bmm->addAction(hr::l10n::s("标记为已读", "Mark finished"));
+    connect(bmRead, &QAction::triggered, this, [this]
+    {
+        const QStringList ps = batchSelPaths();
+        if (!ps.isEmpty()) applyMarkState(ps, QLatin1String("read"));
+    });
+    QAction *bmReading = bmm->addAction(hr::l10n::s("标记为在读", "Mark reading"));
+    connect(bmReading, &QAction::triggered, this, [this]
+    {
+        const QStringList ps = batchSelPaths();
+        if (!ps.isEmpty()) applyMarkState(ps, QLatin1String("reading"));
+    });
+    QAction *bmUnread = bmm->addAction(hr::l10n::s("标记为未读（清空进度）", "Mark unread"));
+    connect(bmUnread, &QAction::triggered, this, [this]
+    {
+        const QStringList ps = batchSelPaths();
+        if (!ps.isEmpty()) applyMarkState(ps, QLatin1String("unread"));
+    });
+    bMark->setMenu(bmm);
+    bbl->addWidget(bMark);
+    QPushButton *bCancel = bbBtn(hr::l10n::s("取消", "Cancel"));
+    connect(bCancel, &QPushButton::clicked, this, [this, multiBtn]
+    { multiBtn->setChecked(false); });
+    bbl->addStretch(1);
+    m_batchCnt->setText(hr::l10n::s("已选 0 本", "0 selected"));
+    m_batchBar->setVisible(false); /* 计数在 setMultiSel(true) 时刷新 */
+
+    /* v1.15.0：工具行已撤——⋯ 更多菜单整个撤除（各入口见上注释）；排序/添加/视图/多选四钮顶栏 */
 
     m_tree = new QTreeWidget;
     m_tree->setColumnCount(4);
@@ -548,6 +734,11 @@ LibraryWindow::LibraryWindow(QWidget *parent) : QMainWindow(parent)
     }
     connect(m_cover, &QListWidget::customContextMenuRequested, this,
             &LibraryWindow::onCoverMenu);
+    /* v1.15.0：多选模式下选择变化 → 批量条计数 */
+    connect(m_tree, &QTreeWidget::itemSelectionChanged, this, [this]
+    { if (m_multiSel) updateBatchCount(); });
+    connect(m_cover, &QListWidget::itemSelectionChanged, this, [this]
+    { if (m_multiSel) updateBatchCount(); });
 
     /* U1 导航壳：书库原内容收进 stack 第 1 页 */
     m_libPage = new QWidget;
@@ -556,6 +747,7 @@ LibraryWindow::LibraryWindow(QWidget *parent) : QMainWindow(parent)
     lay->setSpacing(4);
     lay->addLayout(row1);
     lay->addLayout(row2);
+    lay->addWidget(m_batchBar); /* v1.15.0：多选批量操作条 */
     lay->addWidget(m_tree, 1);
     lay->addWidget(m_cover, 1);
     /* U8 书架视图（封面+木质板条，QScrollArea 包裹） */
@@ -568,6 +760,14 @@ LibraryWindow::LibraryWindow(QWidget *parent) : QMainWindow(parent)
         evt("lib_open_book", "path=" + QFileInfo(p).fileName().left(80));
         openBookOrRemote(p);
     };
+    /* v1.15.0：书架视图多选联动 + 右键菜单（书架卡此前无右键） */
+    m_shelf->onSelChanged = [this]
+    { if (m_multiSel) updateBatchCount(); };
+    m_shelf->onMenu = [this](const QString &p, const QPoint &gp)
+    {
+        evt("lib_shelf_menu", "path=" + QFileInfo(p).fileName().left(60));
+        showBookMenu(QStringList{p}, gp);
+    };
     m_shelf->setVisible(false);
     shelfWrap->setWidget(m_shelf);
     shelfWrap->setVisible(false);
@@ -577,6 +777,12 @@ LibraryWindow::LibraryWindow(QWidget *parent) : QMainWindow(parent)
     /* v0.78.0 V3：侧栏壳（横幅 + 列表 + 格言条 + 扫描提示），总宽 204 / 内边距 10（对齐 Compose） */
     m_sideWrap = new QWidget;
     m_sideWrap->setFixedWidth(204);
+    /* v1.15.7：侧栏底色统一成面板色（亮=白）——此前下半部（格言/扫描条/说明·夜间行）
+     * 用 Window 灰（亮板 F3F5F9），上半部列表视口用 Base 白，视觉割裂（用户点名统一白）；
+     * palette(base) 随亮暗双色板自动跟随（setDarkMode DIM-1 全量重 polish 重算），
+     * 仅侧栏本体，标题栏与其它区域不动 */
+    m_sideWrap->setObjectName(QString::fromLatin1("sideWrap"));
+    m_sideWrap->setStyleSheet(QString::fromLatin1("#sideWrap{background:palette(base);}"));
     QVBoxLayout *sideLay = new QVBoxLayout(m_sideWrap);
     sideLay->setContentsMargins(10, 14, 10, 10);
     sideLay->setSpacing(8);
@@ -584,6 +790,9 @@ LibraryWindow::LibraryWindow(QWidget *parent) : QMainWindow(parent)
     sideLay->addWidget(m_banner);
     m_side = new QListWidget;
     m_side->setFrameShape(QFrame::NoFrame);
+    /* v1.15.4：侧栏不参与焦点链——窗口激活/焦点重排会让列表被 Qt 自动设 current=0
+     * → currentRowChanged(0) → onSide(0) → 启动后 ~800ms 误跳最近阅读页（真机复现） */
+    m_side->setFocusPolicy(Qt::NoFocus);
     /* v0.95.0 W16：导航字号调大 1/3+（11pt≈15px → fsPx(18)≈20px，用户点名） */
     /* v0.96.0 W17#1：导航字号 25px（用户点名），行上下 padding 拉大间隔 */
     m_side->setStyleSheet(QString::fromLatin1("QListWidget{font-size:25px;}"
@@ -704,6 +913,8 @@ LibraryWindow::LibraryWindow(QWidget *parent) : QMainWindow(parent)
     buildFavPage();                   /* U7：珍藏页（封面网格） */
     m_stack->addWidget(m_bmPage);     /* 5 书签笔记（U7） */
     m_stack->addWidget(m_favPage);    /* 6 我的珍藏（U7） */
+    buildRecentPage();                /* U9：最近阅读页（v1.14.0，安卓 Recent 同构） */
+    m_stack->addWidget(m_recentPage); /* 7 最近阅读（U9，侧栏/首页进入，无底 tab） */
 
     /* v0.93.0 W14：原 body 横布局（侧栏|内容）撤并进 central 装配——侧栏全高 */
 
@@ -762,7 +973,6 @@ LibraryWindow::LibraryWindow(QWidget *parent) : QMainWindow(parent)
     setCentralWidget(central);
 
     connect(btnAdd, &QPushButton::clicked, this, &LibraryWindow::onManageDirs);
-    connect(btnScan, &QPushButton::clicked, this, &LibraryWindow::onRescan);
     connect(m_search, &QLineEdit::textChanged, this, [this] { loadTable(); });
     connect(m_search, &QLineEdit::editingFinished, this, [this]
     {
@@ -810,37 +1020,31 @@ LibraryWindow::LibraryWindow(QWidget *parent) : QMainWindow(parent)
         }
         loadTable();
     });
-    connect(btnFav, &QPushButton::toggled, this, [this](bool on)
+    connect(m_tree, &QTreeWidget::itemDoubleClicked, this,
+            [this](QTreeWidgetItem *item, int col)
     {
-        m_onlyFav = on;
-        loadTable();
+        if (m_multiSel) return; /* v1.15.1：多选模式双击=不误开书 */
+        onOpenBook(item, col);
     });
-    connect(btnAssoc, &QPushButton::clicked, this, &LibraryWindow::onAssoc);
-    connect(btnSync, &QPushButton::clicked, this, &LibraryWindow::onSync);
-    connect(btnRemote, &QPushButton::clicked, this, &LibraryWindow::onRemote);
-    connect(btnOpen, &QPushButton::clicked, this, [this]
-    {
-        QTreeWidgetItem *it = m_tree->currentItem();
-        if (it) openBookOrRemote(it->data(0, Qt::UserRole).toString());
-    });
-    connect(m_tree, &QTreeWidget::itemDoubleClicked, this, &LibraryWindow::onOpenBook);
     /* v0.104.0（P1-6）：单击选中即预开 */
     connect(m_tree, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem *it, int)
     {
+        if (m_multiSel) return; /* v1.15.1：多选模式单击=勾选，不预开 */
         if (it) preOpenBook(it->data(0, Qt::UserRole).toString());
     });
     connect(m_cover, &QListWidget::itemClicked, this, [this](QListWidgetItem *it)
     {
+        if (m_multiSel) return; /* v1.15.1：多选模式单击=勾选，不预开 */
         if (it) preOpenBook(it->data(Qt::UserRole).toString());
     }); /* v0.104.0（P1-6）：预开 */
     connect(m_cover, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *it)
     {
+        if (m_multiSel) return; /* v1.15.1：多选模式双击=不误开书 */
         if (!it) return;
         evt("lib_open_book",
             "path=" + QFileInfo(it->data(Qt::UserRole).toString()).fileName().left(80));
         openBookOrRemote(it->data(Qt::UserRole).toString());
     });
-    connect(btnStats, &QPushButton::clicked, this, &LibraryWindow::onStats);
     /* U2：封面 toggle 退役——"封面/网格"视图由 lib/view 接管（保持 ini 兼容） */
     connect(m_sortC, static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged),
             this, [this](int)
@@ -855,7 +1059,7 @@ LibraryWindow::LibraryWindow(QWidget *parent) : QMainWindow(parent)
     setDarkMode(QSettings(hr::dataDir() + "/qt-prefs.ini", QSettings::IniFormat)
                     .value("ui/dark", false).toBool(),
                 false);
-    showTab(1); /* 默认落书库页 */
+    showTab(0); /* v1.15.3：默认落首页（用户定版；原默认落书库页） */
     m_iconFillTimer = new QTimer(this);
     m_iconFillTimer->setInterval(25);
     connect(m_iconFillTimer, &QTimer::timeout, this, &LibraryWindow::pumpDeferredFill);
@@ -890,6 +1094,17 @@ LibraryWindow::LibraryWindow(QWidget *parent) : QMainWindow(parent)
         scanRemoteSources();
     });
     refreshHome(); /* U7：首页数据首刷（evt home_render） */
+    /* v1.11 探针：HR_HOME_MAX=1 启动后最大化并二次刷新（首页适配实测，无环境变量零差异） */
+    if (!qgetenv("HR_HOME_MAX").isEmpty())
+    {
+        QTimer::singleShot(1200, this, [this] { showMaximized(); });
+        QTimer::singleShot(2400, this, [this]
+        {
+            const QRect ag = QGuiApplication::primaryScreen()->availableGeometry();
+            evt("home_max", QString("avail=%1x%2").arg(ag.width()).arg(ag.height()));
+            showTab(0); /* 切首页触发 refreshHome + home_fit（真实布局尺寸） */
+        });
+    }
     applyBlueLight(); /* U8：蓝光滤镜暖色叠加（ui/blueLight） */
 
     QSettings st0(hr::dataDir() + "/qt-prefs.ini", QSettings::IniFormat);
@@ -994,6 +1209,7 @@ static QMutex s_covMu;
 static QCache<QString, QImage> s_covRaw;   /* 缩放原图（键 png|pmtime|宽x高） */
 static QCache<QString, QPixmap> s_covCard; /* 成品卡面（圆角+星标/云徽） */
 static int s_dbgAttaches = 0; /* v1.10.1 诊断探针（临时）：本次构建首个挂卡回探 */
+static int s_pumpIconN = 0, s_pumpWallN = 0; /* v1.11.0a 诊断探针（临时）：本次节拍累计 */
 
 static QImage coverPngScaledImage(const QString &png, int w, int h)
 {
@@ -1245,10 +1461,6 @@ static void spParseSeries(const QString &path, const QString &title, QString *ou
 void LibraryWindow::loadTable()
 {
     const qint64 t0 = QDateTime::currentMSecsSinceEpoch(); /* v0.107.2：lib_table 打点 */
-    m_tree->clear();
-    m_iconTodo.clear();
-    m_wallTodo.clear();
-    m_wallRows.clear(); /* v0.109.0：清上一轮分批填充队列 */
     /* U2：一次性取进度，状态过滤用（path -> page/pageCount） */
     QHash<QString, QPair<int, int>> prog;
     for (const Db::ProgressRow &pr : Db::allProgress())
@@ -1430,6 +1642,12 @@ void LibraryWindow::loadTable()
             return;
         }
     }
+    /* v1.11.0a 根修：清空后移到指纹判定之后——短路路径不得清空（启动"建表→skip"双调用
+     * 中 skip 曾清掉首建刚排队的挂卡/图标队列且不再重建 → 冷启动书架空白，v1.10.0 起竞态） */
+    m_tree->clear();
+    m_iconTodo.clear();
+    m_wallTodo.clear();
+    m_wallRows.clear(); /* v0.109.0：清上一轮分批填充队列 */
     auto mkRowItem = [this, &prog, showFn, useMeta, tableView, serNum](QTreeWidgetItem *parent,
                                                                const Db::MetaRow &r)
         -> QTreeWidgetItem *
@@ -1525,6 +1743,8 @@ void LibraryWindow::loadTable()
         int wallSync = 0;
         QStringList missPngs;
         s_dbgAttaches = 0; /* v1.10.1 诊断探针 */
+        s_pumpIconN = 0;
+        s_pumpWallN = 0;
         QString dbgPk, dbgCk;
         qint64 dbgPmt = -1;
         for (const Db::MetaRow &r : rows)
@@ -1699,6 +1919,7 @@ void LibraryWindow::pumpDeferredFill()
             t.first->setIcon(0, QIcon(coverTile(t.second.first, t.second.second, 40, 56)));
         tn++;
     }
+    s_pumpIconN += tn; /* v1.11.0a 诊断探针 */
     int wn = 0;
     while (wn < 4 && !m_wallTodo.isEmpty())
     {
@@ -1707,8 +1928,12 @@ void LibraryWindow::pumpDeferredFill()
         wallAttachCard(r, it);
         wn++;
     }
+    s_pumpWallN += wn; /* v1.11.0a 诊断探针 */
     if (m_iconTodo.isEmpty() && m_wallTodo.isEmpty() && m_iconFillTimer)
+    {
         m_iconFillTimer->stop();
+        evt("wall_pump", QString("icon=%1 wall=%2").arg(s_pumpIconN).arg(s_pumpWallN));
+    }
 }
 
 void LibraryWindow::onAddDir() { onManageDirs(); } /* U2：转发目录管理对话框 */
@@ -1859,87 +2084,139 @@ void LibraryWindow::onToggleFav()
     loadTable();
 }
 
-/* U0 修复#1 接线 + U2 菜单扩 8 项（对齐 Compose BookMenu；标签/AI 简介随 U6/U7 填实） */
+/* v0 修复#1 接线 + U2 菜单扩 8 项；v1.15.0：菜单本体抽到 fillBookMenu/showBookMenu
+ * （树/封面墙/书架卡共用；条目对齐安卓 ShareDialog） */
 void LibraryWindow::onTreeMenu(const QPoint &pos)
 {
     QTreeWidgetItem *it = m_tree->itemAt(pos);
     if (!it) return;
-    const QList<QTreeWidgetItem *> sel = m_tree->selectedItems();
-    const bool multi = sel.size() > 1;
-    QStringList paths;
-    for (QTreeWidgetItem *s : sel) paths << s->data(0, Qt::UserRole).toString();
     const QString p = it->data(0, Qt::UserRole).toString();
-    const bool fav = Db::isFavorite(p);
-    const bool isRm = !multi && p.startsWith(QString::fromLatin1("remote://"));
-    QMenu menu(this);
-    QAction *infoAct = multi ? nullptr
-                             : menu.addAction(hr::l10n::s("文件信息", "File info"));
-    QAction *tagAct = multi ? nullptr : menu.addAction(hr::l10n::s("标签…", "Tags…"));
-    /* P1 适配（A8）：远程书 guard——AI 简介/打开文件夹/删除文件仅本地书 */
-    QAction *aiAct = (multi || isRm) ? nullptr
-                                     : menu.addAction(hr::l10n::s("AI 简介", "AI intro"));
-    QAction *folderAct = (multi || isRm)
-                             ? nullptr
-                             : menu.addAction(hr::l10n::s("打开所在文件夹", "Open folder"));
-    QAction *favAct = menu.addAction(multi
-                                         ? QString(hr::l10n::s("收藏所选(%1)", "Favoritize (%1)"))
-                                               .arg(sel.size())
-                                         : (fav ? hr::l10n::s("取消收藏", "Unfavorite")
-                                                : hr::l10n::s("加入收藏", "Favorite")));
-    QAction *rmLibAct = menu.addAction(multi
-                                           ? QString(hr::l10n::s("移出书库(%1)", "Remove (%1)"))
-                                                 .arg(sel.size())
-                                           : hr::l10n::s("移出书库", "Remove from library"));
-    QAction *delAct = isRm ? nullptr
-                           : menu.addAction(hr::l10n::s("删除文件…", "Delete files…"));
-    if (delAct) delAct->setData(QString("red"));
-    /* v1.2.0（G）：三态标记（安卓 BookStateStore 同语义：已读=进度写满、
-     * 未读=清进度、在读=READING 覆盖；前两者随 books 通道回流安卓） */
-    QMenu *markMenu = menu.addMenu(hr::l10n::s("标记状态", "Mark status"));
-    QAction *mkRead = markMenu->addAction(hr::l10n::s("标记已读", "Mark finished"));
-    QAction *mkReading = markMenu->addAction(hr::l10n::s("标记在读", "Mark reading"));
-    QAction *mkUnread = markMenu->addAction(hr::l10n::s("标记未读", "Mark unread"));
+    if (p.isEmpty()) return;
+    QStringList paths;
+    for (QTreeWidgetItem *s : m_tree->selectedItems())
+    {
+        const QString sp = s->data(0, Qt::UserRole).toString();
+        if (!sp.isEmpty()) paths << sp;
+    }
+    if (!paths.contains(p)) paths = QStringList{p}; /* 右键未选中行=只对该行生效 */
+    showBookMenu(paths, m_tree->viewport()->mapToGlobal(pos));
+}
+
+void LibraryWindow::onCoverMenu(const QPoint &pos)
+{
+    QListWidgetItem *it = m_cover->itemAt(pos);
+    if (!it) return;
+    const QString p = it->data(Qt::UserRole).toString();
+    if (p.isEmpty()) return;
+    QStringList paths;
+    for (QListWidgetItem *s : m_cover->selectedItems())
+    {
+        const QString sp = s->data(Qt::UserRole).toString();
+        if (!sp.isEmpty()) paths << sp;
+    }
+    if (!paths.contains(p)) paths = QStringList{p};
+    showBookMenu(paths, m_cover->viewport()->mapToGlobal(pos));
+}
+
+/* v1.15.0：菜单条目对齐安卓 ShareDialog.show（单书序：PDF文本重排(仅PDF)/打开方式/
+ * 发送文件/删除/移出书库/标记为已读/标记为未读（清空进度）/标记为在读/AI 简介书籍/
+ * 文件信息 + 桌面特有 收藏/标签；桌面暂无播放列表，"加入播放列表"暂缺；
+ * id：1收藏 2移出 3删除 4已读 5在读 6未读 7打开方式 8发送 9重排 10AI 11信息 12标签） */
+void LibraryWindow::fillBookMenu(QMenu &menu, const QStringList &paths)
+{
+    const bool multi = paths.size() > 1;
+    const QString p = paths.first();
+    const bool isRm = p.startsWith(QString::fromLatin1("remote://"));
+    const bool isPdf = !isRm && p.endsWith(QString::fromLatin1(".pdf"), Qt::CaseInsensitive);
+    if (multi)
+    {
+        menu.addAction(hr::l10n::s("收藏所选(%1)", "Favoritize (%1)").arg(paths.size()))
+            ->setData(1);
+        menu.addAction(hr::l10n::s("移出书库(%1)", "Remove (%1)").arg(paths.size()))
+            ->setData(2);
+        menu.addAction(hr::l10n::s("删除(%1)", "Delete (%1)").arg(paths.size()))->setData(3);
+        menu.addAction(hr::l10n::s("标记为已读(%1)", "Mark finished (%1)").arg(paths.size()))
+            ->setData(4);
+        menu.addAction(hr::l10n::s("标记为在读(%1)", "Mark reading (%1)").arg(paths.size()))
+            ->setData(5);
+        menu.addAction(hr::l10n::s("标记为未读(%1)", "Mark unread (%1)").arg(paths.size()))
+            ->setData(6);
+        return;
+    }
+    if (isPdf)
+        menu.addAction(hr::l10n::s("PDF文本重排", "PDF reflow"))->setData(9);
+    if (!isRm)
+        menu.addAction(hr::l10n::s("打开方式", "Open with"))->setData(7);
+    if (!isRm)
+        menu.addAction(hr::l10n::s("发送文件", "Send file"))->setData(8);
+    if (!isRm)
+        menu.addAction(hr::l10n::s("删除", "Delete"))->setData(3);
+    menu.addAction(hr::l10n::s("移出书库", "Remove from library"))->setData(2);
+    menu.addAction(hr::l10n::s("标记为已读", "Mark finished"))->setData(4);
+    menu.addAction(hr::l10n::s("标记为未读（清空进度）", "Mark unread (clear progress)"))
+        ->setData(6);
+    menu.addAction(hr::l10n::s("标记为在读", "Mark reading"))->setData(5);
+    if (!isRm)
+        menu.addAction(hr::l10n::s("AI 简介书籍", "AI intro"))->setData(10);
+    menu.addAction(hr::l10n::s("文件信息", "File info"))->setData(11);
     menu.addSeparator();
-    menu.addAction(hr::l10n::s("取消", "Cancel"));
-    QAction *act = menu.exec(m_tree->viewport()->mapToGlobal(pos));
+    menu.addAction(Db::isFavorite(p) ? hr::l10n::s("取消收藏", "Unfavorite")
+                                     : hr::l10n::s("加入收藏", "Favorite"))
+        ->setData(1);
+    menu.addAction(hr::l10n::s("标签…", "Tags…"))->setData(12);
+}
+
+void LibraryWindow::showBookMenu(const QStringList &paths, const QPoint &gpos)
+{
+    if (paths.isEmpty()) return;
+    QMenu menu(this);
+    fillBookMenu(menu, paths);
+    QAction *act = menu.exec(gpos);
     if (!act) return;
-    if (act == favAct)
+    bool ok = false;
+    const int id = act->data().toInt(&ok);
+    if (!ok || id <= 0) return;
+    dispatchBookMenu(id, paths);
+}
+
+/* v1.2.0（G）三态标记逻辑抽公用（安卓 BookStateStore 同语义：已读=进度写满、
+ * 未读=清进度、在读=READING 覆盖）；v1.15.0 菜单/批量条共用 */
+void LibraryWindow::applyMarkState(const QStringList &paths, const QString &act)
+{
+    for (const QString &x : paths)
     {
-        const bool turnOn = multi ? true : !fav;
-        for (const QString &x : paths) Db::setFavoriteSync(x, turnOn);
-        evt("lib_fav", QString("on=%1 n=%2").arg(turnOn ? 1 : 0).arg(paths.size()));
-        loadTable();
-    }
-    else if (act == mkRead || act == mkReading || act == mkUnread)
-    {
-        for (const QString &x : paths)
+        if (act == QLatin1String("reading"))
+            hr::setBookStateReading(x, true);
+        else if (act == QLatin1String("read"))
         {
-            if (act == mkReading)
-            {
-                hr::setBookStateReading(x, true);
-            }
-            else if (act == mkRead)
-            {
-                int pg = 0, pc = 0, vw = 0;
-                if (!Db::loadProgress(x, &pg, &pc, &vw) || pc <= 0) { pc = 1; vw = 0; }
-                Db::saveProgress(x, pc - 1, pc, vw); /* p=1.0（安卓 markRead 同语义） */
-                hr::setBookStateReading(x, false);
-            }
-            else
-            {
-                Db::deleteProgress(x); /* 安卓 markUnread 同语义 */
-                hr::setBookStateReading(x, false);
-            }
+            int pg = 0, pc = 0, vw = 0;
+            if (!Db::loadProgress(x, &pg, &pc, &vw) || pc <= 0) { pc = 1; vw = 0; }
+            Db::saveProgress(x, pc - 1, pc, vw); /* p=1.0（安卓 markRead 同语义） */
+            hr::setBookStateReading(x, false);
         }
-        evt("lib_mark_state",
-            QString("act=%1 n=%2")
-                .arg(act == mkRead ? QString("read")
-                     : act == mkReading ? QString("reading")
-                                        : QString("unread"))
-                .arg(paths.size()));
-        loadTable();
+        else
+        {
+            Db::deleteProgress(x); /* 安卓 markUnread 同语义 */
+            hr::setBookStateReading(x, false);
+        }
     }
-    else if (act == rmLibAct)
+    evt("lib_mark_state", QString("act=%1 n=%2").arg(act).arg(paths.size()));
+    loadTable();
+}
+
+void LibraryWindow::dispatchBookMenu(int id, const QStringList &paths)
+{
+    const QString p = paths.first();
+    switch (id)
+    {
+    case 1: /* 收藏 */
+    {
+        for (const QString &x : paths) Db::setFavoriteSync(x, true);
+        evt("lib_fav", QString("on=1 n=%1").arg(paths.size()));
+        loadTable();
+        break;
+    }
+    case 2: /* 移出书库 */
     {
         if (QMessageBox::question(
                 this, "HowRead Qt",
@@ -1949,75 +2226,112 @@ void LibraryWindow::onTreeMenu(const QPoint &pos)
         for (const QString &x : paths) Db::removeBookFull(x); /* P0：级联+墓碑 */
         evt("lib_remove", QString("n=%1").arg(paths.size()));
         loadTable();
+        break;
     }
-    else if (act == delAct)
-    {
+    case 3: /* 删除 */
         onDeleteFiles(paths);
-    }
-    else if (act == folderAct)
+        break;
+    case 4:
+        applyMarkState(paths, QLatin1String("read"));
+        break;
+    case 5:
+        applyMarkState(paths, QLatin1String("reading"));
+        break;
+    case 6:
+        applyMarkState(paths, QLatin1String("unread"));
+        break;
+    case 7: /* 打开方式：系统默认程序（安卓 openWith 同位） */
+        evt("lib_openwith", "path=" + QFileInfo(p).fileName().left(80));
+        QDesktopServices::openUrl(QUrl::fromLocalFile(p));
+        break;
+    case 8: /* 发送文件：资源管理器定位（安卓 share intent 的桌面对应） */
+        evt("lib_send", "path=" + QFileInfo(p).fileName().left(80));
+        QProcess::startDetached(QString::fromLatin1("explorer"),
+                                QStringList() << QString::fromLatin1("/select,") +
+                                                     QDir::toNativeSeparators(p));
+        break;
+    case 9: /* PDF文本重排（安卓 openPDFInTextReflow 同位：整本抽文本生成重排本并打开） */
     {
-        QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(p).absolutePath()));
-    }
-    else if (act == infoAct)
-    {
-        const Db::MetaRow *m = nullptr;
-        for (const Db::MetaRow &r : Db::listLibrary())
-            if (r.path == p) { m = &r; break; }
-        const QFileInfo fi(p);
-        /* P1 适配（A7）：描述行（lib/showDescription；AI 简介存库后可见） */
-        const QString desc = Db::descriptionOf(p);
-        const QString descLine =
-            (QSettings(hr::dataDir() + "/qt-prefs.ini", QSettings::IniFormat)
-                     .value("lib/showDescription", true).toBool() &&
-             !desc.isEmpty())
-                ? QString("\n%1: %2").arg(hr::l10n::s("描述", "Description"), desc.left(200))
-                : QString();
-        QMessageBox::information(
-            this, hr::l10n::s("文件信息", "File info"),
-            QString("%1\n%2\n%3: %4\n%5: %6 KB\n%7: %8\n%9: %10%11")
-                .arg(m && !m->title.isEmpty() ? m->title : fi.fileName())
-                .arg(QDir::toNativeSeparators(p))
-                .arg(hr::l10n::s("页数", "Pages"))
-                .arg(m ? m->pages : 0)
-                .arg(hr::l10n::s("大小", "Size"))
-                .arg(fi.size() / 1024)
-                .arg(hr::l10n::s("修改时间", "Modified"))
-                .arg(fi.lastModified().toString("yyyy-MM-dd HH:mm"))
-                .arg(hr::l10n::s("收藏", "Favorite"))
-                .arg(Db::isFavorite(p) ? hr::l10n::s("是", "Yes")
-                                       : hr::l10n::s("否", "No"))
-                .arg(descLine));
-    }
-    else if (act == tagAct)
-    {
-        /* U6：标签体系（file_meta.tags，逗号分隔） */
-        QDialog dg(this);
-        dg.setWindowTitle(hr::l10n::s("标签", "Tags"));
-        dg.resize(420, 150);
-        QVBoxLayout *vl = new QVBoxLayout(&dg);
-        vl->addWidget(new QLabel(hr::l10n::s("标签（逗号分隔）：", "Tags (comma separated):"),
-                                 &dg));
-        QLineEdit *ed = new QLineEdit(Db::tagsOf(p), &dg);
-        ed->setPlaceholderText(hr::l10n::s("历史, 小说, 待读…", "history, novel, to-read…"));
-        vl->addWidget(ed);
-        QDialogButtonBox *bb2 =
-            new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dg);
-        bb2->button(QDialogButtonBox::Ok)->setText(hr::l10n::s("保存", "Save"));
-        bb2->button(QDialogButtonBox::Cancel)->setText(hr::l10n::s("取消", "Cancel"));
-        vl->addWidget(bb2);
-        connect(bb2, &QDialogButtonBox::accepted, &dg, &QDialog::accept);
-        connect(bb2, &QDialogButtonBox::rejected, &dg, &QDialog::reject);
-        if (dg.exec() == QDialog::Accepted)
+        statusBar()->showMessage(
+            hr::l10n::s("正在提取 PDF 文本生成重排本…", "Extracting PDF text…"));
+        evt("lib_reflow_start", "path=" + QFileInfo(p).fileName().left(80));
+        QThreadPool::globalInstance()->start(QRunnable::create([this, p]
         {
-            Db::setTags(p, ed->text().trimmed());
-            evt("lib_tags", "tags=" + ed->text().trimmed().left(40));
-            statusBar()->showMessage(hr::l10n::s("标签已保存", "Tags saved"), 5000);
-            refreshSideTags(); /* v0.84.0 W3 D4：标签区即时更新 */
-        }
+            const long long ms0 = QDateTime::currentMSecsSinceEpoch();
+            QString err, outPath;
+            int pages = 0;
+            void *doc = hr_qt_open(hr::openablePath(p).toUtf8().constData());
+            if (doc)
+            {
+                const int total = qMin(hr_qt_count(doc), 2000);
+                QString acc;
+                for (int pg = 0; pg < total; pg++)
+                {
+                    float box[4] = {0, 0, 0, 0};
+                    hr_qt_page_box(doc, pg, box);
+                    char *tx = nullptr;
+                    float *rc = nullptr;
+                    int rn = 0;
+                    if (hr_qt_selection(doc, pg, box[0], box[1], box[2], box[3], 0, &tx, &rc,
+                                        &rn) == 0 &&
+                        tx)
+                    {
+                        const QString sT = QString::fromUtf8(tx);
+                        if (!sT.trimmed().isEmpty())
+                            acc += QString("[%1] %2\n\n")
+                                       .arg(hr::l10n::s("第 %1 页", "Page %1").arg(pg + 1))
+                                       .arg(sT);
+                    }
+                    free(tx);
+                    free(rc);
+                    pages = pg + 1;
+                }
+                hr_qt_close(doc);
+                if (!acc.isEmpty())
+                {
+                    QDir().mkpath(hr::dataDir() + QString::fromLatin1("/reflow"));
+                    outPath = hr::dataDir() + QString::fromLatin1("/reflow/") +
+                              QFileInfo(p).completeBaseName() +
+                              QString::fromLatin1("-reflow.txt");
+                    QFile f(outPath);
+                    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+                        f.write(acc.toUtf8());
+                    else
+                    {
+                        outPath.clear();
+                        err = hr::l10n::s("重排本写入失败", "write failed");
+                    }
+                }
+                else
+                    err = hr::l10n::s("无可提取文本（扫描版 PDF？）", "no extractable text");
+            }
+            else
+                err = hr::l10n::s("打开失败", "open failed");
+            QMetaObject::invokeMethod(this, [this, p, outPath, err, pages, ms0]
+            {
+                statusBar()->clearMessage();
+                if (outPath.isEmpty())
+                {
+                    QMessageBox::warning(this, "HowRead Qt",
+                                         hr::l10n::s("PDF 文本重排失败：", "PDF reflow failed: ") +
+                                             err);
+                    evt("lib_reflow_fail", err.left(60));
+                    return;
+                }
+                evt("lib_reflow_done",
+                    QString("pages=%1 ms=%2 out=%3")
+                        .arg(pages)
+                        .arg(QDateTime::currentMSecsSinceEpoch() - ms0)
+                        .arg(QFileInfo(outPath).fileName().left(60)));
+                statusBar()->showMessage(
+                    hr::l10n::s("重排本已生成，正在打开…", "Reflow ready, opening…"), 5000);
+                openBookOrRemote(outPath);
+            }, Qt::QueuedConnection);
+        }));
+        break;
     }
-    else if (act == aiAct)
+    case 10: /* AI 简介（前 5 页→AI 概括→可存书库信息；异步不阻塞） */
     {
-        /* U6：AI 简介（前 5 页→AI 概括→可存书库信息；异步不阻塞） */
         const AiConfig c = AiConfig::load();
         if (!c.usable())
         {
@@ -2041,7 +2355,7 @@ void LibraryWindow::onTreeMenu(const QPoint &pos)
                     char *tx = nullptr;
                     float *rc = nullptr;
                     int rn = 0;
-                    if (hr_qt_selection(doc, pg, box[0], box[1], box[2], box[3], &tx, &rc,
+                    if (hr_qt_selection(doc, pg, box[0], box[1], box[2], box[3], 0, &tx, &rc,
                                         &rn) == 0 &&
                         tx)
                     {
@@ -2097,7 +2411,257 @@ void LibraryWindow::onTreeMenu(const QPoint &pos)
                 dg.exec();
             }, Qt::QueuedConnection);
         }));
+        break;
     }
+    case 11: /* 文件信息 */
+    {
+        /* v1.15.6：值拷贝修复——原 `m=&r` 指向 listLibrary() 临时 QList 的内部
+         * 元素，循环结束临时析构后 m 悬垂；下方 QMessageBox 读 m->title/m->pages
+         * 即访问已释放堆块（QString 引用计数++写已释放内存）→ 堆损坏
+         * 0xC0000374 闪退（真机事件日志实锤：右键→文件信息必崩） */
+        Db::MetaRow mrow;
+        for (const Db::MetaRow &r : Db::listLibrary())
+            if (r.path == p) { mrow = r; break; }
+        const bool hasRow = !mrow.path.isEmpty();
+        const QFileInfo fi(p);
+        /* P1 适配（A7）：描述行（lib/showDescription；AI 简介存库后可见） */
+        const QString desc = Db::descriptionOf(p);
+        const QString descLine =
+            (QSettings(hr::dataDir() + "/qt-prefs.ini", QSettings::IniFormat)
+                     .value("lib/showDescription", true).toBool() &&
+             !desc.isEmpty())
+                ? QString("\n%1: %2").arg(hr::l10n::s("描述", "Description"), desc.left(200))
+                : QString();
+        QMessageBox::information(
+            this, hr::l10n::s("文件信息", "File info"),
+            QString("%1\n%2\n%3: %4\n%5: %6 KB\n%7: %8\n%9: %10%11")
+                .arg(hasRow && !mrow.title.isEmpty() ? mrow.title : fi.fileName())
+                .arg(QDir::toNativeSeparators(p))
+                .arg(hr::l10n::s("页数", "Pages"))
+                .arg(hasRow ? mrow.pages : 0)
+                .arg(hr::l10n::s("大小", "Size"))
+                .arg(fi.size() / 1024)
+                .arg(hr::l10n::s("修改时间", "Modified"))
+                .arg(fi.lastModified().toString("yyyy-MM-dd HH:mm"))
+                .arg(hr::l10n::s("收藏", "Favorite"))
+                .arg(Db::isFavorite(p) ? hr::l10n::s("是", "Yes")
+                                       : hr::l10n::s("否", "No"))
+                .arg(descLine));
+        break;
+    }
+    case 12: /* 标签（U6：file_meta.tags，逗号分隔） */
+    {
+        QDialog dg(this);
+        dg.setWindowTitle(hr::l10n::s("标签", "Tags"));
+        dg.resize(420, 150);
+        QVBoxLayout *vl = new QVBoxLayout(&dg);
+        vl->addWidget(new QLabel(hr::l10n::s("标签（逗号分隔）：", "Tags (comma separated):"),
+                                 &dg));
+        QLineEdit *ed = new QLineEdit(Db::tagsOf(p), &dg);
+        ed->setPlaceholderText(hr::l10n::s("历史, 小说, 待读…", "history, novel, to-read…"));
+        vl->addWidget(ed);
+        QDialogButtonBox *bb2 =
+            new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dg);
+        bb2->button(QDialogButtonBox::Ok)->setText(hr::l10n::s("保存", "Save"));
+        bb2->button(QDialogButtonBox::Cancel)->setText(hr::l10n::s("取消", "Cancel"));
+        vl->addWidget(bb2);
+        connect(bb2, &QDialogButtonBox::accepted, &dg, &QDialog::accept);
+        connect(bb2, &QDialogButtonBox::rejected, &dg, &QDialog::reject);
+        if (dg.exec() == QDialog::Accepted)
+        {
+            Db::setTags(p, ed->text().trimmed());
+            evt("lib_tags", "tags=" + ed->text().trimmed().left(40));
+            statusBar()->showMessage(hr::l10n::s("标签已保存", "Tags saved"), 5000);
+            refreshSideTags(); /* v0.84.0 W3 D4：标签区即时更新 */
+        }
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+QStringList LibraryWindow::batchSelPaths() const
+{
+    if (!m_viewC || !m_tree || !m_cover || !m_shelf)
+        return QStringList(); /* v1.15.0：工具栏块先于视图块建——构造期计数守卫 */
+    const QString vk = m_viewC->currentData().toString();
+    QStringList out;
+    if (vk == QLatin1String("shelf"))
+    {
+        for (const QString &x : m_shelf->selPaths) out << x;
+        return out;
+    }
+    if (vk == QLatin1String("cover") || vk == QLatin1String("grid"))
+    {
+        for (QListWidgetItem *s : m_cover->selectedItems())
+        {
+            const QString sp = s->data(Qt::UserRole).toString();
+            if (!sp.isEmpty()) out << sp;
+        }
+        return out;
+    }
+    for (QTreeWidgetItem *s : m_tree->selectedItems())
+    {
+        const QString sp = s->data(0, Qt::UserRole).toString();
+        if (!sp.isEmpty()) out << sp;
+    }
+    return out;
+}
+
+void LibraryWindow::updateBatchCount()
+{
+    m_batchCnt->setText(hr::l10n::s("已选 %1 本", "%1 selected")
+                            .arg(batchSelPaths().size()));
+}
+
+/* v1.15.0：多选模式总开关——三视图选择态 + 批量操作条（此前仅切树/封面选择模式、
+ * 书架视图无任何效果且无配套操作，用户点名"多选按钮没有生效"修复） */
+void LibraryWindow::setMultiSel(bool on)
+{
+    m_multiSel = on;
+    /* v1.15.1：多选改 MultiSelection——普通单击=勾选/取消勾选（原 ExtendedSelection
+     * 单击会清掉先前所选，须按住 Ctrl 才能加选，用户实测"只能选择一本"；
+     * 安卓多选同交互；书架视图卡片本就是单击勾选，不变） */
+    m_tree->setSelectionMode(on ? QAbstractItemView::MultiSelection
+                                : QAbstractItemView::SingleSelection);
+    m_cover->setSelectionMode(on ? QAbstractItemView::MultiSelection
+                                 : QAbstractItemView::SingleSelection);
+    m_shelf->selMode = on;
+    if (!on)
+    {
+        m_tree->clearSelection();
+        m_cover->clearSelection();
+        m_shelf->selPaths.clear();
+        m_shelf->syncChecks();
+    }
+    m_batchBar->setVisible(on);
+    if (on) updateBatchCount();
+    evt("lib_multi", on ? "on" : "off");
+}
+
+/* v1.15.0 无头探针（--shelfsmoke）：多选三视图+批量条状态 */
+QString LibraryWindow::multiProbeState()
+{
+    return QString("tree=%1 cover=%2 bar=%3 shelf=%4")
+        .arg(m_tree->selectionMode() == QAbstractItemView::MultiSelection ? 1 : 0)
+        .arg(m_cover->selectionMode() == QAbstractItemView::MultiSelection ? 1 : 0)
+        .arg(m_batchBar->isVisible() ? 1 : 0)
+        .arg(m_shelf->selMode ? 1 : 0);
+}
+
+/* v1.15.2：启动默认页探针（--shelfsmoke 门禁：构造后未 gotoTab 的栈页） */
+int LibraryWindow::shellProbePage() const
+{
+    return m_stack->currentIndex();
+}
+
+QStringList LibraryWindow::bookMenuForProbe(const QString &path)
+{
+    QMenu menu(this);
+    fillBookMenu(menu, QStringList{path});
+    QStringList out;
+    for (QAction *a : menu.actions())
+        if (!a->isSeparator())
+            out << QString::fromLatin1("%1|%2")
+                    .arg(a->data().toInt())
+                    .arg(a->text());
+    return out;
+}
+
+/* v1.15.6 --menudispatchsmoke：右键菜单动作真实派发回归——文件信息 use-after-scope
+ * （堆损坏闪退）探针；动作 3/7/8/9/10 不派发（删真文件/外部程序/引擎+网络副作用），
+ * 模态弹窗经单发定时器自动关闭；派发全程存活即通过 */
+void LibraryWindow::menuDispatchProbe()
+{
+    QString p;
+    for (const Db::MetaRow &r : Db::listLibrary())
+        if (!r.path.isEmpty()) { p = r.path; break; }
+    if (p.isEmpty())
+    {
+        fprintf(stderr, "MENUPROBE no-book\n");
+        return;
+    }
+    const int ids[] = {1, 4, 5, 6, 2, 11, 12};
+    for (int id : ids)
+    {
+        QTimer::singleShot(500, this, []
+        {
+            if (QWidget *w = QApplication::activeModalWidget()) w->close();
+        });
+        dispatchBookMenu(id, QStringList{p});
+        QCoreApplication::processEvents();
+        evt("menudispatch", QString("id=%1").arg(id));
+        fprintf(stderr, "MENUPROBE id=%d ok\n", id);
+    }
+}
+
+/* v1.15.8 --aboutsmoke：软件说明页无头截图（版本条=软件名+版本+build 验证）——
+ * 弹窗 500ms 抓图存 shots_qt_about.png、1600ms 自动关闭 */
+void LibraryWindow::aboutProbeShot()
+{
+    QTimer::singleShot(500, this, [this]
+    {
+        if (QWidget *w = QApplication::activeModalWidget())
+        {
+            w->grab().save(hr::dataDir() + "/shots_qt_about.png");
+            fprintf(stderr, "ABOUTSMOKE frameless=%d\n",
+                    (w->windowFlags() & Qt::FramelessWindowHint) ? 1 : 0);
+        }
+    });
+    QTimer::singleShot(1600, this, []
+    {
+        if (QWidget *w = QApplication::activeModalWidget()) w->close();
+    });
+    showAboutDialog();
+}
+
+/* v1.15.10 --resizesmoke：最大化/还原阅读位保持回归（真实嵌入链）——开书→跳
+ * 40 页→壳窗放大→内嵌阅读器重排落地，evt 报 before/after；门禁在 runner 按 evt 判 */
+void LibraryWindow::resizeProbe(const QString &book)
+{
+    openBookOrRemote(book);
+    for (int j = 0; j < 80 && readerActive() && m_reader->pageCount() <= 0; ++j)
+    {
+        QCoreApplication::processEvents();
+        QThread::msleep(40);
+    }
+    if (!m_reader)
+    {
+        evt("resz_fail", "no-reader");
+        return;
+    }
+    for (int j = 0; j < 60; ++j)
+    {
+        QCoreApplication::processEvents();
+        QThread::msleep(40);
+    }
+    evt("resz_open_ok", QString("pages=%1").arg(m_reader->pageCount()));
+    m_reader->jumpToPublic(40);
+    for (int j = 0; j < 60; ++j)
+    {
+        QCoreApplication::processEvents();
+        QThread::msleep(40);
+    }
+    const int before = m_reader->probePage();
+    evt("resz_before", QString::number(before));
+    resize(1600, 950); /* 壳窗放大 → 内嵌阅读器 resizeEvent → 重排 */
+    for (int j = 0; j < 150; ++j)
+    {
+        QCoreApplication::processEvents();
+        QThread::msleep(40);
+    }
+    evt("resz_after", QString("after=%1 pages=%2")
+                          .arg(m_reader->probePage())
+                          .arg(m_reader->pageCount()));
+}
+
+QString LibraryWindow::shelfProbeBook()
+{
+    const QList<Db::MetaRow> rows = Db::listLibrary();
+    for (const Db::MetaRow &r : rows)
+        if (r.path.endsWith(QString::fromLatin1(".pdf"), Qt::CaseInsensitive)) return r.path;
+    return rows.isEmpty() ? QString() : rows.first().path;
 }
 
 void LibraryWindow::onDeleteFiles(const QStringList &paths)
@@ -2259,56 +2823,6 @@ void LibraryWindow::onManageDirs()
     scanRemoteSources();
 }
 
-
-void LibraryWindow::onCoverMenu(const QPoint &pos)
-{
-    QListWidgetItem *it = m_cover->itemAt(pos);
-    if (!it) return;
-    const QString p = it->data(Qt::UserRole).toString();
-    const bool fav = Db::isFavorite(p);
-    QMenu menu(this);
-    QAction *favAct = menu.addAction(fav ? hr::l10n::s("取消收藏", "Unfavorite")
-                                         : hr::l10n::s("加入收藏", "Favorite"));
-    /* v1.2.0（G）：三态标记（同 onTreeMenu） */
-    QMenu *markMenu = menu.addMenu(hr::l10n::s("标记状态", "Mark status"));
-    QAction *mkRead = markMenu->addAction(hr::l10n::s("标记已读", "Mark finished"));
-    QAction *mkReading = markMenu->addAction(hr::l10n::s("标记在读", "Mark reading"));
-    QAction *mkUnread = markMenu->addAction(hr::l10n::s("标记未读", "Mark unread"));
-    QAction *act = menu.exec(m_cover->viewport()->mapToGlobal(pos));
-    if (act == favAct)
-    {
-        Db::setFavoriteSync(p, !fav);
-        evt("lib_fav", QString("on=%1 path=%2")
-                           .arg(!fav ? 1 : 0).arg(QFileInfo(p).fileName().left(80)));
-        loadTable();
-    }
-    else if (act == mkRead || act == mkReading || act == mkUnread)
-    {
-        if (act == mkReading)
-        {
-            hr::setBookStateReading(p, true);
-        }
-        else if (act == mkRead)
-        {
-            int pg = 0, pc = 0, vw = 0;
-            if (!Db::loadProgress(p, &pg, &pc, &vw) || pc <= 0) { pc = 1; vw = 0; }
-            Db::saveProgress(p, pc - 1, pc, vw);
-            hr::setBookStateReading(p, false);
-        }
-        else
-        {
-            Db::deleteProgress(p);
-            hr::setBookStateReading(p, false);
-        }
-        evt("lib_mark_state",
-            QString("act=%1 path=%2")
-                .arg(act == mkRead ? QString("read")
-                     : act == mkReading ? QString("reading")
-                                        : QString("unread"))
-                .arg(QFileInfo(p).fileName().left(80)));
-        loadTable();
-    }
-}
 
 /* ---- U1 导航壳 ---- */
 
@@ -2520,18 +3034,20 @@ void LibraryWindow::closeEvent(QCloseEvent *e)
 
 void LibraryWindow::showTab(int idx)
 {
-    if (idx < 0 || idx > 6) return; /* 5=书签笔记 6=珍藏（U7，侧栏/首页进入，无底 tab） */
+    if (idx < 0 || idx > 7) return; /* 5=书签笔记 6=珍藏 7=最近阅读（U7/U9，侧栏/首页进入，无底 tab） */
     m_stack->setCurrentIndex(idx);
     /* v0.86.0 W5 H2：窗口标题随页刷新（对齐页名；此前恒为“书库”） */
     {
-        static const struct { const char *zh, *en; } kPg[7] = {
+        static const struct { const char *zh, *en; } kPg[8] = {
             {"首页", "Home"}, {"书架", "Bookshelf"}, {"我的书库", "My library"},
             {"偏好", "Settings"}, {"网上书库", "Network"}, {"书签笔记", "Notes"},
             {"我的珍藏", "Favorites"},
+            {"最近阅读", "Recent"},
         }; /* v1.0.0：书库→书架、我的文件→我的书库 */
         setWindowTitle("HowRead Qt — " + hr::l10n::s(kPg[idx].zh, kPg[idx].en));
     }
     if (idx == 0) refreshHome(); /* U7：进首页即刷新数据 */
+    if (idx == 7) refreshRecentPage(); /* U9：进最近阅读页即刷新数据 */
     for (int i = 0; i < m_tabBtns.size(); i++)
         m_tabBtns[i]->setChecked(i == idx);
     hr::Icons::retint(); /* v0.86.0 W5 H1：选中 tab 图标 accent 重染 */
@@ -2541,7 +3057,27 @@ void LibraryWindow::showTab(int idx)
 /* 侧栏：0 最近阅读 1 我的书架 2 我的书库 3 书签笔记（v1.0.0 网上书库行撤）5 拉伸 6 软件说明 7 夜间/白天 */
 void LibraryWindow::onSide(int row)
 {
+    /* v1.15.4 诊断：启动后 ~800ms 一次自发 currentRowChanged(0)→showTab(7)，
+     * 用户定版首页被破坏——记录触发环境定位根因（mouse=左键按下即真实点击） */
+    evt("on_side", QString("row=%1 mouse=%2 focus=%3 cur=%4 n=%5 sel=%6")
+                            .arg(row)
+                            .arg(int(QApplication::mouseButtons()))
+                            .arg(QApplication::focusWidget()
+                                     ? QApplication::focusWidget()->metaObject()->className()
+                                     : QString("-"))
+                            .arg(m_side ? m_side->currentRow() : -1)
+                            .arg(m_side ? m_side->count() : 0)
+                            .arg(m_side ? m_side->selectedItems().size() : 0));
     if (row < 0) return;
+    /* v1.15.4：只认鼠标手势的行电流——程序性电流（焦点链重排自动设 current）不导航，
+     * 并复位选中态防侧栏高亮与实际页面漂移（键盘导航侧栏本就无使用场景） */
+    if (QApplication::mouseButtons() == Qt::NoButton)
+    {
+        m_side->blockSignals(true);
+        m_side->setCurrentRow(-1);
+        m_side->blockSignals(false);
+        return;
+    }
     QListWidgetItem *sIt = m_side->item(row);
     const QString role = sIt ? sIt->data(Qt::UserRole).toString() : QString();
     if (role.startsWith(QLatin1String("tag:"))) /* v0.84.0 W3 D4：标签过滤（再点取消） */
@@ -2578,8 +3114,8 @@ void LibraryWindow::onSide(int row)
     }
     switch (row)
     {
-    case 0: /* 最近阅读：暂落首页（U7 上最近列表） */
-        showTab(0);
+    case 0: /* 最近阅读（U9 专页，v1.14.0） */
+        showTab(7);
         break;
     case 1: /* 我的书架 */
         showTab(1);
@@ -3569,6 +4105,7 @@ protected:
         int mx = 1;
         for (const auto &b : buckets) mx = qMax(mx, b.second);
         const int gap = n > 14 ? 3 : 10;
+        const int lstep = n > 20 ? 5 : (n > 14 ? 2 : 1); /* v1.14.1：桶多时隔步画标签 */
         const qreal bw = (qreal)(width() - gap * (n + 1)) / n;
         QFont lf = font();
         lf.setPointSize(7);
@@ -3580,118 +4117,39 @@ protected:
             p.fillRect(QRectF(gap + i * (bw + gap), 12 + (height() - 26 - h), bw, h),
                        i == n - 1 ? accent : soft);
             p.setPen(palette().color(QPalette::PlaceholderText));
-            p.drawText(QRectF(gap + i * (bw + gap), height() - 26, bw, 12),
-                       Qt::AlignCenter, buckets[i].first);
-            p.drawText(QRectF(gap + i * (bw + gap), height() - 14, bw, 12),
-                       Qt::AlignCenter,
-                       v > 0 ? QString("%1分").arg(v) : QString("—"));
+            if (i % lstep == 0 || i == n - 1) /* v1.14.1：桶多时隔步画 x 轴标签 */
+                p.drawText(QRectF(gap + i * (bw + gap), height() - 26, bw, 12),
+                           Qt::AlignCenter, buckets[i].first);
+            if (n <= 14) /* v1.14.1：桶多时不画逐柱数值（对齐安卓只留 x 轴日期） */
+                p.drawText(QRectF(gap + i * (bw + gap), height() - 14, bw, 12),
+                           Qt::AlignCenter,
+                           v > 0 ? QString("%1分").arg(v) : QString("—"));
         }
     }
 };
 
 void LibraryWindow::onStats()
 {
-    const QVector<hr::Stats::DayRow> rows = hr::Stats::rows(14);
-    const QVector<hr::Stats::DayRow> all = hr::Stats::allDays(); /* P2（D12） */
     QDialog dlg(this);
     dlg.setWindowTitle(hr::l10n::s("阅读统计", "Reading stats"));
     dlg.resize(520, 560);
     QVBoxLayout *lay = new QVBoxLayout(&dlg);
     QTabWidget *tabs = new QTabWidget(&dlg);
     lay->addWidget(tabs, 1);
-    /* P2 适配（D12）：周/月/年聚合（镜像 WIN PeriodStats：周一锚/自然月/全部年份） */
-    auto weeklyBk = [&all]()
-    {
-        QMap<QDate, int> mp;
-        const QDate cur = QDate::currentDate();
-        const QDate curMon = cur.addDays(-(cur.dayOfWeek() - 1));
-        for (const auto &d : all)
-        {
-            const QDate dt = QDate::fromString(d.day, "yyyy-MM-dd");
-            if (!dt.isValid()) continue;
-            mp[dt.addDays(-(dt.dayOfWeek() - 1))] += d.minutes;
-        }
-        QVector<QPair<QString, int>> out;
-        for (int i = 11; i >= 0; i--)
-        {
-            const QDate m = curMon.addDays(-i * 7);
-            out.append(qMakePair(QString("%1/%2").arg(m.month(), 2, 10, QChar('0'))
-                                                 .arg(m.day(), 2, 10, QChar('0')),
-                                  mp.value(m, 0)));
-        }
-        return out;
-    };
-    auto monthlyBk = [&all]()
-    {
-        QMap<int, int> mp;
-        const QDate cur = QDate::currentDate();
-        for (const auto &d : all)
-        {
-            const QDate dt = QDate::fromString(d.day, "yyyy-MM-dd");
-            if (dt.isValid()) mp[dt.year() * 100 + dt.month()] += d.minutes;
-        }
-        QVector<QPair<QString, int>> out;
-        for (int i = 11; i >= 0; i--)
-        {
-            const QDate m = cur.addMonths(-i);
-            out.append(qMakePair(QString("%1/%2").arg(m.year() % 100).arg(m.month()),
-                                  mp.value(m.year() * 100 + m.month(), 0)));
-        }
-        return out;
-    };
-    auto yearlyBk = [&all]()
-    {
-        QMap<int, int> mp;
-        for (const auto &d : all)
-        {
-            const QDate dt = QDate::fromString(d.day, "yyyy-MM-dd");
-            if (dt.isValid()) mp[dt.year()] += d.minutes;
-        }
-        if (mp.isEmpty()) mp[QDate::currentDate().year()] = 0;
-        QVector<QPair<QString, int>> out;
-        for (auto it = mp.constBegin(); it != mp.constEnd(); ++it)
-            out.append(qMakePair(QString::number(it.key()), it.value()));
-        return out;
-    };
-    auto mkBars = [&tabs](const QVector<QPair<QString, int>> &bk, const QString &title)
+    /* v1.14.2：三页签柱状图定版——近1周 | 近1月 | 近1年（周/月=逐日柱，
+     * 年=近 12 自然月柱）；汇总行/全部年份/近 14 天明细/切换按钮版撤（用户定版） */
+    auto mkPeriodTab = [&tabs](const QString &title, const QVector<QPair<QString, int>> &bk)
     {
         QWidget *pg = new QWidget;
         QVBoxLayout *pl = new QVBoxLayout(pg);
-        pl->addWidget(new QLabel(title, pg));
         StatsBars *bars = new StatsBars(pg);
         bars->buckets = bk;
         pl->addWidget(bars, 1);
         tabs->addTab(pg, title);
     };
-    mkBars(weeklyBk(), hr::l10n::s("近 12 周（阅读分钟）", "Last 12 weeks (min)"));
-    mkBars(monthlyBk(), hr::l10n::s("近 12 月（阅读分钟）", "Last 12 months (min)"));
-    mkBars(yearlyBk(), hr::l10n::s("全部年份（阅读分钟）", "All years (min)"));
-    QWidget *dayPg = new QWidget;
-    QVBoxLayout *dayLay = new QVBoxLayout(dayPg);
-    tabs->addTab(dayPg, hr::l10n::s("近 14 天明细", "14-day detail"));
-    QTreeWidget *tw = new QTreeWidget(dayPg);
-    tw->setColumnCount(4);
-    tw->setHeaderLabels(QStringList() << hr::l10n::s("日期", "Day")
-                                      << hr::l10n::s("分钟", "Min")
-                                      << hr::l10n::s("页数", "Pages")
-                                      << hr::l10n::s("书目", "Books"));
-    tw->setRootIsDecorated(false);
-    tw->setAlternatingRowColors(true);
-    dayLay->addWidget(tw, 1);
-    int tm = 0, tp = 0;
-    for (const hr::Stats::DayRow &r : rows)
-    {
-        new QTreeWidgetItem(tw, QStringList() << r.day << QString::number(r.minutes)
-                                              << QString::number(r.pages)
-                                              << QString::number(r.books));
-        tm += r.minutes;
-        tp += r.pages;
-    }
-    QLabel *lb = new QLabel(
-        QString(hr::l10n::s("近 14 天：%1 分钟 / %2 页；累计书目 %3 本",
-                            "14 days: %1 min / %2 pages; %3 books"))
-            .arg(tm).arg(tp).arg(hr::Stats::totalBooks()), dayPg);
-    dayLay->addWidget(lb);
+    mkPeriodTab(hr::l10n::s("近1周", "1W"), hr::Stats::bucketsDaily(7, false));
+    mkPeriodTab(hr::l10n::s("近1月", "1M"), hr::Stats::bucketsDaily(30, true));
+    mkPeriodTab(hr::l10n::s("近1年", "1Y"), hr::Stats::bucketsMonthly());
     QHBoxLayout *bl = new QHBoxLayout;
     QPushButton *clr = new QPushButton(hr::l10n::s("清空统计…", "Clear…"), &dlg);
     QPushButton *close = new QPushButton(hr::l10n::s("关闭", "Close"), &dlg);
@@ -3705,7 +4163,10 @@ void LibraryWindow::onStats()
         onClearStatsDialog();
     });
     connect(close, &QPushButton::clicked, &dlg, &QDialog::accept);
-    evt("stats_view", QString("days=%1").arg(rows.size()));
+    evt("stats_view", QString("w=%1 m=%2 y=%3")
+                           .arg(hr::Stats::minutesBack(7))
+                           .arg(hr::Stats::minutesBack(30))
+                           .arg(hr::Stats::minutesBack(365)));
     dlg.exec();
 }
 
@@ -6500,9 +6961,9 @@ static QString fmtDurMin(int m)
     return QString(hr::l10n::s("%1分钟", "%1m")).arg(m);
 }
 
-/* 区块标题行：标题 + 副标题 + [齿轮] + 更多 › */
-static QWidget *mkHeader(const QString &title, QLabel **subOut, QPushButton **moreOut,
-                         QPushButton **gearOut)
+/* 区块标题行：标题 + 副标题 + 更多 ›（v1.15.2：统计齿轮撤——更多=统计弹窗，
+ * 清空统计入口保留在弹窗底部"清空统计…"） */
+static QWidget *mkHeader(const QString &title, QLabel **subOut, QPushButton **moreOut)
 {
     QWidget *w = new QWidget;
     QHBoxLayout *hl = new QHBoxLayout(w);
@@ -6512,7 +6973,7 @@ static QWidget *mkHeader(const QString &title, QLabel **subOut, QPushButton **mo
     QFont f = tt->font();
     f.setBold(true);
     if (f.pointSizeF() > 0.0)
-        f.setPointSizeF(f.pointSizeF() * 1.2); /* v0.96.0 W17#4：六区块标题字号调大一级 */
+        f.setPointSizeF(f.pointSizeF() * 1.08); /* v1.11.0b：单列紧凑定版（原 W17#4 1.2 倍撤回） */
     tt->setFont(f);
     hl->addWidget(tt);
     QLabel *sb = new QLabel(w);
@@ -6520,16 +6981,6 @@ static QWidget *mkHeader(const QString &title, QLabel **subOut, QPushButton **mo
     hl->addWidget(sb);
     if (subOut) *subOut = sb;
     hl->addStretch(1);
-    if (gearOut)
-    {
-        QPushButton *g = new QPushButton(QString::fromUtf8("\xE2\x9A\x99"), w);
-        g->setFlat(true);
-        g->setFixedSize(26, 22);
-        g->setCursor(Qt::PointingHandCursor);
-        g->setToolTip(hr::l10n::s("阅读统计配置", "Stats settings"));
-        hl->addWidget(g);
-        *gearOut = g;
-    }
     QPushButton *m = new QPushButton(hr::l10n::s("更多 ›", "More \xE2\x80\xBA"), w);
     m->setFlat(true);
     m->setCursor(Qt::PointingHandCursor);
@@ -6555,7 +7006,7 @@ static QWidget *mkStatCell(const QString &label, QLabel **numOut, bool clickable
     }
     else
         fr = new QFrame;
-    fr->setMinimumHeight(62); /* W17#4：随放大后的数字加高 */
+    fr->setMinimumHeight(54); /* v1.11.0b：单列紧凑 */
     fr->setStyleSheet(QString::fromLatin1(
         "QWidget{background:palette(base); border-radius:8px; border:none;}"
         "QPushButton:hover{background:palette(alternate-base);}"));
@@ -6606,6 +7057,9 @@ void LibraryWindow::buildHomePage()
     lay->setContentsMargins(0, 0, 8, 0);
     lay->setSpacing(6);
     sa->setWidget(root);
+    /* v1.11.0：六区块挂 m_homeCols 容器（宽屏双列 / 窄屏单列，relayoutHome 重排） */
+    m_homeCols = new QWidget;
+    lay->addWidget(m_homeCols, 1); /* v1.11.0a 根修：容器必须挂进根布局（漏挂=整页空白） */
     /* v0.95.0 W16：sa 改挂尾部网格叠放单元格（FAB 悬浮其上），不再独立占行 */
 
     auto mkRow = [](QHBoxLayout **out) -> QWidget *
@@ -6617,53 +7071,86 @@ void LibraryWindow::buildHomePage()
         *out = r;
         return w;
     };
-    QPushButton *more = nullptr, *gear = nullptr;
+    QPushButton *more = nullptr; /* v1.15.2：gear 撤（仅统计块用过） */
 
-    /* 1 最近阅读 */
-    lay->addWidget(mkHeader(hr::l10n::s("最近阅读", "Recent"), &m_hSubRecent, &more, nullptr));
-    { /* v0.81.0 V6：最近横排放横向滚动容器（对齐 Compose LazyRow；书多出横向滚动条不挤压） */
-        QWidget *rowW = mkRow(&m_hRecent);
+    /* 1 最近阅读（v1.11.0：区块容器化——双列/单列重排目标） */
+    {
+        QWidget *sec = new QWidget;
+        QVBoxLayout *svl = new QVBoxLayout(sec);
+        svl->setContentsMargins(0, 0, 0, 0);
+        svl->setSpacing(4); /* v1.11.0b */
+        svl->addWidget(mkHeader(hr::l10n::s("最近阅读", "Recent"), &m_hSubRecent, &more));
+        QWidget *rowW = mkRow(&m_hRecent); /* v0.81.0 V6：横向滚动容器（Compose LazyRow 同款） */
         QScrollArea *rs = new QScrollArea;
         rs->setWidgetResizable(true);
         rs->setFrameShape(QFrame::NoFrame);
-        rs->setFixedHeight(258); /* W18#2：随再放大的封面瓦片加高 */
+        rs->setFixedHeight(198); /* v1.11.0b：随 132×190 瓦片 */
         rs->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         rs->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff); /* v0.86.0 W5 H5：对齐 LazyRow 无滚动条 */
         rs->setWidget(rowW);
-        lay->addWidget(rs);
+        svl->addWidget(rs);
+        m_homeSecs.append(sec);
     }
     connect(more, &QPushButton::clicked, this, [this]
     {
-        if (m_statusC)
-        {
-            const int i = m_statusC->findData(QString::fromLatin1("reading"));
-            if (i >= 0) m_statusC->setCurrentIndex(i);
-        }
         evt("home_recent_more", "");
-        showTab(1);
+        showTab(7); /* v1.14.0：进最近阅读页（原跳书架"在读"过滤撤销） */
     });
-    lay->addSpacing(8);
-
-    /* 2 书签笔记 */
-    lay->addWidget(mkHeader(hr::l10n::s("书签笔记", "Notes"), &m_hSubBm, &more, nullptr));
-    lay->addWidget(mkRow(&m_hBm));
+    /* 2 书签笔记（v1.11.0：行容器化——卡多不再撑宽页面；行高随空态收紧） */
+    {
+        QWidget *sec = new QWidget;
+        QVBoxLayout *svl = new QVBoxLayout(sec);
+        svl->setContentsMargins(0, 0, 0, 0);
+        svl->setSpacing(4); /* v1.11.0b */
+        svl->addWidget(mkHeader(hr::l10n::s("书签笔记", "Notes"), &m_hSubBm, &more));
+        QWidget *rowW = mkRow(&m_hBm);
+        QScrollArea *bs = new QScrollArea;
+        bs->setWidgetResizable(true);
+        bs->setFrameShape(QFrame::NoFrame);
+        bs->setFixedHeight(102); /* 书签卡 94 + 余量（空态 refreshHome 收至 32） */
+        bs->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        bs->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff); /* LazyRow 同款隐藏滚动条 */
+        bs->setWidget(rowW);
+        svl->addWidget(bs);
+        m_homeBmSa = bs;
+        m_homeSecs.append(sec);
+    }
     connect(more, &QPushButton::clicked, this, [this] { evt("home_bm_more", ""); showTab(5); });
-    lay->addSpacing(8);
 
-    /* 3 我的珍藏 */
-    lay->addWidget(mkHeader(hr::l10n::s("我的珍藏", "Favorites"), &m_hSubFav, &more, nullptr));
-    lay->addWidget(mkRow(&m_hFav));
+    /* 3 我的珍藏（v1.11.0：行容器化） */
+    {
+        QWidget *sec = new QWidget;
+        QVBoxLayout *svl = new QVBoxLayout(sec);
+        svl->setContentsMargins(0, 0, 0, 0);
+        svl->setSpacing(4); /* v1.11.0b */
+        svl->addWidget(mkHeader(hr::l10n::s("我的珍藏", "Favorites"), &m_hSubFav, &more));
+        QWidget *rowW = mkRow(&m_hFav);
+        QScrollArea *fs = new QScrollArea;
+        fs->setWidgetResizable(true);
+        fs->setFrameShape(QFrame::NoFrame);
+        fs->setFixedHeight(198); /* 瓦片 190 + 余量（空态 refreshHome 收至 32） */
+        fs->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        fs->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        fs->setWidget(rowW);
+        svl->addWidget(fs);
+        m_homeFavSa = fs;
+        m_homeSecs.append(sec);
+    }
     connect(more, &QPushButton::clicked, this, [this] { evt("home_fav_more", ""); showTab(6); });
-    lay->addSpacing(8);
 
-    /* 4 阅读统计（2×2 + 总时长大卡；齿轮=清空两击确认） */
-    lay->addWidget(mkHeader(hr::l10n::s("阅读统计", "Stats"), &m_hSubStats, &more, &gear));
+    /* 4 阅读统计（2×2 + 总时长大卡；v1.11.0 区块容器化；v1.15.2 齿轮撤——更多=统计弹窗，
+     * 弹窗底部留有"清空统计…"） */
+    {
+        QWidget *sec = new QWidget;
+        QVBoxLayout *svl = new QVBoxLayout(sec);
+        svl->setContentsMargins(0, 0, 0, 0);
+        svl->setSpacing(4); /* v1.11.0b */
+        svl->addWidget(mkHeader(hr::l10n::s("阅读统计", "Stats"), &m_hSubStats, &more));
     connect(more, &QPushButton::clicked, this, [this]
     {
         evt("home_stats_total_open", "more");
         onStats();
     });
-    connect(gear, &QPushButton::clicked, this, &LibraryWindow::onClearStatsDialog);
     {
         QWidget *sw = new QWidget;
         QHBoxLayout *sl = new QHBoxLayout(sw);
@@ -6686,9 +7173,9 @@ void LibraryWindow::buildHomePage()
         QPushButton *totalBtn = nullptr;
         QWidget *tc = mkStatCell(hr::l10n::s("总阅读时间", "Total"), &m_hStTotal, true,
                                  &totalBtn);
-        tc->setMinimumHeight(118);
+        tc->setMinimumHeight(108); /* v1.11.0b */
         sl->addWidget(tc, 10);
-        lay->addWidget(sw);
+        svl->addWidget(sw);
         connect(readBtn, &QPushButton::clicked, this, [this]
         {
             evt("home_stats_read_jump", m_hStRead ? "n=" + m_hStRead->text() : QString());
@@ -6705,23 +7192,44 @@ void LibraryWindow::buildHomePage()
             onStats();
         });
     }
-    lay->addSpacing(8);
-
-    /* 5 我的文件（圆形条目） */
-    lay->addWidget(mkHeader(hr::l10n::s("我的书库", "My library"), &m_hSubFiles, &more, nullptr)); /* v1.0.0 */
-    lay->addWidget(mkRow(&m_hFiles));
+    m_homeSecs.append(sec);
+    }
+    /* 5 我的文件（圆形条目；v1.11.0 区块容器化） */
+    {
+        QWidget *sec = new QWidget;
+        QVBoxLayout *svl = new QVBoxLayout(sec);
+        svl->setContentsMargins(0, 0, 0, 0);
+        svl->setSpacing(4); /* v1.11.0b */
+        svl->addWidget(mkHeader(hr::l10n::s("我的书库", "My library"), &m_hSubFiles, &more)); /* v1.0.0 */
+        svl->addWidget(mkRow(&m_hFiles));
+        m_homeSecs.append(sec);
+    }
     connect(more, &QPushButton::clicked, this, [this] { evt("home_files_more", ""); showTab(2); });
-    lay->addSpacing(8);
 
-    /* 6 网上书库（圆形条目） */
-    lay->addWidget(mkHeader(hr::l10n::s("网上书库", "Network"), &m_hSubSrv, &more, nullptr));
-    lay->addWidget(mkRow(&m_hSrv));
+    /* 6 网上书库（v1.11.0：行容器化——服务器多时不撑宽页面） */
+    {
+        QWidget *sec = new QWidget;
+        QVBoxLayout *svl = new QVBoxLayout(sec);
+        svl->setContentsMargins(0, 0, 0, 0);
+        svl->setSpacing(4); /* v1.11.0b */
+        svl->addWidget(mkHeader(hr::l10n::s("网上书库", "Network"), &m_hSubSrv, &more));
+        QWidget *rowW = mkRow(&m_hSrv);
+        QScrollArea *ss = new QScrollArea;
+        ss->setWidgetResizable(true);
+        ss->setFrameShape(QFrame::NoFrame);
+        ss->setFixedHeight(96); /* 圆钮 88 + 余量（空态 refreshHome 收至 32） */
+        ss->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        ss->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        ss->setWidget(rowW);
+        svl->addWidget(ss);
+        m_homeSrvSa = ss;
+        m_homeSecs.append(sec);
+    }
     connect(more, &QPushButton::clicked, this, [this] { evt("home_net_more", ""); showTab(4); });
-    lay->addStretch(1);
 
     /* FAB：继续阅读（右下；最近一本，无则去书库） */
     QHBoxLayout *fbl = new QHBoxLayout;
-    fbl->setContentsMargins(0, 0, 12, 12); /* v0.95.0 W16：悬浮 FAB 与边缘留呼吸位 */
+    fbl->setContentsMargins(0, 0, 8, 8); /* v1.11.0b */
     fbl->addStretch(1);
     /* v0.77.0 V2：FAB 对齐安卓/Compose——56px 圆钮 + 开卷图标（无图标资源时退回文字胶囊） */
     m_homeFab = new QToolButton(m_homePage);
@@ -6768,12 +7276,114 @@ void LibraryWindow::buildHomePage()
             showTab(1);
         }
     });
+    /* v1.11.0：窗口尺寸变化防抖 → refreshHome（重排双列/单列 + 重算行上限） */
+    m_homeResizeDeb = new QTimer(this);
+    m_homeResizeDeb->setSingleShot(true);
+    m_homeResizeDeb->setInterval(250);
+    connect(m_homeResizeDeb, &QTimer::timeout, this, [this] { refreshHome(); });
+    relayoutHome(true); /* 首次装配（单列起步，页宽已知后自适应） */
+}
+
+/* v1.11.0：首页六区块重排——页宽≥1280 双列（左：最近/珍藏，右：书签/统计/文件/服务器），
+ * 窄屏单列（原布局）。仅模式变化时重建（防抖与 refreshHome 重入安全）。 */
+void LibraryWindow::relayoutHome(bool force)
+{
+    if (!m_homeCols || m_homeSecs.size() != 6) return;
+    /* v1.11.0b：定版上下单列——双列装配废弃（用户反馈最大化后排布变左右），仅首次装配 */
+    if (!force && m_homeCols->layout()) return;
+    QLayout *old = m_homeCols->layout();
+    if (old)
+    {
+        QLayoutItem *it;
+        while ((it = old->takeAt(0)) != nullptr)
+        {
+            if (it->widget()) it->widget()->setParent(nullptr);
+            delete it;
+        }
+        delete old;
+    }
+    QVBoxLayout *one = new QVBoxLayout(m_homeCols); /* v1.11.0b：上下单列装配 */
+    one->setContentsMargins(0, 0, 0, 0);
+    one->setSpacing(6);
+    for (QWidget *sec : m_homeSecs) one->addWidget(sec);
+    one->addStretch(1);
+    evt("home_relayout", QString("col=1 w=%1").arg(m_homePage->width()));
+    dumpHomeState("after-relayout"); /* v1.11.0a 诊断探针 */
+}
+
+/* v1.11.0a 诊断探针（临时）：首页/书架结构快照——区块可见性/几何/挂载与栈页状态 */
+void LibraryWindow::dumpHomeState(const QString &tag)
+{
+    if (!m_homePage || !m_homeCols) return;
+    QString ss;
+    for (QWidget *sec : m_homeSecs)
+        ss += QString("|v%1@%2x%3").arg(sec->isVisible() ? 1 : 0)
+                  .arg(sec->width()).arg(sec->height());
+    evt("home_dump", QString("%1 idx=%2 page=v%3@%4x%5 cols=v%6@%7x%8 secs=%9")
+            .arg(tag)
+            .arg(m_stack ? m_stack->currentIndex() : -1)
+            .arg(m_homePage->isVisible() ? 1 : 0)
+            .arg(m_homePage->width()).arg(m_homePage->height())
+            .arg(m_homeCols->isVisible() ? 1 : 0)
+            .arg(m_homeCols->width()).arg(m_homeCols->height())
+            .arg(ss));
+    if (m_cover)
+        evt("home_dump2", QString("%1 coverN=%2 shelfN=%3 shelfVis=%4 tabVis=%5")
+                .arg(tag).arg(m_cover->count())
+                .arg(m_shelf ? m_shelf->books.size() : -1)
+                .arg(m_shelfWrap && !m_shelfWrap->isHidden() ? 1 : 0)
+                .arg(m_tabBar && !m_tabBar->isHidden() ? 1 : 0));
+}
+
+/* v1.11.0：窗口尺寸变化 → 250ms 防抖后 refreshHome（重排 + 重算行上限） */
+void LibraryWindow::resizeEvent(QResizeEvent *e)
+{
+    QMainWindow::resizeEvent(e);
+    if (m_homeResizeDeb) m_homeResizeDeb->start();
+}
+
+/* v1.13.0：书签笔记按书聚合（首页横卡与 U7 书签页两级共用口径）——bms 须已按
+ * createdAt 倒序：书按"最近一条"排前，计数分 书签/笔记，last=最近一条时间 */
+struct BmBookAgg
+{
+    QString path;
+    int marks = 0; /* 普通书签 */
+    int notes = 0; /* AI/手工笔记 */
+    long long last = 0;
+};
+static QList<BmBookAgg> bmGroupByBook(const QList<BookmarkRow> &bms)
+{
+    QList<BmBookAgg> out;
+    QHash<QString, int> idx;
+    for (const BookmarkRow &b : bms)
+    {
+        const int i = idx.value(b.path, -1);
+        if (i < 0)
+        {
+            BmBookAgg n;
+            n.path = b.path;
+            out.append(n);
+            idx.insert(b.path, out.size() - 1);
+        }
+        BmBookAgg &a = i < 0 ? out.last() : out[i];
+        if (b.isAiNote) a.notes++;
+        else a.marks++;
+        a.last = qMax(a.last, b.createdAt);
+    }
+    return out;
 }
 
 void LibraryWindow::refreshHome()
 {
     const qint64 t0 = QDateTime::currentMSecsSinceEpoch(); /* v0.107.2：home_render ms */
     if (!m_hRecent || !m_hBm || !m_hFav || !m_hFiles || !m_hSrv) return;
+    /* v1.11.0：首页自适应——模式重排 + 按当前宽度动态行上限（最大化整行完整呈现）。
+     * 行宽估算：双列左右按 3:2 拉伸；瓦片 158+12/枚、书签卡 288+12/枚。 */
+    relayoutHome();
+    const int pageW = m_homePage ? m_homePage->width() : 1000;
+    const int rowWFull = qMax(320, pageW - 24);
+    const int capTileL = qBound(3, (rowWFull + 12) / 144, 12); /* 瓦片 132+12 */
+    const int capBmN = qBound(1, (rowWFull + 12) / 284, 12);   /* 书签卡 272+12 */
     /* 数据一次取齐 */
     QHash<QString, QString> titles;
     for (const Db::MetaRow &r : Db::listLibrary())
@@ -6811,11 +7421,11 @@ void LibraryWindow::refreshHome()
         const QString t = titleOf(p);
         QToolButton *tb = new QToolButton;
         tb->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        /* W18#2：封面瓦片再放大 120×166→144×200（等比） */
-        tb->setIcon(QIcon(coverTile(p, t, 144, 200)));
-        tb->setIconSize(QSize(144, 200));
-        tb->setFixedSize(158, 242);
-        tb->setText(tb->fontMetrics().elidedText(t, Qt::ElideRight, 150));
+        /* v1.11.0b：瓦片 120×166/按钮 132×190（首页单列紧凑定版，W18#2 放大撤回） */
+        tb->setIcon(QIcon(coverTile(p, t, 120, 166)));
+        tb->setIconSize(QSize(120, 166));
+        tb->setFixedSize(132, 190);
+        tb->setText(tb->fontMetrics().elidedText(t, Qt::ElideRight, 125));
         tb->setToolTip(t);
         tb->setCursor(Qt::PointingHandCursor);
         tb->setStyleSheet(QString::fromLatin1(
@@ -6841,7 +7451,7 @@ void LibraryWindow::refreshHome()
     int nRecent = 0;
     for (const Db::ProgressRow &r : rec)
     {
-        if (nRecent >= 12) break;
+        if (nRecent >= capTileL) break; /* v1.11.0：随宽度自适应 */
         if (!r.path.startsWith(QString::fromLatin1("remote://")) && !QFileInfo::exists(r.path))
             continue;
         m_hRecent->addWidget(tile(r.path, "home_recent_open"));
@@ -6854,17 +7464,20 @@ void LibraryWindow::refreshHome()
     m_hRecent->addStretch(1);
     m_hSubRecent->setText(QString(hr::l10n::s("共 %1 本", "%1 books")).arg(nRecent));
 
-    /* 2 书签笔记横卡（≤12；封面+书名+note/label+N%·第x页） */
+    /* 2 书签笔记横卡（v1.13.0：按书聚合——安卓 BookmarksFragment2 BY_BOOK 同思路；
+     * 每书一卡=封面+书名+书签x·笔记y+最近时间+阅读进度；点击进书签笔记页该书） */
     rowClear(m_hBm);
+    const QList<BmBookAgg> bookAgg = bmGroupByBook(bms);
     int nBm = 0;
-    for (const BookmarkRow &b : bms)
+    for (const BmBookAgg &a : bookAgg)
     {
-        if (nBm >= 12) break;
-        const QString t = titleOf(b.path);
+        if (nBm >= capBmN) break; /* v1.11.0：随宽度自适应 */
+        const QString t = titleOf(a.path);
         QPushButton *card = new QPushButton;
         card->setFlat(true);
-        card->setFixedSize(288, 110); /* W18#2：书签卡再放大 250×96→288×110 */
+        card->setFixedSize(272, 94); /* v1.11.0b：单列紧凑 */
         card->setCursor(Qt::PointingHandCursor);
+        card->setToolTip(t);
         card->setStyleSheet(QString::fromLatin1(
             "QPushButton{background:palette(base); border:none; border-radius:8px;}"
             "QPushButton:hover{background:palette(alternate-base);}"));
@@ -6872,46 +7485,52 @@ void LibraryWindow::refreshHome()
         cl->setContentsMargins(8, 8, 8, 8);
         cl->setSpacing(8);
         QLabel *cv = new QLabel(card);
-        cv->setFixedSize(64, 90); /* W18#2：书签卡封面再放大 54×76→64×90 */
-        cv->setPixmap(coverTile(b.path, t, 64, 90));
+        cv->setFixedSize(58, 72); /* v1.11.0b */
+        cv->setPixmap(coverTile(a.path, t, 58, 72));
         cv->setStyleSheet(QString::fromLatin1("background:transparent;"));
         cl->addWidget(cv);
         QVBoxLayout *tx = new QVBoxLayout;
         tx->setContentsMargins(0, 0, 0, 0);
         tx->setSpacing(2);
-        QLabel *l1 = new QLabel(card->fontMetrics().elidedText(t, Qt::ElideRight, 196), card); /* W18#2：随卡再加宽 */
+        QLabel *l1 = new QLabel(card->fontMetrics().elidedText(t, Qt::ElideRight, 180), card); /* v1.11.0b */
         l1->setStyleSheet(QString::fromLatin1(
             "font-size:%1px; font-weight:bold; background:transparent;").arg(hr::Ui::fsPx(12)));
-        QString sub = b.note.trimmed();
-        if (sub.isEmpty())
-            sub = (b.label.trimmed().isEmpty() ? hr::l10n::s("书签", "Bookmark") : b.label) +
-                  QString::fromLatin1("  ") +
-                  QDateTime::fromMSecsSinceEpoch(b.createdAt)
-                      .toString(QString::fromLatin1("MM-dd HH:mm"));
-        QLabel *l2 = new QLabel(card->fontMetrics().elidedText(sub, Qt::ElideRight, 196), card); /* W18#2：按卡内实际宽省略 */
+        /* v1.13.0：副行=书签/笔记计数+最近一条时间（安卓书头行 "(N items)" 同思路） */
+        QStringList parts;
+        if (a.marks > 0)
+            parts << hr::l10n::s("书签 %1", "%1 marks").arg(a.marks);
+        if (a.notes > 0)
+            parts << hr::l10n::s("笔记 %1", "%1 notes").arg(a.notes);
+        const QString sub =
+            parts.join(QString::fromUtf8(" \xC2\xB7 ")) + QString::fromUtf8("  ") +
+            QDateTime::fromMSecsSinceEpoch(a.last)
+                .toString(QString::fromLatin1("MM-dd HH:mm"));
+        QLabel *l2 = new QLabel(card->fontMetrics().elidedText(sub, Qt::ElideRight, 180), card); /* v1.11.0b */
         l2->setWordWrap(true);
         l2->setStyleSheet(QString::fromLatin1(
             "color:palette(mid); font-size:%1px; background:transparent;").arg(hr::Ui::fsPx(11)));
         l2->setMaximumHeight(30);
-        int pct = 0;
-        const auto pit = prog.constFind(b.path);
+        /* v1.13.0：末行=该书阅读进度（无进度行则留空） */
+        QLabel *l3 = new QLabel(QString(), card);
+        const auto pit = prog.constFind(a.path);
         if (pit != prog.constEnd() && pit->second > 0)
-            pct = (pit->first + 1) * 100 / pit->second;
-        QLabel *l3 = new QLabel(
-            QString(hr::l10n::s("%1% \xC2\xB7 \xE7\xAC\xAC %2 \xE9\xA1\xB5",
-                                "%1% \xC2\xB7 p%2")).arg(pct).arg(b.page + 1), card);
+        {
+            const int pct = (pit->first + 1) * 100 / pit->second;
+            l3->setText(QString(hr::l10n::s("%1% \xC2\xB7 \xE7\xAC\xAC %2 \xE9\xA1\xB5",
+                                            "%1% \xC2\xB7 p%2")).arg(pct).arg(pit->first + 1));
+        }
         l3->setStyleSheet(QString::fromLatin1(
             "color:palette(mid); font-size:%1px; background:transparent;").arg(hr::Ui::fsPx(10)));
         tx->addWidget(l1);
         tx->addWidget(l2);
         tx->addWidget(l3);
         cl->addLayout(tx, 1);
-        const QString bp = b.path;
-        const int bpg = b.page;
-        connect(card, &QPushButton::clicked, this, [this, bp, bpg]
+        /* v1.13.0：点击→书签笔记页并展开该书（安卓首页"更多"进 BY_BOOK 同语义） */
+        const QString bp = a.path;
+        connect(card, &QPushButton::clicked, this, [this, bp, t]
         {
-            evt("home_bm_jump", QString("page=%1").arg(bpg + 1));
-            emit openAtRequested(bp, bpg);
+            evt("home_bm_book", "name=" + t.left(60));
+            openBookmarksForBook(bp);
         });
         m_hBm->addWidget(card);
         nBm++;
@@ -6920,14 +7539,15 @@ void LibraryWindow::refreshHome()
         m_hBm->addWidget(emptyLb(hr::l10n::s("还没有书签——阅读器中点「书签」即可添加",
                                              "No bookmarks yet — add one in the reader")));
     m_hBm->addStretch(1);
-    m_hSubBm->setText(QString(hr::l10n::s("共 %1 条", "%1 items")).arg(bms.size()));
+    m_hSubBm->setText(QString(hr::l10n::s("共 %1 本", "%1 books")).arg(bookAgg.size()));
+    if (m_homeBmSa) m_homeBmSa->setFixedHeight(nBm > 0 ? 102 : 32); /* v1.11.0b */
 
     /* 3 我的珍藏（≤12） */
     rowClear(m_hFav);
     int nFav = 0;
     for (const QString &p : favs)
     {
-        if (nFav >= 12) break;
+        if (nFav >= capTileL) break; /* v1.11.0：随宽度自适应 */
         if (!p.startsWith(QString::fromLatin1("remote://")) && !QFileInfo::exists(p)) continue;
         m_hFav->addWidget(tile(p, "home_fav_open"));
         nFav++;
@@ -6937,6 +7557,7 @@ void LibraryWindow::refreshHome()
                                               "Tap the star on a cover to favorite")));
     m_hFav->addStretch(1);
     m_hSubFav->setText(QString(hr::l10n::s("共 %1 本", "%1 books")).arg(favs.size()));
+    if (m_homeFavSa) m_homeFavSa->setFixedHeight(nFav > 0 ? 198 : 32); /* v1.11.0b */
 
     /* 4 阅读统计数字 */
     const int booksN = titles.size();
@@ -6976,7 +7597,7 @@ void LibraryWindow::refreshHome()
         const QString d = sdirs.at(i);
         circle(m_hFiles, hr::l10n::s("书库 · ", "Lib \xC2\xB7 ") + QDir(d).dirName(),
                hr::l10n::s("库", "Lib"), QColor(0xE3, 0xF2, 0xFD),
-               QString::fromLatin1("glyphicons_422_book_library"), 80, 116, 104, [this, d]
+               QString::fromLatin1("glyphicons_422_book_library"), 72, 96, 96, [this, d]
                {
                    evt("home_files", "lib=" + QDir(d).dirName().left(40));
                    evt("hf_step", "1-click"); /* v0.99.0 W20：点击路径逐步定位，崩溃看最后一条 */
@@ -7021,7 +7642,7 @@ void LibraryWindow::refreshHome()
                           : pr == QString::fromLatin1("opds") ? QString::fromLatin1("O")
                                                               : QString::fromLatin1("N");
         const QString nm = s.name.isEmpty() ? s.host : s.name;
-        circle(m_hSrv, nm, g, QColor(0xFF, 0xF3, 0xE0), ic, 64, 96, 88, [this, nm, pr]
+        circle(m_hSrv, nm, g, QColor(0xFF, 0xF3, 0xE0), ic, 56, 88, 80, [this, nm, pr]
                {
                    evt("home_server", pr + " " + nm.left(40));
                    showTab(4);
@@ -7031,10 +7652,27 @@ void LibraryWindow::refreshHome()
         m_hSrv->addWidget(emptyLb(hr::l10n::s("添加 WebDAV/SMB/SFTP 服务器，家里的书直接读",
                                               "Add a WebDAV/SMB/SFTP server to read your books")));
     m_hSrv->addStretch(1);
+    if (m_homeSrvSa) m_homeSrvSa->setFixedHeight(srcs.isEmpty() ? 32 : 96); /* v1.11.0b */
     m_hSubSrv->setText(srcs.isEmpty() ? hr::l10n::s("未配置", "Not set")
                                       : QString(hr::l10n::s("%1 个服务器", "%1 servers"))
                                             .arg(srcs.size()));
 
+    { /* v1.11 探针：首页适配测量（视口 vs 内容最小尺寸 vs 滚动余量） */
+        QScrollArea *hsa = nullptr;
+        const auto hkids = m_homePage->children();
+        for (QObject *k : hkids) if ((hsa = qobject_cast<QScrollArea *>(k)) != nullptr) break;
+        if (hsa && hsa->widget())
+        {
+            QWidget *rt = hsa->widget();
+            const QSize mh = rt->minimumSizeHint();
+            evt("home_fit", QString("vpw=%1 vph=%2 rw=%3 rh=%4 minw=%5 minh=%6 vb=%7 hb=%8")
+                    .arg(hsa->viewport()->width()).arg(hsa->viewport()->height())
+                    .arg(rt->width()).arg(rt->height())
+                    .arg(mh.width()).arg(mh.height())
+                    .arg(hsa->verticalScrollBar()->maximum())
+                    .arg(hsa->horizontalScrollBar()->maximum()));
+        }
+    }
     evt("home_render", QString("recent=%1 bm=%2 fav=%3 srv=%4 files=%5 totalmin=%6 books=%7 ms=%8")
                            .arg(nRecent).arg(nBm).arg(nFav).arg(srcs.size()).arg(nFiles)
                            .arg(totalMin).arg(booksN)
@@ -7093,7 +7731,7 @@ void LibraryWindow::onClearStatsDialog()
     dg.exec();
 }
 
-/* U7 书签笔记聚合页（书名+位置+标签+笔记；双击 openAt，右键删除/打开） */
+/* U7 书签笔记聚合页（v1.13.0 两级：书行→该书条目时间倒序；双击书行展开，双击笔记看正文/书签 openAt，右键删除/打开/打开书） */
 void LibraryWindow::buildBookmarksPage()
 {
     m_bmPage = new QWidget;
@@ -7112,7 +7750,7 @@ void LibraryWindow::buildBookmarksPage()
                                             << hr::l10n::s("位置", "Position")
                                             << hr::l10n::s("标签", "Label")
                                             << hr::l10n::s("笔记", "Note"));
-    m_bmTree->setRootIsDecorated(false);
+    m_bmTree->setRootIsDecorated(true); /* v1.13.0：两级——书行带展开箭头 */
     m_bmTree->setAlternatingRowColors(true);
     m_bmTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_bmTree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
@@ -7120,9 +7758,21 @@ void LibraryWindow::buildBookmarksPage()
     m_bmTree->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     m_bmTree->header()->setSectionResizeMode(3, QHeaderView::Stretch);
     vl->addWidget(m_bmTree, 1);
-    vl->addWidget(new QLabel(hr::l10n::s("双击跳转到书签；右键可删除。", "Double-click to jump; right-click to delete."), m_bmPage));
+    vl->addWidget(new QLabel(hr::l10n::s("先按书分组（最近使用排前）；双击书名展开该书书签与笔记（时间倒序）；双击笔记看正文、书签跳位；右键可删除，书行右键可打开书。", "Grouped by book (most recent first); double-click a book to expand its bookmarks & notes (newest first); double-click a note to read it, a bookmark to jump; right-click for actions."), m_bmPage));
     connect(m_bmTree, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem *it, int)
     {
+        if (it->data(0, Qt::UserRole + 6).toInt() == 1)
+            return; /* v1.13.0：书行双击交给 Qt 默认展开/收起 */
+        /* v1.12.2：点击分流（安卓 showNoteDialog 同语义）——笔记行只读弹正文、
+         * 书签行开书跳位 */
+        if (it->data(0, Qt::UserRole + 3).toInt() == 1)
+        {
+            QMessageBox::information(this, it->data(0, Qt::UserRole + 5).toString(),
+                                     it->data(0, Qt::UserRole + 4).toString());
+            evt("bm_note_view", QString("src=u7 id=%1")
+                                    .arg(it->data(0, Qt::UserRole + 2).toLongLong()));
+            return;
+        }
         const QString p = it->data(0, Qt::UserRole).toString();
         const int pg = it->data(0, Qt::UserRole + 1).toInt();
         if (!p.isEmpty())
@@ -7136,14 +7786,42 @@ void LibraryWindow::buildBookmarksPage()
     {
         QTreeWidgetItem *it = m_bmTree->itemAt(pos);
         if (!it) return;
+        /* v1.13.0：书行菜单——打开书（条目行菜单见下方原逻辑） */
+        if (it->data(0, Qt::UserRole + 6).toInt() == 1)
+        {
+            QMenu menu(this);
+            QAction *ob = menu.addAction(hr::l10n::s("打开书", "Open book"));
+            QAction *act = menu.exec(m_bmTree->viewport()->mapToGlobal(pos));
+            if (act == ob)
+            {
+                const QString p = it->data(0, Qt::UserRole).toString();
+                if (!p.isEmpty())
+                {
+                    evt("bm_page_book_open", "");
+                    openBookOrRemote(p);
+                }
+            }
+            return;
+        }
         QMenu menu(this);
         QAction *op = menu.addAction(hr::l10n::s("打开", "Open"));
+        /* v1.12.2：笔记行加正文查看入口（与侧板/首页同口径） */
+        QAction *viewA = nullptr;
+        if (it->data(0, Qt::UserRole + 3).toInt() == 1)
+            viewA = menu.addAction(hr::l10n::s("查看", "View") + " " +
+                                   it->data(0, Qt::UserRole + 5).toString());
         QAction *del = menu.addAction(hr::l10n::s("删除书签", "Delete bookmark"));
         QAction *act = menu.exec(m_bmTree->viewport()->mapToGlobal(pos));
         const QString p = it->data(0, Qt::UserRole).toString();
         const int pg = it->data(0, Qt::UserRole + 1).toInt();
         const long long id = it->data(0, Qt::UserRole + 2).toLongLong();
-        if (act == del && id > 0)
+        if (act == viewA && viewA)
+        {
+            QMessageBox::information(this, it->data(0, Qt::UserRole + 5).toString(),
+                                     it->data(0, Qt::UserRole + 4).toString());
+            evt("bm_note_view", QString("src=u7 id=%1").arg(id));
+        }
+        else if (act == del && id > 0)
         {
             Db::deleteBookmark(id);
             evt("bm_page_del", QString("id=%1").arg(id));
@@ -7168,7 +7846,11 @@ void LibraryWindow::refreshBookmarksPage()
     QList<BookmarkRow> bms = Db::allBookmarks();
     std::sort(bms.begin(), bms.end(), [](const BookmarkRow &a, const BookmarkRow &b)
               { return a.createdAt > b.createdAt; });
-    m_bmTree->clear();
+    /* v1.13.0：两级结构（安卓 BookmarksFragment2 BY_BOOK 同思路）——第一级=书行
+     * （最近使用排前，副列=计数+最近时间）；第二级=该书书签+笔记混排时间倒序。
+     * 重建前收集展开态，重建后恢复（删除刷新不再整体收起） */
+    const QList<BmBookAgg> agg = bmGroupByBook(bms);
+    QHash<QString, QList<QTreeWidgetItem *>> kids;
     for (const BookmarkRow &b : bms)
     {
         const QString t = titles.value(b.path, QFileInfo(b.path).fileName());
@@ -7176,17 +7858,82 @@ void LibraryWindow::refreshBookmarksPage()
         const auto pit = prog.constFind(b.path);
         if (pit != prog.constEnd() && pit->second > 0)
             pct = (pit->first + 1) * 100 / pit->second;
+        /* v1.12.2：第 4 列按类别显示——AI 答复🤖/手工笔记正文📝/普通书签=备注；
+         * 行 data 带类别(+3)/正文(+4)/标题(+5)，双击分流与右键查看用 */
+        QString noteCol;
+        if (b.isAiNote)
+            noteCol = b.aiAnswer.isEmpty()
+                          ? QString::fromUtf8("\xf0\x9f\x93\x9d ") + b.label
+                          : QString::fromUtf8("\xf0\x9f\xa4\x96 ") + b.aiAnswer;
+        else
+            noteCol = b.note;
         QTreeWidgetItem *it = new QTreeWidgetItem(
             QStringList() << t
                           << QString(hr::l10n::s("%1% \xC2\xB7 \xE7\xAC\xAC %2 \xE9\xA1\xB5",
                                                  "%1% \xC2\xB7 p%2")).arg(pct).arg(b.page + 1)
-                          << b.label << b.note);
+                          << b.label << noteCol);
         it->setData(0, Qt::UserRole, b.path);
         it->setData(0, Qt::UserRole + 1, b.page);
         it->setData(0, Qt::UserRole + 2, (qlonglong)b.id);
-        m_bmTree->addTopLevelItem(it);
+        it->setData(0, Qt::UserRole + 3, b.isAiNote ? 1 : 0);
+        it->setData(0, Qt::UserRole + 4, hr::noteBodyText(b));
+        it->setData(0, Qt::UserRole + 5,
+                    b.aiAnswer.isEmpty() ? hr::l10n::s("笔记", "Note")
+                                         : hr::l10n::s("AI 笔记", "AI note"));
+        it->setToolTip(3, b.isAiNote ? hr::noteBodyText(b) : b.note);
+        kids[b.path].append(it);
     }
-    evt("bm_page_render", QString("n=%1").arg(bms.size()));
+    QStringList expanded;
+    for (int i = 0; i < m_bmTree->topLevelItemCount(); ++i)
+    {
+        QTreeWidgetItem *b0 = m_bmTree->topLevelItem(i);
+        if (b0->data(0, Qt::UserRole + 6).toInt() == 1 && b0->isExpanded())
+            expanded << b0->data(0, Qt::UserRole).toString();
+    }
+    m_bmTree->clear();
+    QFont bf = m_bmTree->font();
+    bf.setBold(true);
+    for (const BmBookAgg &a : agg)
+    {
+        const QString t = titles.value(a.path, QFileInfo(a.path).fileName());
+        QTreeWidgetItem *book = new QTreeWidgetItem(
+            m_bmTree,
+            QStringList() << t
+                          << QString(hr::l10n::s("书签 %1 \xC2\xB7 笔记 %2 \xC2\xB7 最近 %3",
+                                                 "%1 marks \xC2\xB7 %2 notes \xC2\xB7 %3"))
+                                 .arg(a.marks)
+                                 .arg(a.notes)
+                                 .arg(QDateTime::fromMSecsSinceEpoch(a.last)
+                                          .toString(QString::fromLatin1("MM-dd HH:mm"))));
+        book->setData(0, Qt::UserRole, a.path);
+        book->setData(0, Qt::UserRole + 6, 1); /* v1.13.0：书行标记 */
+        book->setFont(0, bf);
+        for (QTreeWidgetItem *it : kids.value(a.path))
+            book->addChild(it);
+        if (expanded.contains(a.path))
+            book->setExpanded(true);
+    }
+    evt("bm_page_render", QString("n=%1 books=%2").arg(bms.size()).arg(agg.size()));
+}
+
+/* v1.13.0：定位到某书——首页书卡点击入口（切 U7 + 刷新 + 展开并滚动到书行） */
+void LibraryWindow::openBookmarksForBook(const QString &path)
+{
+    showTab(5);
+    refreshBookmarksPage();
+    if (!m_bmTree) return;
+    for (int i = 0; i < m_bmTree->topLevelItemCount(); ++i)
+    {
+        QTreeWidgetItem *it = m_bmTree->topLevelItem(i);
+        if (it->data(0, Qt::UserRole + 6).toInt() == 1 &&
+            it->data(0, Qt::UserRole).toString() == path)
+        {
+            it->setExpanded(true);
+            m_bmTree->scrollToItem(it, QAbstractItemView::PositionAtTop);
+            m_bmTree->setCurrentItem(it);
+            break;
+        }
+    }
 }
 
 /* U7 珍藏页（封面网格；双击打开，右键取消收藏） */
@@ -7266,6 +8013,267 @@ void LibraryWindow::refreshFavPage()
     evt("fav_page_render", QString("n=%1").arg(n));
 }
 
+/* U9 最近阅读页（v1.14.0 对齐安卓 RecentFragment2）：从新到旧；右上"清空列表"+
+ * ☰ 设置（隐藏读完的书 + 列表/简表/网格/封面 四视图）；✕ 仅移出列表（书/进度保留） */
+void LibraryWindow::buildRecentPage()
+{
+    m_recentPage = new QWidget;
+    QVBoxLayout *vl = new QVBoxLayout(m_recentPage);
+    vl->setContentsMargins(10, 8, 10, 8);
+    vl->setSpacing(6);
+    QLabel *tt = new QLabel(hr::l10n::s("最近阅读", "Recent"), m_recentPage);
+    QFont f = tt->font();
+    f.setBold(true);
+    f.setPointSize(f.pointSize() + 2);
+    tt->setFont(f);
+    vl->addWidget(tt);
+    QHBoxLayout *hl = new QHBoxLayout;
+    hl->setContentsMargins(0, 0, 0, 0);
+    hl->setSpacing(8);
+    m_recentCount = new QLabel(m_recentPage);
+    m_recentCount->setStyleSheet(QString::fromLatin1(
+        "color:palette(mid); font-size:%1px;").arg(hr::Ui::fsPx(11)));
+    hl->addWidget(m_recentCount);
+    hl->addStretch(1);
+    QPushButton *clr = new QPushButton(hr::l10n::s("清空列表", "Clear list"), m_recentPage);
+    clr->setFlat(true);
+    clr->setCursor(Qt::PointingHandCursor);
+    hl->addWidget(clr);
+    QPushButton *cfg = new QPushButton(QString::fromUtf8("\xE2\x98\xB0"), m_recentPage); /* ☰ */
+    cfg->setFlat(true);
+    cfg->setFixedSize(26, 22);
+    cfg->setCursor(Qt::PointingHandCursor);
+    cfg->setToolTip(hr::l10n::s("显示方式", "View options"));
+    hl->addWidget(cfg);
+    vl->addLayout(hl);
+    m_recentList = new QListWidget(m_recentPage);
+    m_recentList->setAlternatingRowColors(true);
+    m_recentList->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_recentList->setUniformItemSizes(false);
+    vl->addWidget(m_recentList, 1);
+    vl->addWidget(new QLabel(hr::l10n::s(
+        "单击打开；✕ 仅把该书移出最近列表（书与阅读进度保留）。",
+        "Click to open; \xE2\x9C\x95 removes the book from this list only (book and progress kept)."),
+        m_recentPage));
+    {
+        QSettings st(hr::dataDir() + "/qt-prefs.ini", QSettings::IniFormat);
+        m_recentView = qBound(0, st.value("ui/recentView", 0).toInt(), 3);
+        m_recentHideRead = st.value("ui/recentHideRead", false).toBool();
+    }
+    /* ☰ 设置菜单：隐藏读完的书 + 四视图（安卓 RecentFragment2 菜单同构） */
+    connect(cfg, &QPushButton::clicked, this, [this, cfg]
+    {
+        QMenu menu(cfg);
+        QAction *hd = menu.addAction(hr::l10n::s("隐藏读完的书", "Hide finished books"));
+        hd->setCheckable(true);
+        hd->setChecked(m_recentHideRead);
+        menu.addSeparator();
+        QAction *aL = menu.addAction(hr::l10n::s("列表", "List"));
+        QAction *aC = menu.addAction(hr::l10n::s("简表", "Compact"));
+        QAction *aG = menu.addAction(hr::l10n::s("网格", "Grid"));
+        QAction *aV = menu.addAction(hr::l10n::s("封面", "Covers"));
+        for (QAction *a : {aL, aC, aG, aV})
+            a->setCheckable(true);
+        (m_recentView == 0 ? aL : m_recentView == 1 ? aC : m_recentView == 2 ? aG : aV)
+            ->setChecked(true);
+        QAction *act = menu.exec(cfg->mapToGlobal(QPoint(0, cfg->height())));
+        if (!act) return;
+        QSettings st(hr::dataDir() + "/qt-prefs.ini", QSettings::IniFormat);
+        if (act == hd)
+        {
+            m_recentHideRead = hd->isChecked();
+            st.setValue("ui/recentHideRead", m_recentHideRead ? 1 : 0);
+            evt("recent_page_hideread", m_recentHideRead ? "1" : "0");
+        }
+        else if (act == aL || act == aC || act == aG || act == aV)
+        {
+            m_recentView = (act == aL) ? 0 : (act == aC) ? 1 : (act == aG) ? 2 : 3;
+            st.setValue("ui/recentView", m_recentView);
+            evt("recent_page_view", QString("v=%1").arg(m_recentView));
+        }
+        else
+            return;
+        refreshRecentPage();
+    });
+    /* 清空列表（确认后；安卓 clearAllRecent 同语义：只清最近列表，书/进度保留） */
+    connect(clr, &QPushButton::clicked, this, [this]
+    {
+        if (QMessageBox::question(this, hr::l10n::s("清空列表", "Clear list"),
+                                  hr::l10n::s("清空最近阅读列表？书与阅读进度会保留。",
+                                              "Clear the recent list? Books and reading progress are kept."),
+                                  QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+            != QMessageBox::Yes)
+            return;
+        const QVector<Db::FavRow> rows = Db::recentRows();
+        for (const Db::FavRow &r : rows)
+            Db::removeRecentSync(r.path);
+        evt("recent_page_clear", QString("n=%1").arg(rows.size()));
+        refreshRecentPage();
+    });
+    connect(m_recentList, &QListWidget::itemClicked, this, [this](QListWidgetItem *it)
+    {
+        if (it) preOpenBook(it->data(Qt::UserRole).toString());
+    }); /* 同珍藏页：预开 */
+    connect(m_recentList, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *it)
+    {
+        const QString p = it ? it->data(Qt::UserRole).toString() : QString();
+        if (!p.isEmpty())
+        {
+            evt("recent_page_open", "path=" + p.left(60));
+            openBookOrRemote(p);
+        }
+    });
+    refreshRecentPage();
+}
+
+void LibraryWindow::refreshRecentPage()
+{
+    if (!m_recentList) return;
+    QHash<QString, QString> titles;
+    QHash<QString, QPair<int, int>> prog;
+    for (const Db::MetaRow &r : Db::listLibrary())
+        titles.insert(r.path, r.title.isEmpty() ? QFileInfo(r.path).fileName() : r.title);
+    for (const Db::ProgressRow &r : Db::allProgress())
+        prog.insert(r.path, qMakePair(r.page, r.pageCount));
+    auto fmtSize = [](long long sz) -> QString
+    {
+        if (sz >= 1048576)
+            return QString(hr::l10n::s("%1 MB", "%1 MB")).arg(sz / 1048576.0, 0, 'f', 1);
+        return QString(hr::l10n::s("%1 KB", "%1 KB")).arg((sz + 1023) / 1024);
+    };
+    m_recentList->clear();
+    if (m_recentView == 2)
+    {
+        m_recentList->setViewMode(QListView::IconMode);
+        m_recentList->setGridSize(QSize(112, 150));
+        m_recentList->setIconSize(QSize(88, 118));
+    }
+    else if (m_recentView == 3)
+    {
+        m_recentList->setViewMode(QListView::IconMode);
+        m_recentList->setGridSize(QSize(132, 190));
+        m_recentList->setIconSize(QSize(120, 166));
+    }
+    else
+    {
+        m_recentList->setViewMode(QListView::ListMode);
+        m_recentList->setGridSize(QSize());
+        m_recentList->setIconSize(QSize(22, 30));
+    }
+    m_recentList->setResizeMode(QListWidget::Adjust);
+    m_recentList->setMovement(QListWidget::Static);
+    int nShow = 0, nHide = 0;
+    for (const Db::FavRow &r : Db::recentRows()) /* 已按 last_read_at 降序（从新到旧） */
+    {
+        const QString p = r.path;
+        int pct = 0;
+        const auto pit = prog.constFind(p);
+        const int pg = pit != prog.constEnd() ? pit->first : 0;
+        const int pc = pit != prog.constEnd() ? pit->second : 0;
+        if (pit != prog.constEnd() && pc > 0)
+            pct = (pg + 1) * 100 / pc;
+        const bool readDone = pc > 0 && pg + 1 >= pc;
+        if (m_recentHideRead && readDone)
+        {
+            nHide++;
+            continue;
+        }
+        const bool isRemote = p.startsWith(QString::fromLatin1("remote://"));
+        if (!isRemote && !QFileInfo::exists(p))
+            continue; /* 文件已不在：静默跳过（同安卓） */
+        const QString t = titles.value(p, QFileInfo(p).fileName());
+        if (m_recentView == 0)
+        {
+            /* 列表：封面+书名+文件名+日期·格式·大小·进度% + ✕（安卓 browse_item_list 同构） */
+            QListWidgetItem *it = new QListWidgetItem(m_recentList);
+            it->setData(Qt::UserRole, p);
+            it->setSizeHint(QSize(0, 76));
+            QWidget *row = new QWidget;
+            QHBoxLayout *rl = new QHBoxLayout(row);
+            rl->setContentsMargins(8, 6, 8, 6);
+            rl->setSpacing(10);
+            QLabel *cv = new QLabel(row);
+            cv->setFixedSize(44, 60);
+            cv->setPixmap(coverTile(p, t, 44, 60));
+            rl->addWidget(cv);
+            QVBoxLayout *tx = new QVBoxLayout;
+            tx->setContentsMargins(0, 0, 0, 0);
+            tx->setSpacing(2);
+            QLabel *l1 = new QLabel(row->fontMetrics().elidedText(t, Qt::ElideRight, 360), row);
+            l1->setStyleSheet(QString::fromLatin1("font-weight:bold; background:transparent;"));
+            QLabel *l2 = new QLabel(
+                row->fontMetrics().elidedText(QFileInfo(p).fileName(), Qt::ElideMiddle, 360), row);
+            l2->setStyleSheet(QString::fromLatin1(
+                "color:palette(mid); background:transparent;").arg(hr::Ui::fsPx(11)));
+            QString meta = QDateTime::fromMSecsSinceEpoch(r.t)
+                               .toString(QString::fromLatin1("yyyy/M/d"));
+            QFileInfo fi(p);
+            if (!isRemote && fi.exists())
+            {
+                const QString ext = fi.suffix().isEmpty()
+                                        ? hr::l10n::s("文件", "file")
+                                        : fi.suffix().toUpper();
+                meta += QString::fromUtf8(" \xC2\xB7 ") + ext + QString::fromUtf8(" \xC2\xB7 ") +
+                        fmtSize(fi.size());
+            }
+            if (pc > 0)
+                meta += QString::fromUtf8(" \xC2\xB7 ") + QString::number(pct) + "%";
+            QLabel *l3 = new QLabel(meta, row);
+            l3->setStyleSheet(QString::fromLatin1(
+                "color:palette(mid); font-size:%1px; background:transparent;").arg(hr::Ui::fsPx(10)));
+            tx->addWidget(l1);
+            tx->addWidget(l2);
+            tx->addWidget(l3);
+            rl->addLayout(tx, 1);
+            QPushButton *x = new QPushButton(QString::fromUtf8("\xE2\x9C\x95"), row); /* ✕ */
+            x->setFlat(true);
+            x->setFixedSize(24, 24);
+            x->setToolTip(hr::l10n::s("移出最近列表", "Remove from recent"));
+            connect(x, &QPushButton::clicked, this, [this, p]
+            {
+                Db::removeRecentSync(p);
+                evt("recent_page_remove", "path=" + p.left(60));
+                refreshRecentPage();
+            });
+            rl->addWidget(x);
+            m_recentList->setItemWidget(it, row);
+        }
+        else if (m_recentView == 1)
+        {
+            /* 简表：小封面单行（书名 · 进度%） */
+            QString txt = t;
+            if (pc > 0)
+                txt += QString::fromUtf8("  \xC2\xB7  ") + QString::number(pct) + "%";
+            QListWidgetItem *it = new QListWidgetItem(QIcon(coverTile(p, t, 22, 30)), txt,
+                                                      m_recentList);
+            it->setData(Qt::UserRole, p);
+            it->setToolTip(t);
+        }
+        else
+        {
+            /* 网格(2)：小封面+书名；封面(3)：大封面+书名（安卓 GRID/COVERS 近似） */
+            const int iw = m_recentView == 2 ? 88 : 120;
+            const int ih = m_recentView == 2 ? 118 : 166;
+            QListWidgetItem *it = new QListWidgetItem(QIcon(coverTile(p, t, iw, ih)), t,
+                                                      m_recentList);
+            it->setData(Qt::UserRole, p);
+            it->setTextAlignment(Qt::AlignHCenter);
+            it->setToolTip(t + (pc > 0 ? QString::fromUtf8(" \xC2\xB7 ") +
+                                             QString::number(pct) + "%"
+                                       : QString()));
+        }
+        nShow++;
+    }
+    m_recentCount->setText(QString(hr::l10n::s("最近 (%1)", "Recent (%1)")).arg(nShow) +
+                           (nHide > 0
+                                ? QString(hr::l10n::s(" \xC2\xB7 已藏读完 %2 本",
+                                                      " \xC2\xB7 %2 finished hidden"))
+                                      .arg(nHide)
+                                : QString()));
+    evt("recent_page_render",
+        QString("n=%1 hide=%2 v=%3").arg(nShow).arg(nHide).arg(m_recentView));
+}
+
 /* ---------- U8 全局收尾 ---------- */
 
 /* 当前配置名（data-dir.txt 基名；无=default） */
@@ -7319,15 +8327,37 @@ bool LibraryWindow::eventFilter(QObject *obj, QEvent *ev)
     return QMainWindow::eventFilter(obj, ev);
 }
 
+/* v1.15.8：编译时间戳（__DATE__="Nov 22 2026" __TIME__="11:13:13" → "202611221113"），
+ * 版本条 build 段与安卓/Harmony 蓝条同口径（紧凑时间戳） */
+static QString aboutBuildStamp()
+{
+    static const char *kMon[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    const QStringList dp =
+        QString::fromLatin1(__DATE__).split(' ', Qt::SkipEmptyParts); /* 月 日 年 */
+    const QStringList tp = QString::fromLatin1(__TIME__).split(':');
+    int mon = 1;
+    for (int i = 0; i < 12; i++)
+        if (dp[0] == QLatin1String(kMon[i])) { mon = i + 1; break; }
+    return QString::fromLatin1("%1%2%3%4%5")
+        .arg(dp[2], QString::number(mon).rightJustified(2, '0'),
+             QString::number(dp[1].toInt()).rightJustified(2, '0'), tp[0], tp[1]);
+}
+
 /* 软件说明（对齐安卓 about_section：版本头条色底 + 描述 + Pro 行 + 各行 label150+值右 + 链接行） */
 void LibraryWindow::showAboutDialog()
 {
     QDialog dg(this);
-    dg.setWindowTitle(hr::l10n::s("软件说明", "About"));
-    dg.resize(520, 540);
+    /* v1.15.9：无标题栏（对齐安卓 dialog 无标题行——版本蓝条居首，用户点名）；
+     * 高度自适应内容（原固定 540 高+stretch 把确定钮推到底撑出大空白） */
+    dg.setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
+    dg.setMinimumWidth(520);
     QVBoxLayout *vl = new QVBoxLayout(&dg);
-    QLabel *banner =
-        new QLabel(QString::fromLatin1("HowRead: v%1").arg(appVersion()), &dg);
+    /* v1.15.8：首行=软件名+版本号+build 信息（对齐安卓 AboutSectionBinder 蓝条
+     * "HowReadPro: v1.3.19 build 20261112054"，用户点名）；build=编译时间戳 */
+    QLabel *banner = new QLabel(QString::fromLatin1("HowReadPro: v%1 build %2")
+                                    .arg(appVersion(), aboutBuildStamp()),
+                                &dg);
     banner->setStyleSheet(QString::fromLatin1(
         "background:palette(link); color:white; font-weight:bold; padding:6px 10px;"
         " border-radius:4px;"));
@@ -7402,7 +8432,7 @@ void LibraryWindow::showAboutDialog()
                               &dg);
     fork->setStyleSheet(QString::fromLatin1("color:palette(mid); font-size:%1px;").arg(hr::Ui::fsPx(10)));
     vl->addWidget(fork);
-    vl->addStretch(1);
+    vl->addSpacing(10); /* v1.15.9：确定钮紧随灰字（原 stretch 撑出大空白，用户点名） */
     QDialogButtonBox *bb = new QDialogButtonBox(QDialogButtonBox::Ok, &dg);
     bb->button(QDialogButtonBox::Ok)->setText(hr::l10n::s("确定", "OK"));
     vl->addWidget(bb);

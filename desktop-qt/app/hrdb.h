@@ -44,6 +44,7 @@ public:
     static QVector<FavRow> recentRows();   /* (path, last_read_at, sync_key) 降序 */
     static void upsertFavoriteAt(const QString &path, long long t, const QString &syncKey);
     static void upsertRecentAt(const QString &path, long long t, const QString &syncKey);
+    static void removeRecentSync(const QString &path); /* v1.14.0：最近列表移除（行删+recent 墓碑+待定清理；书/进度保留） */
     static void setFavoriteSync(const QString &path, bool on); /* UI 钩子：收藏增删带墓碑/待定表 */
     static void upsertFileMeta(const QString &path, const QString &title, int pages,
                                long long size, long long mtime,

@@ -99,6 +99,66 @@ int totalBooks()
     return all.size();
 }
 
+int minutesBack(int days) /* v1.13.1：近 N 天（含今日）阅读分钟 */
+{
+    QMutexLocker l(&g_mu);
+    const QJsonObject daysO = load().value(QString::fromLatin1("days")).toObject();
+    const QDate cur = QDate::currentDate();
+    const QDate lo = cur.addDays(-days); /* 滑动窗口 dt > cur-N → [cur-N+1, cur] 共 N 天 */
+    int sum = 0;
+    for (auto it = daysO.constBegin(); it != daysO.constEnd(); ++it)
+    {
+        const QDate dt = QDate::fromString(it.key(), QString::fromLatin1("yyyy-MM-dd"));
+        if (dt.isValid() && dt > lo)
+            sum += it.value().toObject().value(QString::fromLatin1("minutes")).toInt();
+    }
+    return sum;
+}
+
+QVector<QPair<QString, int>> bucketsDaily(int days, bool shortLabel) /* v1.14.1 */
+{
+    QMutexLocker l(&g_mu);
+    const QJsonObject daysO = load().value(QString::fromLatin1("days")).toObject();
+    const QDate cur = QDate::currentDate();
+    QVector<QPair<QString, int>> out;
+    for (int i = days - 1; i >= 0; i--)
+    {
+        const QDate d = cur.addDays(-i);
+        const QString lb = shortLabel ? QString::number(d.day())
+                                      : QString("%1/%2").arg(d.month()).arg(d.day());
+        out.append(qMakePair(
+            lb,
+            daysO.value(d.toString(QString::fromLatin1("yyyy-MM-dd")))
+                .toObject()
+                .value(QString::fromLatin1("minutes"))
+                .toInt()));
+    }
+    return out;
+}
+
+QVector<QPair<QString, int>> bucketsMonthly() /* v1.14.1：近 12 自然月分钟 */
+{
+    QMutexLocker l(&g_mu);
+    const QJsonObject daysO = load().value(QString::fromLatin1("days")).toObject();
+    QMap<int, int> mp;
+    for (auto it = daysO.constBegin(); it != daysO.constEnd(); ++it)
+    {
+        const QDate dt = QDate::fromString(it.key(), QString::fromLatin1("yyyy-MM-dd"));
+        if (dt.isValid())
+            mp[dt.year() * 100 + dt.month()] +=
+                it.value().toObject().value(QString::fromLatin1("minutes")).toInt();
+    }
+    const QDate cur = QDate::currentDate();
+    QVector<QPair<QString, int>> out;
+    for (int i = 11; i >= 0; i--)
+    {
+        const QDate m = cur.addMonths(-i);
+        out.append(qMakePair(QString("%1/%2").arg(m.year() % 100).arg(m.month()),
+                              mp.value(m.year() * 100 + m.month(), 0)));
+    }
+    return out;
+}
+
 void clearAll()
 {
     QMutexLocker l(&g_mu);

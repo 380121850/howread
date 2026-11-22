@@ -4,6 +4,7 @@
 
 #include <QJsonObject>
 #include <QString>
+#include <QPair>
 #include <QVector>
 
 namespace hr
@@ -23,6 +24,10 @@ void addReading(const QString &book, int pagesDelta, int minutesDelta);
 QVector<DayRow> rows(int lastN = 14);
 QVector<DayRow> allDays(); /* P2（D12）：全部按日记录（周/月/年聚合用） */
 int totalBooks(); /* 全部去重书目数 */
+int minutesBack(int days); /* v1.13.1：近 N 天（含今日）阅读分钟（统计页汇总行/statssmoke 共用） */
+/* v1.14.1：柱状图桶（近 N 天逐日/近 12 自然月）——统计页柱状图与 statssmoke 交叉核对共用 */
+QVector<QPair<QString, int>> bucketsDaily(int days, bool shortLabel = false);
+QVector<QPair<QString, int>> bucketsMonthly();
 void clearAll();  /* U7 缺陷#3：清空全部阅读统计（删 stats.json） */
 
 /* v1.2.0（C）：app-Stats.json 六键互通（安卓 ProfileStateIO 同 schema） */

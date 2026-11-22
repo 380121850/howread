@@ -3431,6 +3431,14 @@
     {
       "name": "perm_tracking_consent",
       "value": "广告标识符权限，用于展示相关广告"
+    },
+    {
+      "name": "recent_clear_all",
+      "value": "清空"
+    },
+    {
+      "name": "recent_clear_confirm",
+      "value": "确定要清空最近阅读列表吗？"
     }
   ]
 }
