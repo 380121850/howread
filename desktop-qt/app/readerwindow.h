@@ -92,6 +92,17 @@ public:
     void *hrDoc() const { return m_doc; }
     void releaseEngineDoc(); /* v0.106.0（P0-4）：归还引擎文档（retire/close/析构共用） */
     bool phase2Busy() const { return m_phase2Busy.load(); } /* v0.107.2：retireReader 延迟放行轮询 */
+    bool relayoutBusy() const { return m_relayoutBusy.load(); } /* v1.15.13：后台重排在飞（门禁探针） */
+    void relayoutForProbe()
+    { /* v1.15.13：无头探针改视口——先把冒烟视口写进 m_viewW/H（否则仍是开书时的排版参数，
+       * "重排"实为同排版重数页） */
+        if (m_smokeW > 0)
+        {
+            m_viewW = m_smokeW;
+            m_viewH = m_smokeH;
+        }
+        relayoutAfterChange(true);
+    } /* v1.15.13：视口/字号类重排（门禁探针） */
     ~ReaderWindow();
     void beginTeardown(bool wait = true); /* v0.107.0（P1-5 补齐）：销毁前收 phase2；v0.107.2：wait=false=只作废 gen 即返回 */
     QString outlineCachePath() const; /* v0.107.0（P2-6）：outline 每书缓存键 */
@@ -119,6 +130,9 @@ public:
     int probeStackNeedH() const;
     int probeLabelCount() const { return m_labels.size(); }
     bool probePageRendered(int pg) const;
+    int probeChapterOf(int page) const;
+    int stdPageHeight() const; /* v1.15.13：可重排书标准页在渲染宽下的真实像素高（取不到=0） */
+    void calibEstH();          /* v1.15.13：占位页高按引擎页尺寸校准 */ /* v1.15.13：门禁探针——页所在章（按章页表累计，无表 -1） */
     /* v1.12.0：--selsmoke 探针——划词选择（页矩形/跨页选区真路径/quad 表） */
     QRectF probeSelPageRect(int pg) const { return selPageRect(pg); }
     bool probeSelectRange(int p0, const QPointF &a, int p1, const QPointF &b);
@@ -271,13 +285,20 @@ private:
     /* ui */
     QScrollArea *m_scroll = nullptr;
     QWidget *m_stack = nullptr;
-    QVBoxLayout *m_stackLay = nullptr;
+    QVector<int> m_stackY; /* v1.15.13：滚动栈手工几何——Y 前缀表（末项=栈总高），取代 QVBoxLayout：
+     * 大书 8000+ 标签时任何一页改高都会让布局重算并搬移其后全部标签（每次渲染落地 O(N) 条
+     * Move 事件、开书/落地冻结 10–28s，事件聚合实锤 Move:QLabel 250–290 万条/2 秒） */
+    QString m_lastTitle; /* v1.15.13：窗口标题去重（大书逐页刷新标题引发非客户区重绘风暴） */
     QVector<QLabel *> m_labels;
     QVector<int> m_labelW;
     QLabel *m_lbPos = nullptr;
     QSlider *m_slider = nullptr;
     QTimer m_resizeTimer;
     void buildStack();
+    void stackAppendLabel(QWidget *stack, QLabel *lb, int w, int h); /* v1.15.13：滚动栈尾追加一页（手工几何） */
+    void stackAfterResize(int page, int newH); /* v1.15.13：单页改高后同步前缀表与可视区几何 */
+    void stackSyncGeomVisible(); /* v1.15.13：视口附近标签几何对齐前缀表 */
+    void stackSyncGeom(int y0, int y1); /* v1.15.13：[y0,y1] 区间标签几何对齐前缀表 */
     void ensureStackTo(int page); /* v0.110.3：滚动栈自愈补建 */
     void showPageView();
     void fillVisible();
@@ -334,6 +355,11 @@ private:
     /* v0.104.0：后台重排状态（与开书经 m_relayoutBusy 互锁防旧 doc UAF） */
     std::atomic<bool> m_relayoutBusy{false};
     std::atomic<int> m_relayoutGen{0};
+    std::atomic<int> m_relayoutStartGen{0}; /* v1.15.13：最近启动的异步重排代号（busy 归属判定） */
+    bool m_estHExact = false; /* v1.15.13：占位页高来自引擎页尺寸（此后不再用第 0 页渲染高改写） */
+    int m_relayoutOldPages = 0; /* v1.15.13：整书重排前的页数（落地按全书比例折算阅读位） */
+    std::atomic<bool> m_accelSaving{false}; /* v1.15.13：加速器后台保存在飞（与重排 busy 分离） */
+    bool m_stackSwap = false; /* v1.15.13：换栈同步窗口（buildStack 内量程塌缩期 fillVisible 禁入） */
     /* v0.107.0（P1-5）：窗口计数 phase2 后台补页（busy 互锁同上） */
     std::atomic<bool> m_phase2Busy{false};
     std::atomic<qint64> m_lastRenderReq{0}; /* v0.107.1：最近渲染请求时刻（phase2 让路用） */

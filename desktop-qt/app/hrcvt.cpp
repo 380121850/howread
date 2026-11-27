@@ -16,6 +16,7 @@
 #include <QProcess>
 #include <algorithm> /* v0.104.0：convCacheTrim sort */
 #include <QSettings> /* v0.104.0：convCacheMB */
+#include <QVector>
 
 namespace hr
 {
@@ -78,6 +79,8 @@ static QString azw3Convert(const QString &src, bool force)
     if (!p.waitForStarted(-1) || !p.waitForFinished(120000))
     {
         p.kill();
+        p.waitForFinished(3000); /* v1.15.13：等进程真正退出再删——mobitool 仍握着输出文件时
+                                 * 删除失败，截断的 EPUB 留在缓存里被当成命中 */
         QDir(outDir).removeRecursively();
         evt(QString::fromLatin1("azw3_convert_fail"), QString::fromLatin1("timeout/start"));
         return QString();
@@ -244,9 +247,19 @@ static QString txtConvert(const QString &path, bool force)
     QString text;
     if (cs == QString::fromLatin1("utf-16"))
     {
-        const int off = (all.size() >= 2) ? 2 : 0; /* 跳 BOM（LE 假定） */
-        text = QString::fromUtf16(reinterpret_cast<const ushort *>(all.constData() + off),
-                                  (all.size() - off) / 2);
+        const int off = (all.size() >= 2) ? 2 : 0; /* 跳 BOM */
+        const int nU = (all.size() - off) / 2;
+        const ushort *u = reinterpret_cast<const ushort *>(all.constData() + off);
+        /* v1.15.13：上方 BOM 判定同时放行 FE FF（大端）与 FF FE（小端），这里却一律按
+         * 宿主小端解码——大端文件整本字节序颠倒=全书乱码 */
+        if (all.startsWith("\xFE\xFF"))
+        {
+            QVector<ushort> sw(nU);
+            for (int i = 0; i < nU; i++) sw[i] = (ushort)(((u[i] << 8) & 0xFF00) | (u[i] >> 8));
+            text = QString::fromUtf16(sw.constData(), nU);
+        }
+        else
+            text = QString::fromUtf16(u, nU);
     }
     else
     {
@@ -592,6 +605,13 @@ QString openablePath(const QString &path, bool forceCacheMiss)
                 "pdf,epub,mobi,azw,azw3,prc,fb2,txt,cbz,xps,html,htm,docx,doc,rtf,odt,djvu",
                 dir.toUtf8().constData(), name, sizeof name) == 0 && name[0])
             out = dir + "/" + QString::fromUtf8(name);
+            /* v1.15.13：包内首书若自身需要转换（GBK 文本/大 mobi/doc 系/mht）同样走转换层——
+             * 原直接交引擎：GBK 文本乱码、大 mobi 落到"整书排版才出首屏"的慢路径 */
+            const QString iext = QFileInfo(out).suffix().toLower();
+            if (QStringList{"txt", "md", "mobi", "azw", "azw3", "prc", "doc", "docx", "rtf",
+                            "odt", "mht", "mhtml"}
+                    .contains(iext))
+                out = openablePath(out, forceCacheMiss);
     }
     /* v0.105.0（P1-5）：CBR → 解包全部条目到 <key>.ldir 目录（引擎 cbz 处理器认
      * "<key> 并生成父目录 <key>.ldir 容器 XML（安卓 FolderContext 同协议）交引擎直开；失败回退原路径 */
@@ -600,14 +620,22 @@ QString openablePath(const QString &path, bool forceCacheMiss)
         route = QString::fromLatin1("cbr");
         const QString dir = dataDir() + QString::fromLatin1("/cache/cbr/") +
                             cvtKey(path);
-        if (forceCacheMiss) QDir(dir).removeRecursively();
-        if (!QFileInfo(dir).isDir() || QDir(dir).entryList(QDir::Files).isEmpty())
+        /* v1.15.13：以 <key>.done 为"解包完成"标记——原"目录非空即命中"，解包中途退出
+         * （关窗/断电/进程被杀）留下的半截图片集会被当成缓存永久复用=漫画缺页 */
+        const QString done = dir + QString::fromLatin1(".done");
+        if (forceCacheMiss || !QFileInfo(done).isFile())
         {
+            QDir(dir).removeRecursively();
             QDir().mkpath(dir);
             char nm[64] = {0};
             const int rrc = hr_qt_rar_extract(path.toUtf8().constData(),
                                               dir.toUtf8().constData(), nm, sizeof nm);
-            if (rrc != 0)
+            if (rrc == 0)
+            {
+                QFile df(done); /* 完成标记：此后不再重解（失败则无标记，下次重试） */
+                if (df.open(QIODevice::WriteOnly)) df.write("ok", 2);
+            }
+            else
                 evt(QString::fromLatin1("cbr_extract_fail"),
                     QString::fromLatin1("path=%1 rc=%2 dir=%3")
                         .arg(path.left(80)).arg(rrc)

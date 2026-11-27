@@ -2620,7 +2620,12 @@ void LibraryWindow::aboutProbeShot()
  * 40 页→壳窗放大→内嵌阅读器重排落地，evt 报 before/after；门禁在 runner 按 evt 判 */
 void LibraryWindow::resizeProbe(const QString &book)
 {
-    openBookOrRemote(book);
+    /* v1.15.13：本探针所在的 --resizesmoke 分支不连 openRequested（连接只在无参启动路径），
+     * 原 emit 无人接收=探针永远开不了书；本地书直接走嵌入链 */
+    if (book.startsWith(QString::fromLatin1("remote://")))
+        openBookOrRemote(book);
+    else
+        openInReader(book, -1);
     for (int j = 0; j < 80 && readerActive() && m_reader->pageCount() <= 0; ++j)
     {
         QCoreApplication::processEvents();
@@ -2636,8 +2641,17 @@ void LibraryWindow::resizeProbe(const QString &book)
         QCoreApplication::processEvents();
         QThread::msleep(40);
     }
+    /* v1.15.13：HR_RESZ_JUMP=<页> 改跳页目标；设置时先等 phase2 补页收尾（复现"窗口外
+     * 重排位保"需全书页数就绪），放大后等重排真正落地再取 after（大书重排可达数十秒） */
+    const int jumpOverride = qEnvironmentVariableIntValue("HR_RESZ_JUMP");
+    if (jumpOverride > 0)
+        for (int j = 0; j < 3000 && m_reader->phase2Busy(); ++j)
+        {
+            QCoreApplication::processEvents();
+            QThread::msleep(40);
+        }
     evt("resz_open_ok", QString("pages=%1").arg(m_reader->pageCount()));
-    m_reader->jumpToPublic(40);
+    m_reader->jumpToPublic(jumpOverride > 0 ? jumpOverride : 40);
     for (int j = 0; j < 60; ++j)
     {
         QCoreApplication::processEvents();
@@ -2650,6 +2664,19 @@ void LibraryWindow::resizeProbe(const QString &book)
     {
         QCoreApplication::processEvents();
         QThread::msleep(40);
+    }
+    if (jumpOverride > 0)
+    {
+        for (int j = 0; j < 3000 && m_reader && m_reader->relayoutBusy(); ++j)
+        {
+            QCoreApplication::processEvents();
+            QThread::msleep(40);
+        }
+        for (int j = 0; j < 10; ++j) /* restorePosDeferred 的 singleShot(0) 落位 */
+        {
+            QCoreApplication::processEvents();
+            QThread::msleep(40);
+        }
     }
     evt("resz_after", QString("after=%1 pages=%2")
                           .arg(m_reader->probePage())

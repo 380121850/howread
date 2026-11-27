@@ -107,6 +107,92 @@ Q_IMPORT_PLUGIN(QSQLiteDriverPlugin)
 
 using namespace hr;
 
+/* v1.15.13 诊断钩子（--relayoutprobe，环境变量 HR_RLP_EVT=1 启用）：应用级事件过滤器量
+ * "相邻两条事件之间的 GUI 线程耗时"，按（事件类型:接收者类）聚合，每 2 秒把累计 >=150ms 的
+ * 桶记一条日志——用来定位没有任何应用日志的 GUI 停顿（海量小事件累加型）。过滤器只看不拦。 */
+class HrEvGapFilter : public QObject
+{
+public:
+    qint64 lastStart = 0;
+    QByteArray lastKey;
+    qint64 lastLog = 0;
+    QHash<QByteArray, qint64> cnt, sum;
+    static const char *evName(int t)
+    {
+        switch (t)
+        {
+        case 1: return "Timer";
+        case 10: return "Enter";
+        case 11: return "Leave";
+        case 12: return "Paint";
+        case 13: return "Move";
+        case 14: return "Resize";
+        case 17: return "Show";
+        case 18: return "Hide";
+        case 21: return "ParentChange";
+        case 22: return "WindowStateChange";
+        case 26: return "ShowToParent";
+        case 27: return "HideToParent";
+        case 33: return "WindowTitleChange";
+        case 39: return "PaletteChange";
+        case 43: return "MetaCall";
+        case 52: return "DeferredDelete";
+        case 68: return "ChildAdded";
+        case 69: return "ChildRemoved";
+        case 70: return "ChildFontChange?";
+        case 71: return "ChildPolished";
+        case 74: return "WinEventAct";
+        case 75: return "WinEventChange?";
+        case 76: return "LayoutRequest";
+        case 77: return "UpdateRequest";
+        case 78: return "UpdateLater";
+        case 79: return "Update?"; /* WinEmbedded? */
+        case 97: return "FontChange";
+        case 98: return "EnabledChange";
+        case 103: return "WindowBlocked";
+        case 110: return "WinIdChange";
+        case 121: return "ApplicationActivate";
+        case 184: return "DevicePixelRatioChange?";
+        case 206: return "Expose";
+        default: return nullptr;
+        }
+    }
+    bool eventFilter(QObject *o, QEvent *e) override
+    {
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (lastStart > 0)
+        {
+            const qint64 dt = now - lastStart;
+            cnt[lastKey] += 1;
+            sum[lastKey] += dt;
+        }
+        if (lastLog == 0) lastLog = now;
+        if (now - lastLog >= 2000)
+        {
+            QHash<QByteArray, qint64>::const_iterator it;
+            for (it = sum.constBegin(); it != sum.constEnd(); ++it)
+            {
+                if (it.value() >= 150)
+                    evt("ev_agg", QString("key=%1 n=%2 ms=%3")
+                                      .arg(QString::fromLatin1(it.key().constData()))
+                                      .arg(cnt.value(it.key()))
+                                      .arg(it.value()));
+            }
+            cnt.clear();
+            sum.clear();
+            lastLog = now;
+        }
+        const char *nm = evName((int)e->type());
+        lastKey = QByteArray(nm ? nm : QByteArray::number((int)e->type()).constData()) + ':' +
+                   (o ? QByteArray(o->metaObject()->className()) : QByteArray("null")) +
+                   (o && !o->objectName().isEmpty()
+                        ? QByteArray("/") + o->objectName().toLatin1()
+                        : QByteArray());
+        lastStart = now;
+        return QObject::eventFilter(o, e);
+    }
+};
+
 int main(int argc, char **argv)
 {
     SetUnhandledExceptionFilter(hr_crash_filter); /* W20 */
@@ -166,6 +252,8 @@ int main(int argc, char **argv)
     bool menuDispatchSmoke = false; /* v1.15.6：--menudispatchsmoke 右键菜单派发回归 */
     bool aboutSmoke = false; /* v1.15.8：--aboutsmoke 软件说明页无头截图 */
     bool resizeSmoke = false; /* v1.15.10：--resizesmoke 最大化/还原阅读位保持 */
+    bool rlpProbe = false; /* v1.15.13：--relayoutprobe 窗口外重排位保门禁（纯无头） */
+    int rlpJump = 3000;
     QString dumpMode;
     QString noteBook;
     QString sshDir;
@@ -333,6 +421,13 @@ int main(int argc, char **argv)
             resizeSmoke = true; /* v1.15.10：阅读位保持回归 */
             book = QString::fromLocal8Bit(argv[i + 1]);
             outPng = QString::fromLocal8Bit(argv[i + 2]);
+            i += 2;
+        }
+        else if (a == "--relayoutprobe" && i + 2 < argc)
+        {
+            rlpProbe = true; /* v1.15.13：开书→等补页收尾→跳页→改视口重排→报阅读位 */
+            book = QString::fromLocal8Bit(argv[i + 1]);
+            rlpJump = QString::fromLocal8Bit(argv[i + 2]).toInt();
             i += 2;
         }
         else if (a == "--shotsmoke")
@@ -1499,6 +1594,159 @@ int main(int argc, char **argv)
                 }
             }
         }
+        if (rlpProbe)
+        {
+            /* v1.15.13 --relayoutprobe <book> <页>：后台开书→等 phase2 收尾→跳页→两轮重排（改尺寸→
+             * 还原）→每轮落地并等 phase2 收尾后报阅读位/页数/章序号。门禁：真改排版后章锚不变、
+             * 还原后排版回到原样时阅读位回到原页。环境开关：
+             *   HR_RLP_REAL=1      真窗口+滚动模式，窗口 resize 驱动重排（不抢焦点；走应用自身
+             *                       resize→500ms 防抖→重排链路，与最大化/还原同路径）
+             *   HR_RLP_SCROLL=1    隐藏窗+滚动模式
+             *   HR_RLP_W0/H0       无头开书视口（缺省 1100x1400；对照实验：直接按目标视口开书取页数）
+             *   HR_RLP_CANCEL=<书> 重排在飞时开另一本书（作废路径清 busy 门禁）
+             * 缺省隐藏窗（不 show）+翻页模式。 */
+            const bool rlpReal = qEnvironmentVariableIsSet("HR_RLP_REAL");
+            static HrEvGapFilter evGap; /* 常驻：装上不再卸（过滤器对象须比 app 活得久） */
+            if (qEnvironmentVariableIsSet("HR_RLP_EVT"))
+                qApp->installEventFilter(&evGap);
+            const bool rlpScroll = rlpReal || qEnvironmentVariableIsSet("HR_RLP_SCROLL");
+            int w0 = qEnvironmentVariableIntValue("HR_RLP_W0");
+            int h0 = qEnvironmentVariableIntValue("HR_RLP_H0");
+            if (w0 <= 0) w0 = 1100;
+            if (h0 <= 0) h0 = 1400;
+            const bool rlpNoUpd = qEnvironmentVariableIsSet("HR_RLP_NOUPD");
+            auto settle = [&win, rlpNoUpd](int n) {
+                for (int j = 0; j < n; ++j)
+                {
+                    const qint64 pe0 = QDateTime::currentMSecsSinceEpoch();
+                    QCoreApplication::processEvents();
+                    const qint64 pem = QDateTime::currentMSecsSinceEpoch() - pe0;
+                    if (pem >= 150) /* GUI 线程单次事件处理耗时（定位落地后的停顿在哪一段） */
+                        evt("pe_slow", QString("ms=%1").arg(pem));
+                    QThread::msleep(40);
+                }
+            };
+            /* 等一轮重排落地：needRise=先等 busy 起（resize 防抖 500ms 后才起）；再等 busy 落 */
+            auto waitLanding = [&win, &settle](bool needRise) {
+                if (needRise)
+                    for (int j = 0; j < 150 && !win.relayoutBusy(); ++j) settle(1);
+                for (int j = 0; j < 7200 && win.relayoutBusy(); ++j) settle(1);
+                settle(25); /* restorePosDeferred 的 singleShot(0) 落位 */
+                if (win.probeLabelCount() <= 0) return; /* 翻页模式无标签栈 */
+                for (int j = 0; j < 100 && win.probePage() >= 0 &&
+                                 !win.probePageRendered(win.probePage());
+                     ++j)
+                    settle(1); /* 落位页出图 */
+            };
+            qint64 rt0 = QDateTime::currentMSecsSinceEpoch();
+            /* 一轮重排：真窗口=改窗口尺寸；无头=改冒烟视口。落地后等 phase2 把余章数完再报
+             * （此时 pages 才是该排版下的全书页数） */
+            auto rlpRound = [&](const char *name, int vw, int vh) {
+                rt0 = QDateTime::currentMSecsSinceEpoch();
+                if (rlpReal)
+                {
+                    win.resize(vw, vh);
+                    waitLanding(true);
+                }
+                else
+                {
+                    win.setSmokeViewport(vw, vh);
+                    win.relayoutForProbe();
+                    settle(60);
+                    waitLanding(false);
+                }
+                for (int j = 0; j < 9000 && win.phase2Busy(); ++j) settle(1);
+                settle(25);
+                evt(name,
+                    QString("after=%1 pages=%2 ch=%3 ms=%4 busy=%5 rend=%6 scrollmax=%7 vph=%8 needh=%9")
+                        .arg(win.probePage())
+                        .arg(win.pageCount())
+                        .arg(win.probeChapterOf(win.probePage()))
+                        .arg(QDateTime::currentMSecsSinceEpoch() - rt0)
+                        .arg((int)win.relayoutBusy())
+                        .arg(win.probePageRendered(win.probePage()) ? 1 : 0)
+                        .arg(win.probeScrollMax())
+                        .arg(win.probeViewportH())
+                        .arg(win.probeStackNeedH()));
+            };
+            if (rlpReal)
+            {
+                win.setAttribute(Qt::WA_ShowWithoutActivating);
+                win.resize(1041, 720);
+                win.show();
+                if (rlpNoUpd)
+                    win.setUpdatesEnabled(false); /* 判别：不重绘时停顿是否消失 */
+                settle(25);
+            }
+            else
+                win.setSmokeViewport(w0, h0);
+            if (!rlpScroll) win.forcePageMode();
+            if (!win.openBookAsync(book, -1))
+            {
+                evt("rlp_fail", "open_busy");
+                return 3;
+            }
+            const qint64 aw = QDateTime::currentMSecsSinceEpoch();
+            while (win.pageCount() <= 0 && !win.asyncFailed() &&
+                   QDateTime::currentMSecsSinceEpoch() - aw < 120000)
+                QCoreApplication::processEvents();
+            if (win.pageCount() <= 0)
+            {
+                evt("rlp_fail", "open");
+                return 3;
+            }
+            for (int j = 0; j < 7200 && win.phase2Busy(); ++j) /* ≤5min：等补页收尾 */
+                settle(1);
+            settle(25);
+            if (rlpReal)
+            {
+                /* 归一化：开书瞬间独立窗口的底栏尚未出现、视口偏高，先按最终几何重排一次再取基准
+                 * （宽变 41px 才会触发应用自身的 resize 重排） */
+                win.resize(1000, 720);
+                waitLanding(true);
+                for (int j = 0; j < 9000 && win.phase2Busy(); ++j) settle(1);
+                settle(25);
+            }
+            evt("rlp_open", QString("pages=%1").arg(win.pageCount()));
+            win.jumpToPublic(rlpJump);
+            settle(60);
+            evt("rlp_before",
+                QString("%1 pages=%2 ch=%3")
+                    .arg(win.probePage())
+                    .arg(win.pageCount())
+                    .arg(win.probeChapterOf(win.probePage())));
+            const QByteArray rlpCancel = qgetenv("HR_RLP_CANCEL");
+            if (!rlpCancel.isEmpty())
+            {
+                /* v1.15.13：重排在飞时开另一本书——作废路径必须回 GUI 线程清 busy（原静默
+                 * return：开书空等满 10s 且 busy 永久卡死=滚动模式此后再不出内容） */
+                rt0 = QDateTime::currentMSecsSinceEpoch();
+                win.setSmokeViewport(1500, 1800);
+                win.relayoutForProbe();
+                const bool ob = win.openBookAsync(QString::fromLocal8Bit(rlpCancel), -1);
+                const qint64 ow = QDateTime::currentMSecsSinceEpoch();
+                while (win.pageCount() <= 0 && !win.asyncFailed() &&
+                       QDateTime::currentMSecsSinceEpoch() - ow < 120000)
+                    QCoreApplication::processEvents();
+                settle(50);
+                evt("rlp_cancel",
+                    QString("ob=%1 ms=%2 pages=%3 busy=%4")
+                        .arg((int)ob)
+                        .arg(QDateTime::currentMSecsSinceEpoch() - rt0)
+                        .arg(win.pageCount())
+                        .arg((int)win.relayoutBusy()));
+            }
+            else
+            {
+                /* 第一轮改排版（无头 900x900 更窄更矮=页数变多；真窗口放大=页数变少），
+                 * 第二轮还原到开书时的尺寸 */
+                rlpRound("rlp_after", rlpReal ? 1500 : 900, rlpReal ? 980 : 900);
+                rlpRound("rlp_after2", rlpReal ? 1000 : w0, rlpReal ? 720 : h0);
+            }
+            QThreadPool::globalInstance()->waitForDone();
+            hr_qt_shutdown();
+            return 0;
+        }
         if (asyncSmoke)
         {
             /* v0.103.0 P0-1：后台打开路径无头回归（worker 打开/排版→UI 装配→首渲全链） */
@@ -1520,7 +1768,7 @@ int main(int argc, char **argv)
                    QDateTime::currentMSecsSinceEpoch() - aw < 40000)
                 QCoreApplication::processEvents();
         }
-        else if (!win.openBook(book, page))
+        else if (!resizeSmoke && !win.openBook(book, page)) /* v1.15.13：resizesmoke 走壳窗嵌入链，不先在独立阅读器同步开一遍 */
         {
             evt("smoke_fail", "open");
             return 3;

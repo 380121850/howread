@@ -922,16 +922,25 @@ void ReaderWindow::jumpTo(int page)
         /* v1.11.1（P1-1）：按真实标签几何落位（estH 均匀假设在长短页混排时漂移，
          * page×estH 会落错页再被渲染修正"跳正"）；未渲染占位仍按 estH 累计 */
         int y = 0;
-        const int nLab = m_labels.size();
-        for (int i = 0; i < page && i < nLab; i++)
+        const int nLab = m_stackY.size() - 1; /* v1.15.13：落位读 Y 前缀表（原逐标签累计） */
+        if (nLab >= 0)
         {
-            /* v1.15.10：0 高标签（栈刚建、布局未激活）按 estH 累计——原仅空位
-             * 回退，重排落地延迟落位时机可能撞上未激活布局 */
-            const int lh = m_labels[i] ? m_labels[i]->height() : 0;
-            y += lh > 0 ? lh : m_estH;
+            if (page < nLab)
+                y = m_stackY[page];
+            else
+                y = m_stackY.last() + (page - nLab) * m_estH; /* 未建尾部按 estH 外推 */
         }
-        if (page > nLab)
-            y += (page - nLab) * m_estH; /* 标签未建到的尾部按 estH 外推 */
+        /* v1.15.13：量程滞后兜底——真窗口里 QScrollArea 要等下一次重绘才处理容器的挂起
+         * resize 事件，补页/建栈刚结束时 maximum 可能仍停在旧高度，远跳被钳到旧量程末尾
+         * （实测 5239 页的书跳第 3001 页落到第 2611 页；无头窗口更是永不刷新）。按容器
+         * 真实高度补齐量程再落位；QScrollArea 随后的自发刷新算出的是同一个值 */
+        syncStackHeight();
+        QScrollBar *vsb = m_scroll->verticalScrollBar();
+        if (m_stack && vsb && m_scroll->viewport())
+        {
+            const int needMax = m_stack->height() - m_scroll->viewport()->height();
+            if (needMax > vsb->maximum()) vsb->setRange(0, needMax);
+        }
         m_scroll->verticalScrollBar()->setValue(y);
         fillVisible();
     }
@@ -1221,11 +1230,12 @@ bool ReaderWindow::openBookAsync(const QString &path, int jumpPage)
     while (!m_flight.isEmpty() || m_auxJobs.load() > 0)
         QApplication::processEvents(); /* v1.8.0：等滚动飞行+翻页/预取辅助任务落地再动 doc */
     /* v0.104.0：等在途后台重排落地（旧 doc 由本流程关，互锁防 UAF） */
-    if (m_relayoutBusy.load())
+    if (m_relayoutBusy.load() || m_accelSaving.load())
     {
         m_relayoutGen.fetch_add(1); /* 作废挂起的重排完成回调 */
         const qint64 tw = QDateTime::currentMSecsSinceEpoch();
-        while (m_relayoutBusy.load() && QDateTime::currentMSecsSinceEpoch() - tw < 10000)
+        while ((m_relayoutBusy.load() || m_accelSaving.load()) &&
+               QDateTime::currentMSecsSinceEpoch() - tw < 10000)
             QApplication::processEvents();
     }
     m_openBusy.store(true);
@@ -1303,6 +1313,17 @@ bool ReaderWindow::openBookAsync(const QString &path, int jumpPage)
                                        acc.toUtf8().constData());
         }
         if (!doc) doc = hr_qt_open(openable.toUtf8().constData());
+        /* v1.15.13：转换产物打不开（典型：转换被中断留下的截断 EPUB/HTML）→ 删产物强制
+         * 重转一次。缓存键只认源文件路径+大小+时间，坏产物会被永久当成命中，此后每次
+         * 开书都失败（实测截断缓存：cannot recognize zip archive） */
+        if (!doc && openable != path)
+        {
+            evt("conv_artifact_bad", "openable=" + openable.left(80));
+            convArtifactRemove(openable, path);
+            const QString retryPath = hr::openablePath(path, true);
+            if (!retryPath.isEmpty())
+                doc = hr_qt_open(retryPath.toUtf8().constData());
+        }
         if (!gw)
         {
             if (doc) hr_qt_close(doc);
@@ -1357,7 +1378,8 @@ bool ReaderWindow::openBookAsync(const QString &path, int jumpPage)
             if (nc > 1)
             {
                 const int limit =
-                    uptoPg >= 0 ? uptoPg + qMax(80, uptoPg / 4) : 0x7fffffff;
+                    uptoPg >= 0 ? uptoPg + qMax(160, uptoPg / 4) : 0x7fffffff; /* v1.15.13：v1.0.1 的
+                     "初始前沿 80→160 页"当时只改在了同步 afterOpen（旧路径），后台开书路径漏改 */
                 for (int ci = 0; ci < nc && gw; ci += 16)
                 {
                     for (int k = ci; k < qMin(ci + 16, nc); k++)
@@ -1391,6 +1413,9 @@ bool ReaderWindow::openBookAsync(const QString &path, int jumpPage)
             for (int v : cachedCh) pages += v;
             cntPartial = false;
             cntPartialCh = 0;
+            /* v1.15.13：缓存命中的全量章页表同样交给 finishOpen——原在此丢弃，m_chapPages
+             * 为空，此后每次重排都因"无表"退化成整书排版（v0.109.0 要避免的卡顿路径） */
+            chapPages = cachedCh;
         }
         else
             pages = countPages(&cntPartial, &cntPartialCh, &chapPages);
@@ -1405,9 +1430,16 @@ bool ReaderWindow::openBookAsync(const QString &path, int jumpPage)
         /* v0.104.0（P1-4）：损坏探针——转换产物打不开、0 页、或前 3 页无可读文字=坏缓存：
          * 删产物强制重转一次；重转后能开且有页则保留打开态（误报保护，如图文为主的文档），
          * 仍坏记忆 kept 不再每次重试（对齐安卓 AbstractCodecContext 探针语义） */
+        /* v1.15.13：纯图产物（CBR/CBZ 及图片）不做"前 3 页有文字"判定——图片集永远没有
+         * 文字段，原逻辑首开必判坏缓存：删产物→整本重解一遍→再判→才记忆保留 */
+        const QString innerExt = QFileInfo(openable).suffix().toLower();
+        const bool imageOnly =
+            QFileInfo(path).suffix().toLower() == QString::fromLatin1("cbr") ||
+            QStringList{"cbz", "cbr", "jpg", "jpeg", "png", "gif", "bmp", "webp"}
+                .contains(innerExt);
         if (openable != path && convProbeAllowed(path))
         {
-            bool probeBad = pages <= 0 || !convTextReadable(doc, pages);
+            bool probeBad = pages <= 0 || (!imageOnly && !convTextReadable(doc, pages));
             if (probeBad)
             {
                 evt("conv_probe_fail",
@@ -1425,7 +1457,7 @@ bool ReaderWindow::openBookAsync(const QString &path, int jumpPage)
                         pages = countPages(&cntPartial, &cntPartialCh, &chapPages);
                     }
                 }
-                if (!doc || pages <= 0 || !convTextReadable(doc, pages))
+                if (!doc || pages <= 0 || (!imageOnly && !convTextReadable(doc, pages)))
                 {
                     convProbeKeep(path);
                     evt("conv_probe_kept", "path=" + path.left(90));
@@ -1533,10 +1565,12 @@ void ReaderWindow::finishOpen(void *doc, int pages, int chapters, int restored,
     m_cacheProg = nullptr;
     m_img = QImage();
     m_img2 = QImage();
-    m_estH = m_viewH > 0 ? m_viewH : 1200; /* v1.0.0：锚排版页高，防占位细条海 */
+    m_estH = m_viewH > 0 ? m_viewH : 1200; calibEstH(); /* v1.0.0：锚排版页高，防占位细条海 */
     buildStack();
     m_slider->setRange(0, qMax(0, m_pages - 1));
     m_slider->setValue(m_page);
+    /* v1.15.12：页数已知立即显示——首次 onPageChanged 要等首渲/门控（大书"-"空窗数秒） */
+    m_lbPos->setText(QString("%1 / %2").arg(m_page + 1).arg(m_pages));
     m_lastStatPage = m_page;
     m_statTimer.start();
     m_openBusy.store(false);
@@ -1645,10 +1679,10 @@ void ReaderWindow::startPhase2Count(int fromChapter, int partialPages, int chapt
                 {
                     QMetaObject::invokeMethod(
                         gw.data(),
-                        [gw, gen, tot = partialPages + extra, chn = all.size()]
+                        [gw, gen, tot = partialPages + extra, chn = all.size(), tbl = all]
                         {
                             if (gw && gw->m_openGen.load() == gen)
-                                gw->applyPhase2Pages(tot, chn);
+                                gw->applyPhase2Pages(tot, chn, tbl);
                         },
                         Qt::QueuedConnection);
                 }
@@ -1663,11 +1697,11 @@ void ReaderWindow::startPhase2Count(int fromChapter, int partialPages, int chapt
         evt("phase2_pages", QString("total=%1 ms=%2").arg(partialPages + extra).arg(ms));
         QMetaObject::invokeMethod(
             gw.data(),
-            [gw, gen, total = partialPages + extra, chapters]
+            [gw, gen, total = partialPages + extra, chapters, all]
             {
                 /* v1.0.1：gen 守卫（同上，防重排竞态错扩） */
                 if (gw && gw->m_openGen.load() == gen)
-                    gw->applyPhase2Pages(total, chapters);
+                    gw->applyPhase2Pages(total, chapters, all);
             },
             Qt::QueuedConnection);
     }));
@@ -1675,14 +1709,17 @@ void ReaderWindow::startPhase2Count(int fromChapter, int partialPages, int chapt
 
 void ReaderWindow::applyPhase2Pages(int total, int chapters, QVector<int> all)
 {
+    /* v1.15.13：章页表随补页同步增长（原调用方不传表，且这里在全表到达时把表清掉）——
+     * 表停在窗口期那几章：读到窗口之外再改字号/最大化，重排按残表定位锚章，阅读位
+     * 跳回窗口末章（实测 3000 页→79 页） */
+    if (!all.isEmpty() && all.size() >= m_chapPages.size())
+        m_chapPages = all;
     if (total <= m_pages) return;
     m_pages = total;
-    if (!all.isEmpty() && all.size() == chapters)
-        m_chapPages.clear();
     /* v0.107.1 fix：窗口化开门后页数增长——滚动内容栈同步补建新增页条目，
      * 否则 fillVisible/requestPage 按 m_pages 索引 m_labels/m_labelW 越界，
      * 且滚动几何（滑条范围 vs 实际条目数）错乱拖动发飘 */
-    if (m_scrollMode && m_stackLay && m_labels.size() < m_pages)
+    if (m_scrollMode && m_stack && m_labels.size() < m_pages)
     {
         if (m_pages - m_labels.size() > 300)
             scheduleStackGrow(); /* v0.107.1：大批量分批建，防 UI 一次卡数百 ms */
@@ -1695,7 +1732,7 @@ void ReaderWindow::applyPhase2Pages(int total, int chapters, QVector<int> all)
                 QLabel *lb = new QLabel;
                 lb->setFixedSize(w, m_estH);
                 initPlaceholder(lb, i); /* v1.8.0（P0-2） */
-                m_stackLay->insertWidget(qMax(0, m_stackLay->count() - 1), lb);
+                stackAppendLabel(m_stack, lb, w, m_estH);
                 m_labels.append(lb);
                 m_labelW.append(-1);
             }
@@ -1707,6 +1744,8 @@ void ReaderWindow::applyPhase2Pages(int total, int chapters, QVector<int> all)
         }
     }
     m_slider->setRange(0, qMax(0, m_pages - 1));
+    /* v1.15.12：页数增长即刷新页码栏分母（原只刷标题，页码栏停在补页前总数） */
+    m_lbPos->setText(QString("%1 / %2").arg(m_page + 1).arg(m_pages));
     /* 书库页数从窗口期写入的部分值补正为全量；v1.9.0（P1-6）：远程书同样补登
      * （size 从 file_meta 保真回填，countCache 键依赖 size 不得清零） */
     if (m_doc && !m_path.startsWith(QString::fromLatin1("remote://")))
@@ -1734,7 +1773,7 @@ void ReaderWindow::applyPhase2Pages(int total, int chapters, QVector<int> all)
  * 数千个 QLabel 会把 UI 卡住数百 ms 到秒级 */
 void ReaderWindow::scheduleStackGrow()
 {
-    if (!m_scrollMode || !m_stackLay || m_labels.size() >= m_pages) return;
+    if (!m_scrollMode || !m_stack || m_labels.size() >= m_pages) return;
     const int w = renderWidthPx();
     const int target = qMin(m_pages, m_labels.size() + 200);
     const qint64 tb0 = QDateTime::currentMSecsSinceEpoch();
@@ -1743,7 +1782,7 @@ void ReaderWindow::scheduleStackGrow()
         QLabel *lb = new QLabel;
         lb->setFixedSize(w, m_estH);
         initPlaceholder(lb, m_labels.size()); /* v1.8.0（P0-2） */
-        m_stackLay->insertWidget(qMax(0, m_stackLay->count() - 1), lb);
+        stackAppendLabel(m_stack, lb, w, m_estH);
         m_labels.append(lb);
         m_labelW.append(-1);
     }
@@ -1763,11 +1802,12 @@ bool ReaderWindow::adoptDoc(void *doc, const QString &displayName, QObject *keep
         QApplication::processEvents(); /* v1.8.0：等滚动飞行+翻页/预取辅助任务落地再动 doc */
     while (m_phase2Busy.load()) /* v0.107.0（P1-5）：等窗口计数 phase2 落地再动 doc */
         QApplication::processEvents();
-    if (m_relayoutBusy.load()) /* v0.104.0：等在途后台重排落地 */
+    if (m_relayoutBusy.load() || m_accelSaving.load()) /* v0.104.0：等在途后台重排落地 */
     {
         m_relayoutGen.fetch_add(1);
         const qint64 tw = QDateTime::currentMSecsSinceEpoch();
-        while (m_relayoutBusy.load() && QDateTime::currentMSecsSinceEpoch() - tw < 10000)
+        while ((m_relayoutBusy.load() || m_accelSaving.load()) &&
+               QDateTime::currentMSecsSinceEpoch() - tw < 10000)
             QApplication::processEvents();
     }
     if (m_doc) { hr_qt_close(m_doc); m_doc = nullptr; }
@@ -1794,11 +1834,12 @@ bool ReaderWindow::adoptDocAsync(void *doc, const QString &displayName, QObject 
     }
     while (!m_flight.isEmpty() || m_auxJobs.load() > 0)
         QApplication::processEvents();
-    if (m_relayoutBusy.load())
+    if (m_relayoutBusy.load() || m_accelSaving.load())
     {
         m_relayoutGen.fetch_add(1); /* 作废挂起的重排完成回调 */
         const qint64 tw = QDateTime::currentMSecsSinceEpoch();
-        while (m_relayoutBusy.load() && QDateTime::currentMSecsSinceEpoch() - tw < 10000)
+        while ((m_relayoutBusy.load() || m_accelSaving.load()) &&
+               QDateTime::currentMSecsSinceEpoch() - tw < 10000)
             QApplication::processEvents();
     }
     m_openBusy.store(true);
@@ -1942,6 +1983,9 @@ bool ReaderWindow::adoptDocAsync(void *doc, const QString &displayName, QObject 
             for (int v : cachedCh) pages += v;
             cntPartial = false;
             cntPartialCh = 0;
+            /* v1.15.13：缓存命中的全量章页表同样交给 finishOpen——原在此丢弃，m_chapPages
+             * 为空，此后每次重排都因"无表"退化成整书排版（v0.109.0 要避免的卡顿路径） */
+            chapPages = cachedCh;
         }
         else
             pages = countPages(&cntPartial, &cntPartialCh, &chapPages);
@@ -2018,6 +2062,7 @@ bool ReaderWindow::afterOpen(int jumpPage)
     m_fixedLayout = QStringList{"pdf", "djvu", "cbz", "xps"}
                         .contains(QFileInfo(m_path).suffix().toLower());
     m_zoom = 1.0;
+    m_chapPages.clear(); /* v1.15.13：换书清旧表（同窗重开时上一本的章页表不得残留） */
     applyUserCss(); /* v0.59.0：排版偏好 user CSS（layout 前生效） */
     qint64 t0 = QDateTime::currentMSecsSinceEpoch();
     hr_qt_layout(m_doc, (float)maxCharsWidth(), (float)m_viewH, m_em);
@@ -2036,6 +2081,7 @@ bool ReaderWindow::afterOpen(int jumpPage)
         {
             m_pages = 0;
             for (int v : cachedCh) m_pages += v;
+            m_chapPages = cachedCh; /* v1.15.13：同上（同步路径） */
             m_slider->setRange(0, qMax(0, m_pages - 1));
             evt(QString::fromLatin1("count_done"),
                 QString::fromLatin1("ms=0 chapters=%1 pages=%2 cached=1 sync=1")
@@ -2090,7 +2136,10 @@ bool ReaderWindow::afterOpen(int jumpPage)
             startPhase2Count(cdone, m_pages, nc);
         }
         else if (!partial && m_pages > 0)
+        {
+            m_chapPages = per; /* v1.15.13：全量表留用（原不存，重排走整书排版） */
             saveCountCache(m_path, m_viewW, m_viewH, int(m_em), per); /* 全量表落盘 */
+        }
         }
     }
     else
@@ -2150,10 +2199,12 @@ bool ReaderWindow::afterOpen(int jumpPage)
     m_img = QImage();
     m_img2 = QImage();
     m_pfCache.clear(); /* v0.103.0：邻页预取随书/排版换代 */
-    m_estH = m_viewH > 0 ? m_viewH : 1200; /* v1.0.0：锚排版页高，防占位细条海 */
+    m_estH = m_viewH > 0 ? m_viewH : 1200; calibEstH(); /* v1.0.0：锚排版页高，防占位细条海 */
     buildStack();
     m_slider->setRange(0, qMax(0, m_pages - 1));
     m_slider->setValue(m_page);
+    /* v1.15.12：页数已知立即显示——首次 onPageChanged 要等首渲/门控（大书"-"空窗数秒） */
+    m_lbPos->setText(QString("%1 / %2").arg(m_page + 1).arg(m_pages));
     m_lastStatPage = m_page;
     m_statTimer.start();
     if (m_scrollMode)
@@ -2173,7 +2224,9 @@ bool ReaderWindow::afterOpen(int jumpPage)
         {
             void *doc = m_doc;
             QPointer<ReaderWindow> gw(this);
-            m_relayoutBusy.store(true);
+            /* v1.15.13：原借用 m_relayoutBusy——保存期间（大书数百 ms~秒级）滚动模式
+             * fillVisible 整段让路且结束后不补渲；也可能清掉刚启动的重排的 busy */
+            m_accelSaving.store(true);
             QThreadPool::globalInstance()->start(QRunnable::create([gw, doc, acc]
             {
                 QElapsedTimer at;
@@ -2187,7 +2240,7 @@ bool ReaderWindow::afterOpen(int jumpPage)
                     [gw, ok, ms]
                     {
                         if (!gw) return;
-                        gw->m_relayoutBusy.store(false);
+                        gw->m_accelSaving.store(false);
                         evt("accel_save",
                             ok ? QString("ok ms=%1 async").arg(ms)
                                : QString::fromLatin1("fail"));
@@ -2202,8 +2255,14 @@ bool ReaderWindow::afterOpen(int jumpPage)
 void ReaderWindow::updateTitle()
 {
     const QString nm = m_bookName.isEmpty() ? hr::l10n::s("(未打开)", "(no book)") : m_bookName;
-    setWindowTitle(QString("HowRead Qt — %1  %2/%3").arg(nm).arg(m_page + 1).arg(m_pages));
-    if (m_lbBook) m_lbBook->setText(nm);
+    const QString t = QString("HowRead Qt — %1  %2/%3").arg(nm).arg(m_page + 1).arg(m_pages);
+    if (t != m_lastTitle) /* v1.15.13：同题不重复 setWindowTitle（大书逐页刷新引发非客户区重绘风暴） */
+    {
+        m_lastTitle = t;
+        setWindowTitle(t);
+    }
+    if (m_lbBook && m_lbBook->text() != nm)
+        m_lbBook->setText(nm);
 }
 
 /* U3a 沉浸：全屏+隐藏顶/底栏；再切退出（F11/底部钮/Esc） */
@@ -2232,14 +2291,12 @@ void ReaderWindow::toggleImmersive()
 void ReaderWindow::buildStack()
 {
     const qint64 tb0 = QDateTime::currentMSecsSinceEpoch();
-    QWidget *content = new QWidget;
-    QVBoxLayout *cl = new QVBoxLayout(content);
-    cl->setContentsMargins(0, 0, 0, 0);
-    cl->setSpacing(0); /* v0.109.0：滚动模式前后页贴合连续 */
+    QWidget *content = new QWidget; /* v1.15.13：标签几何改手工管理（原 QVBoxLayout 级联见 m_stackY 注） */
     /* 检视修复：二次建栈（relayout/换书）前必须清旧表——旧 dangling QLabel 若留数组，
      * 下次 requestPage 的 QPointer 构造即撞 UAF（GUI 起书秒退根因，v0.58 潜伏） */
     m_labels.clear();
     m_labelW.clear();
+    m_stackY.clear();
     m_lru.clear();          /* v1.8.0（P0-5）：随栈重建清 LRU/字节账 */
     m_labelBytes.clear();
     m_lastTop = -1;
@@ -2250,15 +2307,13 @@ void ReaderWindow::buildStack()
         QLabel *lb = new QLabel;
         lb->setFixedSize(w, m_estH);
         initPlaceholder(lb, i); /* v1.8.0（P0-2）：占位纸底+页码+载入提示 */
-        cl->addWidget(lb);
+        stackAppendLabel(content, lb, w, m_estH);
         m_labels.append(lb);
         m_labelW.append(-1);
     }
-    cl->addStretch(1);
     QWidget *old = m_scroll->takeWidget(); /* 收回所有权再删，避免双重释放 */
     delete old;
     m_stack = content;
-    m_stackLay = cl;
     m_scroll->setWidget(m_stack);
     evt("stack_step", "post_setwidget"); /* v1.15.11：取证桩（量程塌缩/重锚发生在本调用内） */
     syncStackHeight(); /* v1.6.1：初始即按 layout 高装配 */
@@ -2316,6 +2371,59 @@ static QImage trimWhiteImg(const QImage &in)
 
 /* v1.8.0（P0-2）：占位不空白——未渲染页=主题纸底色+弱化页码+载入提示（原只写页码
  * 无底色，视觉上就是"空白页"）。主题色随栈重建烘焙（主题切换会 buildStack）。 */
+/* v1.15.13：滚动栈手工几何。原 QVBoxLayout 把 8000+ 个页标签全部纳入布局管理：任何一页
+ * 渲染落地改高（setFixedSize）都会触发布局重算，把落地点之后的所有标签逐个搬移一遍——
+ * 每次落地 O(N) 条 Move 事件，渐进渲染几千页 × 数千标签 = 数千万条事件（事件聚合实测
+ * Move:QLabel 250–290 万条/2 秒），大书开书/落地 GUI 冻结 10–28 秒。改为前缀表 m_stackY
+ * 记录每页 Y（末项=总高）：改高只做 O(N) 整数加法 + 视口附近几十个标签的真实搬移；
+ * 视口外的几何延迟到滚近时（fillVisible→stackSyncGeomVisible）再落位。 */
+void ReaderWindow::stackAppendLabel(QWidget *stack, QLabel *lb, int w, int h)
+{
+    const int y = m_stackY.isEmpty() ? 0 : m_stackY.last(); /* 末项=当前总高，即新页 Y */
+    m_stackY.append(y + h); /* 追加后末项仍=总高 */
+    if (stack)
+    {
+        lb->setParent(stack);
+        lb->setGeometry(0, y, w, h);
+        if (stack->isVisible())
+            lb->show();
+    }
+}
+
+void ReaderWindow::stackSyncGeom(int y0, int y1)
+{
+    if (!m_stack || m_stackY.isEmpty()) return;
+    const int n = m_stackY.size() - 1;
+    for (int i = 0; i < n; i++)
+    {
+        if (m_stackY[i + 1] <= y0) continue;
+        if (m_stackY[i] >= y1) break;
+        QLabel *lb = i < m_labels.size() ? m_labels[i] : nullptr;
+        if (lb && lb->y() != m_stackY[i])
+            lb->move(0, m_stackY[i]);
+    }
+}
+
+void ReaderWindow::stackSyncGeomVisible()
+{
+    if (!m_scroll || !m_stack || m_stackY.isEmpty()) return;
+    const int top = m_scroll->verticalScrollBar()->value();
+    const int vh = m_scroll->viewport()->height();
+    stackSyncGeom(top - vh, top + 2 * vh); /* 视口上下各放一屏余量（锚定/预取读 y） */
+}
+
+void ReaderWindow::stackAfterResize(int page, int newH)
+{
+    if (page < 0 || page + 1 >= m_stackY.size()) return;
+    const int dy = newH - (m_stackY[page + 1] - m_stackY[page]);
+    if (dy != 0)
+        for (int i = page + 1; i < m_stackY.size(); i++) m_stackY[i] += dy;
+    QLabel *lb = page < m_labels.size() ? m_labels[page] : nullptr;
+    if (lb && lb->y() != m_stackY[page])
+        lb->move(0, m_stackY[page]); /* 本页自身落位（预取页可能落在视口外） */
+    stackSyncGeomVisible(); /* 视口内其余标签随 dy 搬移（仅几十个，原为全量级联） */
+}
+
 void ReaderWindow::initPlaceholder(QLabel *lb, int page)
 {
     const Theme &t = kThemes[m_theme];
@@ -2364,13 +2472,14 @@ void ReaderWindow::evictByBudget(int first, int last)
 
 void ReaderWindow::fillVisible()
 {
-    m_lastRenderReq.store(QDateTime::currentMSecsSinceEpoch()); /* v0.107.1 让路信号 */
     if (m_openBusy.load() || !m_scrollMode || m_pages == 0) return;
     /* v1.15.11：重排过渡期禁锚——buildStack 的 setWidget/resize 会让滚动条量程
      * 瞬时塌缩，valueChanged→fillVisible 把 m_page 重锚回 0（真机日志实锤：重排
      * 未落地进度已被写回第 1 页，v1.15.10 残余"最大化后跳回首"根因）；过渡期旧
      * 栈渲染也让路，落位统一交 restorePosDeferred 按重排前页号收回 */
-    if (m_relayoutBusy.load()) return;
+    if (m_stackSwap) return; /* v1.15.13：v1.15.11 的过渡期让路收窄为"换栈同步窗口"——量程塌缩
+     * 只发生在 buildStack 内；重排等待期旧栈几何仍真实，改为只跟踪页码（见下） */
+    stackSyncGeomVisible(); /* v1.15.13：滚近区域标签几何先落位（懒同步补齐） */
     const int top = m_scroll->verticalScrollBar()->value();
     const int bottom = top + m_scroll->viewport()->height();
     /* v1.8.0（P0-4）：滚动方向记忆（+1 下 / -1 上）——预取按方向加宽前方 */
@@ -2384,9 +2493,9 @@ void ReaderWindow::fillVisible()
     {
         int acc = 0;
         const int n = m_labels.size();
-        for (int i = 0; i < n; i++)
+        for (int i = 0; i < n && i + 1 < m_stackY.size(); i++)
         {
-            const int h = m_labels[i] ? m_labels[i]->height() : m_estH;
+            const int h = m_stackY[i + 1] - m_stackY[i]; /* v1.15.13：Y 前缀表（含已渲染真实高） */
             const int y0 = acc;
             acc += h;
             if (first < 0 && acc > top) first = i;
@@ -2396,6 +2505,20 @@ void ReaderWindow::fillVisible()
         if (first < 0) first = n > 0 ? n - 1 : 0;
         if (last < first) last = first;
     }
+    /* v1.15.13：重排等待期只跟踪阅读位/页码，不派渲染、不清标签——v1.15.11"过渡期旧栈
+     * 渲染让路"的防崩语义不变。原整段让路有两处副作用：① 等待期拖动时页码/进度冻结
+     * （大书重排可达数十秒）；② 让路信号仍在函数入口刷新，滚动一下就把后台重排按停
+     * 1.5s，越滚重排越不结束 */
+    if (m_relayoutBusy.load())
+    {
+        if (m_page != first)
+        {
+            m_page = first;
+            onPageChanged();
+        }
+        return;
+    }
+    m_lastRenderReq.store(QDateTime::currentMSecsSinceEpoch()); /* v0.107.1 让路信号 */
     for (int p = first; p <= last; p++)
         requestPage(p);
     /* v1.8.0（P0-4）：预取加宽+方向加权——窗口外前后各 2 页，滚动方向侧再 +2 */
@@ -2454,7 +2577,7 @@ static QThreadPool *renderPool()
  * 直达新区）时，渲染前同步补建到目标页；此前静默返回=该页永久空白且无日志 */
 void ReaderWindow::ensureStackTo(int page)
 {
-    if (!m_scrollMode || !m_stackLay || page < m_labels.size()) return;
+    if (!m_scrollMode || !m_stack || page < m_labels.size()) return;
     const int w = renderWidthPx();
     const int target = qMin(m_pages, page + 1);
     const qint64 tb0 = QDateTime::currentMSecsSinceEpoch();
@@ -2463,7 +2586,7 @@ void ReaderWindow::ensureStackTo(int page)
         QLabel *lb = new QLabel;
         lb->setFixedSize(w, m_estH);
         initPlaceholder(lb, m_labels.size()); /* v1.8.0（P0-2） */
-        m_stackLay->insertWidget(qMax(0, m_stackLay->count() - 1), lb);
+        stackAppendLabel(m_stack, lb, w, m_estH);
         m_labels.append(lb);
         m_labelW.append(-1);
     }
@@ -2594,6 +2717,7 @@ void ReaderWindow::dispatchPage(int page)
                         const int oldH = lb->height(); /* v1.11.1（P0-1）：改高前快照 */
                         lb->setPixmap(QPixmap::fromImage(up));
                         lb->setFixedSize(targetW, dispH);
+                        stackAfterResize(page, dispH); /* v1.15.13：前缀表+可视区几何（无布局级联） */
                         m_labelW[page] = rendW;
                         m_labelBytes.insert(page, (qint64)up.sizeInBytes());
                         m_lru.removeAll(page);
@@ -2607,8 +2731,12 @@ void ReaderWindow::dispatchPage(int page)
                     {
                         if (m_trimWhite) im2 = trimWhiteImg(im2); /* v0.83.0 W2（开关滚动恒关） */
                         const int oldH = lb->height(); /* v1.11.1（P0-1）：改高前快照 */
+                        /* v1.15.13：±1 像素不搬移——占位高已按引擎页尺寸对齐（calibEstH），标准页真实高
+                         * 与占位至多差取整的 1 像素；改高会让其下全部标签在可见窗口里逐个搬移 */
+                        const int newLh = qAbs(im2.height() - oldH) <= 1 ? oldH : im2.height();
                         lb->setPixmap(QPixmap::fromImage(im2));
-                        lb->setFixedSize(im2.size());
+                        lb->setFixedSize(im2.width(), newLh);
+                        stackAfterResize(page, newLh); /* v1.15.13：前缀表+可视区几何（无布局级联） */
                         m_labelW[page] = targetW;
                         /* v1.8.0（P0-5）：字节账 + LRU 触点 */
                         m_labelBytes.insert(page, (qint64)im2.sizeInBytes());
@@ -2621,7 +2749,7 @@ void ReaderWindow::dispatchPage(int page)
                             if (ms > 400) m_fixedSlowMs = (int)ms;
                         }
                         syncStackHeight(); /* v1.6.1：真实页高替换 estH 后同步 */
-                        anchorScrollOnResize(page, lb, oldH, im2.size().height()); /* v1.11.1（P0-1） */
+                        anchorScrollOnResize(page, lb, oldH, newLh); /* v1.11.1（P0-1） */
                         /* v1.0.0：矮页（封面/标题行，高仅几十 px）不参与校准——
                          * 此前 estH 被第 0 页带塌，整本占位标签成细条海（用户附图实证） */
                         if (page == 0 && m_viewH > 0 && img.height() >= m_viewH / 2)
@@ -2636,18 +2764,28 @@ void ReaderWindow::dispatchPage(int page)
                             const int top0 = sb0 ? sb0->value() : 0;
                             int shift = 0, fixed = 0;
                             const int wNow = renderWidthPx();
-                            m_estH = im2.height();
-                            for (int i = 0; i < m_labels.size() && i < m_labelW.size(); i++)
+                            if (!m_estHExact) m_estH = im2.height();
+                            const int dH = m_estH - oldEst;
+                            int dAcc = 0; /* v1.15.13：前缀表整体改高，可视区几何即时对齐 */
+                            for (int i = 0; i < m_labels.size() && i + 1 < m_stackY.size() &&
+                                            i < m_labelW.size(); i++)
                             {
+                                m_stackY[i] += dAcc;
                                 if (!m_labels[i] || m_labelW[i] != -1) continue; /* 仅未渲染占位 */
-                                const int ly = m_labels[i]->y();
+                                const int ly = m_stackY[i];
                                 if (ly + oldEst <= top0)
-                                    shift += m_estH - oldEst;
+                                    shift += dH;
                                 else if (ly < top0 && top0 < ly + oldEst)
-                                    shift += (int)((top0 - ly) * (double)(m_estH - oldEst) / qMax(1, oldEst));
+                                    shift += (int)((top0 - ly) * (double)dH / qMax(1, oldEst));
                                 m_labels[i]->setFixedSize(wNow, m_estH);
+                                if (m_labels[i]->y() != m_stackY[i])
+                                    m_labels[i]->move(0, m_stackY[i]);
+                                dAcc += dH;
                                 fixed++;
                             }
+                            if (dAcc != 0 && !m_stackY.isEmpty())
+                                m_stackY[m_stackY.size() - 1] += dAcc;
+                            stackSyncGeomVisible();
                             syncStackHeight();
                             if (sb0 && shift != 0)
                                 sb0->setValue(top0 + shift);
@@ -2684,6 +2822,7 @@ void ReaderWindow::dispatchPage(int page)
 void ReaderWindow::pumpPending()
 {
     if (m_pendQueue.isEmpty() || m_flight.size() >= kMaxFlight) return;
+    if (m_relayoutBusy.load()) return; /* v1.15.13：重排等待期不派待渲队列——引擎已按新排版分页，按旧页号渲出来的是别页 */
     const int top = m_scroll->verticalScrollBar()->value();
     const int mid = top + m_scroll->viewport()->height() / 2;
     int center = m_page;
@@ -2749,7 +2888,7 @@ void ReaderWindow::showPageView()
     QWidget *old = m_scroll->takeWidget();
     delete old;
     m_stack = content;
-    m_stackLay = nullptr;
+    m_stackY.clear(); /* v1.15.13：页模式无滚动栈前缀表 */
     m_scroll->setWidget(content);
     m_scroll->verticalScrollBar()->setValue(0);
 }
@@ -2778,7 +2917,7 @@ void ReaderWindow::renderNow(int page)
     }
     else m_img2 = QImage();
     if (page == 0 && m_viewH > 0 && m_img.height() >= m_viewH / 2) /* v1.0.0：矮页不校准 */
-        m_estH = m_img.height(); /* 未裁剪原高（滚动布局口径） */
+        if (!m_estHExact) m_estH = m_img.height(); /* 未裁剪原高（滚动布局口径） */
     if (m_trimWhite) /* v0.83.0 W2 D6：裁白边（翻页模式） */
     {
         m_img = trimWhiteImg(m_img);
@@ -2800,6 +2939,7 @@ void ReaderWindow::renderNow(int page)
 void ReaderWindow::kickPagePrefetch(int page)
 {
     if (m_scrollMode || m_openBusy.load() || !m_doc || m_pages <= 0) return;
+    if (m_relayoutBusy.load()) return; /* v1.15.13：重排等待期不起翻页预取（同下） */
     const int w = renderWidthPx();
     int mode = 0, tint = 0;
     applyThemeToJob(&mode, &tint); /* GUI 线程先取定参数（与 requestPage 同口径） */
@@ -2836,7 +2976,7 @@ void ReaderWindow::kickPagePrefetch(int page)
 
 void ReaderWindow::storePrefetch(int gen, int page, int w, const QImage &img)
 {
-    if (gen != m_openGen.load() || img.isNull()) return;
+    if (gen != m_openGen.load() || img.isNull() || m_relayoutBusy.load()) return; /* v1.15.13：重排等待期的预取结果不入缓存（可能是新排版的页） */
     if (m_pfCache.size() > 8) m_pfCache.clear(); /* v1.8.0（P0-4）：±3 预取需 8 档 */
     m_pfCache.insert(page, qMakePair(w, img));
 }
@@ -2860,6 +3000,8 @@ void ReaderWindow::renderPageAsync(int page)
         return;
     }
     onPageChanged(); /* 进度/标题/滑条即时反馈（旧页位图仍显示=旧页留存） */
+    if (m_relayoutBusy.load()) return; /* v1.15.13：重排等待期不起异步渲染——引擎已按新排版分页，
+     * 按旧页号渲出来的是别页；落地时按折算后的页号重渲 */
     m_pageFlight = true;
     m_pageReqT0 = QDateTime::currentMSecsSinceEpoch();
     const int seq = ++m_pageSeq;
@@ -2943,7 +3085,7 @@ void ReaderWindow::onPageJobDone(int page, int seq, const QImage &img,
         applyTexture(&m_img2);
     }
     if (page == 0 && m_viewH > 0 && m_img.height() >= m_viewH / 2) /* v1.0.0：矮页不校准 */
-        m_estH = m_img.height();
+        if (!m_estHExact) m_estH = m_img.height();
     if (m_trimWhite) /* v0.83.0 W2 D6：裁白边（翻页模式） */
     {
         m_img = trimWhiteImg(m_img);
@@ -2981,29 +3123,72 @@ void ReaderWindow::onPageChanged()
 void ReaderWindow::finishRelayoutWindowed(int gen, void *doc, const QVector<int> &all,
                                           int anchorCh, int anchorPg, int nc)
 {
-    m_relayoutBusy.store(false);
-    if (gen != m_relayoutGen.load() || doc != m_doc || all.isEmpty()) return;
+    /* v1.15.12：busy 保持到 buildStack+滑条同步完成——setWidget 的量程塌缩窗口内
+     * fillVisible 不得重锚（m_page 瞬态归 0 → 页码闪"1 / N"+ 无效 render_req 连发，
+     * 用户实测最大化后页码先跳 1 再跳回）；早期丢弃路径在此处清位 */
+    if (gen != m_relayoutGen.load() || doc != m_doc || all.isEmpty())
+    {
+        /* v1.15.13：仅当本代仍是最近启动的一代才清 busy——被更新一代重排顶替时 busy
+         * 归新一代所有；此处抢清会让返回书库时的 releaseEngineDoc 关掉新一代 worker
+         * 正在使用的 doc（UAF） */
+        if (m_relayoutStartGen.load() == gen)
+            m_relayoutBusy.store(false);
+        return;
+    }
     int sum = 0;
     for (int v : all) sum += qMax(0, v);
+    /* v1.15.13：等待期用户可能已滚走——按当前 m_page 在旧表里重定位锚（此刻 m_chapPages
+     * 仍是重排前排版的表）；滚出本次已数窗口则夹到窗口末章 */
+    int oldCnt = 0; /* 锚章在旧排版里的页数（章内按比例折算） */
+    if (!m_chapPages.isEmpty())
+    {
+        int accO = 0;
+        for (int k = 0; k < m_chapPages.size(); k++)
+        {
+            const int cp = qMax(0, m_chapPages[k]);
+            if (accO + cp > m_page || k == m_chapPages.size() - 1)
+            {
+                anchorCh = qMin(k, all.size() - 1);
+                anchorPg = qBound(0, m_page - accO, qMax(0, cp - 1));
+                oldCnt = cp;
+                break;
+            }
+            accO += cp;
+        }
+    }
     m_chapPages = all;
     m_pages = qMax(1, sum);
     int acc = 0;
     for (int k = 0; k < anchorCh && k < all.size(); k++) acc += qMax(0, all[k]);
     if (anchorCh >= 0 && anchorCh < all.size())
-        m_page = acc + qMin(qMax(0, anchorPg), qMax(0, all[anchorCh] - 1));
+    {
+        /* v1.15.13：章内页号按比例折算——重排现在真的改分页（worker 先交新排版参数），
+         * 原"章内页号原样保留"随章长漂移：6 页的章放大字号变 9 页，第 5 页还落第 5 页，
+         * 在章内的位置就从 83% 退到 44% */
+        const int nc1 = qMax(0, all[anchorCh]);
+        const int newPg = oldCnt > 0
+                              ? (int)qRound(anchorPg * (double)qMax(1, nc1) / oldCnt)
+                              : anchorPg;
+        m_page = acc + qBound(0, newPg, qMax(0, nc1 - 1));
+    }
     m_page = qBound(0, m_page, m_pages - 1);
     const int pgRestore = m_page; /* v1.15.11：锚定章回放页快照（buildStack 前取） */
     m_img = QImage();
     m_img2 = QImage();
     m_pfCache.clear(); /* 排版参数变了，预取位图全部失效 */
-    m_estH = m_viewH > 0 ? m_viewH : 1200; /* v1.0.0：锚排版页高，防占位细条海 */
+    m_estH = m_viewH > 0 ? m_viewH : 1200; calibEstH(); /* v1.0.0：锚排版页高，防占位细条海 */
     /* v1.8.0：渲染状态复位（多飞行/待渲/翻页异步/首帧门控） */
     m_flight.clear(); m_flightT0.clear(); m_flightSeq.clear(); m_pendQueue.clear();
     m_pageFlight = false; m_gatePending = false;
+    ++m_pageSeq; /* v1.15.13：作废重排前派发的翻页渲染回调——落地走 renderNow 不推进 seq，
+    旧排版页图完成后仍能通过 seq 校验并覆盖新排版的当前页 */
     m_cacheProg = nullptr;
+    m_stackSwap = true; /* v1.15.13：换栈同步窗口内 fillVisible 完全禁入 */
     buildStack();
     m_slider->setRange(0, qMax(0, m_pages - 1));
     m_slider->setValue(m_page);
+    m_stackSwap = false;
+    m_relayoutBusy.store(false); /* v1.15.12：换栈+滑条同步完成后再放行 fillVisible */
     if (m_scrollMode)
         restorePosDeferred(pgRestore); /* v1.15.11：显式页快照落位 */
     else renderNow(m_page);
@@ -3059,15 +3244,18 @@ void ReaderWindow::relayoutAfterChange(bool metrics)
         const int pg0 = m_page; /* v1.15.11：重排入口页快照 */
         /* v1.9.0（P1-4）：旧位图保留——缩放瞬时按新旧宽比矩阵缩放即时反馈 */
         m_pfCache.clear();
-        m_estH = m_viewH > 0 ? m_viewH : 1200; /* v1.0.0：锚排版页高，防占位细条海 */
+        m_estH = m_viewH > 0 ? m_viewH : 1200; calibEstH(); /* v1.0.0：锚排版页高，防占位细条海 */
         /* v1.8.0：渲染状态复位（多飞行/待渲/翻页异步/首帧门控） */
         m_flight.clear(); m_flightT0.clear(); m_flightSeq.clear(); m_pendQueue.clear();
         m_pageFlight = false; m_gatePending = false;
+        ++m_pageSeq; /* v1.15.13：同上，作废重排前的翻页渲染回调 */
         m_cacheProg = nullptr;
-    m_cacheProg = nullptr;
+        m_stackSwap = true; /* v1.15.13：同步换栈窗口禁入 fillVisible；不再借用重排 busy——那是在飞
+         * worker 的归属标志，这里 store(false) 会让返回书库时关掉它正在用的 doc */
         buildStack();
         m_slider->setRange(0, qMax(0, m_pages - 1));
         m_slider->setValue(m_page);
+        m_stackSwap = false;
         if (m_scrollMode)
             restorePosDeferred(pg0); /* v1.15.11：显式页快照落位 */
         /* v1.9.0（P1-4）：缩放渐进——旧位图按新旧宽比缩放即时显示，全宽重渲走
@@ -3111,9 +3299,12 @@ void ReaderWindow::relayoutAfterChange(bool metrics)
             m_img2 = QImage();
             m_pfCache.clear();
             const int pg0 = m_page; /* v1.15.11：buildStack 过渡事件可能扰动 m_page，先快照 */
+            m_stackSwap = true; /* v1.15.13：同步换栈窗口禁入 fillVisible；不再借用重排 busy——那是在飞
+         * worker 的归属标志，这里 store(false) 会让返回书库时关掉它正在用的 doc */
             buildStack();
             m_slider->setRange(0, qMax(0, m_pages - 1));
             m_slider->setValue(m_page);
+            m_stackSwap = false;
             if (m_scrollMode)
                 restorePosDeferred(pg0); /* v1.15.11：显式页快照落位 */
             else renderNow(m_page);
@@ -3149,6 +3340,7 @@ void ReaderWindow::relayoutAfterChange(bool metrics)
         }
         m_relayoutBusy.store(true);
         const int gen2 = m_relayoutGen.fetch_add(1) + 1;
+        m_relayoutStartGen.store(gen2); /* v1.15.13：busy 归属代号 */
         const int winCh = qMin(nc0, anchorCh + 1 + qMax(40, anchorCh / 4));
         QThreadPool::globalInstance()->start(QRunnable::create(
             [gw, gen2, doc2, layW2, em2, vw2, vh2, winCh, nc0, anchorCh, anchorPg]
@@ -3156,16 +3348,45 @@ void ReaderWindow::relayoutAfterChange(bool metrics)
             if (!gw) return;
             QVector<int> all;
             all.reserve(winCh);
+            /* v1.15.13：先把新排版参数交给引擎。fz_layout_document 对 EPUB/分章 mobi 只记录
+             * 宽/高/字号并把各章标记待重排，逐章重排推迟到下面 count_pages_of 触达时才做
+             * （正是窗口化的本意）。原缺这一步：改字号/改窗口只按旧排版重数页——页数不变、
+             * 页面内容照旧（用户日志实锤：同一本 325 页的书连续 5 次重排都是 325 页；
+             * 走整书路径的同一批书是 668→287、1098→518） */
+            if (hr_qt_layout(doc2, (float)layW2, (float)vh2, em2) != 0)
+                evt("rlayout_params_fail",
+                    QString("gen=%1 err=%2").arg(gen2).arg(QString::fromLocal8Bit(hr_qt_last_error())));
+            /* v1.15.13：作废路径也必须回 GUI 线程清 busy——原静默 return：开书/adopt 作废
+             * 在途重排后 m_relayoutBusy 永不清除（等待循环空转满 10s；v1.15.11 起滚动模式
+             * fillVisible 还会永久让路=新书全是占位页） */
+            auto bail = [gw, gen2, doc2, nc0, anchorCh, anchorPg]
+            {
+                QMetaObject::invokeMethod(
+                    gw.data(),
+                    [gw, gen2, doc2, nc0, anchorCh, anchorPg]
+                    { gw->finishRelayoutWindowed(gen2, doc2, QVector<int>(), anchorCh, anchorPg, nc0); },
+                    Qt::QueuedConnection);
+            };
             for (int k = 0; k < winCh; k++)
             {
-                if (!gw || gw->m_relayoutGen.load() != gen2) return;
+                if (!gw) return;
+                if (gw->m_relayoutGen.load() != gen2)
+                {
+                    bail();
+                    return;
+                }
                 /* 交互让路（同 phase2）：1.5s 内有渲染请求则暂停重数 */
                 while (gw && gw->m_relayoutGen.load() == gen2 &&
                        QDateTime::currentMSecsSinceEpoch() -
                                gw->m_lastRenderReq.load() <
                            1500)
                     QThread::msleep(120);
-                if (!gw || gw->m_relayoutGen.load() != gen2) return;
+                if (!gw) return;
+                if (gw->m_relayoutGen.load() != gen2)
+                {
+                    bail();
+                    return;
+                }
                 all.append(hr_qt_count_pages_of(doc2, k));
             }
             QMetaObject::invokeMethod(
@@ -3180,6 +3401,8 @@ void ReaderWindow::relayoutAfterChange(bool metrics)
     /* v0.104.0（P0-5）：可重排格式整书重排移后台（改字号/换主题/缩放窗口不再冻结）；
      * 旧排版页继续显示，完成后换栈恢复阅读位；与开书经 m_relayoutBusy 互锁防旧 doc UAF */
     const int gen = m_relayoutGen.fetch_add(1) + 1;
+    m_relayoutOldPages = m_pages; /* v1.15.13：整书重排前的页数（落地按全书比例折算阅读位） */
+    m_relayoutStartGen.store(gen); /* v1.15.13：busy 归属代号 */
     m_relayoutBusy.store(true);
     const int layW = maxCharsWidth();
     const int em = m_em, viewW = m_viewW, viewH = m_viewH;
@@ -3202,22 +3425,42 @@ void ReaderWindow::relayoutAfterChange(bool metrics)
 
 void ReaderWindow::finishRelayout(int gen, void *doc, int pages, int chapters)
 {
-    m_relayoutBusy.store(false);
-    if (gen != m_relayoutGen.load() || doc != m_doc) return; /* 换代/换书：丢弃 */
-    m_pages = qMax(0, pages);
-    m_page = qBound(0, m_page, qMax(0, m_pages - 1));
+    /* v1.15.12：busy 保持到 buildStack+滑条同步完成（同 finishRelayoutWindowed——
+     * 量程塌缩窗口内禁锚，防页码瞬态"1 / N"）；换代/换书丢弃路径在此处清位 */
+    if (gen != m_relayoutGen.load() || doc != m_doc)
+    {
+        /* v1.15.13：仅当本代仍是最近启动的一代才清 busy（同 finishRelayoutWindowed） */
+        if (m_relayoutStartGen.load() == gen)
+            m_relayoutBusy.store(false);
+        return; /* 换代/换书：丢弃 */
+    }
+    /* v1.15.13：页数变了（真改排版）按全书比例折算阅读位——原"页号原样保留"在页数变化时
+     * 漂移：96 页的书读到第 20 页（21%），窗口放大后变 52 页还落第 20 页（38%）。
+     * 与书签跨排版的"比例回落"（resolveBookmarkPage）同一口径 */
+    const int oldPages = m_relayoutOldPages;
+    const int newPages = qMax(0, pages);
+    int np = m_page;
+    if (newPages > 0 && oldPages > 0 && oldPages != newPages)
+        np = (int)qRound(m_page * (double)newPages / oldPages);
+    m_pages = newPages;
+    m_page = qBound(0, np, qMax(0, m_pages - 1));
     const int pgRestore = m_page; /* v1.15.11：重排入口页快照（buildStack 前取） */
     m_img = QImage();
     m_img2 = QImage();
     m_pfCache.clear(); /* 排版参数变了，预取位图全部失效 */
-    m_estH = m_viewH > 0 ? m_viewH : 1200; /* v1.0.0：锚排版页高，防占位细条海 */
+    m_estH = m_viewH > 0 ? m_viewH : 1200; calibEstH(); /* v1.0.0：锚排版页高，防占位细条海 */
     /* v1.8.0：渲染状态复位（多飞行/待渲/翻页异步/首帧门控） */
     m_flight.clear(); m_flightT0.clear(); m_flightSeq.clear(); m_pendQueue.clear();
     m_pageFlight = false; m_gatePending = false;
+    ++m_pageSeq; /* v1.15.13：作废重排前派发的翻页渲染回调——落地走 renderNow 不推进 seq，
+    旧排版页图完成后仍能通过 seq 校验并覆盖新排版的当前页 */
     m_cacheProg = nullptr;
+    m_stackSwap = true; /* v1.15.13：换栈同步窗口内 fillVisible 完全禁入 */
     buildStack();
     m_slider->setRange(0, qMax(0, m_pages - 1));
     m_slider->setValue(m_page);
+    m_stackSwap = false;
+    m_relayoutBusy.store(false); /* v1.15.12：换栈+滑条同步完成后再放行 fillVisible */
     if (m_scrollMode)
         restorePosDeferred(pgRestore); /* v1.15.11：显式页快照落位 */
     else renderNow(m_page);
@@ -3627,7 +3870,13 @@ void ReaderWindow::onOpen()
                                 "*.djvu *.zip *.md *.pdb *.tif *.tiff *.cbr *.mht *.mhtml);;") +
             hr::l10n::s("所有文件 (*)", "All files (*)"));
     if (f.isEmpty()) return;
-    openBook(f, -1);
+    /* v1.15.13：原走同步 openBook——转换+整书排版压在界面线程（没有"正在打开"遮罩），
+     * 且不等/不作废在飞的后台重排与 phase2 计数就直接关旧 doc（UAF 风险），打开失败
+     * 还静默。内嵌时交书库按"换书直达"新开阅读器（后台打开+失败收尾）；独立窗走后台打开 */
+    if (receivers(SIGNAL(openPathRequested(QString))) > 0)
+        emit openPathRequested(f);
+    else
+        openBookAsync(f, -1);
 }
 
 void ReaderWindow::onThemeNext()
@@ -4627,7 +4876,10 @@ QRectF ReaderWindow::scrollPageRect(int page) const
 {
     if (page < 0 || page >= m_labels.size() || !m_labels[page] || !m_scroll->widget())
         return QRectF();
-    const QPoint p = m_labels[page]->pos() + m_scroll->widget()->pos();
+    /* v1.15.13：Y 取前缀表真值——几何懒同步下未同步标签的 y() 可能滞后于改高搬移 */
+    const int ly = page + 1 < m_stackY.size() ? m_stackY[page] : m_labels[page]->y();
+    const QPoint p(m_labels[page]->pos().x() + m_scroll->widget()->pos().x(),
+                   ly + m_scroll->widget()->pos().y());
     return QRectF(p, m_labels[page]->size());
 }
 
@@ -4850,7 +5102,8 @@ void ReaderWindow::closeEvent(QCloseEvent *e)
 void ReaderWindow::releaseEngineDoc()
 {
     hr::m4StopSpeak(this);
-    if (m_openBusy.load() || m_relayoutBusy.load() || m_phase2Busy.load() ||
+    if (m_openBusy.load() || m_relayoutBusy.load() || m_accelSaving.load() ||
+        m_phase2Busy.load() ||
         !m_flight.isEmpty() || m_auxJobs.load() > 0) /* v1.8.0：多飞行/辅助任务 */
         return;
     void *d = m_doc;
@@ -4897,8 +5150,8 @@ void ReaderWindow::requestClose()
  * 探针实锤：sbmax=48278 仅覆盖 needh=381069 的 12.7%）。栈内容任何变化后同步一次。 */
 void ReaderWindow::syncStackHeight()
 {
-    if (!m_scrollMode || !m_stack || !m_stackLay) return;
-    const QSize want = m_stackLay->sizeHint();
+    if (!m_scrollMode || !m_stack || m_stackY.isEmpty()) return;
+    const QSize want(renderWidthPx(), m_stackY.last()); /* v1.15.13：前缀表末项=栈总高 */
     if (want.width() > 0 && want.height() > 0 && want != m_stack->size())
         m_stack->resize(want); /* QScrollArea 据 widget 尺寸算滚动范围 */
 }
@@ -4914,8 +5167,64 @@ int ReaderWindow::probeViewportH() const
 }
 int ReaderWindow::probeStackNeedH() const
 {
-    if (!m_stack || !m_stack->layout()) return -1;
-    return m_stack->layout()->sizeHint().height();
+    if (!m_scrollMode || m_stackY.isEmpty()) return -1; /* v1.15.13：前缀表末项（原布局 sizeHint） */
+    return m_stackY.last();
+}
+int ReaderWindow::stdPageHeight() const
+{
+    if (!m_doc || m_pages <= 0 || m_fixedLayout) return 0;
+    /* 取一个"必非章末页"的页面：章首页且本章 >= 2 页 */
+    int pg = -1, acc = 0;
+    for (int k = 0; k < m_chapPages.size(); k++)
+    {
+        const int cp = qMax(0, m_chapPages[k]);
+        if (acc + cp > m_pages) break;
+        if (cp >= 2)
+        {
+            pg = acc;
+            break;
+        }
+        acc += cp;
+    }
+    if (pg < 0 && m_chapPages.isEmpty() && m_pages >= 2) pg = 0; /* 无章表=整书单章 */
+    if (pg < 0) return 0;
+    float box[4];
+    if (hr_qt_page_box(m_doc, pg, box) != 0) return 0;
+    const double pw = (double)box[2] - box[0], ph = (double)box[3] - box[1];
+    const int w = renderWidthPx();
+    if (pw < 1.0 || ph < 1.0 || w < 2) return 0;
+    /* 与桥的渲染口径一致（hr_qt_render）：pixmap 高 = ceil(下边 x 比例) - floor(上边 x 比例) */
+    const double s = (double)w / pw;
+    const int h = (int)std::ceil((double)box[3] * s) - (int)std::floor((double)box[1] * s);
+    return (h > 0 && h < 20000) ? h : 0;
+}
+
+void ReaderWindow::calibEstH()
+{
+    /* v1.15.13：可重排书的占位页高直接用引擎页尺寸折算的真实页高。原先一律用视口高，而
+     * 真实页高=版面高 x (渲染宽/版面宽)，两者差十几到几十像素：滚动模式每渲染出一页，标签
+     * 改高后其下全部标签都要重排——可见窗口里是逐个搬移，耗时正比于"总标签数 x 下方标签
+     * 数"（实测 7844 页的书读第 3000 页，落地后一批 3 页卡 10.8 秒）。页高对齐后标准页
+     * 渲染落地不再搬移，只有每章末页（更矮）仍会搬一次。取不到（djvu/异常）回退原口径 */
+    m_estHExact = false;
+    const int sh = stdPageHeight();
+    if (sh > 0)
+    {
+        m_estH = sh;
+        m_estHExact = true;
+    }
+}
+
+int ReaderWindow::probeChapterOf(int page) const /* v1.15.13：重排位保门禁——页所在章（按章页表累计；无表 -1） */
+{
+    if (page < 0 || m_chapPages.isEmpty()) return -1;
+    int acc = 0;
+    for (int k = 0; k < m_chapPages.size(); k++)
+    {
+        acc += qMax(0, m_chapPages[k]);
+        if (page < acc) return k;
+    }
+    return m_chapPages.size() - 1;
 }
 bool ReaderWindow::probePageRendered(int pg) const
 {
